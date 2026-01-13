@@ -10,7 +10,7 @@ Provides CRUD operations for Kanban checklists and checklist items including:
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
@@ -157,13 +157,14 @@ async def update_checklist(
 @router.delete(
     "/checklists/{checklist_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a checklist",
     description="Delete a checklist (hard delete). This deletes all items in the checklist."
 )
 async def delete_checklist(
     checklist_id: int,
     db: KanbanDB = Depends(get_kanban_db_for_user)
-) -> None:
+) -> Response:
     """Delete a checklist and all its items permanently."""
     try:
         success = db.delete_checklist(checklist_id=checklist_id)
@@ -172,6 +173,7 @@ async def delete_checklist(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Checklist {checklist_id} not found"
             )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException:
         raise
     except Exception as e:
@@ -317,13 +319,14 @@ async def update_checklist_item(
 @router.delete(
     "/checklist-items/{item_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a checklist item",
     description="Delete a checklist item (hard delete)."
 )
 async def delete_checklist_item(
     item_id: int,
     db: KanbanDB = Depends(get_kanban_db_for_user)
-) -> None:
+) -> Response:
     """Delete a checklist item permanently."""
     try:
         success = db.delete_checklist_item(item_id=item_id)
@@ -332,6 +335,7 @@ async def delete_checklist_item(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Checklist item {item_id} not found"
             )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException:
         raise
     except Exception as e:

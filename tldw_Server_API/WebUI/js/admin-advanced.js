@@ -496,6 +496,7 @@ function adminDownloadLLMUsageCSV() {
 function _auditBuildQueryParams(overrides = {}) {
   const q = new URLSearchParams();
   const fmt = overrides.format ?? (document.getElementById('audit_format')?.value || 'json');
+  const maxRows = overrides.max_rows ?? overrides.maxRows;
   q.append('format', fmt);
   const minRisk = overrides.min_risk_score ?? (document.getElementById('audit_min_risk')?.value || '').trim();
   const userId = overrides.user_id ?? (document.getElementById('audit_user_id')?.value || '').trim();
@@ -504,6 +505,7 @@ function _auditBuildQueryParams(overrides = {}) {
   const fname = overrides.filename ?? (document.getElementById('audit_filename')?.value || '').trim();
   const start = overrides.start_time ?? (document.getElementById('audit_start')?.value || '').trim();
   const end = overrides.end_time ?? (document.getElementById('audit_end')?.value || '').trim();
+  if (maxRows) q.append('max_rows', maxRows);
   if (minRisk) q.append('min_risk_score', minRisk);
   if (userId) q.append('user_id', userId);
   if (ev) q.append('event_type', ev);
@@ -514,16 +516,21 @@ function _auditBuildQueryParams(overrides = {}) {
   return q.toString();
 }
 
+function _auditBuildHeaders() {
+  const headers = {};
+  const client = window.apiClient;
+  if (client && client.token) {
+    if (client.authMode === 'single-user' || (client.authMode === 'multi-user' && client.preferApiKeyInMultiUser)) headers['X-API-KEY'] = client.token;
+    else if (client.authMode === 'multi-user') headers['Authorization'] = `Bearer ${client.token}`;
+    else headers['X-API-KEY'] = client.token;
+  }
+  return headers;
+}
+
 async function _auditFetchAndDownload(qs, format) {
   try {
     const url = `${window.apiClient.baseUrl}/api/v1/audit/export?${qs}`;
-    const headers = {};
-    const client = window.apiClient;
-    if (client && client.token) {
-      if (client.authMode === 'single-user' || (client.authMode === 'multi-user' && client.preferApiKeyInMultiUser)) headers['X-API-KEY'] = client.token;
-      else if (client.authMode === 'multi-user') headers['Authorization'] = `Bearer ${client.token}`;
-      else headers['X-API-KEY'] = client.token;
-    }
+    const headers = _auditBuildHeaders();
     const res = await fetch(url, { headers });
     const text = await res.text();
     if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
@@ -559,17 +566,43 @@ function adminAuditDownloadApiEventsCSV() {
   _auditFetchAndDownload(qs, 'csv');
 }
 
+function adminAuditPresetOrgInvites() {
+  const eventTypeEl = document.getElementById('audit_event_type');
+  const categoryEl = document.getElementById('audit_category');
+  const startEl = document.getElementById('audit_start');
+  const endEl = document.getElementById('audit_end');
+  const filenameEl = document.getElementById('audit_filename');
+  if (eventTypeEl) eventTypeEl.value = 'DATA_WRITE,DATA_UPDATE';
+  if (categoryEl) categoryEl.value = 'DATA_MODIFICATION';
+  const now = new Date();
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  if (startEl) startEl.value = dayAgo.toISOString().replace('Z', '+00:00');
+  if (endEl) endEl.value = now.toISOString().replace('Z', '+00:00');
+  if (filenameEl) filenameEl.value = 'audit_org_invites.json';
+  if (typeof Toast !== 'undefined' && Toast) Toast.success('Org invite audit filters applied');
+}
+
+function adminAuditPresetRegistrationCodes() {
+  const eventTypeEl = document.getElementById('audit_event_type');
+  const categoryEl = document.getElementById('audit_category');
+  const startEl = document.getElementById('audit_start');
+  const endEl = document.getElementById('audit_end');
+  const filenameEl = document.getElementById('audit_filename');
+  if (eventTypeEl) eventTypeEl.value = 'DATA_WRITE,DATA_UPDATE';
+  if (categoryEl) categoryEl.value = 'DATA_MODIFICATION';
+  const now = new Date();
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  if (startEl) startEl.value = dayAgo.toISOString().replace('Z', '+00:00');
+  if (endEl) endEl.value = now.toISOString().replace('Z', '+00:00');
+  if (filenameEl) filenameEl.value = 'audit_registration_codes.json';
+  if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration code audit filters applied');
+}
+
 async function adminAuditPreviewJSON() {
   try {
     const qs = _auditBuildQueryParams({ format: 'json' });
     const url = `${window.apiClient.baseUrl}/api/v1/audit/export?${qs}`;
-    const headers = {};
-    const client = window.apiClient;
-    if (client && client.token) {
-      if (client.authMode === 'single-user' || (client.authMode === 'multi-user' && client.preferApiKeyInMultiUser)) headers['X-API-KEY'] = client.token;
-      else if (client.authMode === 'multi-user') headers['Authorization'] = `Bearer ${client.token}`;
-      else headers['X-API-KEY'] = client.token;
-    }
+    const headers = _auditBuildHeaders();
     const res = await fetch(url, { headers });
     const text = await res.text();
     if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
@@ -583,6 +616,29 @@ async function adminAuditPreviewJSON() {
   } catch (e) {
     const pre = document.getElementById('adminAuditPreview');
     if (pre) pre.textContent = `Preview failed: ${e.message || e}`;
+  }
+}
+
+async function adminAuditStatusCheck() {
+  const el = document.getElementById('adminAuditStatus');
+  if (!el) return;
+  el.textContent = 'Audit logging: checking...';
+  try {
+    const qs = _auditBuildQueryParams({ format: 'json', max_rows: 1 });
+    const url = `${window.apiClient.baseUrl}/api/v1/audit/export?${qs}`;
+    const headers = _auditBuildHeaders();
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      if (res.status === 403) {
+        el.textContent = 'Audit logging: permission denied';
+      } else {
+        el.textContent = `Audit logging: unavailable (HTTP ${res.status})`;
+      }
+      return;
+    }
+    el.textContent = 'Audit logging: active';
+  } catch (e) {
+    el.textContent = 'Audit logging: unavailable';
   }
 }
 
@@ -1813,6 +1869,9 @@ function bindAdminAdvanced() {
   document.getElementById('btnAdminAuditLast24h')?.addEventListener('click', adminAuditDownloadLast24hHighRisk);
   document.getElementById('btnAdminAuditApiEvents')?.addEventListener('click', adminAuditDownloadApiEventsCSV);
   document.getElementById('btnAdminAuditPreview')?.addEventListener('click', adminAuditPreviewJSON);
+  document.getElementById('btnAdminAuditOrgInvites')?.addEventListener('click', adminAuditPresetOrgInvites);
+  document.getElementById('btnAdminAuditRegCodes')?.addEventListener('click', adminAuditPresetRegistrationCodes);
+  adminAuditStatusCheck();
 
   // LLM Usage Charts controls
   document.getElementById('btnAdminLoadLLMCharts')?.addEventListener('click', adminLoadLLMCharts);
@@ -1912,7 +1971,8 @@ export default {
   rcCreate, rcList, rcDelete, rcRenderList,
   orgInviteCreate, orgInviteList, orgInviteRevoke, orgInviteRenderList,
   adminQueryLLMUsage, adminDownloadLLMUsageCSV,
-  adminAuditDownload, adminAuditDownloadLast24hHighRisk, adminAuditDownloadApiEventsCSV, adminAuditPreviewJSON,
+  adminAuditDownload, adminAuditDownloadLast24hHighRisk, adminAuditDownloadApiEventsCSV, adminAuditPreviewJSON, adminAuditStatusCheck,
+  adminAuditPresetOrgInvites, adminAuditPresetRegistrationCodes,
   adminLoadLLMCharts,
   admUserKeyRotate, admUserKeyRevoke,
   adminLoadCleanupSettings: adminLoadCleanupSettings,

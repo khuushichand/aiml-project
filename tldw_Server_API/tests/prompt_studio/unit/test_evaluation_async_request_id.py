@@ -78,6 +78,7 @@ def test_create_evaluation_async_schedules_with_request_id(monkeypatch, override
     api_key = get_settings().SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_API_KEY", "THIS-IS-A-SECURE-KEY-123-REPLACE-ME")
     # Ensure the app sees the expected API key in environment for single-user auth
     monkeypatch.setenv("SINGLE_USER_API_KEY", api_key)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
     resp = client.post(
         "/api/v1/prompt-studio/evaluations",

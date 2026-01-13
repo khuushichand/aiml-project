@@ -4,11 +4,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from loguru import logger
-
+from tldw_Server_API.app.core.Embeddings import redis_pipeline
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 _EMBEDDINGS_DOMAIN = "embeddings"
-_EMBEDDINGS_JOB_TYPE = "media_embeddings"
+_EMBEDDINGS_ROOT_JOB_TYPE = "embeddings_pipeline"
+_VALID_STAGES = {"chunking", "embedding", "storage"}
 
 
 def _env_bool(key: str, default: bool = False) -> bool:
@@ -18,14 +18,16 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _warn_legacy_flag(key: str) -> None:
-    if _env_bool(key, False):
-        logger.warning("Embeddings jobs legacy fallback flag {} is ignored; core Jobs is the only backend.", key)
-
-
 def _jobs_queue() -> str:
     queue = (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip()
     return queue or "default"
+
+
+def _root_jobs_queue(stage_queue: str) -> str:
+    root_queue = (os.getenv("EMBEDDINGS_ROOT_JOBS_QUEUE") or "").strip()
+    if root_queue:
+        return root_queue
+    return "low" if stage_queue != "low" else "default"
 
 
 def _jobs_manager() -> JobManager:
@@ -38,12 +40,12 @@ def _jobs_manager() -> JobManager:
 
 def _map_status(raw_status: Optional[str]) -> str:
     status = str(raw_status or "").lower()
-    if status == "queued":
-        return "processing"
     if status == "quarantined":
         return "failed"
     if status in {"processing", "completed", "failed", "cancelled"}:
         return status
+    if status == "queued":
+        return "queued"
     return "processing"
 
 
@@ -75,16 +77,56 @@ def _normalize_payload(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _config_version(
+    embedding_model: str,
+    embedding_provider: Optional[str],
+    chunk_size: Optional[int],
+    chunk_overlap: Optional[int],
+) -> str:
+    return ":".join(
+        [
+            str(embedding_model or "").strip(),
+            str(embedding_provider or "").strip(),
+            str(chunk_size or ""),
+            str(chunk_overlap or ""),
+        ]
+    )
+
+
+def _map_priority(embedding_priority: Optional[int]) -> int:
+    try:
+        raw = int(embedding_priority) if embedding_priority is not None else 50
+    except (TypeError, ValueError):
+        raw = 50
+    return max(1, min(10, int(raw / 10)))
+
+
+def _derive_root_status(root_job: Dict[str, Any]) -> str:
+    status = _map_status(root_job.get("status"))
+    if status in {"completed", "failed", "cancelled"}:
+        return status
+    if status == "processing":
+        return status
+    result = _normalize_payload(root_job.get("result"))
+    progress = root_job.get("progress_percent")
+    progress_message = root_job.get("progress_message")
+    if progress is not None:
+        try:
+            if float(progress) > 0:
+                return "processing"
+        except (TypeError, ValueError):
+            pass
+    if progress_message:
+        return "processing"
+    if any(result.get(key) is not None for key in ("embedding_count", "chunks_processed", "total_chunks")):
+        return "processing"
+    return "queued"
+
+
 class EmbeddingsJobsAdapter:
     def __init__(
         self,
-        *,
-        read_legacy: Optional[bool] = None,
     ) -> None:
-        if read_legacy:
-            logger.warning("Embeddings jobs legacy fallback removed; read_legacy flag is ignored.")
-        _warn_legacy_flag("JOBS_ADAPTER_READ_LEGACY_EMBEDDINGS")
-        self._read_legacy = False
         self._expose_progress = _env_bool("EMBEDDINGS_JOBS_EXPOSE_PROGRESS", False)
         self._jm = _jobs_manager()
 
@@ -100,29 +142,89 @@ class EmbeddingsJobsAdapter:
         request_source: Optional[str] = None,
         request_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        force_regenerate: bool = False,
+        stage: Optional[str] = None,
+        embedding_priority: Optional[int] = None,
     ) -> Dict[str, Any]:
+        stage_name = (stage or "chunking").strip().lower() or "chunking"
+        if stage_name not in _VALID_STAGES:
+            raise ValueError(f"Invalid embeddings stage: {stage_name}")
         payload: Dict[str, Any] = {
             "media_id": int(media_id),
             "embedding_model": embedding_model,
             "embedding_provider": embedding_provider,
+            "current_stage": stage_name,
+            "force_regenerate": bool(force_regenerate),
         }
+        if embedding_priority is not None:
+            payload["embedding_priority"] = int(embedding_priority)
         if chunk_size is not None:
             payload["chunk_size"] = int(chunk_size)
         if chunk_overlap is not None:
             payload["chunk_overlap"] = int(chunk_overlap)
         if request_source:
             payload["request_source"] = str(request_source)
-        return self._jm.create_job(
+        idempotency_key = None
+        root_idempotency_key = None
+        version = None
+        if not force_regenerate:
+            version = _config_version(embedding_model, embedding_provider, chunk_size, chunk_overlap)
+            idempotency_key = f"{media_id}:{stage_name}:{version}"
+            root_idempotency_key = f"{media_id}:root:{version}"
+        if version is not None:
+            payload["config_version"] = version
+        stage_queue = _jobs_queue()
+        root_queue = _root_jobs_queue(stage_queue)
+        root_job = self._jm.create_job(
             domain=_EMBEDDINGS_DOMAIN,
-            queue=_jobs_queue(),
-            job_type=_EMBEDDINGS_JOB_TYPE,
+            queue=root_queue,
+            job_type=_EMBEDDINGS_ROOT_JOB_TYPE,
             payload=payload,
             owner_user_id=str(user_id) if user_id is not None else None,
-            priority=5,
+            idempotency_key=root_idempotency_key,
+            priority=_map_priority(embedding_priority),
             max_retries=0,
             request_id=request_id,
             trace_id=trace_id,
         )
+
+        stage_payload = dict(payload)
+        stage_payload["root_job_uuid"] = root_job.get("uuid")
+        stage_payload["parent_job_uuid"] = root_job.get("uuid")
+        stage_payload["user_id"] = str(user_id) if user_id is not None else None
+        if request_id:
+            stage_payload["request_id"] = str(request_id)
+        if trace_id:
+            stage_payload["trace_id"] = str(trace_id)
+        if idempotency_key:
+            stage_payload["idempotency_key"] = idempotency_key
+
+        try:
+            if stage_name == "chunking":
+                redis_pipeline.enqueue_chunking_job(
+                    payload=stage_payload,
+                    root_job_uuid=str(root_job.get("uuid") or ""),
+                    force_regenerate=bool(force_regenerate),
+                    require_redis=not redis_pipeline.allow_stub(),
+                )
+            else:
+                redis_pipeline.enqueue_stage(
+                    stage=stage_name,
+                    payload=stage_payload,
+                    require_redis=not redis_pipeline.allow_stub(),
+                )
+        except Exception:
+            try:
+                self._jm.fail_job(
+                    int(root_job["id"]),
+                    error="Failed to enqueue embeddings job to Redis",
+                    retryable=False,
+                    enforce=False,
+                )
+            except Exception:
+                pass
+            raise
+        return root_job
 
     def update_job(
         self,
@@ -154,7 +256,8 @@ class EmbeddingsJobsAdapter:
     def get_job(self, job_id: str, user_id: str) -> Optional[Dict[str, Any]]:
         job = self._lookup_job(job_id, user_id)
         if job:
-            return self._format_job(job)
+            derived = _derive_root_status(job)
+            return self._format_job(job, status_override=derived)
         return None
 
     def list_jobs(
@@ -166,36 +269,35 @@ class EmbeddingsJobsAdapter:
         offset: int,
     ) -> List[Dict[str, Any]]:
         desired = str(status).lower() if status else None
-        mapped_status = None
-        filter_after = None
-        if desired == "processing":
-            filter_after = {"processing"}
-        elif desired in {"completed", "failed", "cancelled"}:
-            mapped_status = desired
+        status_filter = desired if desired in {"completed", "failed", "cancelled"} else None
         raw_limit = max(0, int(limit) + int(offset))
         jobs = self._jm.list_jobs(
             domain=_EMBEDDINGS_DOMAIN,
             queue=None,
-            status=mapped_status,
+            status=status_filter,
             owner_user_id=str(user_id),
-            job_type=_EMBEDDINGS_JOB_TYPE,
+            job_type=_EMBEDDINGS_ROOT_JOB_TYPE,
             limit=raw_limit or 1,
         )
-        if filter_after:
-            jobs = [job for job in jobs if _map_status(job.get("status")) in filter_after]
+        filtered: List[Dict[str, Any]] = []
+        for job in jobs:
+            derived = _derive_root_status(job)
+            if desired and derived != desired:
+                continue
+            filtered.append(self._format_job(job, status_override=derived))
         if jobs:
-            sliced = jobs[int(offset):int(offset) + int(limit)]
-            return [self._format_job(job) for job in sliced]
+            sliced = filtered[int(offset):int(offset) + int(limit)]
+            return sliced
         return []
 
-    def _format_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
+    def _format_job(self, job: Dict[str, Any], *, status_override: Optional[str] = None) -> Dict[str, Any]:
         payload = _normalize_payload(job.get("payload"))
         result = _normalize_payload(job.get("result"))
         response: Dict[str, Any] = {
             "id": str(job.get("uuid") or job.get("id")),
             "media_id": payload.get("media_id"),
             "user_id": job.get("owner_user_id"),
-            "status": _map_status(job.get("status")),
+            "status": status_override or _map_status(job.get("status")),
             "embedding_model": payload.get("embedding_model"),
             "embedding_count": result.get("embedding_count"),
             "chunks_processed": result.get("chunks_processed"),
@@ -226,12 +328,11 @@ class EmbeddingsJobsAdapter:
             return None
         if str(job.get("domain")) != _EMBEDDINGS_DOMAIN:
             return None
-        if str(job.get("job_type")) != _EMBEDDINGS_JOB_TYPE:
+        if str(job.get("job_type")) != _EMBEDDINGS_ROOT_JOB_TYPE:
             return None
         owner = job.get("owner_user_id")
         if owner is not None and str(owner) != str(user_id):
             return None
         return job
-
 
 __all__ = ["EmbeddingsJobsAdapter"]

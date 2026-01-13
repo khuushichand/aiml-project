@@ -145,8 +145,21 @@ Metric definitions:
 - `JOBS_MAX_CONCURRENCY` (per processor instance)
 - `JOBS_ENABLE_METRICS=true|false`
 - Feature flags for rollout:
-  - `TLDW_JOBS_BACKEND=core` (legacy backends removed; overrides ignored by Chatbooks/Prompt Studio).
-  - Domain overrides remain for embeddings execution mode (`EMBEDDINGS_JOBS_BACKEND=jobs|redis`).
+  - `TLDW_JOBS_BACKEND=core` defines the core Jobs backend: a unified `jobs`
+    table with leases/retries, worker SDK, and shared metrics across domains
+    (SQLite/Postgres storage supported).
+  - Removed legacy backends: Embeddings Redis job manager, Prompt Studio job
+    manager, and the Chatbooks queue shim. These were consolidated into core to
+    eliminate drift and keep a single source of truth for job state/metrics.
+  - `EMBEDDINGS_JOBS_BACKEND=jobs` remains for domain-specific selection because
+    embeddings previously switched between backends (jobs|redis). Today only
+    `jobs`/`core` are honored; other values log a warning and no-op.
+  - Chatbooks/Prompt Studio ignore overrides: `CHATBOOKS_JOBS_BACKEND`,
+    `PROMPT_STUDIO_JOBS_BACKEND`, or `TLDW_JOBS_BACKEND` values other than `core`
+    emit a warning and still use core.
+  - Migration path for removed legacy backends: set `TLDW_JOBS_BACKEND=core`,
+    set (or keep) `EMBEDDINGS_JOBS_BACKEND=jobs`, remove legacy backend env
+    values, restart workers, and verify jobs are enqueued/processed via core.
 
 ## Security & Multi-Tenant
 

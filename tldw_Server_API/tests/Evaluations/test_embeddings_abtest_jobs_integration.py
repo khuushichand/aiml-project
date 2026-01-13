@@ -19,6 +19,7 @@ async def test_abtest_run_enqueues_and_worker_handles(tmp_path, monkeypatch):
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
     monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs.db"))
     monkeypatch.setenv("EVALUATIONS_TEST_DB_PATH", str(tmp_path / "evals.db"))
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_db"))
     reset_settings()
 
     app = FastAPI()

@@ -57,6 +57,9 @@ class AnthropicAdapter(ChatProvider):
 
     def _resolve_base_url(self, request: Dict[str, Any]) -> str:
         """Resolve API base URL with precedence: app_config -> env -> default."""
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
         try:
             cfg = (request or {}).get("app_config") or {}
             anth_cfg = cfg.get("anthropic_api") or {}
@@ -282,6 +285,7 @@ class AnthropicAdapter(ChatProvider):
                 "completion_tokens": usage.get("output_tokens"),
                 "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0),
             }
+        shaped["provider_response"] = data
         return shaped
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
@@ -307,8 +311,15 @@ class AnthropicAdapter(ChatProvider):
         # delegating to legacy paths to avoid recursion and mixed behaviors.
         raise RuntimeError("AnthropicAdapter native HTTP disabled by configuration")
 
-    def _tool_delta_chunk(self, tool_index: int, tool_id: str, tool_name: Optional[str], arguments: str) -> str:
-        return sse_data({
+    def _tool_delta_chunk(
+        self,
+        tool_index: int,
+        tool_id: str,
+        tool_name: Optional[str],
+        arguments: str,
+        provider_response: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload = {
             "choices": [{
                 "index": 0,
                 "delta": {
@@ -320,7 +331,10 @@ class AnthropicAdapter(ChatProvider):
                     }]
                 },
             }]
-        })
+        }
+        if provider_response is not None:
+            payload["provider_response"] = provider_response
+        return sse_data(payload)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
@@ -378,19 +392,35 @@ class AnthropicAdapter(ChatProvider):
                                             buf = str(initial_input)
                                     tool_states[idx] = {"id": tool_id, "name": tool_name, "buffer": buf, "position": tool_counter}
                                     tool_counter += 1
-                                    yield self._tool_delta_chunk(tool_states[idx]["position"], tool_id, tool_name, buf)
+                                    yield self._tool_delta_chunk(
+                                        tool_states[idx]["position"],
+                                        tool_id,
+                                        tool_name,
+                                        buf,
+                                        provider_response=ev,
+                                    )
                             elif ev_type == "content_block_delta":
                                 delta = ev.get("delta", {})
                                 idx = int(ev.get("index", 0))
                                 dt = delta.get("type")
                                 if dt == "text_delta" and "text" in delta:
-                                    yield openai_delta_chunk(delta.get("text", ""))
+                                    text = delta.get("text") or ""
+                                    yield sse_data({
+                                        "choices": [{"delta": {"content": text}}],
+                                        "provider_response": ev,
+                                    })
                                 elif dt == "input_json_delta" and idx in tool_states:
                                     partial = delta.get("partial_json", "")
                                     if partial:
                                         st = tool_states[idx]
                                         st["buffer"] += partial
-                                        yield self._tool_delta_chunk(st["position"], st["id"], st["name"], st["buffer"])
+                                        yield self._tool_delta_chunk(
+                                            st["position"],
+                                            st["id"],
+                                            st["name"],
+                                            st["buffer"],
+                                            provider_response=ev,
+                                        )
                                 elif dt == "tool_use_delta" and idx in tool_states:
                                     st = tool_states[idx]
                                     if "name" in delta and delta["name"]:
@@ -400,13 +430,22 @@ class AnthropicAdapter(ChatProvider):
                                             st["buffer"] = __import__("json").dumps(delta["input"])
                                         except Exception:
                                             st["buffer"] = str(delta["input"])
-                                    yield self._tool_delta_chunk(st["position"], st["id"], st["name"], st["buffer"])
+                                    yield self._tool_delta_chunk(
+                                        st["position"],
+                                        st["id"],
+                                        st["name"],
+                                        st["buffer"],
+                                        provider_response=ev,
+                                    )
                             elif ev_type == "message_delta":
                                 stop_reason = (ev.get("delta") or {}).get("stop_reason")
                                 if stop_reason:
                                     fr_map = {"end_turn": "stop", "max_tokens": "length", "stop_sequence": "stop", "tool_use": "tool_calls"}
                                     finish_reason = fr_map.get(stop_reason, stop_reason)
-                                    yield sse_data({"choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]})
+                                    yield sse_data({
+                                        "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+                                        "provider_response": ev,
+                                    })
                         for tail in finalize_stream(response=resp, done_already=done_sent):
                             yield tail
                 return

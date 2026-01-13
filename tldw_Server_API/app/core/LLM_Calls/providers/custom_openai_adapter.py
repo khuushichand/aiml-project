@@ -83,6 +83,9 @@ class CustomOpenAIAdapter(ChatProvider):
         return h
 
     def _resolve_base(self, request: Dict[str, Any], cfg_section: str) -> str:
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip().rstrip("/")
         cfg = request.get("app_config") or {}
         section = cfg.get(cfg_section) or {}
         base = section.get("api_ip") or os.getenv("CUSTOM_OPENAI_API_IP_1")

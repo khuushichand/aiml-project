@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, AnyUrl, validator
 
 
-SourceType = Literal["rss", "site"]  # forums moved to Phase 3 (feature-flagged later)
+SourceType = Literal["rss", "site", "forum"]  # forums are feature-flagged for Phase 3
 
 
 # --------------------

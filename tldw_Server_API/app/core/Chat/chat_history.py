@@ -348,6 +348,18 @@ def save_chat_history_to_db_wrapper(
                                     max_retries,
                                 )
 
+                if message_save_count > 0:
+                    try:
+                        from tldw_Server_API.app.core.Chat.conversation_enrichment import schedule_auto_tagging
+
+                        schedule_auto_tagging(db, current_conversation_id)
+                    except Exception as exc:
+                        logging.debug(
+                            "Auto-tagging trigger skipped for conversation %s: %s",
+                            current_conversation_id,
+                            exc,
+                        )
+
         except (InputError, ConflictError, CharactersRAGDBError) as exc:
             logging.error("Error saving messages to conversation %s: %s", current_conversation_id, exc, exc_info=True)
             return current_conversation_id, f"Error saving messages: {exc}"

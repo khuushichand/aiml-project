@@ -25,6 +25,7 @@ import os
 from loguru import logger
 
 from ....core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from ....core.DB_Management.backends.base import BackendType
 from ....core.Prompt_Management.prompt_studio.test_runner import TestRunner
 from ....core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -583,12 +584,35 @@ async def delete_evaluation(
         conn = db.get_connection()
         cursor = conn.cursor()
 
-        # Soft delete
-        cursor.execute("""
-            UPDATE prompt_studio_evaluations
-            SET deleted = 1, deleted_at = ?
-            WHERE id = ?
-        """, (datetime.now().isoformat(), evaluation_id))
+        supports_soft_delete = False
+        try:
+            if db.backend_type == BackendType.POSTGRESQL and db.backend is not None:
+                table_info = db.backend.get_table_info(
+                    "prompt_studio_evaluations",
+                    connection=conn.raw_connection,
+                )
+                columns = {info.get("name") for info in table_info}
+            else:
+                cursor.execute("PRAGMA table_info(prompt_studio_evaluations)")
+                columns = {row[1] for row in cursor.fetchall()}
+            supports_soft_delete = "deleted" in columns and "deleted_at" in columns
+        except Exception as exc:
+            logger.debug("Failed to check prompt_studio_evaluations columns: %s", exc)
+
+        if supports_soft_delete:
+            cursor.execute(
+                """
+                UPDATE prompt_studio_evaluations
+                SET deleted = 1, deleted_at = ?
+                WHERE id = ?
+                """,
+                (datetime.now().isoformat(), evaluation_id),
+            )
+        else:
+            cursor.execute(
+                "DELETE FROM prompt_studio_evaluations WHERE id = ?",
+                (evaluation_id,),
+            )
 
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Evaluation not found")

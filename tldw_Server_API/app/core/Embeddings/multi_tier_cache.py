@@ -14,13 +14,13 @@ from pathlib import Path
 from collections import OrderedDict
 from datetime import datetime, timedelta
 import mmap
-import redis
 import asyncio
 import functools
 
 from loguru import logger
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 
 
 @dataclass
@@ -518,15 +518,18 @@ class L3RemoteCache:
 
         # Try to connect to Redis
         try:
-            self.redis_client = redis.Redis(
-                host=redis_host,
-                port=redis_port,
-                db=redis_db,
-                decode_responses=False
+            preferred_url = f"redis://{redis_host}:{int(redis_port)}/{int(redis_db)}"
+            self.redis_client = create_sync_redis_client(
+                preferred_url=preferred_url,
+                context="embeddings_l3_cache",
+                fallback_to_fake=True,
+                decode_responses=False,
             )
-            self.redis_client.ping()
             self.enabled = True
-            logger.info(f"L3 Remote cache connected to Redis at {redis_host}:{redis_port}")
+            if getattr(self.redis_client, "_tldw_is_stub", False):
+                logger.info("L3 Remote cache using in-memory stub (Redis unavailable)")
+            else:
+                logger.info(f"L3 Remote cache connected to Redis at {redis_host}:{redis_port}")
         except Exception as e:
             logger.warning(f"L3 Remote cache disabled, Redis not available: {e}")
             try:

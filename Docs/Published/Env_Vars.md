@@ -73,6 +73,10 @@ Egress & Outbound Policy (global + Workflows)
 - `JOBS_DB_URL`: Postgres DSN for Jobs backend; falls back to SQLite when unset.
 - `JOBS_*`: Lease/renew/metrics settings (see repo `Env_Vars.md`).
   - Common toggles include `JOBS_WEBHOOKS_*`, `JOBS_INTEGRITY_SWEEP_*`, `JOBS_METRICS_*`.
+- `EMBEDDINGS_JOBS_QUEUE`: Queue for embeddings stage jobs (default `default`).
+- `EMBEDDINGS_ROOT_JOBS_QUEUE`: Queue for embeddings root jobs (default `low` when stage queue is not `low`).
+- `EMBEDDINGS_JOBS_WORKER_ID`: Worker identifier for embeddings jobs (default `embeddings-jobs-<pid>`).
+- `EMBEDDINGS_JOBS_EXPOSE_PROGRESS`: Include progress fields in public embeddings jobs responses (`true|false`, default `false`).
 
 ## Chatbooks
 - `CHATBOOKS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).
@@ -110,6 +114,11 @@ Queues
 ## Chunking / RAG / Embeddings / MCP / TTS
 Module-specific toggles exist; see the repo `Env_Vars.md` or the respective module docs for details.
 Notable: `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES` lets media-embeddings jobs succeed with zero vectors for media types like `audio,video`.
+
+RAG precomputed spans (late-interaction index)
+- `RAG_PRECOMPUTED_SPANS_MAX_VECTORS_PER_CORPUS`: Cap on stored span vectors per corpus (default `200000`).
+- `RAG_PRECOMPUTED_SPANS_MAX_MB_PER_CORPUS`: Cap on precomputed span storage per corpus in MB (default `512`).
+- `RAG_PRECOMPUTED_SPANS_RETENTION_DAYS`: Retention window for precomputed spans before GC (default `30`).
 
 Monitoring & Telemetry
 - `METRICS_ENABLED`: Enable text metrics endpoints.

@@ -3,17 +3,17 @@
 Version: 0.2
 Owner: Core Maintainers (Server/API + WebUI)
 Status: In Progress
-Updated: 2025-10-19
+Updated: 2026-01-12
 
-Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py
+Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py, Docs/Product/Watchlists-UX-PRD.md
 
 ---
 
 ## 1. Summary
 
 Content Collections unify two complementary workflows:
-- **Watchlists**: Source-centric scheduled collection from websites/news sites/RSS with jobs, runs, aggregated outputs, template-driven rendering, versioning, retention/TTL, and delivery (email + Chatbook). *Status: implemented; WebUI admin flows now consume the new APIs.*
-- **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, notes, highlights, import/export. *Status: capture/status/favorite/notes flows and basic WebUI shipped; highlights/import remain in backlog.*
+- **Watchlists**: Source-centric scheduled collection from websites/news sites/RSS with jobs, runs, aggregated outputs, template-driven rendering, versioning, retention/TTL, and delivery (email + Chatbook). *Status: implemented; WebUI admin flows now consume the new APIs; run WebSocket streaming and forum gating shipped.*
+- **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, notes, highlights, import/export. *Status: capture/status/favorite/notes flows and basic WebUI shipped; Pocket/Instapaper import/export API shipped; highlights + import/export UX tracked in Watchlists-UX-PRD.*
 
 Both flows will share a normalized collections layer that references (but does not replace) the existing Media DB. Media DB remains the canonical artifact store; the collections layer will provide dedupe, metadata, and search connectivity across Watchlists and Reading. Outputs can be generated from scheduled runs or filtered item sets, exported as Chatbooks, delivered via email, or linked back into Media DB.
 
@@ -21,9 +21,9 @@ Both flows will share a normalized collections layer that references (but does n
 
 ### Goals (MVP → v1)
 - [x] Unified content item model and shared ingestion/dedupe/search/embeddings.
-- [x] Reading capture: save URL → readable text; statuses/tags/favorites/notes; search; basic WebUI. *(Highlights/import/export still planned.)*
+- [x] Reading capture: save URL → readable text; statuses/tags/favorites/notes; search; basic WebUI. *(Highlights UI and import/export UX tracked in Watchlists-UX-PRD.)*
 - [x] Watchlists: manage sources, groups/tags; jobs with schedule; runs with logs/stats; RSS + simple sites (front page + top-N).
-- [ ] Outputs: Markdown briefing/newsletter; optional MECE; optional TTS audio; export/ingest. *(Markdown/HTML + retention/delivery shipped; MECE/TTS automation pending.)*
+- [x] Outputs: Markdown briefing/newsletter; MECE and TTS audio variants; export/ingest.
 - [x] APIs and WebUI slices for items, reading, watchlists, and outputs.
 
 ### Non-Goals (initial)
@@ -51,12 +51,12 @@ Primary value: one local-first place to capture → read → organize → search
 ### In-Scope
 - Watchlists sources/groups/tags/jobs/runs with ingestion pipeline, template store, retention/versioning, and delivery (implemented).
 - File-based template management and API-driven template CRUD (implemented).
-- Ad-hoc link capture and reader UI with statuses/favorites/highlights (planned).
-- Unified collections data layer that references Media DB while enabling dedupe and metadata across origins (planned).
-- RSS polling; simple site extraction (front page + top-N). Forums remain Phase 3 (planned).
-- Canonical URL/content-hash dedupe and change detection (planned).
-- Outputs in Markdown/HTML plus MECE/TTS variants; Chatbook delivery; optional Media DB ingestion (partially implemented-MECE/TTS automation and ingest toggles planned).
-- FTS5 search and ChromaDB embeddings per user over collections data (planned).
+- Ad-hoc link capture and reader UI with statuses/favorites/notes (implemented; highlights UI pending; import/export API shipped; UX tracked in Watchlists-UX-PRD).
+- Unified collections data layer that references Media DB while enabling dedupe and metadata across origins (implemented).
+- RSS polling; simple site extraction (front page + top-N). Forums are feature-flagged with throttling (implemented; disabled by default).
+- Canonical URL/content-hash dedupe and change detection (implemented).
+- Outputs in Markdown/HTML plus MECE/TTS variants; Chatbook delivery; optional Media DB ingestion (implemented).
+- FTS5 search and ChromaDB embeddings per user over collections data (implemented).
 
 ### Out-of-Scope (initial)
 - Paywall bypass; authenticated scraping; heavy JS rendering.
@@ -72,8 +72,7 @@ MVP
 - Generate a Markdown briefing from a run or a filtered item set; download artifact.
 
 v1
-- MECE/narrative templates; HTML newsletter; one-click TTS audio briefing.
-- Import Pocket/Instapaper into items; export as Chatbook.
+- Import Pocket/Instapaper into items; export JSONL/zip.
 - Highlights/notes in reader view.
 
 ## 7. UX Flows (High-Level)
@@ -81,7 +80,7 @@ v1
 - Items: Unified list with filters (origin, tags, status, domain, date); search; bulk select for outputs.
 - Reader: Distraction-free item detail with actions (Tag, Favorite, Mark Read, Summarize, Listen). Highlights/notes (v1).
 - Watchlists: Sources (CRUD, tags/groups); Jobs (scope, schedule, options); Runs (logs/stats); Outputs.
-- Reading: Quick save, import/export; tags/status/favorites.
+- Reading: Quick save; tags/status/favorites; import/export UX tracked in Watchlists-UX-PRD.
 
 ## 8. Functional Requirements
 
@@ -97,7 +96,7 @@ v1
 - URL validation; safe fetch (timeouts, size caps, content-type checks); follow redirects.
 - RSS: parse items; track guid/link/pubDate; dedupe by canonical link+hash.
 - Sites: index fetch; extract article links (CSS selector or defaults); cap top-N per source.
-- Forums: moved to Phase 3 and behind a feature flag; excluded from MVP/v1.
+- Forums: gated behind feature flag with throttling; disabled by default.
 - Readability-style article extraction; sanitize HTML; derive plain text.
 - Metadata extraction: title, author (if present), publish date, canonical link; compute domain.
 
@@ -110,6 +109,7 @@ v1
 - Timezone: all schedule expressions are interpreted and stored with timezone `UTC+8`.
 - Jobs: scope (sources/groups/tags), schedule (interval/cron), active flag, per-host delay, max concurrency, retry policy.
 - Runs: status (queued/running/success/partial/failed), stats (new/updated/ignored/errors), logs, started/finished times.
+- Runs: WebSocket streaming for status/log tail (implemented).
 - HTTP caching: ETag/Last-Modified; send If-Modified-Since/If-None-Match when supported.
 
 ### 8.5 Search & RAG
@@ -124,12 +124,12 @@ v1
 - Templates: managed via API (CRUD) with DB-backed storage and seed defaults; preview supported. Watchlist-specific templates are stored under `Config_Files/templates/watchlists` (override via `WATCHLIST_TEMPLATE_DIR`).
 - Delivery: download file; optional Media DB ingest, email (SMTP provider via `NotificationsService`), Chatbook document generation.
 - Retention: global defaults via `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS` / `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`, per-job overrides under `output_prefs.retention`, per-output overrides during generation.
-- Status: **Partially complete** - API + retention/versioning + email/Chatbook delivery and WebUI controls shipped; MECE/TTS automation and Media DB ingest toggles remain planned.
+- Status: **Complete** - API + retention/versioning + email/Chatbook delivery and WebUI controls shipped; MECE/TTS automation and Media DB ingest toggles included.
 
 ### 8.7 Reading Features
-- Status transitions (saved → reading → read/archived); favorites; per-item notes (basic); highlights (v1). *(Notes shipped; highlights/import pending.)*
+- Status transitions (saved → reading → read/archived); favorites; per-item notes (basic); highlights (v1). *(Notes shipped; highlights UI pending; import/export API shipped; UX tracked in Watchlists-UX-PRD.)*
 - Highlights anchoring: store `quote` and anchor via fuzzy text matching with `content_hash_ref`; offsets are advisory. On text change, attempt re-anchor; if failing, mark highlight `stale` while preserving original context.
-- Import: Pocket/Instapaper (JSON/CSV) to items with tag merging; Export: JSONL or zip bundle.
+- Import: Pocket/Instapaper (JSON/CSV) to items with tag merging; Export: JSONL or zip bundle. Status: **Complete (API)**; UX tracked in Watchlists-UX-PRD.
 
 ### 8.8 Observability & Limits
 - Structured logs (run/job/source/item); per-run metrics; error categories.
@@ -211,7 +211,7 @@ Reading
 - `GET /reading/items/{id}` → full item
 - `PATCH /reading/items/{id}` → update title/tags/status/favorite/notes
 - `DELETE /reading/items/{id}` → soft delete; `?hard=true`
-- `POST /reading/import` → Pocket/Instapaper; returns job id
+- `POST /reading/import` → Pocket/Instapaper; returns summary (imported/updated/skipped/errors)
 - `GET /reading/export` → JSONL/zip
 - `POST /reading/items/{id}/highlight` (v1)
 
@@ -309,31 +309,29 @@ Scheduling
    - `content_items` + tag joins live in Collections DB alongside Media DB.
    - Watchlist ingestion dual-writes; `/api/v1/items` resolves from collections before falling back to legacy search.
 
-2. **Reading Workflow** - *MVP shipped; highlights/import pending*
+2. **Reading Workflow** - *MVP shipped; highlights UI pending; import/export API shipped*
    - URL capture (save), status/favorite/tags/notes, reader endpoints, and WebUI page delivered.
-   - Highlights lifecycle and third-party import/export remain TODO.
+   - Highlights UI and import/export UX remain TODO; tracked in Watchlists-UX-PRD.
 
 3. **Search & Retrieval Enhancements** - *shipped*
    - FTS5 online updates for collections; embeddings queueing via Redis job manager; provenance filters exposed on `/items`.
    - End-to-end embeddings worker validation pending full worker stack smoke tests.
 
-4. **Outputs & Delivery Expansion** - *in progress*
-   - Markdown/HTML generation, retention TTLs, NotificationsService delivery, and output templates wired into WebUI.
-   - MECE/TTS automation and Media DB ingest switch to follow.
+4. **Outputs & Delivery Expansion** - *complete*
+   - Markdown/HTML generation, retention TTLs, NotificationsService delivery, MECE/TTS automation, Media DB ingest toggles, and output templates wired into WebUI.
 
-5. **WebUI & Admin UX** - *shipped*
+5. **WebUI & Admin UX** - *shipped (core)*
    - Next.js pages for Items, Reading, and Watchlists consume the new APIs; job output preferences editable (template, retention, email/chatbook deliveries).
-   - Future: reader highlights UI, template editor, bulk item actions.
+   - Remaining UX work tracked in Watchlists-UX-PRD: reader highlights UI, template editor, bulk item actions, Pocket/Instapaper import/export UX.
 
-6. **Stage 2 - Postgres Enablement** - *planned*
-   - Refactor schema creation/migration scripts for Postgres compatibility.
-   - Validate Watchlists/Collections DB backends against Postgres and update tooling/documentation accordingly.
+6. **Stage 2 - Postgres Enablement** - *complete*
+   - Collections/Watchlists schema creation and inserts validated against Postgres; integration smoke tests added.
 
 ## 19. Rollout Plan
 
 - **Phase 1 (complete):** Unified collections schema, ingestion bridge, reading capture/search UI, WebUI wiring for items/reading/watchlists.
-- **Phase 2 (active):** Advanced outputs (MECE/TTS automation), delivery UX refinements, embeddings worker hardening, optional forums ingestion experiments.
-- **Phase 3 (planned):** Reader enhancements (highlights/notes UX), third-party imports, WebSocket run streaming, Postgres enablement (Stage 2).
+- **Phase 2 (complete):** Advanced outputs (MECE/TTS automation + ingest toggles), delivery UX refinements, embeddings worker hardening, forum gating.
+- **Phase 3 (planned):** Reader highlights/notes UX, template editor, bulk item actions, Pocket/Instapaper import/export UX (see Watchlists-UX-PRD).
 
 ## 20. Risks & Mitigations
 

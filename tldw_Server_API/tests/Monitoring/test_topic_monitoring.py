@@ -19,6 +19,7 @@ def test_topic_monitoring_alert_creation(tmp_path, monkeypatch):
     # Point alerts DB to a temp file
     db_file = tmp_path / "alerts.db"
     monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))
+    monkeypatch.setenv("MONITORING_ENABLED", "true")
     # Use an in-memory watchlists file to avoid writing to repo
     wl_file = tmp_path / "watchlists.json"
     wl_file.write_text(json.dumps({"watchlists": []}), encoding="utf-8")
@@ -56,6 +57,7 @@ def test_topic_monitoring_regex_pattern_with_flags(tmp_path, monkeypatch):
 
     db_file = tmp_path / "alerts.db"
     monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))
+    monkeypatch.setenv("MONITORING_ENABLED", "true")
     wl_file = tmp_path / "watchlists.json"
     wl_file.write_text(json.dumps({"watchlists": []}), encoding="utf-8")
     monkeypatch.setenv("MONITORING_WATCHLISTS_FILE", str(wl_file))
@@ -87,6 +89,7 @@ def test_topic_monitoring_skips_empty_pattern(tmp_path, monkeypatch):
 
     db_file = tmp_path / "alerts.db"
     monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))
+    monkeypatch.setenv("MONITORING_ENABLED", "true")
     wl_file = tmp_path / "watchlists.json"
     wl_file.write_text(json.dumps({"watchlists": []}), encoding="utf-8")
     monkeypatch.setenv("MONITORING_WATCHLISTS_FILE", str(wl_file))
@@ -111,3 +114,50 @@ def test_topic_monitoring_skips_empty_pattern(tmp_path, monkeypatch):
     db = TopicMonitoringDB(db_path=str(db_file))
     items = db.list_alerts(user_id="u1")
     assert items == []
+
+
+def test_topic_monitoring_streaming_dedupe(tmp_path, monkeypatch):
+    db_file = tmp_path / "alerts.db"
+    monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))
+    monkeypatch.setenv("MONITORING_ENABLED", "true")
+    wl_file = tmp_path / "watchlists.json"
+    wl_file.write_text(json.dumps({"watchlists": []}), encoding="utf-8")
+    monkeypatch.setenv("MONITORING_WATCHLISTS_FILE", str(wl_file))
+
+    _reset_topic_monitoring_service()
+    svc = get_topic_monitoring_service()
+    svc.reload()
+
+    wl = Watchlist(
+        name="Streaming WL",
+        description="Detect 'alert'",
+        enabled=True,
+        scope_type="user",
+        scope_id="u1",
+        rules=[WatchlistRule(pattern="alert", category="custom", severity="warning")],
+    )
+    svc.upsert_watchlist(wl)
+
+    created1 = svc.evaluate_and_alert(
+        user_id="u1",
+        text="alert me please",
+        source="chat.output",
+        source_id="stream-1",
+        chunk_id="stream-1:1",
+        chunk_seq=1,
+    )
+    created2 = svc.evaluate_and_alert(
+        user_id="u1",
+        text="alert me please",
+        source="chat.output",
+        source_id="stream-1",
+        chunk_id="stream-1:2",
+        chunk_seq=2,
+    )
+
+    assert created1 == 1
+    assert created2 == 0
+
+    db = TopicMonitoringDB(db_path=str(db_file))
+    items = db.list_alerts(user_id="u1")
+    assert len(items) == 1

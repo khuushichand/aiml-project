@@ -13,6 +13,7 @@ from fastapi import (
     HTTPException,
     Query,
     Path,
+    Response,
     status
 )
 from loguru import logger
@@ -739,14 +740,19 @@ async def edit_message(
         )
 
 
-@router.delete("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Delete a message", tags=["Messages"])
+@router.delete(
+    "/messages/{message_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Delete a message",
+    tags=["Messages"],
+)
 async def delete_message(
     message_id: str = Path(..., description="Message ID"),
     expected_version: int = Query(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
-):
+) -> Response:
     """
     Soft delete a message from a conversation.
 
@@ -792,6 +798,7 @@ async def delete_message(
                 logger.debug(f"Non-fatal: failed to bump conversation metadata for {message['conversation_id']}")
 
         logger.info(f"Soft deleted message {message_id} by user {current_user.id}")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     except HTTPException:
         raise

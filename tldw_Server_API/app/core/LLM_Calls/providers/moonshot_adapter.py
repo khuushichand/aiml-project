@@ -49,6 +49,7 @@ def _moonshot_request(
     app_config: Optional[Dict[str, Any]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
+    base_url: Optional[str] = None,
 ):
     loaded_config_data = app_config or load_and_log_configs()
     moonshot_config = loaded_config_data.get("moonshot_api", {})
@@ -176,7 +177,7 @@ def _moonshot_request(
     }
     headers = merge_extra_headers(headers, {"extra_headers": extra_headers})
 
-    api_base_url = moonshot_config.get("api_base_url", "https://api.moonshot.cn/v1")
+    api_base_url = base_url or moonshot_config.get("api_base_url", "https://api.moonshot.cn/v1")
     api_url = api_base_url.rstrip("/") + "/chat/completions"
 
     payload = merge_extra_body(payload, {"extra_body": extra_body})
@@ -294,6 +295,7 @@ class MoonshotAdapter(ChatProvider):
             "app_config": request.get("app_config"),
             "extra_headers": request.get("extra_headers"),
             "extra_body": request.get("extra_body"),
+            "base_url": request.get("base_url"),
         }
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:

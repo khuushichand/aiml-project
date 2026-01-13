@@ -27,8 +27,13 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
     EmbeddingsABTestStatusResponse,
     EmbeddingsABTestResultsResponse,
     EmbeddingsABTestResultSummary,
+    EmbeddingsABTestResultRow,
     ArmSummary,
     EmbeddingsABTestRunRequest,
+)
+from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+    log_evaluation_created,
+    log_run_started,
 )
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
     run_abtest_full,
@@ -94,6 +99,12 @@ async def create_embeddings_abtest(
         )
     db.insert_abtest_queries(test_id, [q.model_dump() for q in payload.config.queries])
     logger.info(f"A/B test created: {test_id} by {user_ctx}")
+    log_evaluation_created(
+        user_id=str(current_user.id),
+        eval_id=test_id,
+        name=payload.name,
+        eval_type="embeddings_abtest",
+    )
     try:
         if idempotency_key:
             db.record_idempotency("emb_abtest", idempotency_key, test_id, user_ctx)
@@ -156,6 +167,12 @@ async def run_embeddings_abtest(
             db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.01}})
         except Exception:
             pass
+        log_run_started(
+            user_id=str(current_user.id),
+            run_id=str(test_id),
+            eval_id=test_id,
+            target_model="embeddings_abtest",
+        )
         try:
             await run_abtest_full(db, cfg, test_id, str(current_user.id), media_db)
         except Exception as _e:
@@ -196,6 +213,12 @@ async def run_embeddings_abtest(
             )
         except Exception:
             pass
+        log_run_started(
+            user_id=str(current_user.id),
+            run_id=str(job_ref or test_id),
+            eval_id=test_id,
+            target_model="embeddings_abtest",
+        )
     except Exception as exc:
         logger.error(f"Failed to enqueue A/B test job {test_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to enqueue A/B test job")
@@ -268,6 +291,29 @@ async def get_embeddings_abtest_results(
     _: None = Depends(check_evaluation_rate_limit),
     current_user: User = Depends(get_eval_request_user),  # noqa: B008
 ):
+    def _parse_json(value, default):
+        if value is None:
+            return default
+        if isinstance(value, (list, dict)):
+            return value
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return default
+        return parsed if isinstance(parsed, (list, dict)) else default
+
+    def _parse_float_list(value):
+        parsed = _parse_json(value, None)
+        if not isinstance(parsed, list):
+            return None
+        out = []
+        for item in parsed:
+            try:
+                out.append(float(item))
+            except (TypeError, ValueError):
+                continue
+        return out
+
     svc = get_unified_evaluation_service_for_user(current_user.id)
     rows, total = svc.db.list_abtest_results(test_id, limit=page_size, offset=(page-1)*page_size)
     row = svc.db.get_abtest(test_id)
@@ -298,7 +344,35 @@ async def get_embeddings_abtest_results(
             doc_counts={}
         ))
     summary = EmbeddingsABTestResultSummary(test_id=test_id, status=status_val, arms=arms)
-    return EmbeddingsABTestResultsResponse(summary=summary, page=page, page_size=page_size, total=total)
+    results = []
+    for r in rows:
+        ranked_ids = _parse_json(r.get("ranked_ids"), [])
+        scores = _parse_json(r.get("scores"), None)
+        metrics = _parse_json(r.get("metrics_json"), {})
+        results.append(
+            EmbeddingsABTestResultRow(
+                result_id=str(r.get("result_id")),
+                test_id=str(r.get("test_id") or test_id),
+                arm_id=str(r.get("arm_id")),
+                query_id=str(r.get("query_id")),
+                ranked_ids=ranked_ids if isinstance(ranked_ids, list) else [],
+                scores=scores if isinstance(scores, list) else None,
+                metrics=metrics if isinstance(metrics, dict) else {},
+                latency_ms=float(r.get("latency_ms")) if r.get("latency_ms") is not None else None,
+                ranked_distances=_parse_float_list(r.get("ranked_distances")),
+                ranked_metadatas=_parse_json(r.get("ranked_metadatas"), None),
+                ranked_documents=_parse_json(r.get("ranked_documents"), None),
+                rerank_scores=_parse_float_list(r.get("rerank_scores")),
+                created_at=r.get("created_at"),
+            )
+        )
+    return EmbeddingsABTestResultsResponse(
+        summary=summary,
+        results=results,
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
 
 
 @abtest_router.get("/embeddings/abtest/{test_id}/significance")

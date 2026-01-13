@@ -7,7 +7,14 @@ from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
 from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter
 
 
-def test_pipeline_trace_default_order():
+def test_pipeline_trace_default_order(monkeypatch):
+    from tldw_Server_API.app.core.Chat import chat_service
+
+    def _fake_llm_call(**_kwargs):
+        return {"choices": [{"message": {"content": ""}}], "usage": {}}
+
+    monkeypatch.setattr(chat_service, "perform_chat_api_call", _fake_llm_call)
+
     def fake_extractor(html: str, url: str):  # noqa: ANN001
         return {
             "url": url,
@@ -25,8 +32,10 @@ def test_pipeline_trace_default_order():
     )
 
     assert result["extraction_successful"] is True
-    assert result["extraction_strategy"] == "trafilatura"
-    assert [entry["strategy"] for entry in result["extraction_trace"]] == DEFAULT_EXTRACTION_STRATEGY_ORDER
+    assert result["extraction_strategy"] == "cluster"
+    expected = list(DEFAULT_EXTRACTION_STRATEGY_ORDER)
+    stop_at = expected.index(result["extraction_strategy"]) + 1
+    assert [entry["strategy"] for entry in result["extraction_trace"]] == expected[:stop_at]
 
 
 def test_pipeline_strategy_order_override_from_router():

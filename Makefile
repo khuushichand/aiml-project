@@ -53,6 +53,26 @@ server-up-dev:
 	uvicorn tldw_Server_API.app.main:app --host $(HOST) --port $(PORT) --reload
 
 # -----------------------------------------------------------------------------
+# Prompt Studio tests
+# -----------------------------------------------------------------------------
+.PHONY: prompt-studio-test prompt-studio-test-sqlite prompt-studio-test-postgres
+
+PS_TEST_PATH ?= tldw_Server_API/tests/prompt_studio
+PS_TEST_ARGS ?= -v
+
+prompt-studio-test:
+	@echo "[prompt-studio] Running Prompt Studio tests (sqlite + postgres when available)"
+	python -m pytest $(PS_TEST_PATH) $(PS_TEST_ARGS)
+
+prompt-studio-test-sqlite:
+	@echo "[prompt-studio] Running Prompt Studio tests (sqlite only)"
+	python -m pytest $(PS_TEST_PATH) -k sqlite $(PS_TEST_ARGS)
+
+prompt-studio-test-postgres:
+	@echo "[prompt-studio] Running Prompt Studio tests (postgres only)"
+	TLDW_TEST_POSTGRES_REQUIRED=1 python -m pytest $(PS_TEST_PATH) -k postgres $(PS_TEST_ARGS)
+
+# -----------------------------------------------------------------------------
 # Benchmarks (LLM Gateway)
 # -----------------------------------------------------------------------------
 .PHONY: bench-sweep bench-stream bench-rps

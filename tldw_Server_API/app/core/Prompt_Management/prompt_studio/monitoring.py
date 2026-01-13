@@ -3,6 +3,7 @@
 
 from typing import Dict, Any, Optional, List
 from contextlib import contextmanager
+import os
 import time
 from datetime import datetime
 from loguru import logger
@@ -804,19 +805,38 @@ class PromptStudioHealthCheck:
             }
             health["status"] = "degraded"
 
-        # Check job queue
-        if self.job_manager:
+        # Check job queue (core Jobs)
+        job_manager = self.job_manager
+        if job_manager is None:
             try:
-                stats = self.job_manager.get_job_stats()
+                from tldw_Server_API.app.core.Jobs.manager import JobManager
+                db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+                backend = "postgres" if db_url.startswith("postgres") else None
+                job_manager = JobManager(backend=backend, db_url=db_url) if db_url else JobManager()
+            except Exception:
+                job_manager = None
+
+        if job_manager is not None:
+            try:
+                domain = "prompt_studio"
+                queue = (os.getenv("PROMPT_STUDIO_JOBS_QUEUE") or "default").strip() or "default"
+                by_status = job_manager.summarize_by_status(domain=domain)
+                queue_stats = job_manager.get_queue_stats(domain=domain, queue=queue)
+
                 health["components"]["job_queue"] = {
                     "status": "healthy",
-                    "queued": stats.get("queue_depth", 0),
-                    "processing": stats.get("processing", 0)
+                    "queued": int(by_status.get("queued", 0) or 0),
+                    "processing": int(by_status.get("processing", 0) or 0),
                 }
 
-                # Update metrics
-                for job_type, count in stats.get("by_type", {}).items():
-                    self.metrics.update_job_queue_size(job_type, count)
+                # Update metrics with per-type queue counts (queued + scheduled)
+                for entry in queue_stats:
+                    job_type = str(entry.get("job_type") or "")
+                    if not job_type:
+                        continue
+                    queued_ready = int(entry.get("queued", 0) or 0)
+                    scheduled = int(entry.get("scheduled", 0) or 0)
+                    self.metrics.update_job_queue_size(job_type, queued_ready + scheduled)
 
             except Exception as e:
                 health["components"]["job_queue"] = {

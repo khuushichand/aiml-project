@@ -1954,6 +1954,7 @@ async def create_chat_completion(
                 final_system_message=final_system_message,
                 app_config=app_config_override,
             )
+            cleaned_args["request"] = request
 
             def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
                 override_default = get_override_default_model(target_provider)
@@ -2015,6 +2016,7 @@ async def create_chat_completion(
                     final_system_message=final_system_message,
                     app_config=refreshed_resolution.app_config,
                 )
+                refreshed_args["request"] = request
                 refreshed_model = refreshed_args.get("model")
                 use_default_model = False
                 if not refreshed_model:
@@ -3110,12 +3112,46 @@ async def update_chat_conversation(
         keywords_payload = update_fields.pop("keywords", None)
         update_fields.pop("version", None)
 
-        allowed_fields = {"state", "topic_label", "cluster_id", "external_ref", "source"}
+        topic_label_changed = "topic_label" in payload.model_fields_set
+        if topic_label_changed:
+            raw_label = update_fields.get("topic_label")
+            normalized_label = str(raw_label).strip() if raw_label is not None else ""
+            latest_message = db.get_latest_message_for_conversation(conversation_id)
+            latest_message_id = latest_message.get("id") if latest_message else None
+            if normalized_label:
+                update_fields["topic_label"] = normalized_label
+                update_fields["topic_label_source"] = "manual"
+                update_fields["topic_last_tagged_at"] = datetime.now(timezone.utc).isoformat()
+                update_fields["topic_last_tagged_message_id"] = latest_message_id
+            else:
+                update_fields["topic_label"] = None
+                update_fields["topic_label_source"] = None
+                update_fields["topic_last_tagged_at"] = None
+                update_fields["topic_last_tagged_message_id"] = None
+
+        allowed_fields = {
+            "state",
+            "topic_label",
+            "topic_label_source",
+            "topic_last_tagged_at",
+            "topic_last_tagged_message_id",
+            "cluster_id",
+            "external_ref",
+            "source",
+        }
         update_data = {k: v for k, v in update_fields.items() if k in allowed_fields}
         db.update_conversation(conversation_id, update_data, payload.version)
 
         if "keywords" in payload.model_fields_set:
             _replace_conversation_keywords(db, conversation_id, keywords_payload or [])
+
+        if topic_label_changed:
+            try:
+                from tldw_Server_API.app.core.Chat.conversation_enrichment import schedule_conversation_clustering
+
+                schedule_conversation_clustering(db)
+            except Exception as exc:
+                logger.debug("Conversation clustering skipped after manual topic update: %s", exc)
 
         updated = db.get_conversation_by_id(conversation_id) or conversation
         keyword_rows = db.get_keywords_for_conversation(conversation_id)

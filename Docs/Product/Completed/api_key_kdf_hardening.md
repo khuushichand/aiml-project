@@ -29,11 +29,15 @@ Parsing logic:
 - Otherwise, treat as a legacy key and fall back to HMAC lookup.
 
 ## Storage & Verification
-- Store the KDF output in `api_keys.key_hash` using a string encoding:
+- PBKDF2-HMAC-SHA256 parameters for `api_keys.key_hash`:
+  - Iterations: 210,000.
+  - Salt: `secrets.token_bytes` (cryptographically secure RNG), 16 bytes.
+  - Derived key length: 32 bytes (SHA-256 output length).
+- Store the KDF output in `api_keys.key_hash` using the string encoding
   `pbkdf2_sha256$<iterations>$<salt_b64>$<hash_b64>`.
-- Store `kid` in a new column `api_keys.key_id` (indexed, unique when present).
-- Verification recomputes PBKDF2 with the stored parameters and uses
-  `hmac.compare_digest` on the raw hash bytes.
+- Store `kid` in `api_keys.key_id` (indexed, unique when present).
+- Verification recomputes PBKDF2 using the stored parameters and compares the
+  raw hash bytes with `hmac.compare_digest` against `api_keys.key_hash`.
 
 ## Legacy Compatibility
 - Keys without a `kid` continue to use the existing HMAC-SHA256 lookup via

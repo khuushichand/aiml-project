@@ -4,7 +4,7 @@
 # Imports
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional, Literal
+from typing import Dict, Any, List, Optional, Literal, Set
 from datetime import datetime, timedelta, timezone
 import secrets
 import string
@@ -12,10 +12,11 @@ import os
 import json
 import asyncio
 import re
+import time
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
 from loguru import logger
 #
 # Local imports
@@ -88,6 +89,20 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     LLMProviderTestResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import SessionResponse, MessageResponse
+from tldw_Server_API.app.api.v1.schemas.user_profile_schemas import (
+    UserProfileResponse,
+    UserProfileUpdateRequest,
+    UserProfileUpdateResponse,
+    UserProfileUpdateError,
+    UserProfileUpdateEntry,
+    UserProfileErrorResponse,
+    UserProfileErrorDetail,
+    UserProfileBulkUpdateDiff,
+    UserProfileBulkUpdateRequest,
+    UserProfileBulkUpdateResponse,
+    UserProfileBulkUpdateUserResult,
+    UserProfileBatchResponse,
+)
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
     APIKeyCreateResponse,
@@ -136,6 +151,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_rate_limit,
     get_session_manager_dep,
 )
+from tldw_Server_API.app.api.v1.utils.profile_errors import (
+    classify_profile_update_skips,
+)
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile, reset_settings
 from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
@@ -159,6 +177,12 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 from tldw_Server_API.app.core.exceptions import ResourceNotFoundError
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.UserProfiles.service import UserProfileService
+from tldw_Server_API.app.core.UserProfiles.update_service import (
+    ProfileUpdateScope,
+    UserProfileUpdateService,
+)
+from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import load_user_profile_catalog
 from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
 from tldw_Server_API.app.services.usage_aggregator import aggregate_usage_daily
 from tldw_Server_API.app.services.llm_usage_aggregator import aggregate_llm_usage_daily
@@ -176,6 +200,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     remove_org_member,
     update_org_member_role,
     list_org_memberships_for_user,
+    list_memberships_for_user,
 )
 from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.AuthNZ.repos.user_provider_secrets_repo import (
@@ -288,6 +313,7 @@ from tldw_Server_API.app.services.registration_service import reset_registration
 import ipaddress
 
 REQUIRED_ADMIN_RANK = ROLE_HIERARCHY.get("admin", 3)
+REQUIRED_TEAM_ADMIN_RANK = ROLE_HIERARCHY.get("lead", 2)
 PLATFORM_ADMIN_ROLES = {"owner", "super_admin", "admin"}
 
 # Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
@@ -451,7 +477,7 @@ async def _enforce_admin_user_scope(
     *,
     require_hierarchy: bool,
 ) -> None:
-    """Enforce shared-org membership and optional role hierarchy for admin actions."""
+    """Enforce shared org/team membership and optional role hierarchy for admin actions."""
     if is_single_user_principal(principal) or _is_platform_admin(principal):
         return
 
@@ -476,20 +502,45 @@ async def _enforce_admin_user_scope(
     }
 
     shared_orgs = set(admin_org_roles) & set(target_org_roles)
-    if not shared_orgs:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to manage users outside your organization",
-        )
-
-    if not require_hierarchy:
+    if shared_orgs and not require_hierarchy:
         return
 
-    for org_id in shared_orgs:
-        admin_role = admin_org_roles.get(org_id)
-        target_role = target_org_roles.get(org_id)
-        if _role_rank(admin_role) >= REQUIRED_ADMIN_RANK and _role_rank(admin_role) >= _role_rank(target_role):
-            return
+    if shared_orgs:
+        for org_id in shared_orgs:
+            admin_role = admin_org_roles.get(org_id)
+            target_role = target_org_roles.get(org_id)
+            if _role_rank(admin_role) >= REQUIRED_ADMIN_RANK and _role_rank(admin_role) >= _role_rank(target_role):
+                return
+
+    admin_team_memberships = await list_memberships_for_user(principal.user_id)
+    target_team_memberships = await list_memberships_for_user(target_user_id)
+
+    admin_team_roles = {
+        m.get("team_id"): str(m.get("role") or "member").strip().lower()
+        for m in admin_team_memberships
+        if m.get("team_id") is not None
+    }
+    target_team_roles = {
+        m.get("team_id"): str(m.get("role") or "member").strip().lower()
+        for m in target_team_memberships
+        if m.get("team_id") is not None
+    }
+
+    shared_teams = set(admin_team_roles) & set(target_team_roles)
+    if shared_teams:
+        for team_id in shared_teams:
+            admin_role = admin_team_roles.get(team_id)
+            target_role = target_team_roles.get(team_id)
+            if _role_rank(admin_role) < REQUIRED_TEAM_ADMIN_RANK:
+                continue
+            if not require_hierarchy or _role_rank(admin_role) >= _role_rank(target_role):
+                return
+
+    if not shared_orgs and not shared_teams:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to manage users outside your organization or team",
+        )
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -513,6 +564,218 @@ def _require_platform_admin(principal: AuthPrincipal) -> None:
     )
 
 
+def _derive_profile_update_roles(principal: AuthPrincipal) -> Set[str]:
+    roles = {str(role).strip().lower() for role in (principal.roles or []) if role}
+    if principal.is_admin or "admin" in roles:
+        roles.add("admin")
+        roles.update({"org_admin", "team_admin"})
+    if _is_platform_admin(principal):
+        roles.add("platform_admin")
+    return roles
+
+
+def _get_bulk_confirm_threshold() -> int:
+    raw_env = os.getenv("BULK_UPDATE_CONFIRM_THRESHOLD")
+    if raw_env:
+        try:
+            return max(1, int(raw_env))
+        except Exception:
+            return 1000
+    try:
+        config_parser = load_comprehensive_config()
+        for section in ("user_profile", "profile", "admin"):
+            if config_parser and config_parser.has_section(section):
+                raw_cfg = config_parser.get(section, "bulkUpdateConfirmThreshold", fallback="").strip()
+                if raw_cfg:
+                    return max(1, int(raw_cfg))
+    except Exception:
+        pass
+    return 1000
+
+
+def _profile_error_response(
+    *,
+    status_code: int,
+    error_code: str,
+    detail: str,
+    errors: Optional[List[UserProfileErrorDetail]] = None,
+) -> JSONResponse:
+    payload = UserProfileErrorResponse(
+        error_code=error_code,
+        detail=detail,
+        errors=errors or [],
+    )
+    return JSONResponse(status_code=status_code, content=payload.model_dump())
+
+
+def _mask_profile_diff_value(
+    profile_service: UserProfileService,
+    catalog_map: Dict[str, Any],
+    key: str,
+    value: Any,
+) -> Any:
+    try:
+        return profile_service._format_value(
+            key,
+            value,
+            include_sources=False,
+            source=None,
+            catalog_map=catalog_map,
+            mask_secrets=True,
+        )
+    except Exception:
+        return value
+
+
+async def _build_bulk_update_before_values(
+    *,
+    user_id: int,
+    updates: List[UserProfileUpdateEntry],
+    profile_service: UserProfileService,
+    user_repo: AuthnzUsersRepo,
+    catalog_map: Dict[str, Any],
+) -> Dict[str, Any]:
+    keys = [entry.key for entry in updates]
+    key_set = set(keys)
+    before: Dict[str, Any] = {}
+
+    identity_keys = {
+        "identity.email",
+        "identity.role",
+        "identity.is_active",
+        "identity.is_verified",
+        "identity.is_locked",
+    }
+    needs_user_record = bool(key_set & (identity_keys | {"limits.storage_quota_mb"}))
+    user_row: Optional[Dict[str, Any]] = None
+    if needs_user_record:
+        user = await user_repo.get_user_by_id(int(user_id))
+        if not user:
+            return before
+        user_row = dict(user)
+
+    if user_row and (key_set & identity_keys):
+        identity = profile_service._build_identity(user_row)
+        await profile_service._attach_lockout_status(identity)
+        identity_map = {
+            "identity.email": identity.get("email"),
+            "identity.role": identity.get("role"),
+            "identity.is_active": identity.get("is_active"),
+            "identity.is_verified": identity.get("is_verified"),
+            "identity.is_locked": identity.get("is_locked"),
+        }
+        for key, value in identity_map.items():
+            if key in key_set:
+                before[key] = _mask_profile_diff_value(
+                    profile_service,
+                    catalog_map,
+                    key,
+                    value,
+                )
+
+    if user_row and "limits.storage_quota_mb" in key_set:
+        before["limits.storage_quota_mb"] = _mask_profile_diff_value(
+            profile_service,
+            catalog_map,
+            "limits.storage_quota_mb",
+            user_row.get("storage_quota_mb"),
+        )
+
+    if any(key.startswith("memberships.") for key in key_set):
+        org_memberships = await list_org_memberships_for_user(user_id)
+        team_memberships = await list_memberships_for_user(user_id)
+        org_roles = {
+            int(m.get("org_id")): m.get("role")
+            for m in org_memberships
+            if m.get("org_id") is not None
+        }
+        team_roles = {
+            int(m.get("team_id")): m.get("role")
+            for m in team_memberships
+            if m.get("team_id") is not None
+        }
+
+        for entry in updates:
+            if entry.key == "memberships.orgs.role":
+                if isinstance(entry.value, dict) and "org_id" in entry.value:
+                    try:
+                        org_id = int(entry.value.get("org_id"))
+                    except (TypeError, ValueError):
+                        continue
+                    before_val = org_roles.get(org_id)
+                    before[entry.key] = _mask_profile_diff_value(
+                        profile_service,
+                        catalog_map,
+                        entry.key,
+                        before_val,
+                    )
+            elif entry.key == "memberships.teams.role":
+                if isinstance(entry.value, dict) and "team_id" in entry.value:
+                    try:
+                        team_id = int(entry.value.get("team_id"))
+                    except (TypeError, ValueError):
+                        continue
+                    before_val = team_roles.get(team_id)
+                    before[entry.key] = _mask_profile_diff_value(
+                        profile_service,
+                        catalog_map,
+                        entry.key,
+                        before_val,
+                    )
+            elif entry.key == "memberships.teams.member":
+                if isinstance(entry.value, dict) and "team_id" in entry.value:
+                    try:
+                        team_id = int(entry.value.get("team_id"))
+                    except (TypeError, ValueError):
+                        continue
+                    role = team_roles.get(team_id)
+                    before_val = {"member": team_id in team_roles, "role": role}
+                    before[entry.key] = _mask_profile_diff_value(
+                        profile_service,
+                        catalog_map,
+                        entry.key,
+                        before_val,
+                    )
+
+    needs_effective = any(
+        key not in identity_keys
+        and not key.startswith("memberships.")
+        and key != "limits.storage_quota_mb"
+        for key in key_set
+    )
+    if needs_effective:
+        effective = await profile_service._build_effective_config(
+            int(user_id),
+            include_sources=False,
+            mask_secrets=True,
+        )
+        for key in key_set:
+            if key in before:
+                continue
+            if key in effective:
+                before[key] = effective.get(key)
+
+    return before
+
+
+def _parse_user_id_list(raw: Optional[str]) -> Optional[List[int]]:
+    if raw is None:
+        return None
+    values: List[int] = []
+    for part in str(raw).split(","):
+        piece = part.strip()
+        if not piece:
+            continue
+        try:
+            values.append(int(piece))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_user_ids",
+            ) from exc
+    return values or None
+
+
 async def _get_admin_org_ids(principal: AuthPrincipal) -> Optional[List[int]]:
     if is_single_user_principal(principal) or _is_platform_admin(principal):
         return None
@@ -523,6 +786,91 @@ async def _get_admin_org_ids(principal: AuthPrincipal) -> Optional[List[int]]:
         )
     memberships = await list_org_memberships_for_user(principal.user_id)
     return [int(m.get("org_id")) for m in memberships if m.get("org_id") is not None]
+
+
+class _ProfileAdminScope:
+    def __init__(
+        self,
+        *,
+        org_admin_ids: Optional[Set[int]],
+        team_admin_ids: Set[int],
+        team_admin_org_ids: Set[int],
+        team_admin_org_map: Dict[int, int],
+    ) -> None:
+        self.org_admin_ids = org_admin_ids
+        self.team_admin_ids = team_admin_ids
+        self.team_admin_org_ids = team_admin_org_ids
+        self.team_admin_org_map = team_admin_org_map
+
+    @property
+    def is_platform_admin(self) -> bool:
+        return self.org_admin_ids is None
+
+
+async def _get_profile_admin_scope(principal: AuthPrincipal) -> _ProfileAdminScope:
+    if is_single_user_principal(principal) or _is_platform_admin(principal):
+        return _ProfileAdminScope(
+            org_admin_ids=None,
+            team_admin_ids=set(),
+            team_admin_org_ids=set(),
+            team_admin_org_map={},
+        )
+    if principal.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to manage users",
+        )
+    org_memberships = await list_org_memberships_for_user(principal.user_id)
+    org_admin_ids = {
+        int(m.get("org_id"))
+        for m in org_memberships
+        if m.get("org_id") is not None
+        and _role_rank(m.get("role")) >= REQUIRED_ADMIN_RANK
+    }
+
+    team_memberships = await list_memberships_for_user(principal.user_id)
+    team_admin_ids: Set[int] = set()
+    team_admin_org_ids: Set[int] = set()
+    team_admin_org_map: Dict[int, int] = {}
+    for membership in team_memberships:
+        team_id = membership.get("team_id")
+        org_id = membership.get("org_id")
+        if team_id is None or org_id is None:
+            continue
+        if _role_rank(membership.get("role")) < REQUIRED_TEAM_ADMIN_RANK:
+            continue
+        team_id_int = int(team_id)
+        org_id_int = int(org_id)
+        team_admin_ids.add(team_id_int)
+        team_admin_org_ids.add(org_id_int)
+        team_admin_org_map[team_id_int] = org_id_int
+
+    if not org_admin_ids and not team_admin_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to manage users",
+        )
+
+    return _ProfileAdminScope(
+        org_admin_ids=org_admin_ids,
+        team_admin_ids=team_admin_ids,
+        team_admin_org_ids=team_admin_org_ids,
+        team_admin_org_map=team_admin_org_map,
+    )
+
+
+async def _load_team_user_ids(team_ids: Set[int]) -> Set[int]:
+    user_ids: Set[int] = set()
+    for team_id in team_ids:
+        members = await list_team_members(int(team_id))
+        for member in members:
+            if member.get("user_id") is None:
+                continue
+            status = member.get("status")
+            if status is not None and str(status).lower() != "active":
+                continue
+            user_ids.add(int(member.get("user_id")))
+    return user_ids
 
 
 async def _enforce_admin_org_access(
@@ -567,6 +915,101 @@ async def _get_scoped_team(
         require_admin=require_admin,
     )
     return team
+
+
+async def _load_bulk_user_candidates(
+    *,
+    principal: AuthPrincipal,
+    org_id: Optional[int],
+    team_id: Optional[int],
+    role: Optional[str],
+    is_active: Optional[bool],
+    search: Optional[str],
+    user_ids: Optional[List[int]],
+) -> List[int]:
+    repo = await AuthnzUsersRepo.from_pool()
+    scope = await _get_profile_admin_scope(principal)
+    org_ids: Optional[List[int]] = None
+    team_user_ids: Optional[Set[int]] = None
+    restrict_to_team_scope = False
+
+    if org_id is not None:
+        if not scope.is_platform_admin:
+            if org_id not in scope.org_admin_ids and org_id not in scope.team_admin_org_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to access this organization",
+                )
+        org_ids = [org_id]
+        if not scope.is_platform_admin and org_id not in scope.org_admin_ids:
+            restrict_to_team_scope = True
+
+    if team_id is not None:
+        team = await get_team(team_id)
+        if not team:
+            raise HTTPException(status_code=404, detail="team_not_found")
+        team_org_id = int(team.get("org_id"))
+        if org_id is not None and team_org_id != int(org_id):
+            return []
+        if not scope.is_platform_admin:
+            if team_id not in scope.team_admin_ids and team_org_id not in scope.org_admin_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to access this team",
+                )
+        team_user_ids = await _load_team_user_ids({int(team_id)})
+        if org_ids is None:
+            org_ids = [team_org_id]
+        elif team_org_id not in org_ids:
+            return []
+
+    if not scope.is_platform_admin and org_ids is None:
+        if scope.org_admin_ids:
+            org_ids = sorted(scope.org_admin_ids)
+        elif scope.team_admin_org_ids:
+            org_ids = sorted(scope.team_admin_org_ids)
+            restrict_to_team_scope = True
+
+    if restrict_to_team_scope and team_user_ids is None:
+        allowed_team_ids = set(scope.team_admin_ids)
+        if org_id is not None:
+            allowed_team_ids = {
+                team_id for team_id, team_org in scope.team_admin_org_map.items()
+                if team_org == int(org_id)
+            }
+        if not allowed_team_ids:
+            return []
+        team_user_ids = await _load_team_user_ids(allowed_team_ids)
+        if not team_user_ids:
+            return []
+
+    target_ids: Set[int] = set()
+    offset = 0
+    limit = 500
+    while True:
+        users, total = await repo.list_users(
+            offset=offset,
+            limit=limit,
+            role=role,
+            is_active=is_active,
+            search=search,
+            org_ids=org_ids,
+        )
+        for user in users:
+            try:
+                target_ids.add(int(user.get("id")))
+            except Exception:
+                continue
+        offset += limit
+        if len(target_ids) >= total:
+            break
+
+    if user_ids:
+        target_ids &= {int(uid) for uid in user_ids}
+    if team_user_ids is not None:
+        target_ids &= team_user_ids
+
+    return sorted(target_ids)
 
 #######################################################################################################################
 #
@@ -1017,13 +1460,14 @@ async def admin_list_user_byok_keys(
 @router.delete(
     "/keys/users/{user_id}/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     dependencies=[Depends(check_rate_limit)],
 )
 async def admin_revoke_user_byok_key(
     user_id: int,
     provider: str,
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> None:
+) -> Response:
     _require_byok_enabled()
     await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
     repo = await _get_user_byok_repo()
@@ -1044,6 +1488,7 @@ async def admin_revoke_user_byok_key(
         raise HTTPException(status_code=500, detail="Failed to revoke user BYOK key") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -1232,6 +1677,7 @@ async def admin_list_shared_byok_keys(
 @router.delete(
     "/keys/shared/{scope_type}/{scope_id}/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     dependencies=[Depends(check_rate_limit)],
 )
 async def admin_delete_shared_byok_key(
@@ -1239,7 +1685,7 @@ async def admin_delete_shared_byok_key(
     scope_id: int,
     provider: str,
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> None:
+) -> Response:
     _require_byok_enabled()
     repo = await _get_shared_byok_repo()
     provider_norm = normalize_provider_name(provider)
@@ -1261,6 +1707,7 @@ async def admin_delete_shared_byok_key(
         raise HTTPException(status_code=500, detail="Failed to delete shared BYOK key") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 #######################################################################################################################
@@ -1441,9 +1888,10 @@ async def admin_upsert_llm_provider_override(
 @router.delete(
     "/llm/providers/overrides/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     dependencies=[Depends(check_rate_limit)],
 )
-async def admin_delete_llm_provider_override(provider: str) -> None:
+async def admin_delete_llm_provider_override(provider: str) -> Response:
     await _ensure_sqlite_authnz_ready_if_test_mode()
     repo = await _get_llm_provider_overrides_repo()
     provider_norm = normalize_provider_name(provider)
@@ -1455,6 +1903,7 @@ async def admin_delete_llm_provider_override(provider: str) -> None:
     if not deleted:
         raise HTTPException(status_code=404, detail="Provider override not found")
     await refresh_llm_provider_overrides()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -2183,22 +2632,108 @@ async def admin_list_virtual_keys(
     user_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
+    name: Optional[str] = Query(None, description="Filter by key name (case-insensitive substring)"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by key status"),
+    org_id: Optional[int] = Query(None, description="Filter by org_id"),
+    team_id: Optional[int] = Query(None, description="Filter by team_id"),
+    created_after: Optional[str] = Query(None, description="ISO-8601 created_at lower bound (UTC)"),
+    created_before: Optional[str] = Query(None, description="ISO-8601 created_at upper bound (UTC)"),
 ) -> list[APIKeyMetadata]:
     try:
         await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
-        wanted = {
-            'id','key_prefix','name','description','scope','status','created_at','expires_at','usage_count','last_used_at','last_used_ip'
-        }
+
+        def _parse_iso_ts(value: str, field_name: str) -> datetime:
+            raw = value.strip()
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            try:
+                dt = datetime.fromisoformat(raw)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"{field_name} must be ISO-8601 timestamp",
+                ) from exc
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+
+        name_filter = name.strip() if isinstance(name, str) and name.strip() else None
+        status_filter = status_filter.strip() if isinstance(status_filter, str) and status_filter.strip() else None
+        created_after_dt = _parse_iso_ts(created_after, "created_after") if created_after else None
+        created_before_dt = _parse_iso_ts(created_before, "created_before") if created_before else None
+        if created_after_dt and created_before_dt and created_after_dt > created_before_dt:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="created_before must be >= created_after",
+            )
+
         # Defensive: ensure user_id is a plain int (some callers might pass (id,))
         if isinstance(user_id, (tuple, list)):
             user_id = user_id[0]
         user_id = int(user_id)
         is_pg = await is_postgres_backend()
         if is_pg:
-            rows = await db.fetch("SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip FROM api_keys WHERE user_id = $1 AND COALESCE(is_virtual,FALSE) = TRUE ORDER BY created_at DESC", user_id)
+            conditions = ["user_id = $1", "COALESCE(is_virtual, FALSE) = TRUE"]
+            params: list[Any] = [user_id]
+            param_idx = 1
+            if name_filter:
+                param_idx += 1
+                conditions.append(f"LOWER(name) LIKE ${param_idx}")
+                params.append(f"%{name_filter.lower()}%")
+            if status_filter:
+                param_idx += 1
+                conditions.append(f"status = ${param_idx}")
+                params.append(status_filter)
+            if org_id is not None:
+                param_idx += 1
+                conditions.append(f"org_id = ${param_idx}")
+                params.append(org_id)
+            if team_id is not None:
+                param_idx += 1
+                conditions.append(f"team_id = ${param_idx}")
+                params.append(team_id)
+            if created_after_dt:
+                param_idx += 1
+                conditions.append(f"created_at >= ${param_idx}")
+                params.append(created_after_dt.replace(tzinfo=None))
+            if created_before_dt:
+                param_idx += 1
+                conditions.append(f"created_at <= ${param_idx}")
+                params.append(created_before_dt.replace(tzinfo=None))
+            where_clause = " AND ".join(conditions)
+            rows = await db.fetch(
+                "SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip "
+                f"FROM api_keys WHERE {where_clause} ORDER BY created_at DESC",
+                *params,
+            )
             items = [APIKeyMetadata(**dict(r)) for r in rows]
         else:
-            cur = await db.execute("SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip FROM api_keys WHERE user_id = ? AND COALESCE(is_virtual,0) = 1 ORDER BY created_at DESC", (user_id,))
+            conditions = ["user_id = ?", "COALESCE(is_virtual,0) = 1"]
+            params2: list[Any] = [user_id]
+            if name_filter:
+                conditions.append("LOWER(name) LIKE ?")
+                params2.append(f"%{name_filter.lower()}%")
+            if status_filter:
+                conditions.append("status = ?")
+                params2.append(status_filter)
+            if org_id is not None:
+                conditions.append("org_id = ?")
+                params2.append(org_id)
+            if team_id is not None:
+                conditions.append("team_id = ?")
+                params2.append(team_id)
+            if created_after_dt:
+                conditions.append("datetime(created_at) >= datetime(?)")
+                params2.append(created_after_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            if created_before_dt:
+                conditions.append("datetime(created_at) <= datetime(?)")
+                params2.append(created_before_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            where_clause = " AND ".join(conditions)
+            cur = await db.execute(
+                "SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip "
+                f"FROM api_keys WHERE {where_clause} ORDER BY datetime(created_at) DESC",
+                tuple(params2),
+            )
             rows = await cur.fetchall()
             items = [
                 APIKeyMetadata(
@@ -2206,6 +2741,8 @@ async def admin_list_virtual_keys(
                 ) for r in rows
             ]
         return items
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Admin failed to list virtual keys for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list virtual keys")
@@ -2356,6 +2893,171 @@ async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> Dict[st
         raise HTTPException(status_code=500, detail="Failed to set notes title settings") from e
 
 
+@router.get(
+    "/users/profile",
+    response_model=UserProfileBatchResponse,
+    response_model_exclude_none=True,
+)
+async def admin_list_user_profiles(
+    sections: Optional[str] = Query(
+        None, description="Comma-separated list of sections to include"
+    ),
+    include_sources: bool = Query(
+        False, description="Include per-field source attribution"
+    ),
+    include_raw: bool = Query(
+        False, description="Include raw stored overrides"
+    ),
+    mask_secrets: bool = Query(
+        True, description="Mask secret values in the response"
+    ),
+    user_ids: Optional[str] = Query(
+        None, description="Comma-separated list of user IDs to include"
+    ),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    team_id: Optional[int] = Query(None, description="Restrict to a specific team"),
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    search: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    http_request: Request = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    session_manager=Depends(get_session_manager_dep),
+) -> UserProfileBatchResponse:
+    """
+    Get batch profile summaries within admin scope.
+    """
+    batch_start = time.perf_counter()
+    user_id_list = _parse_user_id_list(user_ids)
+    target_ids = await _load_bulk_user_candidates(
+        principal=principal,
+        org_id=org_id,
+        team_id=team_id,
+        role=role,
+        is_active=is_active,
+        search=search,
+        user_ids=user_id_list,
+    )
+    total = len(target_ids)
+    offset = (page - 1) * limit
+    page_ids = target_ids[offset : offset + limit]
+
+    db_pool = await get_db_pool()
+    service = UserProfileService(db_pool)
+    requested = service.parse_sections(sections)
+    if requested is None:
+        requested = {"identity", "memberships", "quotas"}
+    api_mgr = await get_api_key_manager()
+
+    repo = await AuthnzUsersRepo.from_pool()
+    profiles: List[UserProfileResponse] = []
+    for user_id in page_ids:
+        user = await repo.get_user_by_id(int(user_id))
+        if not user:
+            continue
+        user_dict: Dict[str, Any] = dict(user)
+        user_dict.pop("password_hash", None)
+
+        security: Optional[Dict[str, Any]] = None
+        if "security" in requested:
+            security = await service.build_security(
+                user_id=int(user_id),
+                session_manager=session_manager,
+                api_key_manager=api_mgr,
+            )
+
+        profile = await service.build_profile(
+            user=user_dict,
+            sections=requested,
+            security=security,
+            include_sources=include_sources,
+            include_raw=include_raw,
+            mask_secrets=mask_secrets,
+            metrics_scope="batch",
+        )
+        profiles.append(UserProfileResponse(**profile))
+
+    pages = (total + limit - 1) // limit if limit else 0
+    response = UserProfileBatchResponse(
+        profiles=profiles,
+        total=total,
+        page=page,
+        limit=limit,
+        pages=pages,
+    )
+
+    try:
+        registry = service._get_metrics_registry()
+        if registry:
+            page_size = len(page_ids)
+            latency_ms = (time.perf_counter() - batch_start) * 1000.0
+            registry.observe(
+                "profile_batch_latency_ms",
+                latency_ms,
+                labels={"page_size": str(page_size)},
+            )
+            threshold_ms = UserProfileService.batch_sla_threshold_ms(max(1, page_size))
+            if latency_ms > threshold_ms:
+                registry.increment(
+                    "profile_batch_sla_breach_total",
+                    1,
+                    labels={"page_size": str(page_size)},
+                )
+                logger.warning(
+                    "Profile batch SLA exceeded: {:.2f}ms for page_size={} (threshold {}ms)",
+                    latency_ms,
+                    page_size,
+                    threshold_ms,
+                )
+            timeout_ms = UserProfileService.batch_timeout_ms()
+            if latency_ms > timeout_ms:
+                registry.increment(
+                    "profile_batch_timeout_total",
+                    1,
+                    labels={"page_size": str(page_size)},
+                )
+                logger.warning(
+                    "Profile batch timeout threshold exceeded: {:.2f}ms for page_size={} (timeout {}ms)",
+                    latency_ms,
+                    page_size,
+                    timeout_ms,
+                )
+    except Exception:
+        pass
+    try:
+        metadata = {
+            "filters": {
+                "user_ids_count": len(user_id_list or []),
+                "org_id": org_id,
+                "team_id": team_id,
+                "role": role,
+                "is_active": is_active,
+                "search": search,
+            },
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "sections": sorted(list(requested or [])),
+            "include_sources": include_sources,
+            "include_raw": include_raw,
+            "mask_secrets": mask_secrets,
+        }
+        await _emit_admin_audit_event(
+            http_request,
+            principal,
+            event_type="data.read",
+            category="data_access",
+            resource_type="user_profile",
+            resource_id=None,
+            action="user_profile.batch_read",
+            metadata=metadata,
+        )
+    except Exception:
+        pass
+    return response
+
+
 @router.get("/users/{user_id}")
 async def get_user_details(
     user_id: int,
@@ -2400,6 +3102,415 @@ async def get_user_details(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve user details",
         ) from e
+
+
+@router.get(
+    "/users/{user_id}/profile",
+    response_model=UserProfileResponse,
+    response_model_exclude_none=True,
+)
+async def admin_get_user_profile(
+    user_id: int,
+    sections: Optional[str] = Query(
+        None, description="Comma-separated list of sections to include"
+    ),
+    include_sources: bool = Query(
+        False, description="Include per-field source attribution"
+    ),
+    include_raw: bool = Query(
+        False, description="Include raw stored overrides"
+    ),
+    mask_secrets: bool = Query(
+        True, description="Mask secret values in the response"
+    ),
+    http_request: Request = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    session_manager=Depends(get_session_manager_dep),
+) -> UserProfileResponse:
+    """
+    Get a unified user profile (admin scope).
+    """
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+
+        repo = await AuthnzUsersRepo.from_pool()
+        user = await repo.get_user_by_id(user_id)
+        if not user:
+            raise UserNotFoundError(f"User {user_id}")
+
+        user_dict: Dict[str, Any] = dict(user)
+        user_dict.pop("password_hash", None)
+
+        db_pool = await get_db_pool()
+        service = UserProfileService(db_pool)
+        requested = service.parse_sections(sections)
+        api_mgr = await get_api_key_manager()
+        security = await service.build_security(
+            user_id=int(user_id),
+            session_manager=session_manager,
+            api_key_manager=api_mgr,
+        )
+        profile = await service.build_profile(
+            user=user_dict,
+            sections=requested,
+            security=security,
+            include_sources=include_sources,
+            include_raw=include_raw,
+            mask_secrets=mask_secrets,
+            metrics_scope="admin",
+        )
+        response = UserProfileResponse(**profile)
+        try:
+            metadata = {
+                "sections": sorted(list(requested or [])),
+                "include_sources": include_sources,
+                "include_raw": include_raw,
+                "mask_secrets": mask_secrets,
+            }
+            await _emit_admin_audit_event(
+                http_request,
+                principal,
+                event_type="data.read",
+                category="data_access",
+                resource_type="user_profile",
+                resource_id=str(user_id),
+                action="user_profile.read",
+                metadata=metadata,
+            )
+        except Exception:
+            pass
+        return response
+
+    except UserNotFoundError as err:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {user_id} not found",
+        ) from err
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to build profile for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve user profile",
+        ) from e
+
+
+@router.patch("/users/{user_id}/profile", response_model=UserProfileUpdateResponse)
+async def admin_update_user_profile(
+    user_id: int,
+    payload: UserProfileUpdateRequest,
+    http_request: Request = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> UserProfileUpdateResponse:
+    """
+    Update a user's profile (admin scope).
+    """
+    if not payload.updates:
+        return _profile_error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code="profile_update_invalid",
+            detail="No updates provided",
+            errors=[UserProfileErrorDetail(key="updates", message="missing")],
+        )
+
+    await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+
+    db_pool = await get_db_pool()
+    repo = await AuthnzUsersRepo.from_pool()
+    user = await repo.get_user_by_id(int(user_id))
+    if not user:
+        return _profile_error_response(
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code="profile_update_not_found",
+            detail=f"User {user_id} not found",
+            errors=[UserProfileErrorDetail(key="user_id", message="not_found")],
+        )
+    profile_service = UserProfileService(db_pool)
+    current_version = await profile_service.get_profile_version(user_id=int(user_id))
+    if payload.profile_version is not None:
+        if not profile_service.versions_match(current_version, payload.profile_version):
+            return _profile_error_response(
+                status_code=status.HTTP_409_CONFLICT,
+                error_code="profile_version_mismatch",
+                detail="profile_version_mismatch",
+                errors=[UserProfileErrorDetail(key="profile_version", message="mismatch")],
+            )
+
+    roles = _derive_profile_update_roles(principal)
+    service = UserProfileUpdateService(db_pool)
+    updates = [(entry.key, entry.value) for entry in payload.updates]
+    preflight = await service.apply_updates(
+        user_id=int(user_id),
+        updates=updates,
+        roles=roles,
+        dry_run=True,
+        db_conn=db,
+        updated_by=principal.user_id,
+        scope=ProfileUpdateScope(
+            actor_user_id=principal.user_id,
+            active_org_id=principal.active_org_id,
+            active_team_id=principal.active_team_id,
+        ),
+    )
+
+    error_payload = classify_profile_update_skips(preflight.skipped)
+    if error_payload:
+        status_code, error_code, detail, errors = error_payload
+        return _profile_error_response(
+            status_code=status_code,
+            error_code=error_code,
+            detail=detail,
+            errors=errors,
+        )
+
+    if payload.dry_run:
+        response = UserProfileUpdateResponse(
+            profile_version=current_version,
+            applied=preflight.applied,
+            skipped=[],
+        )
+    else:
+        result = await service.apply_updates(
+            user_id=int(user_id),
+            updates=updates,
+            roles=roles,
+            dry_run=False,
+            db_conn=db,
+            updated_by=principal.user_id,
+            scope=ProfileUpdateScope(
+                actor_user_id=principal.user_id,
+                active_org_id=principal.active_org_id,
+                active_team_id=principal.active_team_id,
+            ),
+        )
+        current_version = await profile_service.get_profile_version(user_id=int(user_id))
+        skipped = [UserProfileUpdateError(**item) for item in result.skipped]
+        response = UserProfileUpdateResponse(
+            profile_version=current_version,
+            applied=result.applied,
+            skipped=skipped,
+        )
+    try:
+        metadata = {
+            "dry_run": payload.dry_run,
+            "update_keys": [entry.key for entry in payload.updates],
+            "applied_count": len(response.applied),
+            "skipped_count": len(response.skipped),
+        }
+        await _emit_admin_audit_event(
+            http_request,
+            principal,
+            event_type="data.read" if payload.dry_run else "data.update",
+            category="data_access" if payload.dry_run else "data_modification",
+            resource_type="user_profile",
+            resource_id=str(user_id),
+            action="user_profile.update_preview" if payload.dry_run else "user_profile.update",
+            metadata=metadata,
+        )
+    except Exception:
+        pass
+    return response
+
+
+@router.post("/users/profile/bulk", response_model=UserProfileBulkUpdateResponse)
+async def admin_bulk_update_user_profiles(
+    payload: UserProfileBulkUpdateRequest,
+    http_request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> UserProfileBulkUpdateResponse:
+    """
+    Bulk update user profiles (admin scope).
+    """
+    if not payload.updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided")
+
+    target_ids = await _load_bulk_user_candidates(
+        principal=principal,
+        org_id=payload.org_id,
+        team_id=payload.team_id,
+        role=payload.role,
+        is_active=payload.is_active,
+        search=payload.search,
+        user_ids=payload.user_ids,
+    )
+    total_targets = len(target_ids)
+    threshold = _get_bulk_confirm_threshold()
+    if not payload.dry_run and total_targets > threshold and not payload.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "bulk_update_confirm_required",
+                "target_count": total_targets,
+                "threshold": threshold,
+            },
+        )
+
+    db_pool = await get_db_pool()
+    update_service = UserProfileUpdateService(db_pool)
+    profile_service = UserProfileService(db_pool)
+    catalog = load_user_profile_catalog()
+    catalog_map = {entry.key: entry for entry in catalog.entries}
+    user_repo = await AuthnzUsersRepo.from_pool()
+    roles = _derive_profile_update_roles(principal)
+    updates = [(entry.key, entry.value) for entry in payload.updates]
+    results: List[UserProfileBulkUpdateUserResult] = []
+    updated_count = 0
+    skipped_count = 0
+    failed_count = 0
+
+    for user_id in target_ids:
+        try:
+            await _enforce_admin_user_scope(principal, int(user_id), require_hierarchy=True)
+        except HTTPException as exc:
+            failed_count += 1
+            results.append(
+                UserProfileBulkUpdateUserResult(
+                    user_id=int(user_id),
+                    error=str(exc.detail) if exc.detail else "forbidden",
+                )
+            )
+            continue
+
+        try:
+            before_values = await _build_bulk_update_before_values(
+                user_id=int(user_id),
+                updates=payload.updates,
+                profile_service=profile_service,
+                user_repo=user_repo,
+                catalog_map=catalog_map,
+            )
+
+            if payload.dry_run:
+                result = await update_service.apply_updates(
+                    user_id=int(user_id),
+                    updates=updates,
+                    roles=roles,
+                    dry_run=True,
+                    db_conn=db_pool,
+                    updated_by=principal.user_id,
+                    scope=ProfileUpdateScope(
+                        actor_user_id=principal.user_id,
+                        active_org_id=principal.active_org_id,
+                        active_team_id=principal.active_team_id,
+                    ),
+                )
+            else:
+                async with db_pool.transaction() as conn:
+                    result = await update_service.apply_updates(
+                        user_id=int(user_id),
+                        updates=updates,
+                        roles=roles,
+                        dry_run=False,
+                        db_conn=conn,
+                        updated_by=principal.user_id,
+                        scope=ProfileUpdateScope(
+                            actor_user_id=principal.user_id,
+                            active_org_id=principal.active_org_id,
+                            active_team_id=principal.active_team_id,
+                        ),
+                    )
+
+            profile_version = await profile_service.get_profile_version(user_id=int(user_id))
+            skipped_entries = [UserProfileUpdateError(**item) for item in result.skipped]
+            applied_keys = set(result.applied)
+            diffs = [
+                UserProfileBulkUpdateDiff(
+                    key=entry.key,
+                    before=before_values.get(entry.key),
+                    after=_mask_profile_diff_value(
+                        profile_service,
+                        catalog_map,
+                        entry.key,
+                        entry.value,
+                    ),
+                )
+                for entry in payload.updates
+                if entry.key in applied_keys
+            ]
+            results.append(
+                UserProfileBulkUpdateUserResult(
+                    user_id=int(user_id),
+                    profile_version=profile_version,
+                    applied=result.applied,
+                    skipped=skipped_entries,
+                    diffs=diffs,
+                )
+            )
+            if result.applied:
+                updated_count += 1
+            else:
+                skipped_count += 1
+        except HTTPException as exc:
+            failed_count += 1
+            results.append(
+                UserProfileBulkUpdateUserResult(
+                    user_id=int(user_id),
+                    error=str(exc.detail) if exc.detail else "update_failed",
+                )
+            )
+        except Exception as exc:
+            logger.error("Bulk profile update failed for user {}: {}", user_id, exc)
+            failed_count += 1
+            results.append(
+                UserProfileBulkUpdateUserResult(
+                    user_id=int(user_id),
+                    error="update_failed",
+                )
+            )
+
+    try:
+        update_keys = [entry.key for entry in payload.updates]
+        metadata = {
+            "dry_run": payload.dry_run,
+            "confirm": payload.confirm,
+            "target_count": total_targets,
+            "updated": updated_count,
+            "skipped": skipped_count,
+            "failed": failed_count,
+            "filters": {
+                "org_id": payload.org_id,
+                "team_id": payload.team_id,
+                "role": payload.role,
+                "is_active": payload.is_active,
+                "search": payload.search,
+                "user_ids_count": len(payload.user_ids or []),
+            },
+            "update_keys": update_keys,
+        }
+        await _emit_admin_audit_event(
+            http_request,
+            principal,
+            event_type="data.read" if payload.dry_run else "data.update",
+            category="data_access" if payload.dry_run else "data_modification",
+            resource_type="user_profile",
+            resource_id=None,
+            action="user_profile.bulk_preview" if payload.dry_run else "user_profile.bulk_update",
+            metadata=metadata,
+        )
+    except Exception:
+        pass
+
+    try:
+        registry = profile_service._get_metrics_registry()
+        if registry:
+            registry.increment(
+                "profile_bulk_update_total",
+                total_targets,
+                labels={"dry_run": str(payload.dry_run).lower()},
+            )
+    except Exception:
+        pass
+
+    return UserProfileBulkUpdateResponse(
+        total_targets=total_targets,
+        updated=updated_count,
+        skipped=skipped_count,
+        failed=failed_count,
+        dry_run=payload.dry_run,
+        results=results,
+    )
 
 
 @router.put("/users/{user_id}")

@@ -5,6 +5,9 @@ domains:
     ua_profile: chrome_120_win
     impersonate: chrome120
     strategy_order: [jsonld, schema, regex, llm, cluster, trafilatura]
+    schema_rules:
+      title_xpath: "//article//h1"
+      content_xpath: "//article//p"
     extra_headers:
       Referer: https://www.google.com
     respect_robots: true

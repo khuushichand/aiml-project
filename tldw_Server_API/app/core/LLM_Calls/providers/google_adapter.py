@@ -95,7 +95,10 @@ class GoogleAdapter(ChatProvider):
             merged["tools"] = cfg.get("tools")
         return merged
 
-    def _base_url(self) -> str:
+    def _base_url(self, request: Optional[Dict[str, Any]] = None) -> str:
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip().rstrip("/")
         return os.getenv("GOOGLE_GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
 
     def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
@@ -327,6 +330,7 @@ class GoogleAdapter(ChatProvider):
                 "object": "chat.completion",
                 "choices": choices or [{"index": 0, "message": {"role": "assistant", "content": None}, "finish_reason": None}],
                 "usage": usage,
+                "provider_response": data,
             }
         except Exception:
             return data
@@ -351,7 +355,10 @@ class GoogleAdapter(ChatProvider):
                 if isinstance(part.get("text"), str):
                     text = part.get("text") or ""
                     if text:
-                        yield openai_delta_chunk(text)
+                        yield sse_data({
+                            "choices": [{"delta": {"content": text}}],
+                            "provider_response": event,
+                        })
                         emitted = True
                 elif isinstance(part.get("functionCall"), dict):
                     fc = part.get("functionCall") or {}
@@ -372,7 +379,8 @@ class GoogleAdapter(ChatProvider):
                                     "function": {"name": name, "arguments": arg_str},
                                 }]
                             },
-                        }]
+                        }],
+                        "provider_response": event,
                     })
                     tool_index += 1
                     emitted = True
@@ -385,7 +393,8 @@ class GoogleAdapter(ChatProvider):
                         "index": idx,
                         "delta": {},
                         "finish_reason": finish_reason,
-                    }]
+                    }],
+                    "provider_response": event,
                 })
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
@@ -439,7 +448,7 @@ class GoogleAdapter(ChatProvider):
         if not api_key:
             from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
             raise ChatConfigurationError(provider=self.name, message="Google API Key required.")
-        url = f"{self._base_url()}/models/{model}:generateContent"
+        url = f"{self._base_url(request)}/models/{model}:generateContent"
         headers = self._headers(api_key)
         payload = self._build_payload(request)
         payload = merge_extra_body(payload, request)
@@ -461,7 +470,7 @@ class GoogleAdapter(ChatProvider):
         if not api_key:
             from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
             raise ChatConfigurationError(provider=self.name, message="Google API Key required.")
-        url = f"{self._base_url()}/models/{model}:streamGenerateContent?alt=sse"
+        url = f"{self._base_url(request)}/models/{model}:streamGenerateContent?alt=sse"
         headers = self._headers(api_key)
         payload = self._build_payload(request)
         payload = merge_extra_body(payload, request)

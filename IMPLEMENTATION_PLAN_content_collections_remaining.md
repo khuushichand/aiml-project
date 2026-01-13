@@ -13,17 +13,17 @@
 ## Stage 3: Watchlists Streaming + Forums Phase 3
 **Goal**: Add run streaming over WebSocket and gated forum ingestion.
 **Success Criteria**: WS endpoint streams run status/logs; forum sources can be enabled via feature flag with safe throttling.
-**Tests**: Integration tests for WS run stream; unit tests for forum parsing and dedupe behavior.
-**Status**: Not Started
+**Tests**: Integration tests for WS run stream; API tests for forum feature-flag gating.
+**Status**: Complete
 
 ## Stage 4: Embeddings Worker Hardening
 **Goal**: Validate embeddings queues and worker reliability under partial failures.
 **Success Criteria**: Worker retries and backoff verified; offline Redis behavior covered; smoke test for full queue → embedding → retrieval path.
-**Tests**: Integration smoke test for embeddings worker; regression tests for retry/offline behavior.
-**Status**: Not Started
+**Tests**: Embeddings jobs worker retry/backoff test; queue → embedding → retrieval smoke test; best-effort enqueue when queue unavailable.
+**Status**: Complete
 
 ## Stage 5: Postgres Enablement
 **Goal**: Make Collections/Watchlists schema and migrations Postgres-compatible.
 **Success Criteria**: Migrations run on Postgres; core watchlists/collections flows pass against Postgres backend.
-**Tests**: Integration tests using isolated Postgres fixture; migration tests for Collections/Watchlists tables.
-**Status**: Not Started
+**Tests**: Postgres integration smoke tests for Collections and Watchlists tables via isolated fixture.
+**Status**: Complete

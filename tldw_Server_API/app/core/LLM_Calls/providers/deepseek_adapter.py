@@ -139,8 +139,11 @@ class DeepSeekAdapter(ChatProvider):
             merged["logit_bias"] = cfg.get("logit_bias")
         return merged
 
-    def _base_url(self, cfg: Optional[Dict[str, Any]]) -> str:
+    def _base_url(self, cfg: Optional[Dict[str, Any]], request: Optional[Dict[str, Any]] = None) -> str:
         default_base = "https://api.deepseek.com"
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip().rstrip("/")
         api_base = None
         if cfg:
             api_base = ((cfg.get("deepseek_api") or {}).get("api_base_url"))
@@ -232,7 +235,7 @@ class DeepSeekAdapter(ChatProvider):
             from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
             raise ChatConfigurationError(provider=self.name, message="DeepSeek API Key required.")
         cfg = request.get("app_config") or {}
-        url = f"{self._base_url(cfg)}/chat/completions"
+        url = f"{self._base_url(cfg, request)}/chat/completions"
         headers = self._headers(api_key)
         payload = self._build_payload(request)
         payload["stream"] = False
@@ -271,7 +274,7 @@ class DeepSeekAdapter(ChatProvider):
             from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
             raise ChatConfigurationError(provider=self.name, message="DeepSeek API Key required.")
         cfg = request.get("app_config") or {}
-        url = f"{self._base_url(cfg)}/chat/completions"
+        url = f"{self._base_url(cfg, request)}/chat/completions"
         headers = self._headers(api_key)
         payload = self._build_payload(request)
         payload["stream"] = True

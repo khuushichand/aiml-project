@@ -287,6 +287,7 @@
             <span class="endpoint-path">/api/v1/audit/export - Audit Logs Export</span>
         </h2>
         <p>Export audit logs (JSON or CSV). Admin-only. Use presets or custom filters.</p>
+        <div id="adminAuditStatus" class="text-muted" style="margin-bottom:8px;">Audit logging: checking...</div>
 
         <div class="columns">
             <div class="column">
@@ -337,7 +338,10 @@
             <button class="api-button" id="btnAdminAuditLast24h">Last 24h High-Risk (CSV)</button>
             <button class="api-button" id="btnAdminAuditApiEvents">API Events (CSV)</button>
             <button class="api-button" id="btnAdminAuditPreview">Preview JSON</button>
+            <button class="api-button" id="btnAdminAuditOrgInvites">Preset: Org Invites</button>
+            <button class="api-button" id="btnAdminAuditRegCodes">Preset: Registration Codes</button>
         </div>
+        <small class="text-muted">Org invites preset sets DATA_MODIFICATION + DATA_WRITE/DATA_UPDATE and last 24h window.</small>
 
         <h3>Preview:</h3>
         <pre id="adminAuditPreview">---</pre>

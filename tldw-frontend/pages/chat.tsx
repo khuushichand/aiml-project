@@ -36,8 +36,84 @@ interface ProvidersResponse {
   total_configured?: number;
 }
 
+interface ConversationListItem {
+  id: string;
+  character_id?: number;
+  title?: string;
+  state: string;
+  topic_label?: string;
+  bm25_norm?: number | null;
+  last_modified: string;
+  created_at: string;
+  message_count: number;
+  keywords: string[];
+  cluster_id?: string | null;
+  source?: string | null;
+  external_ref?: string | null;
+  version: number;
+}
+
+interface ConversationListPagination {
+  limit: number;
+  offset: number;
+  total: number;
+  has_more: boolean;
+}
+
+interface ConversationListResponse {
+  items: ConversationListItem[];
+  pagination: ConversationListPagination;
+}
+
+interface ConversationTreeNode {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string;
+  children: ConversationTreeNode[];
+  truncated: boolean;
+}
+
+interface ConversationTreeResponse {
+  conversation: {
+    id: string;
+    title?: string | null;
+    state: string;
+    topic_label?: string | null;
+    last_modified: string;
+  };
+  root_threads: ConversationTreeNode[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total_root_threads: number;
+    has_more: boolean;
+  };
+  depth_cap: number;
+}
+
+interface ChatAnalyticsBucket {
+  bucket_start: string;
+  topic_label?: string | null;
+  state: string;
+  count: number;
+}
+
+interface ChatAnalyticsResponse {
+  buckets: ChatAnalyticsBucket[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+    has_more: boolean;
+  };
+  bucket_granularity: 'day' | 'week';
+}
+
 const DEFAULT_SYSTEM_PROMPT = 'System prompt text';
 const DWELL_TIME_THRESHOLD_MS = 3000;
+const CONVERSATION_PAGE_LIMIT = 30;
+const ANALYTICS_DEFAULT_RANGE_DAYS = 14;
 
 export default function ChatPage() {
   const { show } = useToast();
@@ -53,11 +129,51 @@ export default function ChatPage() {
   const [saveToDb, setSaveToDb] = useState<boolean>(false);
   const abortRef = useRef<AbortController | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const { sessions, addSession, mergeSessions, migrateSessionId, lastSessionIdRef } = useChatSessions();
+  const [mainTab, setMainTab] = useState<'chat' | 'analytics'>('chat');
+  const [conversationItems, setConversationItems] = useState<ConversationListItem[]>([]);
+  const [conversationPagination, setConversationPagination] = useState<ConversationListPagination>({
+    limit: CONVERSATION_PAGE_LIMIT,
+    offset: 0,
+    total: 0,
+    has_more: false,
+  });
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [conversationError, setConversationError] = useState<string | null>(null);
+  const [conversationQuery, setConversationQuery] = useState('');
+  const [conversationState, setConversationState] = useState('all');
+  const [conversationTopic, setConversationTopic] = useState('');
+  const [conversationKeywords, setConversationKeywords] = useState('');
+  const [conversationOrderBy, setConversationOrderBy] = useState<'bm25' | 'recency' | 'hybrid' | 'topic'>('recency');
+  const [conversationOffset, setConversationOffset] = useState(0);
+  const [treeViewEnabled, setTreeViewEnabled] = useState(false);
+  const [treeData, setTreeData] = useState<ConversationTreeResponse | null>(null);
+  const [treeLoading, setTreeLoading] = useState(false);
+  const [treeError, setTreeError] = useState<string | null>(null);
+  const [treeOffset, setTreeOffset] = useState(0);
+  const [treeMaxDepth, setTreeMaxDepth] = useState(4);
+  const [analyticsBuckets, setAnalyticsBuckets] = useState<ChatAnalyticsBucket[]>([]);
+  const [analyticsPagination, setAnalyticsPagination] = useState({
+    limit: 100,
+    offset: 0,
+    total: 0,
+    has_more: false,
+  });
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
+  const [analyticsGranularity, setAnalyticsGranularity] = useState<'day' | 'week'>('day');
+  const [analyticsStartDate, setAnalyticsStartDate] = useState(() => {
+    const start = new Date();
+    start.setUTCDate(start.getUTCDate() - ANALYTICS_DEFAULT_RANGE_DAYS);
+    return start.toISOString().slice(0, 10);
+  });
+  const [analyticsEndDate, setAnalyticsEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [knowledgeSaveById, setKnowledgeSaveById] = useState<Record<string, { status?: string; pending?: boolean }>>({});
+  const { addSession, mergeSessions, migrateSessionId, lastSessionIdRef } = useChatSessions();
   const [preset, setPreset] = useState<'creative'|'balanced'|'precise'|'json'>('balanced');
   const [advanced, setAdvanced] = useState<string>('{}');
   const [recentModels, setRecentModels] = useState<string[]>([]);
   const pageSize = 50;
+  const treePageLimit = 6;
   const [pageOffset, setPageOffset] = useState(0);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [currentProvider, setCurrentProvider] = useState<string | undefined>(undefined);
@@ -151,6 +267,295 @@ export default function ChatPage() {
     }
   }, [conversationId, getLatestUserQuery]);
 
+  const normalizeText = (value: unknown): string => {
+    if (value === null || value === undefined) return '';
+    return String(value).trim();
+  };
+
+  const buildDocIdFromPayload = (doc: Record<string, any>): string => {
+    return (
+      normalizeText(doc.id) ||
+      normalizeText(doc.doc_id) ||
+      normalizeText(doc.document_id) ||
+      normalizeText(doc.metadata?.doc_id) ||
+      normalizeText(doc.metadata?.document_id) ||
+      ''
+    );
+  };
+
+  const buildChunkIdsFromPayload = (doc: Record<string, any>): string[] => {
+    const list = doc.chunk_ids || doc.chunkIds || doc.metadata?.chunk_ids || doc.metadata?.chunkIds;
+    const single = doc.chunk_id || doc.chunkId || doc.metadata?.chunk_id || doc.metadata?.chunkId;
+    if (Array.isArray(list)) {
+      return list.map((id: unknown) => normalizeText(id)).filter(Boolean);
+    }
+    if (single) {
+      return [normalizeText(single)].filter(Boolean);
+    }
+    return [];
+  };
+
+  const buildCorpusFromPayload = (doc: Record<string, any>): string => {
+    return (
+      normalizeText(doc.corpus) ||
+      normalizeText(doc.source) ||
+      normalizeText(doc.metadata?.corpus) ||
+      normalizeText(doc.metadata?.source) ||
+      normalizeText(doc.metadata?.source_name) ||
+      ''
+    );
+  };
+
+  const extractCitationTargets = (payload: unknown) => {
+    const docIds = new Set<string>();
+    const chunkIds = new Set<string>();
+    const corpora = new Set<string>();
+
+    const addDoc = (doc: Record<string, any>) => {
+      const docId = buildDocIdFromPayload(doc);
+      if (docId) docIds.add(docId);
+      buildChunkIdsFromPayload(doc).forEach((id) => chunkIds.add(id));
+      const corpus = buildCorpusFromPayload(doc);
+      if (corpus) corpora.add(corpus);
+    };
+
+    const addCitation = (citation: Record<string, any>) => {
+      const docId = normalizeText(citation.doc_id || citation.document_id);
+      if (docId) docIds.add(docId);
+      const chunkId = normalizeText(citation.chunk_id);
+      if (chunkId) chunkIds.add(chunkId);
+      const chunkList = citation.chunk_ids;
+      if (Array.isArray(chunkList)) {
+        chunkList.map((id: unknown) => normalizeText(id)).filter(Boolean).forEach((id: string) => chunkIds.add(id));
+      }
+    };
+
+    const collectFromContainer = (container: Record<string, any>) => {
+      const docs = container.documents || container.results || container.items;
+      if (Array.isArray(docs)) {
+        docs.filter(Boolean).forEach((doc: Record<string, any>) => addDoc(doc));
+      }
+      const citations = container.citations;
+      if (Array.isArray(citations)) {
+        citations.filter(Boolean).forEach((c: Record<string, any>) => addCitation(c));
+      }
+      const chunkCitations = container.chunk_citations || container.chunkCitations;
+      if (Array.isArray(chunkCitations)) {
+        chunkCitations.filter(Boolean).forEach((c: Record<string, any>) => addCitation(c));
+      }
+    };
+
+    if (payload && typeof payload === 'object') {
+      collectFromContainer(payload as Record<string, any>);
+      const nested = (payload as Record<string, any>).data;
+      if (nested && typeof nested === 'object') {
+        collectFromContainer(nested);
+      }
+    }
+
+    return {
+      docIds: Array.from(docIds),
+      chunkIds: Array.from(chunkIds),
+      corpora: Array.from(corpora),
+    };
+  };
+
+  const collectCitationTargetsForMessage = useCallback((messageId?: string) => {
+    if (!messageId) return { docIds: [] as string[], chunkIds: [] as string[], corpus: undefined as string | undefined };
+    const idx = uiMessages.findIndex((m) => m.messageId === messageId);
+    if (idx < 0) return { docIds: [], chunkIds: [], corpus: undefined };
+
+    let start = -1;
+    for (let i = idx - 1; i >= 0; i--) {
+      if (uiMessages[i]?.role === 'user') {
+        start = i;
+        break;
+      }
+    }
+    let end = uiMessages.length;
+    for (let i = idx + 1; i < uiMessages.length; i++) {
+      if (uiMessages[i]?.role === 'user') {
+        end = i;
+        break;
+      }
+    }
+
+    const docIds = new Set<string>();
+    const chunkIds = new Set<string>();
+    const corpora = new Set<string>();
+
+    for (let i = start + 1; i < end; i++) {
+      if (i === idx) continue;
+      const msg = uiMessages[i];
+      if (msg?.role !== 'tool') continue;
+      const raw = msg.tool?.content ?? msg.text ?? '';
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw);
+        const targets = extractCitationTargets(parsed);
+        targets.docIds.forEach((id) => docIds.add(id));
+        targets.chunkIds.forEach((id) => chunkIds.add(id));
+        targets.corpora.forEach((c) => corpora.add(c));
+      } catch {
+        continue;
+      }
+    }
+
+    const corpus = corpora.size === 1 ? Array.from(corpora)[0] : undefined;
+    return { docIds: Array.from(docIds), chunkIds: Array.from(chunkIds), corpus };
+  }, [uiMessages]);
+
+  const getMessageText = useCallback((msg: ChatMessage): string => {
+    if (typeof msg.content === 'string') return msg.content;
+    return msg.content?.text || '';
+  }, []);
+
+  const parseConversationKeywords = useCallback(() => {
+    return conversationKeywords
+      .split(',')
+      .map((kw) => kw.trim())
+      .filter(Boolean);
+  }, [conversationKeywords]);
+
+  const fetchConversations = useCallback(async (nextOffset: number, append: boolean = false) => {
+    setConversationLoading(true);
+    setConversationError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: String(CONVERSATION_PAGE_LIMIT),
+        offset: String(nextOffset),
+        order_by: conversationOrderBy,
+      });
+      if (conversationQuery.trim()) params.set('query', conversationQuery.trim());
+      if (conversationState !== 'all') params.set('state', conversationState);
+      if (conversationTopic.trim()) params.set('topic_label', conversationTopic.trim());
+      const keywords = parseConversationKeywords();
+      keywords.forEach((kw) => params.append('keywords', kw));
+
+      const data = await apiClient.get<ConversationListResponse>(`/chat/conversations?${params.toString()}`);
+      setConversationItems((prev) => (append ? [...prev, ...(data?.items || [])] : (data?.items || [])));
+      setConversationPagination(data?.pagination || {
+        limit: CONVERSATION_PAGE_LIMIT,
+        offset: nextOffset,
+        total: data?.items?.length || 0,
+        has_more: false,
+      });
+      setConversationOffset(nextOffset);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load conversations';
+      setConversationError(message);
+    } finally {
+      setConversationLoading(false);
+    }
+  }, [conversationOrderBy, conversationQuery, conversationState, conversationTopic, parseConversationKeywords]);
+
+  const fetchConversationTree = useCallback(async (nextOffset: number) => {
+    if (!conversationId) return;
+    setTreeLoading(true);
+    setTreeError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: String(treePageLimit),
+        offset: String(nextOffset),
+        max_depth: String(treeMaxDepth),
+      });
+      const data = await apiClient.get<ConversationTreeResponse>(
+        `/chat/conversations/${conversationId}/tree?${params.toString()}`
+      );
+      setTreeData(data);
+      setTreeOffset(nextOffset);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load tree';
+      setTreeError(message);
+    } finally {
+      setTreeLoading(false);
+    }
+  }, [conversationId, treeMaxDepth, treePageLimit]);
+
+  const fetchAnalytics = useCallback(async (nextOffset: number) => {
+    setAnalyticsLoading(true);
+    setAnalyticsError(null);
+    try {
+      const params = new URLSearchParams({
+        start_date: analyticsStartDate,
+        end_date: analyticsEndDate,
+        bucket_granularity: analyticsGranularity,
+        limit: String(analyticsPagination.limit),
+        offset: String(nextOffset),
+      });
+      const data = await apiClient.get<ChatAnalyticsResponse>(`/chat/analytics?${params.toString()}`);
+      setAnalyticsBuckets(data?.buckets || []);
+      setAnalyticsPagination(data?.pagination || {
+        limit: analyticsPagination.limit,
+        offset: nextOffset,
+        total: data?.buckets?.length || 0,
+        has_more: false,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load analytics';
+      setAnalyticsError(message);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }, [analyticsEndDate, analyticsGranularity, analyticsPagination.limit, analyticsStartDate]);
+
+  const handleKnowledgeSave = useCallback(async (msg: ChatMessage) => {
+    if (!conversationId || !msg.messageId) {
+      show({ title: 'Save unavailable', description: 'Missing conversation or message ID.', variant: 'warning' });
+      return;
+    }
+    const snippet = getMessageText(msg).trim();
+    if (!snippet) {
+      show({ title: 'Save skipped', description: 'No message content found.', variant: 'warning' });
+      return;
+    }
+    setKnowledgeSaveById((prev) => ({
+      ...prev,
+      [msg.messageId as string]: { status: prev[msg.messageId as string]?.status, pending: true },
+    }));
+    try {
+      const res = await apiClient.post<any>('/chat/knowledge/save', {
+        conversation_id: conversationId,
+        message_id: msg.messageId,
+        snippet,
+        export_to: 'none',
+      });
+      const status = res?.export_status || 'not_requested';
+      setKnowledgeSaveById((prev) => ({
+        ...prev,
+        [msg.messageId as string]: { status, pending: false },
+      }));
+      show({ title: 'Saved snippet', description: `Export status: ${status}`, variant: 'success' });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Save failed';
+      setKnowledgeSaveById((prev) => ({
+        ...prev,
+        [msg.messageId as string]: { status: prev[msg.messageId as string]?.status, pending: false },
+      }));
+      show({ title: 'Save failed', description: message, variant: 'danger' });
+    }
+  }, [conversationId, getMessageText, show]);
+
+  const handleCopyWithCitations = useCallback(async (msg: ChatMessage) => {
+    const messageText = getMessageText(msg);
+    if (!messageText) return;
+    try {
+      await navigator.clipboard.writeText(messageText);
+      show({ title: 'Answer with citations copied', variant: 'success' });
+      const targets = collectCitationTargetsForMessage(msg.messageId);
+      void sendImplicitFeedback({
+        event_type: 'citation_used',
+        message_id: msg.messageId || undefined,
+        doc_id: targets.docIds.length === 1 ? targets.docIds[0] : undefined,
+        chunk_ids: targets.chunkIds.length ? targets.chunkIds : undefined,
+        impression_list: targets.docIds.length ? targets.docIds : undefined,
+        corpus: targets.corpus,
+      });
+    } catch {
+      show({ title: 'Copy failed', variant: 'danger' });
+    }
+  }, [collectCitationTargetsForMessage, getMessageText, sendImplicitFeedback, show]);
+
   const openFeedbackModal = useCallback((msg: ChatMessage, helpful: boolean | null) => {
     setFeedbackModalMessage(msg);
     setFeedbackModalHelpful(helpful);
@@ -219,6 +624,8 @@ export default function ChatPage() {
     setPageOffset(0);
     setHasMoreHistory(false);
     setFeedbackById({});
+    setTreeViewEnabled(false);
+    setTreeData(null);
   };
 
   // Load saved messages when switching to a known conversation
@@ -356,6 +763,9 @@ export default function ChatPage() {
           if (id) {
             addSession({ id, title, model, created_at: new Date().toISOString() });
           }
+          if (saveToDb) {
+            refreshConversations();
+          }
         });
         show({ title: 'Response complete', variant: 'success' });
       } else {
@@ -386,6 +796,9 @@ export default function ChatPage() {
         if (id) {
           addSession({ id: String(id), title, model, created_at: new Date().toISOString() });
         }
+        if (saveToDb) {
+          refreshConversations();
+        }
         show({ title: 'Response ready', variant: 'success' });
       }
     } catch (error: unknown) {
@@ -404,20 +817,14 @@ export default function ChatPage() {
   const handleFeedback = useCallback(async (messageId: string, helpful: boolean) => {
     if (!messageId) return;
     const nextValue = helpful ? 'up' : 'down';
-    let previousValue: 'up' | 'down' | undefined;
-    let shouldSend = false;
-    setFeedbackById((prev) => {
-      const current = prev[messageId];
-      if (current?.pending) return prev;
-      if (current?.value === nextValue) return prev;
-      previousValue = current?.value;
-      shouldSend = true;
-      return {
-        ...prev,
-        [messageId]: { value: nextValue, pending: true },
-      };
-    });
-    if (!shouldSend) return;
+    const current = feedbackById[messageId];
+    if (current?.pending || current?.value === nextValue) return;
+    const previousValue = current?.value;
+
+    setFeedbackById((prev) => ({
+      ...prev,
+      [messageId]: { value: nextValue, pending: true },
+    }));
 
     try {
       await apiClient.post('/feedback/explicit', {
@@ -440,7 +847,7 @@ export default function ChatPage() {
       }));
       show({ title: 'Feedback failed', description: message, variant: 'danger' });
     }
-  }, [conversationId, show]);
+  }, [conversationId, feedbackById, show]);
 
   const handleDetailedFeedbackSubmit = useCallback(async () => {
     const messageId = feedbackModalMessage?.messageId;
@@ -592,6 +999,10 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    fetchConversations(0, false);
+  }, [fetchConversations]);
+
   // Load sessions from server (first page)
   useEffect(() => {
     const fetchSessions = async () => {
@@ -619,11 +1030,28 @@ export default function ChatPage() {
     setUiMessages([{ role: 'system', text: DEFAULT_SYSTEM_PROMPT }]);
     setPageOffset(0);
     setFeedbackById({});
+    setTreeData(null);
+    setTreeOffset(0);
     (async () => {
       await loadConversationPage(conversationId, 0);
       setPageOffset((p) => p + pageSize);
     })();
   }, [conversationId, loadConversationPage, pageSize]);
+
+  useEffect(() => {
+    if (conversationId) return;
+    if (treeViewEnabled) setTreeViewEnabled(false);
+  }, [conversationId, treeViewEnabled]);
+
+  useEffect(() => {
+    if (!treeViewEnabled || !conversationId) return;
+    fetchConversationTree(0);
+  }, [conversationId, fetchConversationTree, treeViewEnabled]);
+
+  useEffect(() => {
+    if (mainTab !== 'analytics') return;
+    fetchAnalytics(0);
+  }, [analyticsEndDate, analyticsGranularity, analyticsStartDate, fetchAnalytics, mainTab]);
 
   const handleLoadOlder = async () => {
     if (!conversationId) return;
@@ -632,6 +1060,35 @@ export default function ChatPage() {
     setPageOffset((p) => p + pageSize);
     // Re-enable auto-scroll after render tick
     setTimeout(() => { suppressAutoScrollRef.current = false; }, 0);
+  };
+
+  const loadMoreConversations = () => {
+    if (conversationLoading || !conversationPagination.has_more) return;
+    fetchConversations(conversationOffset + CONVERSATION_PAGE_LIMIT, true);
+  };
+
+  const refreshConversations = () => {
+    fetchConversations(0, false);
+  };
+
+  const loadNextTreePage = () => {
+    if (!treeData?.pagination?.has_more || treeLoading) return;
+    fetchConversationTree(treeOffset + treePageLimit);
+  };
+
+  const loadPrevTreePage = () => {
+    if (treeOffset <= 0 || treeLoading) return;
+    fetchConversationTree(Math.max(treeOffset - treePageLimit, 0));
+  };
+
+  const loadNextAnalyticsPage = () => {
+    if (!analyticsPagination.has_more || analyticsLoading) return;
+    fetchAnalytics(analyticsPagination.offset + analyticsPagination.limit);
+  };
+
+  const loadPrevAnalyticsPage = () => {
+    if (analyticsPagination.offset <= 0 || analyticsLoading) return;
+    fetchAnalytics(Math.max(analyticsPagination.offset - analyticsPagination.limit, 0));
   };
 
   const chatuiMessages: ChatMessage[] = useMemo(() => {
@@ -643,13 +1100,42 @@ export default function ChatPage() {
     return toChatMessages(uiMessages, avatarUrl);
   }, [uiMessages, model, currentProvider, providerIconUrl]);
 
+  const maxAnalyticsCount = useMemo(() => {
+    const counts = analyticsBuckets.map((b) => b.count);
+    return Math.max(1, ...counts);
+  }, [analyticsBuckets]);
+
+  const renderTreeNode = useCallback((node: ConversationTreeNode, depth: number) => {
+    const indent = Math.min(depth, 8) * 12;
+    return (
+      <div key={node.id} style={{ marginLeft: indent }} className="mb-2">
+        <div className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs">
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-gray-500">
+            <span>{node.role}</span>
+            <span>{new Date(node.created_at).toLocaleString()}</span>
+          </div>
+          <div className="mt-1 whitespace-pre-wrap text-gray-700">{node.content || '(empty message)'}</div>
+          {node.truncated && (
+            <div className="mt-1 text-[10px] text-amber-600">Truncated (depth or message cap)</div>
+          )}
+        </div>
+        {node.children?.map((child) => renderTreeNode(child, depth + 1))}
+      </div>
+    );
+  }, []);
+
   const renderFeedbackFooter = useCallback((msg: ChatMessage) => {
     if (!msg.messageId) return null;
     if (!msg.role || msg.role === 'user') return null;
+    const messageText = getMessageText(msg);
+    const hasCitations = /(^|\n)\s*(Sources|Citations|References)\b/i.test(messageText);
     const state = feedbackById[msg.messageId] || {};
     const pending = state.pending;
     const upSelected = state.value === 'up';
     const downSelected = state.value === 'down';
+    const saveState = knowledgeSaveById[msg.messageId] || {};
+    const savePending = saveState.pending;
+    const saveStatus = saveState.status;
 
     const baseButton = 'rounded border px-2 py-0.5 text-[11px] transition';
     const upClasses = cn(
@@ -664,7 +1150,7 @@ export default function ChatPage() {
     );
 
     return (
-      <div className="flex items-center gap-2 text-[11px] text-gray-500">
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
         <span>Was this helpful?</span>
         <button
           type="button"
@@ -692,9 +1178,48 @@ export default function ChatPage() {
         >
           Details
         </button>
+        <button
+          type="button"
+          className={cn(
+            baseButton,
+            savePending
+              ? 'border-gray-200 bg-gray-50 text-gray-400'
+              : 'border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+          )}
+          onClick={() => handleKnowledgeSave(msg)}
+          disabled={pending || savePending || !conversationId}
+          aria-label="Save snippet to notes"
+          title={conversationId ? 'Save snippet to Notes' : 'Save requires a saved conversation'}
+        >
+          Save snippet
+        </button>
+        {saveStatus && (
+          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">
+            Export: {saveStatus}
+          </span>
+        )}
+        {hasCitations && (
+          <button
+            type="button"
+            className="rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 hover:bg-gray-100"
+            onClick={() => handleCopyWithCitations(msg)}
+            aria-label="Copy with citations"
+          >
+            Copy with citations
+          </button>
+        )}
       </div>
     );
-  }, [feedbackById, handleFeedback, openFeedbackModal]);
+  }, [
+    conversationId,
+    feedbackById,
+    getMessageText,
+    handleCopyWithCitations,
+    handleFeedback,
+    handleKnowledgeSave,
+    knowledgeSaveById,
+    openFeedbackModal,
+  ]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -731,6 +1256,7 @@ export default function ChatPage() {
   };
 
   useEffect(() => {
+    if (treeViewEnabled) return;
     const el = chatListRef.current;
     if (!el) return;
     if (!scrollLock && !suppressAutoScrollRef.current) {
@@ -739,9 +1265,10 @@ export default function ChatPage() {
     } else {
       setShowJump(!atBottom(el));
     }
-  }, [uiMessages, scrollLock]);
+  }, [scrollLock, treeViewEnabled, uiMessages]);
 
   const onScrollContainer = () => {
+    if (treeViewEnabled) return;
     const el = chatListRef.current;
     if (!el) return;
     setShowJump(!atBottom(el));
@@ -773,26 +1300,246 @@ export default function ChatPage() {
           ]}
         />
         <div className="md:col-span-1 space-y-3">
-          <h2 className="text-lg font-semibold text-gray-800">Conversations</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-gray-800">Conversations</h2>
+            <Button variant="secondary" onClick={startNewChat}>New Chat</Button>
+          </div>
           <div className="rounded-md border bg-white p-3 h-[72vh] overflow-y-auto">
-            <div className="mb-2 flex items-center justify-between text-xs text-gray-600">
-              <div>Count: {sessions.length}</div>
-              <Button variant="secondary" onClick={startNewChat}>New Chat</Button>
+            <div className="mb-3 space-y-2 text-xs text-gray-600">
+              <div className="flex items-center gap-2">
+                <input
+                  className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+                  placeholder="Search titles"
+                  value={conversationQuery}
+                  onChange={(e) => setConversationQuery(e.target.value)}
+                />
+                <Button variant="secondary" onClick={refreshConversations}>Refresh</Button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+                  value={conversationState}
+                  onChange={(e) => setConversationState(e.target.value)}
+                >
+                  <option value="all">All states</option>
+                  <option value="in-progress">In-progress</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="backlog">Backlog</option>
+                  <option value="non-viable">Non-viable</option>
+                </select>
+                <input
+                  className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+                  placeholder="Topic label"
+                  value={conversationTopic}
+                  onChange={(e) => setConversationTopic(e.target.value)}
+                />
+              </div>
+              <input
+                className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+                placeholder="Keywords (comma-separated)"
+                value={conversationKeywords}
+                onChange={(e) => setConversationKeywords(e.target.value)}
+              />
+              <div className="flex flex-wrap gap-2">
+                {(['recency', 'bm25', 'hybrid', 'topic'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={cn(
+                      'rounded-full border px-2 py-0.5 text-[11px] uppercase tracking-wide',
+                      conversationOrderBy === mode
+                        ? 'border-blue-400 bg-blue-50 text-blue-700'
+                        : 'border-gray-300 text-gray-600 hover:bg-gray-100'
+                    )}
+                    onClick={() => setConversationOrderBy(mode)}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-gray-500">
+                <span>Showing {conversationItems.length} of {conversationPagination.total}</span>
+                {conversationLoading && <span>Loading…</span>}
+              </div>
             </div>
+            {conversationError && (
+              <div className="mb-2 text-xs text-red-600">{conversationError}</div>
+            )}
             <ul className="text-sm divide-y">
-              {sessions.map((s) => (
-                <li key={s.id} className="py-2">
-                  <button className="text-left" onClick={() => setConversationId(s.id)}>
-                    <div className="font-medium truncate">{s.title || 'Chat'}</div>
-                    <div className="text-xs text-gray-500 truncate">{s.model} • {new Date(s.created_at).toLocaleString()}</div>
+              {conversationItems.map((item) => (
+                <li key={item.id} className={cn('py-2', conversationId === item.id && 'bg-blue-50/40')}>
+                  <button className="w-full text-left" onClick={() => setConversationId(item.id)}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-medium truncate">{item.title || 'Chat'}</div>
+                      {typeof item.bm25_norm === 'number' && (
+                        <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700">
+                          {Math.round(item.bm25_norm * 100)}%
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
+                      <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 uppercase tracking-wide text-gray-600">
+                        {item.state || 'in-progress'}
+                      </span>
+                      {item.topic_label && (
+                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                          {item.topic_label}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500 truncate">
+                      {item.message_count} msgs • {new Date(item.last_modified).toLocaleString()}
+                    </div>
                   </button>
                 </li>
               ))}
+              {!conversationItems.length && !conversationLoading && (
+                <li className="py-4 text-center text-xs text-gray-500">No conversations found.</li>
+              )}
             </ul>
+            <div className="mt-3 flex items-center justify-between text-xs text-gray-600">
+              <span>Offset: {conversationPagination.offset}</span>
+              <Button variant="secondary" onClick={loadMoreConversations} disabled={!conversationPagination.has_more || conversationLoading}>
+                Load more
+              </Button>
+            </div>
           </div>
         </div>
 
         <div className="md:col-span-3 rounded-md border bg-white p-4 flex flex-col h-[80vh]">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="inline-flex rounded border border-gray-200 bg-gray-50 p-1 text-xs">
+              <button
+                type="button"
+                className={cn(
+                  'rounded px-3 py-1',
+                  mainTab === 'chat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+                )}
+                onClick={() => setMainTab('chat')}
+              >
+                Chat
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  'rounded px-3 py-1',
+                  mainTab === 'analytics' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+                )}
+                onClick={() => setMainTab('analytics')}
+              >
+                Analytics
+              </button>
+            </div>
+            {mainTab === 'chat' && (
+              <div className="flex items-center gap-3 text-xs text-gray-600">
+                <label className="inline-flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={treeViewEnabled}
+                    onChange={(e) => setTreeViewEnabled(e.target.checked)}
+                    disabled={!conversationId}
+                  />
+                  <span>Tree view</span>
+                </label>
+                {treeViewEnabled && (
+                  <div className="flex items-center gap-2">
+                    <span>Depth</span>
+                    <select
+                      className="rounded border border-gray-300 px-2 py-1 text-xs"
+                      value={treeMaxDepth}
+                      onChange={(e) => setTreeMaxDepth(Number(e.target.value))}
+                    >
+                      {[2, 3, 4, 5, 6].map((depth) => (
+                        <option key={depth} value={depth}>{depth}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          {mainTab === 'analytics' ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="mb-3 grid grid-cols-2 gap-3 text-xs text-gray-600 md:grid-cols-4">
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Start</label>
+                  <input
+                    type="date"
+                    className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+                    value={analyticsStartDate}
+                    onChange={(e) => setAnalyticsStartDate(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-gray-500">End</label>
+                  <input
+                    type="date"
+                    className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+                    value={analyticsEndDate}
+                    onChange={(e) => setAnalyticsEndDate(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Granularity</label>
+                  <select
+                    className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+                    value={analyticsGranularity}
+                    onChange={(e) => setAnalyticsGranularity(e.target.value as 'day' | 'week')}
+                  >
+                    <option value="day">Day</option>
+                    <option value="week">Week</option>
+                  </select>
+                </div>
+                <div className="flex items-end justify-end">
+                  <Button variant="secondary" onClick={() => fetchAnalytics(0)}>Refresh</Button>
+                </div>
+              </div>
+              {analyticsError && (
+                <div className="mb-2 text-xs text-red-600">{analyticsError}</div>
+              )}
+              <div className="flex-1 overflow-y-auto rounded border p-3">
+                {analyticsLoading && <div className="text-xs text-gray-500">Loading analytics…</div>}
+                {!analyticsLoading && analyticsBuckets.length === 0 && (
+                  <div className="text-xs text-gray-500">No analytics buckets found for this range.</div>
+                )}
+                <div className="space-y-2">
+                  {analyticsBuckets.map((bucket) => (
+                    <div key={`${bucket.bucket_start}-${bucket.state}-${bucket.topic_label || 'none'}`} className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] text-gray-600">
+                        <span>{new Date(bucket.bucket_start).toLocaleDateString()}</span>
+                        <span className="uppercase tracking-wide">{bucket.state}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="h-2 flex-1 rounded-full bg-gray-100">
+                          <div
+                            className="h-2 rounded-full bg-blue-500"
+                            style={{ width: `${(bucket.count / maxAnalyticsCount) * 100}%` }}
+                          />
+                        </div>
+                        <span className="text-xs text-gray-700">{bucket.count}</span>
+                        <span className="text-[11px] text-emerald-700">
+                          {bucket.topic_label || 'No topic'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-3 flex items-center justify-between text-xs text-gray-600">
+                <Button variant="secondary" onClick={loadPrevAnalyticsPage} disabled={analyticsPagination.offset <= 0 || analyticsLoading}>
+                  Prev
+                </Button>
+                <span>
+                  Offset {analyticsPagination.offset} • Total {analyticsPagination.total}
+                </span>
+                <Button variant="secondary" onClick={loadNextAnalyticsPage} disabled={!analyticsPagination.has_more || analyticsLoading}>
+                  Next
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
           <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-4">
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">Model</label>
@@ -878,78 +1625,109 @@ export default function ChatPage() {
           <div className="flex-1 min-h-0 flex flex-col">
             <div className="flex items-center justify-between mb-1 text-xs text-gray-600">
               <div className="space-x-2">
-                {hasMoreHistory && <Button variant="secondary" onClick={handleLoadOlder}>Load older</Button>}
+                {treeViewEnabled ? (
+                  <>
+                    <Button variant="secondary" onClick={loadPrevTreePage} disabled={treeOffset <= 0 || treeLoading}>
+                      Prev threads
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={loadNextTreePage}
+                      disabled={!treeData?.pagination?.has_more || treeLoading}
+                    >
+                      Next threads
+                    </Button>
+                    {treeData && (
+                      <span className="text-[11px] text-gray-500">
+                        {treeOffset + 1}–{Math.min(treeOffset + treePageLimit, treeData.pagination.total_root_threads)} of {treeData.pagination.total_root_threads}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  hasMoreHistory && <Button variant="secondary" onClick={handleLoadOlder}>Load older</Button>
+                )}
               </div>
               <div className="font-mono">{currentProvider ? `${currentProvider}${currentModelOnly ? '/' + currentModelOnly : ''}` : ''}</div>
             </div>
             <div ref={chatListRef} onScroll={onScrollContainer} className="relative flex-1 min-h-0 rounded border p-2 overflow-y-auto">
-              {showJump && (
+              {!treeViewEnabled && showJump && (
                 <button onClick={jumpToLatest} className="absolute right-3 bottom-3 z-10 rounded bg-blue-600 px-3 py-1 text-white text-xs shadow">
                   Jump to latest
                 </button>
               )}
-              <ChatMessageList
-                messages={chatuiMessages}
-                renderMessageFooter={renderFeedbackFooter}
-                renderMessageContent={(msg: ChatMessage) => {
-                  if (msg.role === 'system') {
-                    const text = typeof msg.content === 'string'
-                      ? msg.content
-                      : msg.content?.text || '';
-                    return (
-                      <details
-                        onToggle={(event) => {
-                          const target = event.currentTarget as HTMLDetailsElement;
-                          if (target.open && msg.messageId && !expandSentRef.current.has(msg.messageId)) {
-                            expandSentRef.current.add(msg.messageId);
-                            void sendImplicitFeedback({
-                              event_type: 'expand',
-                              message_id: msg.messageId,
-                            });
-                          }
-                        }}
-                      >
-                        <summary className="cursor-pointer text-xs text-amber-700">
-                          <span className="mr-2 inline-flex rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
-                            System
-                          </span>
-                          <span>View system prompt</span>
-                        </summary>
-                        <div className="mt-2 whitespace-pre-wrap text-xs text-amber-900">
-                          {text || DEFAULT_SYSTEM_PROMPT}
+              {treeViewEnabled ? (
+                <div className="space-y-3">
+                  {treeLoading && <div className="text-xs text-gray-500">Loading tree…</div>}
+                  {treeError && <div className="text-xs text-red-600">{treeError}</div>}
+                  {!treeLoading && treeData?.root_threads?.length === 0 && (
+                    <div className="text-xs text-gray-500">No root threads found.</div>
+                  )}
+                  {treeData?.root_threads?.map((node) => renderTreeNode(node, 0))}
+                </div>
+              ) : (
+                <ChatMessageList
+                  messages={chatuiMessages}
+                  renderMessageFooter={renderFeedbackFooter}
+                  renderMessageContent={(msg: ChatMessage) => {
+                    if (msg.role === 'system') {
+                      const text = typeof msg.content === 'string'
+                        ? msg.content
+                        : msg.content?.text || '';
+                      return (
+                        <details
+                          onToggle={(event) => {
+                            const target = event.currentTarget as HTMLDetailsElement;
+                            if (target.open && msg.messageId && !expandSentRef.current.has(msg.messageId)) {
+                              expandSentRef.current.add(msg.messageId);
+                              void sendImplicitFeedback({
+                                event_type: 'expand',
+                                message_id: msg.messageId,
+                              });
+                            }
+                          }}
+                        >
+                          <summary className="cursor-pointer text-xs text-amber-700">
+                            <span className="mr-2 inline-flex rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
+                              System
+                            </span>
+                            <span>View system prompt</span>
+                          </summary>
+                          <div className="mt-2 whitespace-pre-wrap text-xs text-amber-900">
+                            {text || DEFAULT_SYSTEM_PROMPT}
+                          </div>
+                        </details>
+                      );
+                    }
+                    if (msg.type === 'tool') {
+                      const contentObj = typeof msg.content === 'object' ? msg.content : null;
+                      const name = contentObj?.name || 'tool';
+                      const text = contentObj?.text || '';
+                      return (
+                        <div className="rounded border bg-gray-50 p-2 text-xs">
+                          <div className="mb-1 font-semibold text-gray-700">Tool: {name}</div>
+                          <pre className="whitespace-pre-wrap text-gray-700 max-h-56 overflow-auto">{text}</pre>
+                          <div className="mt-2 text-right">
+                            <button
+                              className="inline-flex items-center rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
+                              aria-label="Mention tool in chat"
+                              title="Mention tool in chat"
+                              onClick={() => setComposerText((prev: string) => {
+                                const mention = `[tool:${name}]`;
+                                const base = typeof prev === 'string' ? prev : '';
+                                return base && base.trim().length ? `${base} ${mention}` : mention;
+                              })}
+                            >
+                              Mention in chat
+                            </button>
+                          </div>
                         </div>
-                      </details>
-                    );
-                  }
-                  if (msg.type === 'tool') {
-                    const contentObj = typeof msg.content === 'object' ? msg.content : null;
-                    const name = contentObj?.name || 'tool';
-                    const text = contentObj?.text || '';
-                    return (
-                      <div className="rounded border bg-gray-50 p-2 text-xs">
-                        <div className="mb-1 font-semibold text-gray-700">Tool: {name}</div>
-                        <pre className="whitespace-pre-wrap text-gray-700 max-h-56 overflow-auto">{text}</pre>
-                        <div className="mt-2 text-right">
-                          <button
-                            className="inline-flex items-center rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
-                            aria-label="Mention tool in chat"
-                            title="Mention tool in chat"
-                            onClick={() => setComposerText((prev: string) => {
-                              const mention = `[tool:${name}]`;
-                              const base = typeof prev === 'string' ? prev : '';
-                              return base && base.trim().length ? `${base} ${mention}` : mention;
-                            })}
-                          >
-                            Mention in chat
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  }
-                  // Use default renderer for non-tool messages
-                  return undefined;
-                }}
-              />
+                      );
+                    }
+                    // Use default renderer for non-tool messages
+                    return undefined;
+                  }}
+                />
+              )}
             </div>
             <div className="mt-2">
               <div className="mb-2 flex items-center justify-between text-xs text-gray-600">
@@ -982,6 +1760,8 @@ export default function ChatPage() {
               />
             </div>
           </div>
+          </>
+          )}
         </div>
       </div>
       <FeedbackModal

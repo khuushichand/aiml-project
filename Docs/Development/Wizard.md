@@ -19,25 +19,28 @@ This document describes the setup wizard CLI skeleton, usage patterns, and troub
   - Behavior: updates `.env` with `AUTH_MODE`, generates `SINGLE_USER_API_KEY` when needed, validates `DATABASE_URL` for multi-user, and prompts to run the AuthNZ initializer when appropriate. Creates a timestamped backup on first modification.
 
 - `db` — initialize/validate databases
+  - Options: `--json`, `--dry-run`
   - Behavior: creates per-user SQLite files for Media/ChaChaNotes/Evaluations, ensures a shared evaluations DB under `Databases/`, and validates Postgres connectivity when `DATABASE_URL` uses a Postgres scheme.
 
-- `providers` — collect/store provider keys (scaffold)
-  - Options: `--json`, `--dry-run`, `--check-provider`
-  - Behavior: prefers `.env` as the source of truth; `config.txt` generation only on explicit request (future step). Optional provider checks are offline/mock in the scaffold.
+- `providers` — collect/store provider keys
+  - Options: `--json`, `--dry-run`, `--check-provider`, `--write-config`
+  - Behavior: reads provider keys from environment variables, writes them into `.env` (masked in output), and optionally updates `config.txt` when `--write-config` is set. Provider checks remain offline/mock and only run when `--check-provider` or `TLDW_CHECK_PROVIDER=1` is set.
 
-- `mcp [add|remove]` — manage MCP client configs (scaffold)
-  - Options: `--json`, `--dry-run`
-  - Behavior: reports which clients would be configured (Cursor, Claude, VS Code, Zed); full implementation will support dry-run diffs, backups, and removal confirmation.
+- `mcp [add|remove]` — manage MCP client configs
+  - Options: `--json`, `--dry-run`, `--client`, `--config-path`, `--server-url`, `--yes/--no-input`
+  - Behavior: updates per-client JSON settings for Cursor/Claude/VS Code/Zed with a `mcpServers` entry, creating timestamped backups and providing unified diffs in dry-run mode. Removal prompts for confirmation unless `--yes` is provided. Override detection with `--config-path` (single client) and set `TLDW_MCP_URL` or `--server-url` to customize the target endpoint.
 
 - `verify` — run verification checks (scaffold)
-  - Options: `--json`, `--check-provider`
-  - Behavior: detects `ffmpeg` and CUDA presence. Full implementation will probe `/api/v1/health`, `/api/v1/healthz`, and `/api/v1/mcp/status`, optionally spinning up the server on a free port.
+  - Options: `--json`, `--check-provider`, `--dry-run`
+  - Behavior: detects `ffmpeg`/CUDA, probes `/api/v1/health`, `/api/v1/healthz`, and `/api/v1/mcp/status`, and can spin up an ephemeral server on a free port (or `TLDW_SERVER_PORT`) when no server is running.
 
 - `format` — format changed files with Black/Ruff when available
+  - Options: `--json`, `--dry-run`
   - Behavior: if in a Git repo, formats changed/untracked files. Skips gracefully if tools missing.
 
 - `doctor` — detect issues and propose fixes (scaffold)
-  - Behavior: checks for `.env` and `.gitignore` basics and `ffmpeg` presence; full implementation will add specific remediation steps.
+  - Options: `--json`, `--dry-run`, `--yes/--no-input`
+  - Behavior: checks `.env` and `.gitignore` basics, validates `DATABASE_URL` in multi-user mode, detects port conflicts, and flags missing `ffmpeg`. Uses `--yes` to apply recommended fixes.
 
 ## Non-Interactive Usage
 
@@ -61,6 +64,32 @@ tldw-setup init --non-interactive --yes --json --no-format
 - Human-readable (default) — concise status, actions, and notes.
 - JSON (`--json`) — machine-readable, stable schema per command (`command`, `status`, `facts`, `actions`, `paths`, etc.).
 
+## JSON Output Schema (Stable Envelope)
+
+All wizard commands emit a common JSON envelope when `--json` is provided:
+
+```json
+{
+  "command": "init|auth|db|providers|mcp|verify|format|doctor",
+  "status": "ok|error",
+  "actions": [],
+  "facts": {},
+  "notes": [],
+  "paths": {},
+  "dry_run": false
+}
+```
+
+Command-specific additions:
+- `init`/`auth`: include `mode`, `paths.env`, and `actions` entries like `set_env`, `validate_database_url`, `authnz_initializer`.
+- `db`: includes `validate_database_url`, `authnz_db`, `postgres_check`, and `sqlite_files` actions.
+- `verify`: includes `facts.server_mode`, `actions.server`, and `actions.endpoints` for each probed path.
+- `providers`: includes `actions.providers`, `set_env`, optional `config_txt`, and optional `provider_checks`.
+- `mcp`: includes `actions.mcp_client` entries with `path`, `status`, and optional `diff/backup`.
+- `doctor`: includes `actions.env`, `set_env`, `gitignore`, `ffmpeg`, and optional `validate_database_url` or `port` actions.
+
+Error responses keep the same envelope and set `status=error` plus an error-relevant action (for example `validate_database_url`).
+
 ## Files Managed
 
 - `.env`: created with mode 0600; idempotent merge updates with de-duplication and timestamped backups.
@@ -83,7 +112,4 @@ tldw-setup init --non-interactive --yes --json --no-format
 
 ## Roadmap Notes
 
-- Implement `.env` merge/update semantics with masking and backups.
-- Add health endpoint probing and ephemeral server spawn with safe shutdown.
-- MCP client installers: dry-run diffs, per-OS path table, timestamped backups, removal confirmation.
-- Provider verification with offline/mocked checks gated by `--check-provider`.
+- CI/DX polish: coverage targets and README quickstart link.

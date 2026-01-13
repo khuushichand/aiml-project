@@ -7,6 +7,7 @@ import os
 from typing import Any, Union, Dict, Optional, List, Callable
 
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
 from tldw_Server_API.app.core.Utils.Utils import logging
 
 
@@ -37,6 +38,10 @@ def _call_adapter(
         app_config: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
 ) -> Any:
+    log_legacy_once(
+        "local_chat_calls",
+        "local_chat_calls is deprecated; use chat_service.perform_chat_api_call instead.",
+    )
     return perform_chat_api_call(
         api_provider=provider,
         messages=input_data,
@@ -74,16 +79,14 @@ def chat_with_local_llm(
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
-    if temperature is not None and temp is None:
-        temp = temperature
-    if stream is not None:
-        streaming = stream
     return _call_adapter(
         "local-llm",
         input_data=input_data,
         temp=temp,
+        temperature=temperature,
         system_message=system_message,
         streaming=streaming,
+        stream=stream,
         model=model,
         top_k=top_k,
         top_p=top_p,
@@ -134,23 +137,21 @@ def chat_with_llama(
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
-    if temperature is not None and temp is None:
-        temp = temperature
-    if stream is not None:
-        streaming = stream
     return _call_adapter(
         "llama.cpp",
         input_data=input_data,
         api_key=api_key,
-        custom_prompt_arg=custom_prompt,
+        custom_prompt=custom_prompt,
         temp=temp,
+        temperature=temperature,
         system_prompt=system_prompt,
         streaming=streaming,
+        stream=stream,
         model=model,
         top_k=top_k,
         top_p=top_p,
         min_p=min_p,
-        max_tokens=n_predict,
+        n_predict=n_predict,
         seed=seed,
         stop=stop,
         response_format=response_format,
@@ -158,6 +159,7 @@ def chat_with_llama(
         n=n,
         presence_penalty=presence_penalty,
         frequency_penalty=frequency_penalty,
+        api_url=api_url,
         app_config=app_config,
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
@@ -184,16 +186,16 @@ def chat_with_kobold(
         "kobold",
         input_data=input_data,
         api_key=api_key,
-        custom_prompt_arg=custom_prompt_input,
+        custom_prompt_input=custom_prompt_input,
         temp=temp,
         system_message=system_message,
         streaming=streaming,
         model=model,
         top_k=top_k,
         top_p=top_p,
-        max_tokens=max_length,
-        stop=stop_sequence,
-        n=num_responses,
+        max_length=max_length,
+        stop_sequence=stop_sequence,
+        num_responses=num_responses,
         seed=seed,
         app_config=app_config,
     )
@@ -230,18 +232,16 @@ def chat_with_oobabooga(
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
-    if temperature is not None and temp is None:
-        temp = temperature
-    if stream is not None:
-        streaming = stream
     return _call_adapter(
         "ooba",
         input_data=input_data,
         api_key=api_key,
-        custom_prompt_arg=custom_prompt_input,
+        custom_prompt_input=custom_prompt_input,
         temp=temp,
+        temperature=temperature,
         system_message=system_message,
         streaming=streaming,
+        stream=stream,
         model=model,
         top_k=top_k,
         top_p=top_p,
@@ -259,6 +259,7 @@ def chat_with_oobabooga(
         tools=tools,
         tool_choice=tool_choice,
         top_logprobs=top_logprobs,
+        ooba_api_url=ooba_api_url,
         app_config=app_config,
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
@@ -296,18 +297,16 @@ def chat_with_tabbyapi(
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
-    if temperature is not None and temp is None:
-        temp = temperature
-    if stream is not None:
-        streaming = stream
     return _call_adapter(
         "tabbyapi",
         input_data=input_data,
         api_key=api_key,
-        custom_prompt_arg=custom_prompt_input,
+        custom_prompt_input=custom_prompt_input,
         temp=temp,
+        temperature=temperature,
         system_message=system_message,
         streaming=streaming,
+        stream=stream,
         model=model,
         top_k=top_k,
         top_p=top_p,
@@ -325,6 +324,7 @@ def chat_with_tabbyapi(
         tools=tools,
         tool_choice=tool_choice,
         top_logprobs=top_logprobs,
+        tabby_api_url=tabby_api_url,
         app_config=app_config,
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
@@ -362,18 +362,16 @@ def chat_with_vllm(
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
-    if temperature is not None and temp is None:
-        temp = temperature
-    if stream is not None:
-        streaming = stream
     return _call_adapter(
         "vllm",
         input_data=input_data,
         api_key=api_key,
-        custom_prompt_arg=custom_prompt_input,
+        custom_prompt_input=custom_prompt_input,
         temp=temp,
+        temperature=temperature,
         system_prompt=system_prompt,
         streaming=streaming,
+        stream=stream,
         model=model,
         top_k=top_k,
         top_p=top_p,
@@ -391,6 +389,7 @@ def chat_with_vllm(
         tools=tools,
         tool_choice=tool_choice,
         top_logprobs=top_logprobs,
+        vllm_api_url=vllm_api_url,
         app_config=app_config,
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
@@ -428,18 +427,16 @@ def chat_with_aphrodite(
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
-    if temperature is not None and temp is None:
-        temp = temperature
-    if stream is not None:
-        streaming = stream
     return _call_adapter(
         "aphrodite",
         input_data=input_data,
         api_key=api_key,
-        custom_prompt_arg=custom_prompt_input,
+        custom_prompt_input=custom_prompt_input,
         temp=temp,
+        temperature=temperature,
         system_prompt=system_prompt,
         streaming=streaming,
+        stream=stream,
         model=model,
         top_k=top_k,
         top_p=top_p,
@@ -457,6 +454,7 @@ def chat_with_aphrodite(
         tools=tools,
         tool_choice=tool_choice,
         top_logprobs=top_logprobs,
+        aphrodite_api_url=aphrodite_api_url,
         app_config=app_config,
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
@@ -493,18 +491,16 @@ def chat_with_ollama(
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
-    if temperature is not None and temp is None:
-        temp = temperature
-    if stream is not None:
-        streaming = stream
     return _call_adapter(
         "ollama",
         input_data=input_data,
         api_key=api_key,
-        custom_prompt_arg=custom_prompt,
+        custom_prompt=custom_prompt,
         temp=temp,
+        temperature=temperature,
         system_message=system_message,
         streaming=streaming,
+        stream=stream,
         model=model,
         top_k=top_k,
         top_p=top_p,
@@ -557,7 +553,6 @@ def chat_with_custom_openai(
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
 ):
-    top_p = maxp if maxp is not None else topp
     return _call_adapter(
         "custom-openai-api",
         input_data=input_data,
@@ -567,7 +562,8 @@ def chat_with_custom_openai(
         system_message=system_message,
         streaming=streaming,
         model=model,
-        top_p=top_p,
+        maxp=maxp,
+        topp=topp,
         minp=minp,
         topk=topk,
         max_tokens=max_tokens,
@@ -625,7 +621,7 @@ def chat_with_custom_openai_2(
         streaming=streaming,
         model=model,
         max_tokens=max_tokens,
-        top_p=topp,
+        topp=topp,
         seed=seed,
         stop=stop,
         response_format=response_format,

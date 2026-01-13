@@ -71,6 +71,7 @@ class HuggingFaceAdapter(ChatProvider):
 
     def _resolve_url_and_headers(self, request: Dict[str, Any]) -> Dict[str, Any]:
         cfg = (request.get("app_config") or {}).get("huggingface_api", {})
+        override_base = request.get("base_url")
         api_base = cfg.get("api_base_url")  # may be None
         use_router = str(
             cfg.get("use_router_url_format", cfg.get("huggingface_use_router_url_format", "false"))
@@ -86,14 +87,15 @@ class HuggingFaceAdapter(ChatProvider):
         if not model:
             model = "unspecified"
         if use_router:
-            base = (
+            base = override_base or (
                 cfg.get("router_base_url")
                 or cfg.get("huggingface_router_base_url")
                 or "https://router.huggingface.co/hf-inference"
-            ).rstrip("/")
+            )
+            base = str(base).rstrip("/")
             url = f"{base}/models/{model.strip('/')}/{chat_path.lstrip('/')}"
         else:
-            base = (api_base or "https://api-inference.huggingface.co/v1").rstrip("/")
+            base = str(override_base or api_base or "https://api-inference.huggingface.co/v1").rstrip("/")
             url = f"{base}/{chat_path.lstrip('/')}"
         headers = {"Content-Type": "application/json"}
         api_key = request.get("api_key") or cfg.get("api_key")

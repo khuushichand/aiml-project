@@ -81,22 +81,31 @@ class _FakeOrgRepo:
         return [{"user_id": 1}, {"user_id": 2}, {"user_id": None}]
 
 
-class _FakeEmbeddingsJobsDB:
+class _FakeJobManager:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
 
-    def get_or_create_user_quota(self, user_id: str):
-        # Map user_id to different active counts to verify summing
-        if user_id == "1":
-            return {"concurrent_jobs_active": 2}
-        if user_id == "2":
-            return {"concurrent_jobs_active": 3}
-        return {"concurrent_jobs_active": 0}
+    @classmethod
+    def set_rls_context(cls, *, is_admin: bool, domain_allowlist: str, owner_user_id: str) -> None:
+        return None
+
+    @classmethod
+    def clear_rls_context(cls) -> None:
+        return None
+
+    def summarize_by_owner_and_status(self, *, domain: str):
+        assert domain == "embeddings"
+        return [
+            {"owner_user_id": "1", "status": "processing", "count": 2},
+            {"owner_user_id": "2", "status": "processing", "count": 3},
+            {"owner_user_id": "2", "status": "queued", "count": 5},
+            {"owner_user_id": "3", "status": "processing", "count": 1},
+        ]
 
 
 @pytest.mark.asyncio
 async def test_get_concurrent_jobs_sums_embedding_jobs_for_org(monkeypatch):
-    """_get_concurrent_jobs should best-effort sum concurrent embedding jobs across org members."""
+    """_get_concurrent_jobs should sum processing embeddings jobs across org members."""
 
     async def _fake_get_db_pool():
         return object()
@@ -113,8 +122,8 @@ async def test_get_concurrent_jobs_sums_embedding_jobs_for_org(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.DB_Management.Embeddings_Jobs_DB.EmbeddingsJobsDatabase",
-        _FakeEmbeddingsJobsDB,
+        "tldw_Server_API.app.core.Jobs.manager.JobManager",
+        _FakeJobManager,
         raising=False,
     )
 

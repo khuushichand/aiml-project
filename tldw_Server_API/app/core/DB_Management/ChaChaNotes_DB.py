@@ -5121,6 +5121,126 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error counting messages for conversation {conversation_id}: {e}")
             raise
 
+    def get_latest_message_for_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch the most recent non-deleted message for a conversation."""
+        query = (
+            "SELECT m.id, m.timestamp, m.content, m.sender "
+            "FROM messages m JOIN conversations c ON m.conversation_id = c.id "
+            "WHERE m.conversation_id = ? AND m.deleted = 0 AND c.deleted = 0 "
+            "ORDER BY m.timestamp DESC LIMIT 1"
+        )
+        try:
+            cursor = self.execute_query(query, (conversation_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return dict(row) if isinstance(row, dict) else {
+                "id": row[0],
+                "timestamp": row[1],
+                "content": row[2],
+                "sender": row[3],
+            }
+        except CharactersRAGDBError as exc:
+            logger.error("Database error fetching latest message for conversation %s: %s", conversation_id, exc)
+            raise
+
+    def count_messages_since(
+        self,
+        conversation_id: str,
+        since_message_id: Optional[str],
+    ) -> int:
+        """Count messages after the given message_id within a conversation."""
+        if not since_message_id:
+            return self.count_messages_for_conversation(conversation_id)
+
+        try:
+            since_message = self.get_message_by_id(since_message_id)
+        except CharactersRAGDBError:
+            return self.count_messages_for_conversation(conversation_id)
+
+        if not since_message:
+            return self.count_messages_for_conversation(conversation_id)
+
+        since_timestamp = since_message.get("timestamp")
+        if not since_timestamp:
+            return self.count_messages_for_conversation(conversation_id)
+
+        query = (
+            "SELECT COUNT(1) FROM messages m "
+            "JOIN conversations c ON m.conversation_id = c.id "
+            "WHERE m.conversation_id = ? AND m.deleted = 0 AND c.deleted = 0 "
+            "AND m.timestamp > ?"
+        )
+        try:
+            cursor = self.execute_query(query, (conversation_id, since_timestamp))
+            row = cursor.fetchone()
+            if row is None:
+                return 0
+            try:
+                return int(row[0])
+            except Exception:
+                return int(row.get("COUNT(1)") or row.get("count") or 0)
+        except CharactersRAGDBError as exc:
+            logger.error("Database error counting messages after %s: %s", since_message_id, exc)
+            raise
+
+    def upsert_conversation_cluster(
+        self,
+        cluster_id: str,
+        *,
+        title: Optional[str] = None,
+        centroid: Optional[str] = None,
+        size: int = 0,
+    ) -> bool:
+        """Insert or update a conversation cluster metadata row."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            if self.backend_type == BackendType.SQLITE:
+                query = (
+                    "INSERT INTO conversation_clusters "
+                    "(cluster_id, title, centroid, size, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(cluster_id) DO UPDATE SET "
+                    "title = excluded.title, centroid = excluded.centroid, size = excluded.size, "
+                    "updated_at = excluded.updated_at"
+                )
+                self.execute_query(query, (cluster_id, title, centroid, int(size), now, now), commit=True)
+                return True
+
+            query = (
+                "INSERT INTO conversation_clusters "
+                "(cluster_id, title, centroid, size, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, NOW(), NOW()) "
+                "ON CONFLICT (cluster_id) DO UPDATE SET "
+                "title = EXCLUDED.title, centroid = EXCLUDED.centroid, size = EXCLUDED.size, "
+                "updated_at = NOW()"
+            )
+            self.backend.execute(query, (cluster_id, title, centroid, int(size)))
+            return True
+        except Exception as exc:
+            logger.error("Failed to upsert conversation cluster %s: %s", cluster_id, exc)
+            return False
+
+    def get_conversation_cluster(self, cluster_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a conversation cluster metadata row by ID."""
+        query = "SELECT * FROM conversation_clusters WHERE cluster_id = ?"
+        try:
+            cursor = self.execute_query(query, (cluster_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return dict(row) if isinstance(row, dict) else {
+                "cluster_id": row[0],
+                "title": row[1],
+                "centroid": row[2],
+                "size": row[3],
+                "created_at": row[4],
+                "updated_at": row[5],
+            }
+        except CharactersRAGDBError as exc:
+            logger.error("Failed to fetch conversation cluster %s: %s", cluster_id, exc)
+            raise
+
     def count_conversations_for_user_by_character(self, client_id: str, character_id: int) -> int:
         """
         Count non-deleted conversations for a given user scoped to a specific character.
@@ -5193,8 +5313,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Note: this method does not change ownership; the `client_id` field is preserved
         unless explicitly provided in `update_data` by a privileged caller.
 
-        Updatable fields from `update_data`: 'title', 'rating', 'state',
-        'topic_label', 'cluster_id', 'source', 'external_ref'. Other fields are ignored.
+        Updatable fields from `update_data`: 'title', 'rating', 'state', 'topic_label',
+        'topic_label_source', 'topic_last_tagged_at', 'topic_last_tagged_message_id',
+        'cluster_id', 'source', 'external_ref'. Other fields are ignored.
         If `update_data` is empty or contains no updatable fields, metadata (version,
         last_modified, client_id) is still updated if the version check passes.
 
@@ -5228,6 +5349,24 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if state_val is None:
                 raise InputError("Conversation state cannot be empty.")
             update_data['state'] = self._normalize_conversation_state(state_val)
+
+        if 'topic_label_source' in update_data:
+            source_val = update_data.get('topic_label_source')
+            if source_val is None:
+                update_data['topic_label_source'] = None
+            else:
+                normalized_source = str(source_val).strip().lower()
+                if normalized_source not in {"manual", "auto"}:
+                    raise InputError("topic_label_source must be 'manual' or 'auto'.")
+                update_data['topic_label_source'] = normalized_source
+
+        if 'topic_last_tagged_at' in update_data:
+            tag_val = update_data.get('topic_last_tagged_at')
+            if isinstance(tag_val, datetime):
+                if tag_val.tzinfo is None:
+                    tag_val = tag_val.replace(tzinfo=timezone.utc)
+                tag_val = tag_val.astimezone(timezone.utc).isoformat()
+            update_data['topic_last_tagged_at'] = tag_val
 
         now = self._get_current_utc_timestamp_iso()
 
@@ -5283,6 +5422,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if 'topic_label' in update_data:
                     fields_to_update_sql.append("topic_label = ?")
                     params_for_set_clause.append(self._normalize_nullable_text(update_data.get('topic_label')))
+
+                if 'topic_label_source' in update_data:
+                    fields_to_update_sql.append("topic_label_source = ?")
+                    params_for_set_clause.append(update_data.get('topic_label_source'))
+
+                if 'topic_last_tagged_at' in update_data:
+                    fields_to_update_sql.append("topic_last_tagged_at = ?")
+                    params_for_set_clause.append(update_data.get('topic_last_tagged_at'))
+
+                if 'topic_last_tagged_message_id' in update_data:
+                    fields_to_update_sql.append("topic_last_tagged_message_id = ?")
+                    params_for_set_clause.append(
+                        self._normalize_nullable_text(update_data.get('topic_last_tagged_message_id'))
+                    )
 
                 if 'cluster_id' in update_data:
                     fields_to_update_sql.append("cluster_id = ?")

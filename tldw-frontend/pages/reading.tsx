@@ -5,20 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient, buildAuthHeaders, getApiBaseUrl } from '@/lib/api';
-
-interface ReadingItem {
-  id: number;
-  title: string;
-  url?: string;
-  domain?: string;
-  summary?: string;
-  notes?: string;
-  status?: string;
-  favorite: boolean;
-  tags: string[];
-  created_at?: string;
-  updated_at?: string;
-}
+import { ReadingItem, ReadingItemsListResponse, ReadingStatus } from '@/types/reading';
 
 interface Highlight {
   id: number;
@@ -33,14 +20,7 @@ interface Highlight {
   state: 'active' | 'stale';
 }
 
-interface ReadingListResponse {
-  items: ReadingItem[];
-  total: number;
-  page: number;
-  size: number;
-}
-
-const STATUS_OPTIONS = ['saved', 'reading', 'read', 'archived'];
+const STATUS_OPTIONS: ReadingStatus[] = ['saved', 'reading', 'read', 'archived'];
 const PAGE_SIZE = 10;
 
 export default function ReadingPage() {
@@ -63,7 +43,7 @@ export default function ReadingPage() {
   const [highlightLoading, setHighlightLoading] = useState<Record<number, boolean>>({});
   const [highlightDrafts, setHighlightDrafts] = useState<Record<number, { quote: string; note: string; color: string; anchor_strategy: string }>>({});
   const [highlightEdits, setHighlightEdits] = useState<Record<number, { note: string; color: string; state: 'active' | 'stale' }>>({});
-  const [statusFilter, setStatusFilter] = useState<'all' | typeof STATUS_OPTIONS[number]>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | ReadingStatus>('all');
   const [search, setSearch] = useState('');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [page, setPage] = useState(1);
@@ -90,7 +70,7 @@ export default function ReadingPage() {
       if (search.trim()) params.q = search.trim();
       if (favoriteOnly) params.favorite = true;
 
-      const data = await apiClient.get<ReadingListResponse>('/reading/items', { params });
+      const data = await apiClient.get<ReadingItemsListResponse>('/reading/items', { params });
       setItems(data.items || []);
       setTotal(data.total || 0);
     } catch (error: unknown) {
@@ -136,7 +116,7 @@ export default function ReadingPage() {
         url: formUrl.trim(),
         title: formTitle.trim() || undefined,
         tags: parseTags(formTags),
-        status: formStatus,
+        status: formStatus as ReadingStatus,
         favorite: formFavorite,
         summary: formSummary.trim() || undefined,
         notes: formNotes.trim() || undefined,

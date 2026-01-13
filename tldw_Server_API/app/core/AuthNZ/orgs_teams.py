@@ -251,6 +251,22 @@ async def update_org_member_role(*, org_id: int, user_id: int, role: str) -> Opt
     return await repo.update_org_member_role(org_id=org_id, user_id=user_id, role=role)
 
 
+async def update_team_member_role(*, team_id: int, user_id: int, role: str) -> Optional[Dict[str, Any]]:
+    """
+    Update a team member's role.
+
+    Parameters:
+        team_id: Team id of the member.
+        user_id: User id whose role should be updated.
+        role: New role to assign.
+
+    Returns:
+        A dict describing the updated membership (team_id, user_id, role), or ``None`` when missing.
+    """
+    repo = await _get_orgs_teams_repo()
+    return await repo.update_team_member_role(team_id=team_id, user_id=user_id, role=role)
+
+
 async def list_org_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
     """
     List organization memberships for a given user.

@@ -8,6 +8,9 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.quota_config import (
+    apply_prompt_studio_quota_defaults,
+)
 
 
 _PROMPT_STUDIO_DOMAIN = "prompt_studio"
@@ -26,6 +29,7 @@ def _jobs_queue() -> str:
 
 
 def _jobs_manager() -> JobManager:
+    apply_prompt_studio_quota_defaults()
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
     if not db_url:
         return JobManager()

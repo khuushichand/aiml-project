@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -280,11 +280,12 @@ async def update_org(
 @router.delete(
     "/{org_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete organization",
 )
 async def delete_org(
     ctx: OrgContext = Depends(require_org_owner()),
-):
+) -> Response:
     """Delete an organization. Requires owner role."""
     # Check for active paid subscription before allowing deletion
     try:
@@ -337,6 +338,7 @@ async def delete_org(
                 await conn.execute("DELETE FROM organizations WHERE id = ?", (ctx.org_id,))
 
     logger.info(f"Org {ctx.org_id} deleted by owner")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -548,13 +550,14 @@ async def update_member_role(
 @router.delete(
     "/{org_id}/members/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Remove organization member",
 )
 async def remove_org_member(
     user_id: int,
     ctx: OrgContext = Depends(require_org_admin()),
     principal: AuthPrincipal = Depends(get_auth_principal),
-):
+) -> Response:
     """Remove a member from the organization. Requires admin or owner role."""
     db_pool = await get_db_pool()
     repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
@@ -584,6 +587,7 @@ async def remove_org_member(
         )
 
     logger.info(f"Removed user {user_id} from org {ctx.org_id}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # =============================================================================
@@ -744,12 +748,13 @@ async def update_team(
 @router.delete(
     "/{org_id}/teams/{team_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete team",
 )
 async def delete_team(
     team_id: int,
     ctx: OrgContext = Depends(require_org_admin()),
-):
+) -> Response:
     """Delete a team. Requires admin or owner role."""
     db_pool = await get_db_pool()
     repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
@@ -777,6 +782,7 @@ async def delete_team(
             await conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
 
     logger.info(f"Deleted team {team_id} from org {ctx.org_id}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # =============================================================================
@@ -863,13 +869,14 @@ async def add_team_member(
 @router.delete(
     "/{org_id}/teams/{team_id}/members/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Remove team member",
 )
 async def remove_team_member(
     team_id: int,
     user_id: int,
     ctx: OrgContext = Depends(require_org_admin()),
-):
+) -> Response:
     """Remove a member from a team. Requires admin or owner role."""
     db_pool = await get_db_pool()
     repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
@@ -890,6 +897,7 @@ async def remove_team_member(
         )
 
     logger.info(f"Removed user {user_id} from team {team_id}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # =============================================================================
@@ -1010,6 +1018,7 @@ async def create_invite(
 @router.delete(
     "/{org_id}/invites/{invite_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Revoke invite",
 )
 async def revoke_invite(
@@ -1017,7 +1026,7 @@ async def revoke_invite(
     http_request: Request,
     ctx: OrgContext = Depends(require_org_admin()),
     principal: AuthPrincipal = Depends(get_auth_principal),
-):
+) -> Response:
     """Revoke an invite. Requires admin or owner role."""
     invite_service = await get_invite_service()
 
@@ -1068,6 +1077,7 @@ async def revoke_invite(
             logger.debug("Org invite audit failed: {}", exc)
 
     await _safe_audit_log_invite_revoke()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

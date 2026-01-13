@@ -171,12 +171,13 @@ async def get_pipeline_preset(
 @pipeline_router.delete(
     "/rag/pipeline/presets/{name}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="evals.rag_pipeline.preset.delete"))],
 )
 async def delete_pipeline_preset(
     name: str,
     current_user: User = Depends(get_eval_request_user),
-):
+) -> Response:
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
         db = svc.db

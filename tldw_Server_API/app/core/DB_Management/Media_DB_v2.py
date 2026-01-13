@@ -1978,6 +1978,15 @@ class MediaDatabase:
         try:
             if self.backend_type != BackendType.SQLITE:
                 return
+            existed = False
+            try:
+                cur = self.execute_query(
+                    "SELECT 1 AS exists_flag FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'unvectorized_chunks_fts'"
+                )
+                existed = cur.fetchone() is not None
+            except Exception:
+                existed = False
             ddl = (
                 "CREATE VIRTUAL TABLE IF NOT EXISTS unvectorized_chunks_fts "
                 "USING fts5(\n"
@@ -1987,6 +1996,14 @@ class MediaDatabase:
                 ")"
             )
             self.execute_query(ddl, commit=True)
+            if not existed:
+                try:
+                    self.execute_query(
+                        "INSERT INTO unvectorized_chunks_fts(unvectorized_chunks_fts) VALUES('rebuild')",
+                        commit=True,
+                    )
+                except Exception as e:
+                    logging.debug(f"ensure_chunk_fts rebuild skipped or failed: {e}")
         except Exception as e:
             logging.debug(f"ensure_chunk_fts skipped or failed: {e}")
 
@@ -2176,6 +2193,59 @@ class MediaDatabase:
                     state TEXT NOT NULL DEFAULT 'active'
                 );
                 CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+
+                CREATE TABLE IF NOT EXISTS collection_tags (
+                    id INTEGER PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    UNIQUE (user_id, name)
+                );
+
+                CREATE TABLE IF NOT EXISTS content_items (
+                    id INTEGER PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    origin TEXT NOT NULL,
+                    origin_type TEXT,
+                    origin_id INTEGER,
+                    url TEXT,
+                    canonical_url TEXT,
+                    domain TEXT,
+                    title TEXT,
+                    summary TEXT,
+                    notes TEXT,
+                    content_hash TEXT,
+                    word_count INTEGER,
+                    published_at TEXT,
+                    status TEXT,
+                    favorite INTEGER NOT NULL DEFAULT 0,
+                    metadata_json TEXT,
+                    media_id INTEGER,
+                    job_id INTEGER,
+                    run_id INTEGER,
+                    source_id INTEGER,
+                    read_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_content_items_user_updated ON content_items(user_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_content_items_user_domain ON content_items(user_id, domain);
+                CREATE INDEX IF NOT EXISTS idx_content_items_job ON content_items(job_id);
+                CREATE INDEX IF NOT EXISTS idx_content_items_run ON content_items(run_id);
+
+                CREATE TABLE IF NOT EXISTS content_item_tags (
+                    item_id INTEGER NOT NULL,
+                    tag_id INTEGER NOT NULL,
+                    UNIQUE (item_id, tag_id)
+                );
+
+                CREATE VIRTUAL TABLE IF NOT EXISTS content_items_fts USING fts5(
+                    title,
+                    summary,
+                    metadata,
+                    content=''
+                );
             """  # Note the added UPDATE statement
 
             logging.debug("[Schema V1] Applying full schema script...")
@@ -2451,6 +2521,59 @@ class MediaDatabase:
 	                            state TEXT NOT NULL DEFAULT 'active'
 	                        );
 	                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+
+                        CREATE TABLE IF NOT EXISTS collection_tags (
+                            id INTEGER PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            name TEXT NOT NULL,
+                            UNIQUE (user_id, name)
+                        );
+
+                        CREATE TABLE IF NOT EXISTS content_items (
+                            id INTEGER PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            origin TEXT NOT NULL,
+                            origin_type TEXT,
+                            origin_id INTEGER,
+                            url TEXT,
+                            canonical_url TEXT,
+                            domain TEXT,
+                            title TEXT,
+                            summary TEXT,
+                            notes TEXT,
+                            content_hash TEXT,
+                            word_count INTEGER,
+                            published_at TEXT,
+                            status TEXT,
+                            favorite INTEGER NOT NULL DEFAULT 0,
+                            metadata_json TEXT,
+                            media_id INTEGER,
+                            job_id INTEGER,
+                            run_id INTEGER,
+                            source_id INTEGER,
+                            read_at TEXT,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
+                        CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL;
+                        CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL;
+                        CREATE INDEX IF NOT EXISTS idx_content_items_user_updated ON content_items(user_id, updated_at DESC);
+                        CREATE INDEX IF NOT EXISTS idx_content_items_user_domain ON content_items(user_id, domain);
+                        CREATE INDEX IF NOT EXISTS idx_content_items_job ON content_items(job_id);
+                        CREATE INDEX IF NOT EXISTS idx_content_items_run ON content_items(run_id);
+
+                        CREATE TABLE IF NOT EXISTS content_item_tags (
+                            item_id INTEGER NOT NULL,
+                            tag_id INTEGER NOT NULL,
+                            UNIQUE (item_id, tag_id)
+                        );
+
+                        CREATE VIRTUAL TABLE IF NOT EXISTS content_items_fts USING fts5(
+                            title,
+                            summary,
+                            metadata,
+                            content=''
+                        );
 	                        """
 	                    )
                     # Ensure visibility/owner columns and indexes exist on upgraded DBs
@@ -2559,6 +2682,59 @@ class MediaDatabase:
                                     state TEXT NOT NULL DEFAULT 'active'
                                 );
                                 CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+
+                                CREATE TABLE IF NOT EXISTS collection_tags (
+                                    id INTEGER PRIMARY KEY,
+                                    user_id TEXT NOT NULL,
+                                    name TEXT NOT NULL,
+                                    UNIQUE (user_id, name)
+                                );
+
+                                CREATE TABLE IF NOT EXISTS content_items (
+                                    id INTEGER PRIMARY KEY,
+                                    user_id TEXT NOT NULL,
+                                    origin TEXT NOT NULL,
+                                    origin_type TEXT,
+                                    origin_id INTEGER,
+                                    url TEXT,
+                                    canonical_url TEXT,
+                                    domain TEXT,
+                                    title TEXT,
+                                    summary TEXT,
+                                    notes TEXT,
+                                    content_hash TEXT,
+                                    word_count INTEGER,
+                                    published_at TEXT,
+                                    status TEXT,
+                                    favorite INTEGER NOT NULL DEFAULT 0,
+                                    metadata_json TEXT,
+                                    media_id INTEGER,
+                                    job_id INTEGER,
+                                    run_id INTEGER,
+                                    source_id INTEGER,
+                                    read_at TEXT,
+                                    created_at TEXT NOT NULL,
+                                    updated_at TEXT NOT NULL
+                                );
+                                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL;
+                                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL;
+                                CREATE INDEX IF NOT EXISTS idx_content_items_user_updated ON content_items(user_id, updated_at DESC);
+                                CREATE INDEX IF NOT EXISTS idx_content_items_user_domain ON content_items(user_id, domain);
+                                CREATE INDEX IF NOT EXISTS idx_content_items_job ON content_items(job_id);
+                                CREATE INDEX IF NOT EXISTS idx_content_items_run ON content_items(run_id);
+
+                                CREATE TABLE IF NOT EXISTS content_item_tags (
+                                    item_id INTEGER NOT NULL,
+                                    tag_id INTEGER NOT NULL,
+                                    UNIQUE (item_id, tag_id)
+                                );
+
+                                CREATE VIRTUAL TABLE IF NOT EXISTS content_items_fts USING fts5(
+                                    title,
+                                    summary,
+                                    metadata,
+                                    content=''
+                                );
                                 """
                             )
                             # Ensure visibility/owner columns and indexes exist on upgraded DBs
@@ -2614,6 +2790,63 @@ class MediaDatabase:
                         connection=conn,
                     )
                     backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS collection_tags ("
+                            "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, "
+                            "UNIQUE (user_id, name))"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS content_items ("
+                            "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, origin TEXT NOT NULL, origin_type TEXT, "
+                            "origin_id BIGINT, url TEXT, canonical_url TEXT, domain TEXT, title TEXT, summary TEXT, notes TEXT, "
+                            "content_hash TEXT, word_count INTEGER, published_at TEXT, status TEXT, favorite INTEGER NOT NULL DEFAULT 0, "
+                            "metadata_json TEXT, media_id BIGINT, job_id BIGINT, run_id BIGINT, source_id BIGINT, read_at TEXT, "
+                            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical "
+                        "ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash "
+                        "ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_user_updated "
+                        "ON content_items(user_id, updated_at DESC)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_user_domain "
+                        "ON content_items(user_id, domain)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_job "
+                        "ON content_items(job_id)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_run "
+                        "ON content_items(run_id)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS content_item_tags ("
+                            "item_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, "
+                            "UNIQUE (item_id, tag_id))"
+                        ),
+                        connection=conn,
+                    )
                 except Exception:
                     pass
                 self._ensure_postgres_source_hash_column(conn)
@@ -2669,6 +2902,63 @@ class MediaDatabase:
                         connection=conn,
                     )
                     backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS collection_tags ("
+                            "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, "
+                            "UNIQUE (user_id, name))"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS content_items ("
+                            "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, origin TEXT NOT NULL, origin_type TEXT, "
+                            "origin_id BIGINT, url TEXT, canonical_url TEXT, domain TEXT, title TEXT, summary TEXT, notes TEXT, "
+                            "content_hash TEXT, word_count INTEGER, published_at TEXT, status TEXT, favorite INTEGER NOT NULL DEFAULT 0, "
+                            "metadata_json TEXT, media_id BIGINT, job_id BIGINT, run_id BIGINT, source_id BIGINT, read_at TEXT, "
+                            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical "
+                        "ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash "
+                        "ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_user_updated "
+                        "ON content_items(user_id, updated_at DESC)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_user_domain "
+                        "ON content_items(user_id, domain)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_job "
+                        "ON content_items(job_id)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_run "
+                        "ON content_items(run_id)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS content_item_tags ("
+                            "item_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, "
+                            "UNIQUE (item_id, tag_id))"
+                        ),
+                        connection=conn,
+                    )
                 except Exception:
                     pass
                 self._ensure_postgres_source_hash_column(conn)
@@ -2704,6 +2994,63 @@ class MediaDatabase:
                     connection=conn,
                 )
                 backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
+                backend.execute(
+                    (
+                        "CREATE TABLE IF NOT EXISTS collection_tags ("
+                        "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, "
+                        "UNIQUE (user_id, name))"
+                    ),
+                    connection=conn,
+                )
+                backend.execute(
+                    (
+                        "CREATE TABLE IF NOT EXISTS content_items ("
+                        "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, origin TEXT NOT NULL, origin_type TEXT, "
+                        "origin_id BIGINT, url TEXT, canonical_url TEXT, domain TEXT, title TEXT, summary TEXT, notes TEXT, "
+                        "content_hash TEXT, word_count INTEGER, published_at TEXT, status TEXT, favorite INTEGER NOT NULL DEFAULT 0, "
+                        "metadata_json TEXT, media_id BIGINT, job_id BIGINT, run_id BIGINT, source_id BIGINT, read_at TEXT, "
+                        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                    ),
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical "
+                    "ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash "
+                    "ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_content_items_user_updated "
+                    "ON content_items(user_id, updated_at DESC)",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_content_items_user_domain "
+                    "ON content_items(user_id, domain)",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_content_items_job "
+                    "ON content_items(job_id)",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_content_items_run "
+                    "ON content_items(run_id)",
+                    connection=conn,
+                )
+                backend.execute(
+                    (
+                        "CREATE TABLE IF NOT EXISTS content_item_tags ("
+                        "item_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, "
+                        "UNIQUE (item_id, tag_id))"
+                    ),
+                    connection=conn,
+                )
             except Exception:
                 pass
             self._ensure_postgres_source_hash_column(conn)
@@ -8332,11 +8679,29 @@ class MediaDatabase:
             mon = get_topic_monitoring_service()
             uid = str(client_id) if client_id is not None else None
             if title:
-                mon.evaluate_and_alert(user_id=uid, text=title, source="ingestion.media", scope_type="user", scope_id=uid)
+                mon.schedule_evaluate_and_alert(
+                    user_id=uid,
+                    text=title,
+                    source="ingestion.media",
+                    scope_type="user",
+                    scope_id=uid,
+                )
             if content:
-                mon.evaluate_and_alert(user_id=uid, text=content, source="ingestion.media", scope_type="user", scope_id=uid)
+                mon.schedule_evaluate_and_alert(
+                    user_id=uid,
+                    text=content,
+                    source="ingestion.media",
+                    scope_type="user",
+                    scope_id=uid,
+                )
             if analysis_content:
-                mon.evaluate_and_alert(user_id=uid, text=analysis_content, source="ingestion.media", scope_type="user", scope_id=uid)
+                mon.schedule_evaluate_and_alert(
+                    user_id=uid,
+                    text=analysis_content,
+                    source="ingestion.media",
+                    scope_type="user",
+                    scope_id=uid,
+                )
         except Exception:
             pass
 

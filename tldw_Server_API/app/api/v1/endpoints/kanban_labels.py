@@ -9,7 +9,7 @@ Provides CRUD operations for Kanban labels including:
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
@@ -150,13 +150,14 @@ async def update_label(
 @router.delete(
     "/labels/{label_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a label",
     description="Delete a label (hard delete). This removes the label from all cards."
 )
 async def delete_label(
     label_id: int,
     db: KanbanDB = Depends(get_kanban_db_for_user)
-) -> None:
+) -> Response:
     """Delete a label permanently."""
     try:
         success = db.delete_label(label_id=label_id)
@@ -165,6 +166,7 @@ async def delete_label(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Label {label_id} not found"
             )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException:
         raise
     except Exception as e:
@@ -203,6 +205,7 @@ async def assign_label_to_card(
 @router.delete(
     "/cards/{card_id}/labels/{label_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Remove label from card",
     description="Remove a label from a card."
 )
@@ -210,11 +213,12 @@ async def remove_label_from_card(
     card_id: int,
     label_id: int,
     db: KanbanDB = Depends(get_kanban_db_for_user)
-) -> None:
+) -> Response:
     """Remove a label from a card."""
     try:
         db.remove_label_from_card(card_id=card_id, label_id=label_id)
         # Don't raise 404 if the association didn't exist - idempotent behavior
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as e:
         raise _handle_error(e)
 

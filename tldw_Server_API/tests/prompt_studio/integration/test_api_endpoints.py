@@ -495,9 +495,30 @@ class TestOptimizationEndpoints:
                     "type": "optimization"
                 }
 
+                project_resp = client.post(
+                    "/api/v1/prompt-studio/projects/",
+                    json={"name": "Opt Project", "status": "active"},
+                    headers=auth_headers,
+                )
+                assert project_resp.status_code in (200, 201), project_resp.text
+                project_id = (project_resp.json().get("data") or {}).get("id") or project_resp.json().get("id")
+
+                prompt_resp = client.post(
+                    "/api/v1/prompt-studio/prompts/create",
+                    json={
+                        "project_id": project_id,
+                        "name": "Opt Prompt",
+                        "system_prompt": "System",
+                        "user_prompt": "{{text}}",
+                    },
+                    headers=auth_headers,
+                )
+                assert prompt_resp.status_code in (200, 201), prompt_resp.text
+                prompt_id = (prompt_resp.json().get("data") or {}).get("id") or prompt_resp.json().get("id")
+
                 optimization_data = {
-                    "project_id": 1,
-                    "prompt_id": 1,
+                    "project_id": project_id,
+                    "prompt_id": prompt_id,
                     "strategy": "mipro",
                     "config": {
                         "max_iterations": 10,

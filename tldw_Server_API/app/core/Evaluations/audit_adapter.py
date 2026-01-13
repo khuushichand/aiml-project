@@ -214,6 +214,13 @@ def log_evaluation_deleted(*, user_id: str, eval_id: str) -> None:
     _schedule(_emit(user_id=user_id, event_type=UEvent.DATA_DELETE, action="evaluation_delete", resource_type="evaluation", resource_id=eval_id))
 
 
+def log_evaluation_exported(*, user_id: str, eval_id: str, eval_type: str, export_format: str, total: Optional[int] = None) -> None:
+    metadata: Dict[str, Any] = {"type": eval_type, "format": export_format}
+    if total is not None:
+        metadata["total"] = int(total)
+    _schedule(_emit(user_id=user_id, event_type=UEvent.DATA_EXPORT, action="evaluation_export", resource_type="evaluation", resource_id=eval_id, metadata=metadata))
+
+
 def log_run_started(*, user_id: str, run_id: str, eval_id: str, target_model: str) -> None:
     _schedule(_emit(user_id=user_id, event_type=UEvent.EVAL_STARTED, action="run_create", resource_type="evaluation_run", resource_id=run_id, metadata={"eval_id": eval_id, "target_model": target_model}))
 

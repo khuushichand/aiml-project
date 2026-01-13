@@ -5,17 +5,18 @@ Owner: Core Maintainers
 Target Release: 0.2.x
 
 ## 1. Summary
-Move embeddings background execution onto the core Jobs worker SDK. Jobs become the execution source of truth for media embeddings instead of in-process background tasks or Redis queues.
+Keep embeddings status/billing in core Jobs while reintroducing a minimal Redis Streams transport for media embeddings stages. Jobs remain the root status source of truth; Redis handles chunking → embedding → storage throughput.
 
 ## 2. Current State
-- Embeddings jobs are executed by the core Jobs worker (`core/Embeddings/services/jobs_worker.py`).
-- The Redis-based embeddings pipeline (`EmbeddingJobManager` + `worker_orchestrator.py`) has been removed.
-- Public job status endpoints read from core Jobs via `EmbeddingsJobsAdapter` (legacy fallback removed).
+- Media embeddings stages run via Redis Streams workers (`core/Embeddings/services/redis_worker.py`).
+- Content embeddings for collections items run via the Redis Streams `embeddings:content` stage.
+- Legacy EmbeddingJobManager/queue schemas remain removed.
+- Public job status endpoints read from core Jobs via `EmbeddingsJobsAdapter` (root jobs only).
 
 ## 3. Goals
-- Execute media embeddings jobs via core Jobs workers.
+- Execute media embeddings stages via Redis Streams for throughput.
 - Keep API behavior unchanged (accepted response + job_id) while shifting execution off the API server.
-- Avoid embedding large chunk/embedding payloads in Jobs rows.
+- Keep Jobs as the status/billing source of truth for root jobs.
 
 ## 4. Non-Goals
 - Full DAG dependency edges (Phase 4 in PRD).
@@ -24,58 +25,67 @@ Move embeddings background execution onto the core Jobs worker SDK. Jobs become 
 
 ### 5.1 Job Types & Queues
 - `domain`: `embeddings`
-- `queue`: `EMBEDDINGS_JOBS_QUEUE` (default `default`)
-- `job_type`: `media_embeddings` (existing adapter type)
+- `root queue`: `EMBEDDINGS_ROOT_JOBS_QUEUE` (default `low`) for Jobs status/billing
+- `stage streams`: Redis Streams `embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`, `embeddings:content`
 
-### 5.2 Payload Shape (media jobs)
+### 5.2 Payload Shape (media stage messages)
 ```json
 {
   "media_id": 123,
+  "user_id": "user-1",
   "embedding_model": "text-embedding-3-small",
   "embedding_provider": "openai",
   "chunk_size": 1000,
   "chunk_overlap": 200,
-  "request_source": "media"
+  "request_source": "media",
+  "current_stage": "chunking",
+  "root_job_uuid": "uuid",
+  "config_version": "model:provider:1000:200"
 }
 ```
 Notes:
 - No raw chunk/embedding arrays in payload.
-- If a non-media source is added later (collections), payload should store only references and keep content below `JOBS_MAX_JSON_BYTES`.
+- Content embeddings payloads include inline text (`content`) and optional metadata; keep payloads below `JOBS_MAX_JSON_BYTES`.
+
+### 5.2.1 Payload Shape (content stage messages)
+```json
+{
+  "item_id": 456,
+  "content": "Inline text to embed",
+  "metadata": { "source": "collections" },
+  "current_stage": "content",
+  "root_job_uuid": "uuid"
+}
+```
 
 ### 5.3 Worker Flow
-Add a Jobs worker service `tldw_Server_API/app/core/Embeddings/services/jobs_worker.py`:
-1. Acquire jobs via `WorkerSDK` (domain `embeddings`, queue `EMBEDDINGS_JOBS_QUEUE`).
-2. Validate `job_type == media_embeddings`; otherwise fail with `error_code="unsupported_job_type"`.
-3. Load media content via `get_media_content` (move to a shared helper or import from `media_embeddings.py`).
-4. Call `generate_embeddings_for_media(...)` with payload fields.
-5. Update job result fields on success:
-   - `embedding_count`
-   - `chunks_processed`
-   - `embedding_model`
-   - `embedding_provider`
-   - optional `total_chunks` if available
-6. Update `progress_percent` (0 -> 25 -> 75 -> 100) as stages complete.
-7. On error, fail job (retryable if provider transient error).
+Add a Redis Streams worker service `tldw_Server_API/app/core/Embeddings/services/redis_worker.py`:
+1. Consume stage messages from Redis Streams (chunking/embedding/storage).
+   - Run with: `python -m tldw_Server_API.app.core.Embeddings.services.redis_worker --stage all`
+2. Chunking stage: load media content, create chunks, persist artifact, enqueue `embeddings:embedding`.
+3. Embedding stage: read chunks, create embeddings (fallback model on provider error), persist artifact, enqueue `embeddings:storage`.
+4. Storage stage: read artifacts, store vectors in ChromaDB, update root Jobs result.
+5. Content stage: embed inline content payloads directly and update the root Jobs result.
+6. Stage chaining is idempotent via artifact reuse and Redis idempotency keys.
+7. On error, retry locally (bounded) then fail the root Jobs record.
 
 ### 5.4 API Behavior
-- When `EMBEDDINGS_JOBS_BACKEND=jobs`, API endpoints only enqueue Jobs and return 202/accepted.
-- When `EMBEDDINGS_JOBS_BACKEND=redis`, keep in-process background tasks while still recording status in core Jobs (legacy label retained for compatibility).
+- Embeddings APIs enqueue a Jobs root record and a Redis Streams chunking message, then return 202/accepted.
+- `EMBEDDINGS_JOBS_BACKEND` legacy values are ignored (Jobs root remains the backend).
 
 ### 5.5 Backpressure / Quotas
-- Use Jobs quotas (see PRD defaults). Backpressure should return 429 when Jobs quota limits are reached.
-- Redis queue stats remain available for legacy mode; Jobs mode can expose empty/disabled stats (Phase 3 cleanup).
+- Jobs quotas remain enforced for root jobs (see PRD defaults).
+- Redis Streams stage queues handle throughput; stage queue stats are Redis-native.
 
 ## 6. Migration Steps
-1. Add Jobs worker service for `media_embeddings` and document run command.
-2. Gate endpoints with `EMBEDDINGS_JOBS_BACKEND=jobs` to enqueue only.
-3. Optional: migrate `core/Collections/embedding_queue.py` to Jobs (content stays out of payload when possible).
-4. Update runbooks/tests to start Jobs worker during E2E runs.
+1. Add Redis Streams worker service for staged pipelines and document run command.
+2. Ensure endpoints enqueue Jobs root + Redis chunking message.
+3. Migrate `core/Collections/embedding_queue.py` to Redis Streams for content embeddings.
+4. Update runbooks/tests to start Redis worker during E2E runs.
 
 ## 7. Testing
 - Unit: new tests for Jobs worker handler (success + failure).
 - E2E: `tldw_Server_API/tests/e2e/test_embeddings_e2e.py` and media embeddings flows with `EMBEDDINGS_JOBS_BACKEND=jobs`.
-- Regression: ensure legacy mode remains unchanged.
 
 ## 8. Open Questions
-- Should collections embedding enqueue be migrated in this phase or deferred to Phase 3?
 - Should progress updates be exposed by default or remain behind `EMBEDDINGS_JOBS_EXPOSE_PROGRESS`?

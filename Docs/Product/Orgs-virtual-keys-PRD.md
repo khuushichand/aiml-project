@@ -11,7 +11,7 @@
 ## Non-Goals (v1)
 
 - Full org/team-scoped RBAC inheritance and per-resource ACLs (future).
-- Cascading side effects across org/team membership changes. Adds/removes are explicit and localized; no implicit cascades in v1.
+- Cascading side effects across org/team membership changes beyond the Default-Base team auto-enrollment. Adds/removes are explicit and localized in v1; the only implicit action is maintaining Default-Base membership per org.
 
 ## User Stories
 
@@ -31,7 +31,7 @@
 
 - Services:
   - `orgs_teams.py`: CRUD helpers for orgs, teams, and team membership (add/list/delete).
-  - `virtual_keys.py`: helpers to read per-key limits, evaluate current usage (day/month) using `llm_usage_log` (fallback) and `llm_usage_daily` when present.
+- `virtual_keys.py`: helpers to read per-key limits, evaluate current usage (day/rolling 30-day window) using `llm_usage_log`.
 
 - Enforcement:
   - `LLMBudgetMiddleware` (FastAPI middleware) checks on configured LLM endpoints:
@@ -55,7 +55,7 @@
     - DELETE /api/v1/admin/teams/{team_id}/members/{user_id} - remove member (idempotent)
   - Virtual key endpoints (admin):
     - POST /api/v1/admin/users/{user_id}/virtual-keys - create virtual key with limits and allowlists
-    - GET  /api/v1/admin/users/{user_id}/virtual-keys - list/search
+    - GET  /api/v1/admin/users/{user_id}/virtual-keys - list/search (filters: name, status, org_id, team_id, created_after, created_before)
 
 ## Data Model
 
@@ -121,12 +121,12 @@ On each request to configured LLM endpoints (defaults: `/api/v1/chat/completions
    - If llm_allowed_models is set, ensure request JSON `model` is in allowlist; else 403.
    - Compute current usage for key_id:
        - Day: sum from `llm_usage_log` where date(ts)=UTC today and key_id matches.
-       - Month: sum where ts IN current UTC month.
+       - Month: sum over a rolling 30-day UTC window.
      Compare against configured budgets (tokens and/or USD). If any limit would be exceeded (>=), reject with 402 and clear message.
 
 Notes:
 - We use logging data as source of truth for spend/token usage; aggregation to daily table can be leveraged for monthly sums in future.
-- Budgets are soft state. A request that tips over a limit will be allowed once (the tipping request), and subsequent requests will be blocked.
+- Budgets are soft state. A request that tips over a limit will be allowed once (the tipping request), and subsequent requests will be blocked. Month limits use a rolling 30-day window.
 - Error codes: 403 for disallowed endpoint/provider/model; 402 for budget exceeded.
  - **Stable contract**: the 402 response payload shape (`error`, `message`, `details`) is stable.
 

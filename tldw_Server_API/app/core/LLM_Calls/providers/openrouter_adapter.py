@@ -51,6 +51,9 @@ class OpenRouterAdapter(ChatProvider):
         return os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
     def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
         try:
             cfg = (request or {}).get("app_config") or {}
             or_cfg = cfg.get("openrouter_api") or {}

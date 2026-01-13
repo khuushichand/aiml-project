@@ -36,7 +36,7 @@
 - Auto-tag idempotency test with manual override preservation.
 - Clustering persistence test (cluster metadata + membership).
 - Opt-out/unclustered handling test.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: WebUI & Docs Alignment
 **Goal**: Surface new filters, ranking, tree view, analytics, and updated docs.
@@ -48,4 +48,4 @@
 **Tests**:
 - UI smoke tests for list/detail/analytics.
 - OpenAPI/doc example validation against schemas.
-**Status**: Not Started
+**Status**: Complete

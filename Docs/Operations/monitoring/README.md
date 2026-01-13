@@ -1,6 +1,6 @@
 # Monitoring TLDW Embeddings Jobs
 
-This folder contains a ready-to-import Grafana dashboard and basic guidance to scrape Prometheus metrics from the API process. The embeddings Jobs worker runs through core Jobs and does not expose a standalone Prometheus endpoint.
+This folder contains a ready-to-import Grafana dashboard and basic guidance to scrape Prometheus metrics from the API process. The embeddings Redis Streams worker does not expose a standalone Prometheus endpoint; root Jobs metrics and API counters are exported by the API process.
 
 ## Prometheus Scrape Setup
 
@@ -31,7 +31,7 @@ Notes:
 
 Import the provided dashboards:
 
-- Embeddings Jobs (legacy orchestrator dashboard; update if you still use it): `monitoring/grafana_embeddings_orchestrator.json`
+- Embeddings Redis Streams (queue/depth panels driven by Redis + API metrics): `monitoring/grafana_embeddings_orchestrator.json`
 - Workflows: `monitoring/grafana_workflows.json`
 - Service Overview: `monitoring/grafana_service_overview.json`
 - Tenant Overview: `monitoring/grafana_tenant_overview.json`
@@ -108,5 +108,5 @@ Core Jobs metrics exported by the API process (filter by `domain="embeddings"`):
 
 ## Troubleshooting
 
-- If Jobs metrics are empty, verify the Jobs DB is reachable and the embeddings Jobs worker is running.
+- If Jobs metrics are empty, verify the Jobs DB is reachable and the embeddings Redis worker is running.
 - If metrics endpoints return 401/403, use admin credentials (single-user API key or admin JWT role).

@@ -189,6 +189,16 @@ CREATE TABLE IF NOT EXISTS job_sla_policies (
   updated_at TEXT DEFAULT (DATETIME('now')),
   PRIMARY KEY (domain, queue, job_type)
 );
+
+-- Job dependencies (DAG edges)
+CREATE TABLE IF NOT EXISTS job_dependencies (
+  job_uuid TEXT NOT NULL,
+  depends_on_job_uuid TEXT NOT NULL,
+  created_at TEXT DEFAULT (DATETIME('now')),
+  PRIMARY KEY (job_uuid, depends_on_job_uuid)
+);
+CREATE INDEX IF NOT EXISTS idx_job_dependencies_job ON job_dependencies(job_uuid);
+CREATE INDEX IF NOT EXISTS idx_job_dependencies_depends_on ON job_dependencies(depends_on_job_uuid);
 """
 
 

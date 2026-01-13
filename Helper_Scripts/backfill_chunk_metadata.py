@@ -116,22 +116,34 @@ def backfill_collection(
         if supports_update:
             collection.update(ids=update_ids, metadatas=updates)
         else:
-            documents = raw.get("documents") or []
+            documents = raw.get("documents")
             embeddings = raw.get("embeddings") or []
-            if len(documents) < len(ids):
-                documents = documents + [None] * (len(ids) - len(documents))
             if len(embeddings) < len(ids):
                 raise RuntimeError("Collection lacks embeddings; cannot upsert without update support.")
-            doc_map = {ids[i]: documents[i] for i in range(len(ids))}
             emb_map = {ids[i]: embeddings[i] for i in range(len(ids))}
-            batch_docs = [doc_map[i] for i in update_ids]
             batch_embs = [emb_map[i] for i in update_ids]
-            collection.upsert(
-                ids=update_ids,
-                metadatas=updates,
-                documents=batch_docs,
-                embeddings=batch_embs,
-            )
+            if documents:
+                doc_map = {ids[i]: documents[i] for i in range(len(documents))}
+                if all(i in doc_map for i in update_ids):
+                    batch_docs = [doc_map[i] for i in update_ids]
+                    collection.upsert(
+                        ids=update_ids,
+                        metadatas=updates,
+                        documents=batch_docs,
+                        embeddings=batch_embs,
+                    )
+                else:
+                    collection.upsert(
+                        ids=update_ids,
+                        metadatas=updates,
+                        embeddings=batch_embs,
+                    )
+            else:
+                collection.upsert(
+                    ids=update_ids,
+                    metadatas=updates,
+                    embeddings=batch_embs,
+                )
 
         total_updates += len(update_ids)
 

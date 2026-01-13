@@ -55,7 +55,8 @@ python -m tldw_Server_API.app.core.DB_Management.migration_tools \
 
 For multi-user deployments, repeat the command for each user directory. Run these migrations
 sequentially; do not run multiple instances in parallel because the tool truncates target tables
-before copying data. To auto-discover user IDs from the filesystem safely:
+before copying data. Use `--user-id` to scope deletions and inserts per user. To auto-discover
+user IDs from the filesystem safely:
 
 ```bash
 while IFS= read -r -d '' USER_DIR; do
@@ -65,6 +66,7 @@ while IFS= read -r -d '' USER_DIR; do
         --chacha-sqlite "$USER_DIR/ChaChaNotes.db" \
         --analytics-sqlite Analytics.db \
         --workflows-sqlite Databases/workflows.db \
+        --user-id "$USER_ID" \
         --pg-host "$PGHOST" \
         --pg-port "$PGPORT" \
         --pg-database "$PGDATABASE" \

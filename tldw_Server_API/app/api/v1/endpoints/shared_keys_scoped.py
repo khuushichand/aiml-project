@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
@@ -306,12 +306,13 @@ async def test_org_shared_key(
 @router.delete(
     "/orgs/{org_id}/keys/shared/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def delete_org_shared_key(
     org_id: int,
     provider: str,
     user: dict = Depends(get_current_user),
-) -> None:
+) -> Response:
     _require_byok_enabled()
     await _require_org_manager(user, org_id)
     repo = await _get_shared_byok_repo()
@@ -324,6 +325,7 @@ async def delete_org_shared_key(
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -520,12 +522,13 @@ async def test_team_shared_key(
 @router.delete(
     "/teams/{team_id}/keys/shared/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def delete_team_shared_key(
     team_id: int,
     provider: str,
     user: dict = Depends(get_current_user),
-) -> None:
+) -> Response:
     _require_byok_enabled()
     await _require_team_manager(user, team_id)
     repo = await _get_shared_byok_repo()
@@ -538,3 +541,4 @@ async def delete_team_shared_key(
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

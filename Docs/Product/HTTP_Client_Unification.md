@@ -76,7 +76,9 @@ Priority targets to migrate:
 - Unit: adapter request/stream paths enforce egress policy, retries, and timeouts.
 - Unit: SSE parsing and streaming timeout coverage (first-byte, idle, heartbeat).
 - Integration: streaming provider endpoints and web scraping flows.
-- Regression: ensure no tests patch raw requests/httpx/aiohttp clients.
+- Regression: enforce no tests patch raw requests/httpx/aiohttp clients via the
+  pre-commit guard, pytest plugin, and CI lint step
+  (`Helper_Scripts/checks/guard_http_client_patching.py`).
 
 ## Rollout Notes
 - No production toggle for adapter selection.

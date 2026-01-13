@@ -1066,7 +1066,9 @@ curl -X GET "http://localhost:8000/api/v1/chats/{chat_id}/export?format=markdown
 
 ```python
 import json
+import socket
 from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 class CharacterChatClient:
@@ -1076,16 +1078,30 @@ class CharacterChatClient:
             "X-API-KEY": api_key
         }
 
-    def _request_json(self, method, path, payload=None, params=None):
+    def _request_json(self, method, path, payload=None, params=None, timeout=None):
         url = f"{self.base_url}{path}"
         if params:
             url = f"{url}?{urlencode(params)}"
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers = {"Content-Type": "application/json", **self.headers}
         req = Request(url, data=data, headers=headers, method=method)
-        with urlopen(req) as resp:
-            body = resp.read().decode("utf-8")
+        try:
+            if timeout is None:
+                with urlopen(req) as resp:
+                    body = resp.read().decode("utf-8")
+            else:
+                with urlopen(req, timeout=timeout) as resp:
+                    body = resp.read().decode("utf-8")
             return json.loads(body) if body else {}
+        except HTTPError as err:
+            error_body = err.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"HTTP {err.code} error for {url}: {error_body}"
+            ) from err
+        except URLError as err:
+            raise ConnectionError(f"Connection error for {url}: {err.reason}") from err
+        except socket.timeout as err:
+            raise TimeoutError(f"Request to {url} timed out") from err
 
     def create_character(self, name, description, personality, first_message):
         return self._request_json(

@@ -13,6 +13,7 @@
 - Inputs/Outputs:
 - Input: OpenAI-style `messages` list with optional `tools`/`tool_choice` (tool_choice requires tools), provider options (temperature, top_p, max_tokens, …), plus additive `extra_headers`/`extra_body` (payload/headers win on conflicts).
   - Output: Non-streaming returns OpenAI-style object; streaming yields `data: …\n\n` lines (OpenAI delta chunks) with a final `[DONE]`.
+  - Non-OpenAI providers preserve provider-specific fields in a `provider_response` extension on responses and SSE chunks.
   - Errors map to `ChatAPIError` subclasses for clean HTTP responses.
 - Related Endpoints:
   - POST `/api/v1/chat/completions` — tldw_Server_API/app/api/v1/endpoints/chat.py:592
@@ -46,6 +47,7 @@
   - Strict OpenAI-compat (local gateways): set `strict_openai_compat=true` in the provider section or env `LOCAL_LLM_STRICT_OPENAI_COMPAT=1|true|yes|on`.
 - Request overrides:
   - `extra_headers` and `extra_body` are merged additively; explicit request headers/payload keys win on conflicts.
+  - `base_url` overrides are allowed only for trusted callers and allowlisted providers (see `byok_allowed_base_url_providers`).
   - Local provider base URLs are config-only; request-level `api_url`/`*_api_url` overrides are rejected.
 - Concurrency & Performance:
   - Streaming via `requests` or `httpx.AsyncClient` depending on handler; SSE normalized and `[DONE]` appended once.

@@ -147,6 +147,7 @@ async def get_media_item(
 @router.delete(
     "/{media_id:int}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Move media item to trash",
     description="Soft-delete a media item by moving it to trash (is_trash=1). Use POST /{media_id}/restore to undo.",
     responses={
@@ -329,6 +330,7 @@ async def restore_media_item(
 @router.delete(
     "/{media_id:int}/permanent",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Permanently delete a trashed media item",
     description="Hard-delete a trashed media item. This cannot be undone.",
     responses={

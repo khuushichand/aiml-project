@@ -89,7 +89,7 @@ app/core/Embeddings/
 ├── jobs_adapter.py                    # Core Jobs adapter for embeddings jobs
 ├── worker_config.py                   # Legacy config (unused; retained for reference)
 ├── services/
-│   └── jobs_worker.py                 # Core Jobs worker for embeddings
+│   └── redis_worker.py                # Redis Streams worker for embeddings stages
 └── Embeddings_Server/
     ├── __init__.py
     └── Embeddings_Create.py          # Core embedding logic

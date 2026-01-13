@@ -21,6 +21,15 @@ Note:
 - `/api/v1/chats` continues to serve character chat session CRUD and exports.
 - Alias: `/api/v1/chats/conversations` maps to the conversation list/update/tree endpoints above.
 
+Parameter glossary:
+- `query`: full-text search term applied to conversation title.
+- `state`: conversation lifecycle state (`in-progress`, `resolved`, `backlog`, `non-viable`).
+- `topic_label`: exact topic label match; append `*` for prefix search.
+- `keywords`: repeatable query parameter; all values must match (AND).
+- `order_by`: `bm25` (text relevance), `recency` (last_modified), `hybrid` (weighted blend), `topic` (alphabetical topic).
+- `start_date`/`end_date`: ISO-8601 range bounds for analytics.
+- `bucket_granularity`: `day` or `week` for analytics buckets.
+
 ## Authentication
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`

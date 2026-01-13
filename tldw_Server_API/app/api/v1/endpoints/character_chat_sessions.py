@@ -1359,14 +1359,19 @@ async def update_chat_session(
         )
 
 
-@router.delete("/{chat_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Delete chat session", tags=["Chat Sessions"])
+@router.delete(
+    "/{chat_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Delete chat session",
+    tags=["Chat Sessions"],
+)
 async def delete_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
-):
+) -> Response:
     """
     Soft delete a chat session.
 
@@ -1448,6 +1453,7 @@ async def delete_chat_session(
         db.soft_delete_conversation(chat_id, exp_ver)
 
         logger.info(f"Soft deleted chat session {chat_id} by user {current_user.id}")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     except ConflictError as e:
         logger.warning(f"Conflict deleting chat session {chat_id}: {e}")

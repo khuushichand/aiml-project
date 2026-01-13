@@ -73,6 +73,26 @@ class TestDatabaseInitialization:
         with pytest.raises(ValueError, match="Client ID cannot be empty"):
             MediaDatabase(db_path=":memory:", client_id=None)
 
+    def test_collections_tables_created(self, memory_db_factory):
+        """Ensure collections tables exist in the Media DB schema."""
+        db = memory_db_factory("client_collections")
+        cursor = db.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='collection_tags'"
+        )
+        assert cursor.fetchone() is not None
+        cursor = db.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='content_items'"
+        )
+        assert cursor.fetchone() is not None
+        cursor = db.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='content_item_tags'"
+        )
+        assert cursor.fetchone() is not None
+        cursor = db.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='content_items_fts'"
+        )
+        assert cursor.fetchone() is not None
+
 def test_schema_versioning_new_file_db(file_db): # Use the file_db fixture
     """Test that a new file DB gets the correct schema version."""
     # Initialization happened in the fixture

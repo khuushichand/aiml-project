@@ -13,6 +13,7 @@
 ####################
 #
 # Import necessary libraries
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import hashlib
@@ -22,7 +23,10 @@ import random
 import sys
 import time
 import re
+import ipaddress
+import math
 import tempfile
+from threading import Lock
 from typing import Any, Dict, List, Union, Optional, Tuple, Callable
 #
 # 3rd-Party Imports
@@ -186,7 +190,7 @@ def _js_required(html: str, headers: Dict[str, Any], url: Optional[str] = None) 
         ):
             return True
         app_shell_ids = ("__next", "__nuxt", "root", "app", "app-root")
-        if script_count >= 5 and visible_len < 600:
+        if script_count >= 1 and visible_len < 600:
             for shell_id in app_shell_ids:
                 if f'id="{shell_id}"' in text or f"id='{shell_id}'" in text:
                     return True
@@ -385,6 +389,82 @@ _STRATEGY_ALIASES = {
     "clustering": "cluster",
 }
 _KNOWN_STRATEGIES = set(DEFAULT_EXTRACTION_STRATEGY_ORDER)
+_MAX_REGEX_TOTAL_MATCHES = 200
+_MAX_REGEX_MATCHES_PER_LABEL = {
+    "number": 50,
+}
+_PII_LABELS = {"email", "phone", "credit_card"}
+_REGEX_CATALOG: List[Tuple[str, re.Pattern[str]]] = [
+    ("email", re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")),
+    ("phone", re.compile(r"\b(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")),
+    ("phone", re.compile(r"\b\+?\d[\d\s().-]{7,}\d\b")),
+    ("url", re.compile(r"\bhttps?://[^\s<>\"]+")),
+    ("ipv4", re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
+    ("ipv6", re.compile(r"\b(?:[A-Fa-f0-9]{0,4}:){2,7}[A-Fa-f0-9]{0,4}\b")),
+    ("uuid", re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b")),
+    ("currency", re.compile(r"[$€£¥]\s?\d+(?:,\d{3})*(?:\.\d{2})?")),
+    ("percentage", re.compile(r"\b\d+(?:\.\d+)?%")),
+    ("number", re.compile(r"\b\d+(?:\.\d+)?\b")),
+    ("datetime", re.compile(r"\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4})(?:[ T]\d{2}:\d{2}(?::\d{2})?)?\b")),
+    ("postal_us", re.compile(r"\b\d{5}(?:-\d{4})?\b")),
+    ("postal_uk", re.compile(r"\b[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}\b", re.IGNORECASE)),
+    ("hex_color", re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b")),
+    ("social_handle", re.compile(r"(?<!\w)@[A-Za-z0-9_]{1,30}\b")),
+    ("mac", re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")),
+    ("iban", re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b", re.IGNORECASE)),
+    ("credit_card", re.compile(r"\b(?:\d[ -]*?){13,19}\b")),
+]
+_CLUSTER_EMBED_CACHE_MAX = 512
+_CLUSTER_EMBED_DIM = 128
+_CLUSTER_PREFILTER_THRESHOLD = 0.2
+_CLUSTER_SIM_THRESHOLD = 0.4
+_CLUSTER_MIN_BLOCK_CHARS = 40
+_CLUSTER_MAX_BLOCKS = 60
+_CLUSTER_EMBED_CACHE: "OrderedDict[str, List[float]]" = OrderedDict()
+_CLUSTER_CACHE_LOCK = Lock()
+
+
+def get_extraction_cache_stats() -> Dict[str, int]:
+    with _CLUSTER_CACHE_LOCK:
+        return {
+            "cluster_embedding_cache_size": len(_CLUSTER_EMBED_CACHE),
+        }
+
+
+def clear_extraction_caches() -> None:
+    with _CLUSTER_CACHE_LOCK:
+        _CLUSTER_EMBED_CACHE.clear()
+
+
+def _cluster_cache_get(key: str) -> Optional[List[float]]:
+    with _CLUSTER_CACHE_LOCK:
+        value = _CLUSTER_EMBED_CACHE.get(key)
+        if value is None:
+            try:
+                increment_counter(
+                    "extraction_cluster_cache_total",
+                    labels={"cache": "embedding", "result": "miss"},
+                )
+            except Exception:
+                pass
+            return None
+        _CLUSTER_EMBED_CACHE.move_to_end(key)
+    try:
+        increment_counter(
+            "extraction_cluster_cache_total",
+            labels={"cache": "embedding", "result": "hit"},
+        )
+    except Exception:
+        pass
+    return value
+
+
+def _cluster_cache_put(key: str, value: List[float]) -> None:
+    with _CLUSTER_CACHE_LOCK:
+        _CLUSTER_EMBED_CACHE[key] = value
+        _CLUSTER_EMBED_CACHE.move_to_end(key)
+        while len(_CLUSTER_EMBED_CACHE) > _CLUSTER_EMBED_CACHE_MAX:
+            _CLUSTER_EMBED_CACHE.popitem(last=False)
 
 
 def _normalize_strategy_order(
@@ -414,6 +494,10 @@ def _normalize_strategy_order(
 
 
 def _trace_entry(strategy: str, status: str, reason: str, detail: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        log_counter("extraction_strategy_total", labels={"strategy": strategy, "status": status})
+    except Exception:
+        pass
     entry = {"strategy": strategy, "status": status, "reason": reason}
     if detail:
         entry["detail"] = detail
@@ -484,6 +568,794 @@ def _extract_with_trafilatura(html: str, url: str) -> Dict[str, Any]:
     return result
 
 
+def _regex_pii_mask_enabled() -> bool:
+    flag = os.getenv("REGEX_PII_MASK", "")
+    return str(flag).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mask_pii_value(label: str, value: str) -> str:
+    if label == "email":
+        if "@" not in value:
+            return "***"
+        local, domain = value.split("@", 1)
+        if len(local) <= 2:
+            masked_local = "*" * len(local)
+        else:
+            masked_local = f"{local[0]}***{local[-1]}"
+        return f"{masked_local}@{domain}"
+    if label == "phone":
+        digits = re.sub(r"\D", "", value)
+        if len(digits) <= 4:
+            return "*" * len(digits)
+        return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
+    if label == "credit_card":
+        digits = re.sub(r"\D", "", value)
+        if len(digits) <= 4:
+            return "*" * len(digits)
+        return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
+    return value
+
+
+def _luhn_check(number: str) -> bool:
+    digits = [int(d) for d in number if d.isdigit()]
+    if len(digits) < 12 or len(digits) > 19:
+        return False
+    checksum = 0
+    parity = len(digits) % 2
+    for idx, digit in enumerate(digits):
+        if idx % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        checksum += digit
+    return checksum % 10 == 0
+
+
+def extract_regex_entities(
+    html_text: str,
+    url: str,
+    *,
+    mask_pii: Optional[bool] = None,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "url": url,
+        "title": "N/A",
+        "author": "N/A",
+        "content": "",
+        "date": "N/A",
+        "extraction_successful": False,
+        "regex_matches": [],
+    }
+    if not html_text:
+        return result
+
+    soup = BeautifulSoup(html_text, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    title_tag = soup.find("title")
+    title = title_tag.get_text(strip=True) if title_tag else None
+    if title:
+        result["title"] = title
+    text = soup.get_text(" ", strip=True)
+    result["content"] = text
+    if not text:
+        return result
+
+    if mask_pii is None:
+        mask_pii = _regex_pii_mask_enabled()
+
+    matches: List[Dict[str, Any]] = []
+    seen_spans: set[tuple[str, int, int]] = set()
+    occupied: List[Tuple[int, int]] = []
+    total_count = 0
+    per_label_counts: Dict[str, int] = {}
+
+    for label, pattern in _REGEX_CATALOG:
+        per_label_limit = _MAX_REGEX_MATCHES_PER_LABEL.get(label, _MAX_REGEX_TOTAL_MATCHES)
+        count = per_label_counts.get(label, 0)
+        if count >= per_label_limit:
+            continue
+        for match in pattern.finditer(text):
+            if total_count >= _MAX_REGEX_TOTAL_MATCHES or count >= per_label_limit:
+                break
+            start, end = match.span()
+            if any(start < span_end and end > span_start for span_start, span_end in occupied):
+                if label == "number":
+                    continue
+            value = match.group(0)
+            if label == "social_handle" and "." in value:
+                continue
+            if label in {"ipv4", "ipv6"}:
+                try:
+                    ipaddress.ip_address(value)
+                except Exception:
+                    continue
+            if label == "credit_card":
+                if not _luhn_check(value):
+                    continue
+            if (label, start, end) in seen_spans:
+                continue
+            seen_spans.add((label, start, end))
+            occupied.append((start, end))
+            if mask_pii and label in _PII_LABELS:
+                value = _mask_pii_value(label, value)
+            matches.append(
+                {
+                    "url": url,
+                    "label": label,
+                    "value": value,
+                    "span": [start, end],
+                }
+            )
+            count += 1
+            total_count += 1
+        per_label_counts[label] = count
+        if total_count >= _MAX_REGEX_TOTAL_MATCHES:
+            break
+
+    result["regex_matches"] = matches
+    result["extraction_successful"] = bool(matches)
+    return result
+
+
+def _tokenize_cluster_text(text: str) -> List[str]:
+    return re.findall(r"\b[\w'-]+\b", text.lower())
+
+
+def _normalize_vector(vec: List[float]) -> List[float]:
+    if not vec:
+        return vec
+    norm = math.sqrt(sum(val * val for val in vec))
+    if norm <= 0.0:
+        return vec
+    return [val / norm for val in vec]
+
+
+def _hash_embedding(text: str, dims: int) -> List[float]:
+    tokens = _tokenize_cluster_text(text)
+    if not tokens:
+        return [0.0] * dims
+    vec = [0.0] * dims
+    for token in tokens:
+        token_hash = hashlib.md5(token.encode("utf-8", errors="ignore")).hexdigest()
+        idx = int(token_hash, 16) % dims
+        vec[idx] += 1.0
+    return _normalize_vector(vec)
+
+
+def _cluster_embedding(text: str, dims: int) -> List[float]:
+    key = hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
+    cached = _cluster_cache_get(key)
+    if cached is not None:
+        return cached
+    vec = _hash_embedding(text, dims)
+    _cluster_cache_put(key, vec)
+    return vec
+
+
+def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+    if not vec_a or not vec_b:
+        return 0.0
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    return float(dot)
+
+
+def _extract_cluster_blocks(
+    html_text: str,
+    *,
+    min_block_chars: int,
+    max_blocks: int,
+) -> List[str]:
+    if not html_text:
+        return []
+    soup = BeautifulSoup(html_text, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    blocks = [tag.get_text(" ", strip=True) for tag in soup.find_all(["p", "li"])]
+    if not blocks:
+        raw_text = soup.get_text("\n", strip=True)
+        blocks = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    filtered = [block for block in blocks if len(block) >= min_block_chars]
+    if not filtered and blocks:
+        filtered = [max(blocks, key=len)]
+    if len(filtered) > max_blocks:
+        indexed = list(enumerate(filtered))
+        top = sorted(indexed, key=lambda item: len(item[1]), reverse=True)[:max_blocks]
+        keep_indexes = {idx for idx, _value in top}
+        filtered = [block for idx, block in indexed if idx in keep_indexes]
+    return filtered
+
+
+def _extract_cluster_title(html_text: str) -> Optional[str]:
+    if not html_text:
+        return None
+    soup = BeautifulSoup(html_text, "html.parser")
+    title_tag = soup.find("title")
+    if not title_tag:
+        return None
+    title = title_tag.get_text(strip=True)
+    return title or None
+
+
+def extract_cluster_entities(
+    html_text: str,
+    url: str,
+    *,
+    cluster_settings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "url": url,
+        "title": "N/A",
+        "author": "N/A",
+        "content": "",
+        "date": "N/A",
+        "extraction_successful": False,
+        "cluster_blocks": [],
+        "cluster_block_count": 0,
+    }
+    if not html_text:
+        result["cluster_error"] = "cluster_empty_html"
+        return result
+
+    settings = dict(cluster_settings or {})
+    min_block_chars = int(settings.get("min_block_chars", _CLUSTER_MIN_BLOCK_CHARS))
+    max_blocks = int(settings.get("max_blocks", _CLUSTER_MAX_BLOCKS))
+    prefilter_threshold = float(settings.get("prefilter_threshold", _CLUSTER_PREFILTER_THRESHOLD))
+    cluster_threshold = float(settings.get("cluster_threshold", _CLUSTER_SIM_THRESHOLD))
+    embed_dims = int(settings.get("embed_dims", _CLUSTER_EMBED_DIM))
+
+    try:
+        increment_counter("extraction_cluster_total", labels={"status": "started"})
+    except Exception:
+        pass
+
+    blocks = _extract_cluster_blocks(
+        html_text,
+        min_block_chars=min_block_chars,
+        max_blocks=max_blocks,
+    )
+    if not blocks:
+        result["cluster_error"] = "cluster_no_blocks"
+        try:
+            increment_counter("extraction_cluster_total", labels={"status": "no_blocks"})
+        except Exception:
+            pass
+        return result
+
+    doc_vec = _cluster_embedding(" ".join(blocks), embed_dims)
+    scored_blocks: List[Tuple[int, str, List[float], float]] = []
+    for idx, block in enumerate(blocks):
+        vec = _cluster_embedding(block, embed_dims)
+        sim = _cosine_similarity(vec, doc_vec)
+        scored_blocks.append((idx, block, vec, sim))
+
+    kept = [item for item in scored_blocks if item[3] >= prefilter_threshold]
+    if not kept:
+        kept = sorted(scored_blocks, key=lambda item: item[3], reverse=True)[: min(2, len(scored_blocks))]
+
+    clusters: List[Dict[str, Any]] = []
+    for idx, block, vec, sim_to_doc in kept:
+        best_idx = None
+        best_sim = -1.0
+        for c_idx, cluster in enumerate(clusters):
+            sim = _cosine_similarity(vec, cluster["centroid"])
+            if sim > best_sim:
+                best_sim = sim
+                best_idx = c_idx
+        if best_idx is None or best_sim < cluster_threshold:
+            clusters.append(
+                {
+                    "members": [(idx, block, sim_to_doc)],
+                    "sum_vec": list(vec),
+                    "centroid": list(vec),
+                    "total_chars": len(block),
+                }
+            )
+            continue
+        cluster = clusters[best_idx]
+        cluster["members"].append((idx, block, sim_to_doc))
+        cluster["sum_vec"] = [a + b for a, b in zip(cluster["sum_vec"], vec)]
+        cluster["centroid"] = _normalize_vector(cluster["sum_vec"])
+        cluster["total_chars"] += len(block)
+
+    if not clusters:
+        result["cluster_error"] = "cluster_no_clusters"
+        try:
+            increment_counter("extraction_cluster_total", labels={"status": "no_clusters"})
+        except Exception:
+            pass
+        return result
+
+    def _cluster_score(cluster: Dict[str, Any]) -> Tuple[int, int]:
+        return (int(cluster.get("total_chars", 0)), len(cluster.get("members", [])))
+
+    best_cluster = max(clusters, key=_cluster_score)
+    ordered_members = sorted(best_cluster["members"], key=lambda item: item[0])
+    content_blocks = [block for _idx, block, _sim in ordered_members if block]
+    content = "\n\n".join(content_blocks).strip()
+
+    if not content:
+        result["cluster_error"] = "cluster_empty_content"
+        try:
+            increment_counter("extraction_cluster_total", labels={"status": "empty"})
+        except Exception:
+            pass
+        return result
+
+    title = _extract_cluster_title(html_text)
+    if title:
+        result["title"] = title
+    result["content"] = content
+    result["cluster_blocks"] = content_blocks
+    result["cluster_block_count"] = len(content_blocks)
+    result["cluster_prefiltered_count"] = len(kept)
+    result["cluster_total_blocks"] = len(blocks)
+    result["cluster_cluster_count"] = len(clusters)
+    result["extraction_successful"] = True
+    try:
+        increment_counter("extraction_cluster_total", labels={"status": "success"})
+    except Exception:
+        pass
+    return result
+
+
+def _extract_text_for_llm(html_text: str) -> str:
+    if not html_text:
+        return ""
+    soup = BeautifulSoup(html_text, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    return soup.get_text(" ", strip=True)
+
+
+def _split_llm_chunks(
+    text: str,
+    *,
+    chunk_token_threshold: int,
+    overlap_rate: float,
+    word_token_rate: float,
+) -> List[str]:
+    if not text:
+        return []
+    words = text.split()
+    if not words:
+        return []
+    rate = max(0.1, float(word_token_rate))
+    token_est = len(words) * rate
+    if token_est <= max(1, int(chunk_token_threshold)):
+        return [" ".join(words)]
+    chunk_words = max(50, int(chunk_token_threshold / rate))
+    overlap = max(0, min(int(chunk_words * max(0.0, min(overlap_rate, 0.9))), chunk_words - 1))
+    step = max(1, chunk_words - overlap)
+    chunks: List[str] = []
+    for start in range(0, len(words), step):
+        chunk = words[start : start + chunk_words]
+        if not chunk:
+            break
+        chunks.append(" ".join(chunk))
+        if start + chunk_words >= len(words):
+            break
+    return chunks
+
+
+def _extract_llm_response_text(resp: Any) -> str:
+    if resp is None:
+        return ""
+    if isinstance(resp, str):
+        return resp
+    if isinstance(resp, dict):
+        choices = resp.get("choices")
+        if isinstance(choices, list) and choices:
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message")
+                if isinstance(message, dict) and isinstance(message.get("content"), str):
+                    return message["content"]
+                if isinstance(choice.get("text"), str):
+                    return choice["text"]
+        if isinstance(resp.get("content"), str):
+            return resp["content"]
+    return ""
+
+
+def _extract_usage_from_response(resp: Any) -> Dict[str, int]:
+    if not isinstance(resp, dict):
+        return {}
+    usage = resp.get("usage")
+    if not isinstance(usage, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        val = usage.get(key)
+        if isinstance(val, (int, float)):
+            out[key] = int(val)
+    return out
+
+
+def _record_llm_usage_metrics(usage: Dict[str, int], *, provider: str, model: str) -> None:
+    pt = usage.get("prompt_tokens")
+    ct = usage.get("completion_tokens")
+    if pt:
+        increment_counter(
+            "llm_tokens_used_total",
+            float(pt),
+            labels={"provider": provider, "model": model, "type": "prompt"},
+        )
+        increment_counter(
+            "llm_tokens_used_total_by_operation",
+            float(pt),
+            labels={"provider": provider, "model": model, "type": "prompt", "operation": "extraction"},
+        )
+    if ct:
+        increment_counter(
+            "llm_tokens_used_total",
+            float(ct),
+            labels={"provider": provider, "model": model, "type": "completion"},
+        )
+        increment_counter(
+            "llm_tokens_used_total_by_operation",
+            float(ct),
+            labels={"provider": provider, "model": model, "type": "completion", "operation": "extraction"},
+        )
+
+
+def _strip_code_fences(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[a-zA-Z0-9_-]*", "", stripped).strip()
+        if stripped.endswith("```"):
+            stripped = stripped[: -3].strip()
+    return stripped
+
+
+def _extract_json_candidates(text: str) -> List[str]:
+    candidates: List[str] = []
+    if not text:
+        return candidates
+    for match in re.finditer(r"```(?:json)?\\s*(.*?)```", text, re.IGNORECASE | re.DOTALL):
+        payload = match.group(1).strip()
+        if payload:
+            candidates.append(payload)
+    for match in re.finditer(r"<json>(.*?)</json>", text, re.IGNORECASE | re.DOTALL):
+        payload = match.group(1).strip()
+        if payload:
+            candidates.append(payload)
+    candidates.append(_strip_code_fences(text))
+    return candidates
+
+
+def _decode_all_json(payload: str) -> List[Any]:
+    decoder = json.JSONDecoder()
+    idx = 0
+    length = len(payload)
+    objects: List[Any] = []
+    while idx < length:
+        brace = payload.find("{", idx)
+        bracket = payload.find("[", idx)
+        if brace == -1 and bracket == -1:
+            break
+        if brace == -1 or (bracket != -1 and bracket < brace):
+            start = bracket
+        else:
+            start = brace
+        try:
+            obj, end = decoder.raw_decode(payload, start)
+        except Exception:
+            idx = start + 1
+            continue
+        objects.append(obj)
+        idx = end
+    return objects
+
+
+def _parse_llm_json(text: str, *, strict: bool) -> Tuple[Optional[Any], Dict[str, Any]]:
+    meta: Dict[str, Any] = {"objects": []}
+    if not text:
+        return None, meta
+    payload = text.strip()
+    if strict:
+        try:
+            obj = json.loads(payload)
+            meta["objects"] = [obj]
+            return obj, meta
+        except Exception as exc:
+            meta["error"] = f"strict_json_failed: {exc}"
+            return None, meta
+    candidates = _extract_json_candidates(payload)
+    for candidate in candidates:
+        objs = _decode_all_json(candidate)
+        if not objs:
+            try:
+                obj = json.loads(candidate)
+            except Exception:
+                continue
+            objs = [obj]
+        if objs:
+            meta["objects"].extend(objs)
+            return objs[0], meta
+    return None, meta
+
+
+def _schema_rules_to_field_specs(schema_rules: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(schema_rules, dict):
+        return []
+    fields: List[Dict[str, Any]] = []
+    if isinstance(schema_rules.get("fields"), list) or isinstance(schema_rules.get("baseFields"), (list, dict)):
+        def _normalize_field_definitions(raw: Any) -> List[Dict[str, Any]]:
+            if isinstance(raw, list):
+                return [f for f in raw if isinstance(f, dict)]
+            if isinstance(raw, dict):
+                normalized: List[Dict[str, Any]] = []
+                for name, spec in raw.items():
+                    if isinstance(spec, dict):
+                        entry = dict(spec)
+                    else:
+                        entry = {"selector": spec}
+                    entry.setdefault("name", str(name))
+                    normalized.append(entry)
+                return normalized
+            return []
+
+        for group in ("baseFields", "fields"):
+            for field in _normalize_field_definitions(schema_rules.get(group) or []):
+                name = field.get("name")
+                if isinstance(name, str) and name.strip():
+                    fields.append(
+                        {
+                            "name": name.strip(),
+                            "type": str(field.get("type") or "text").strip().lower(),
+                        }
+                    )
+        return fields
+    selector_fields = {
+        "title": ("title_xpath", "title_selector"),
+        "summary": ("summary_xpath", "summary_selector", "description_xpath"),
+        "content": ("content_xpath", "content_selector"),
+        "author": ("author_xpath", "author_selector"),
+        "published": ("published_xpath", "date_xpath", "date_selector"),
+    }
+    for name, keys in selector_fields.items():
+        if any(schema_rules.get(key) for key in keys):
+            fields.append({"name": name, "type": "text"})
+    return fields
+
+
+def _llm_prompt_for_mode(
+    *,
+    mode: str,
+    chunk: str,
+    url: str,
+    fields: List[Dict[str, Any]],
+    chunk_index: int,
+    chunk_count: int,
+    extra_instructions: Optional[str],
+) -> str:
+    header = (
+        "Extract structured information from the following webpage text."
+        " Return only JSON with nulls for unknown fields."
+    )
+    chunk_note = f"Chunk {chunk_index + 1} of {chunk_count}."
+    field_spec = json.dumps(fields, ensure_ascii=True)
+    if mode == "schema":
+        prompt = (
+            f"{header}\nURL: {url}\n{chunk_note}\n"
+            f"Schema fields (name/type): {field_spec}\n"
+            "Return a JSON object with those fields at the top level."
+        )
+    elif mode == "infer_schema":
+        prompt = (
+            f"{header}\nURL: {url}\n{chunk_note}\n"
+            "Infer a compact schema for the content and return:\n"
+            "{\"schema\": {\"fields\": [...]}, \"data\": {...}}"
+        )
+    else:
+        prompt = (
+            f"{header}\nURL: {url}\n{chunk_note}\n"
+            "Return a JSON object with keys: title, author, date, content, blocks.\n"
+            "Blocks should be a list of {type, text}."
+        )
+    if extra_instructions:
+        prompt = f"{prompt}\nAdditional instructions: {extra_instructions}"
+    return f"{prompt}\n\nContent:\n{chunk}"
+
+
+def _merge_llm_data(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    for key, value in incoming.items():
+        if key not in base or base[key] in (None, "", [], {}):
+            base[key] = value
+            continue
+        if isinstance(base[key], list) and isinstance(value, list):
+            base[key].extend(value)
+    return base
+
+
+def _merge_llm_results(objs: List[Dict[str, Any]], mode: str) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    merged: Dict[str, Any] = {}
+    schema: Optional[Dict[str, Any]] = None
+    for obj in objs:
+        if not isinstance(obj, dict):
+            continue
+        if mode == "infer_schema":
+            if isinstance(obj.get("schema"), dict):
+                schema = obj.get("schema")
+            data = obj.get("data") if isinstance(obj.get("data"), dict) else obj
+            _merge_llm_data(merged, data)
+        else:
+            _merge_llm_data(merged, obj)
+    return merged, schema
+
+
+def _llm_has_content(data: Dict[str, Any]) -> bool:
+    for key, value in data.items():
+        if value is None:
+            continue
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, list) and value:
+            return True
+        if isinstance(value, dict) and value:
+            return True
+    return False
+
+
+def extract_llm_entities(
+    html_text: str,
+    url: str,
+    *,
+    llm_settings: Optional[Dict[str, Any]] = None,
+    schema_rules: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "url": url,
+        "title": "N/A",
+        "author": "N/A",
+        "content": "",
+        "date": "N/A",
+        "extraction_successful": False,
+        "llm_mode": None,
+    }
+    if not html_text:
+        return result
+
+    settings = dict(llm_settings or {})
+    provider = str(settings.get("provider") or "").strip().lower()
+    app_config = None
+    if not provider:
+        try:
+            from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
+
+            app_config = ensure_app_config(None)
+            provider = str(app_config.get("RAG_DEFAULT_LLM_PROVIDER") or "").strip().lower()
+        except Exception:
+            provider = ""
+    if not provider:
+        result["llm_error"] = "llm_provider_missing"
+        return result
+
+    if app_config is None:
+        try:
+            from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
+
+            app_config = ensure_app_config(None)
+        except Exception:
+            app_config = None
+
+    text = _extract_text_for_llm(html_text)
+    if not text:
+        result["llm_error"] = "llm_empty_text"
+        return result
+
+    mode = str(settings.get("mode") or "").strip().lower()
+    if not mode:
+        mode = "schema" if schema_rules else "blocks"
+    if mode not in {"blocks", "schema", "infer_schema"}:
+        mode = "blocks"
+
+    chunk_token_threshold = int(settings.get("chunk_token_threshold") or 1200)
+    overlap_rate = float(settings.get("overlap_rate") or 0.1)
+    word_token_rate = float(settings.get("word_token_rate") or 1.3)
+    strict_json = bool(settings.get("strict_json") or False)
+    chunks = _split_llm_chunks(
+        text,
+        chunk_token_threshold=chunk_token_threshold,
+        overlap_rate=overlap_rate,
+        word_token_rate=word_token_rate,
+    )
+    if not chunks:
+        result["llm_error"] = "llm_no_chunks"
+        return result
+
+    fields = _schema_rules_to_field_specs(schema_rules)
+    extra_prompt = settings.get("prompt")
+    system_message = settings.get("system_message")
+    model = settings.get("model")
+    api_key = settings.get("api_key")
+    temperature = settings.get("temperature")
+    max_tokens = settings.get("max_tokens")
+    response_format = settings.get("response_format")
+    if strict_json and response_format is None:
+        response_format = {"type": "json_object"}
+
+    parsed_objects: List[Dict[str, Any]] = []
+    usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    llm_errors: List[str] = []
+    for idx, chunk in enumerate(chunks):
+        prompt = _llm_prompt_for_mode(
+            mode=mode,
+            chunk=chunk,
+            url=url,
+            fields=fields,
+            chunk_index=idx,
+            chunk_count=len(chunks),
+            extra_instructions=str(extra_prompt) if extra_prompt else None,
+        )
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+
+            resp = perform_chat_api_call(
+                api_provider=provider,
+                messages=messages,
+                system_message=system_message,
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                app_config=app_config,
+            )
+        except Exception as exc:
+            llm_errors.append(f"llm_call_failed: {exc}")
+            continue
+
+        usage = _extract_usage_from_response(resp)
+        model_name = str(resp.get("model") if isinstance(resp, dict) else model or "unknown")
+        _record_llm_usage_metrics(usage, provider=provider, model=model_name)
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            usage_total[key] = usage_total.get(key, 0) + int(usage.get(key, 0))
+
+        raw_text = _extract_llm_response_text(resp)
+        obj, meta = _parse_llm_json(raw_text, strict=strict_json)
+        if obj is None:
+            detail = meta.get("error") or "no_json"
+            llm_errors.append(f"llm_parse_failed: {detail}")
+            continue
+        if isinstance(obj, dict):
+            parsed_objects.append(obj)
+
+    if not parsed_objects:
+        result["llm_error"] = "; ".join(llm_errors) if llm_errors else "llm_no_parseable_output"
+        result["llm_mode"] = mode
+        return result
+
+    merged, inferred_schema = _merge_llm_results(parsed_objects, mode)
+    result["llm_extraction"] = merged
+    result["llm_schema"] = inferred_schema
+    result["llm_provider"] = provider
+    result["llm_mode"] = mode
+    result["llm_usage"] = usage_total
+
+    for key in ("title", "author", "date", "summary", "content"):
+        if key in merged and merged[key] is not None:
+            result[key] = merged[key]
+    if not result.get("content") and isinstance(merged.get("blocks"), list):
+        blocks = merged.get("blocks") or []
+        parts = []
+        for block in blocks:
+            if isinstance(block, dict):
+                text_val = block.get("text")
+                if isinstance(text_val, str) and text_val.strip():
+                    parts.append(text_val.strip())
+            elif isinstance(block, str) and block.strip():
+                parts.append(block.strip())
+        if parts:
+            result["content"] = "\n\n".join(parts)
+
+    result["extraction_successful"] = _llm_has_content(merged)
+    return result
+
+
 def extract_article_with_pipeline(
     html: str,
     url: str,
@@ -491,6 +1363,8 @@ def extract_article_with_pipeline(
     strategy_order: Optional[List[str]] = None,
     handler: Optional[Callable[[str, str], Dict[str, Any]]] = None,
     fallback_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+    schema_rules: Optional[Dict[str, Any]] = None,
+    llm_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     trace: List[Dict[str, Any]] = []
     order, unknown = _normalize_strategy_order(strategy_order)
@@ -503,8 +1377,42 @@ def extract_article_with_pipeline(
             trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
             continue
         if strategy == "schema":
+            if isinstance(schema_rules, dict) and schema_rules:
+                try:
+                    from tldw_Server_API.app.core.Watchlists.fetchers import (
+                        extract_schema_fields,
+                        validate_selector_rules,
+                    )
+                except Exception as exc:
+                    trace.append(_trace_entry(strategy, "failed", "schema_import_error", str(exc)))
+                    continue
+                validation = validate_selector_rules(schema_rules, html_text=html)
+                errors = validation.get("errors") if isinstance(validation, dict) else None
+                warnings = validation.get("warnings") if isinstance(validation, dict) else None
+                warning_detail = None
+                if isinstance(warnings, list) and warnings:
+                    warning_detail = f"{len(warnings)} selector warning(s)"
+                if errors:
+                    trace.append(
+                        _trace_entry(
+                            strategy,
+                            "failed",
+                            "schema_invalid_selectors",
+                            f"{len(errors)} invalid selector(s)",
+                        )
+                    )
+                    continue
+                result = extract_schema_fields(html, url, schema_rules)
+                if warning_detail:
+                    result["schema_selector_warnings"] = warnings
+                if result.get("extraction_successful"):
+                    trace.append(_trace_entry(strategy, "success", "schema_extracted", warning_detail))
+                    return _attach_trace(result, trace, strategy, order)
+                trace.append(_trace_entry(strategy, "failed", "schema_no_content", warning_detail))
+                last_result = result
+                continue
             if handler is None:
-                trace.append(_trace_entry(strategy, "skipped", "no_handler"))
+                trace.append(_trace_entry(strategy, "skipped", "no_schema_rules_or_handler"))
                 continue
             try:
                 result = handler(html, url)
@@ -519,13 +1427,31 @@ def extract_article_with_pipeline(
                 trace.append(_trace_entry(strategy, "failed", "handler_error", str(exc)))
             continue
         if strategy == "regex":
-            trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
+            result = extract_regex_entities(html, url)
+            last_result = result
+            if result.get("extraction_successful"):
+                trace.append(_trace_entry(strategy, "success", "regex_extracted"))
+                return _attach_trace(result, trace, strategy, order)
+            trace.append(_trace_entry(strategy, "failed", "regex_no_matches"))
             continue
         if strategy == "llm":
-            trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
+            result = extract_llm_entities(html, url, llm_settings=llm_settings, schema_rules=schema_rules)
+            last_result = result
+            if result.get("extraction_successful"):
+                trace.append(_trace_entry(strategy, "success", "llm_extracted"))
+                return _attach_trace(result, trace, strategy, order)
+            detail = result.get("llm_error")
+            trace.append(_trace_entry(strategy, "failed", "llm_no_content", str(detail) if detail else None))
             continue
         if strategy == "cluster":
-            trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
+            result = extract_cluster_entities(html, url)
+            last_result = result
+            if result.get("extraction_successful"):
+                detail = f"cluster_blocks={result.get('cluster_block_count')}"
+                trace.append(_trace_entry(strategy, "success", "cluster_extracted", detail))
+                return _attach_trace(result, trace, strategy, order)
+            detail = result.get("cluster_error")
+            trace.append(_trace_entry(strategy, "failed", "cluster_no_content", str(detail) if detail else None))
             continue
         if strategy == "trafilatura":
             extractor = fallback_extractor or _extract_with_trafilatura
@@ -553,6 +1479,8 @@ def extract_article_data_from_html(
     url: str,
     strategy_order: Optional[List[str]] = None,
     handler: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+    schema_rules: Optional[Dict[str, Any]] = None,
+    llm_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Extract article metadata and body from raw HTML."""
     return extract_article_with_pipeline(
@@ -560,6 +1488,8 @@ def extract_article_data_from_html(
         url,
         strategy_order=strategy_order,
         handler=handler,
+        schema_rules=schema_rules,
+        llm_settings=llm_settings,
     )
 
 
@@ -627,9 +1557,10 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         plan = _P()  # type: ignore
 
     handler_path = str(getattr(plan, "handler", "") or "")
-    handler_func = resolve_handler(handler_path)
-    use_handler = bool(handler_path) and handler_path != DEFAULT_HANDLER
+    handler_func = resolve_handler(handler_path) if handler_path else None
+    use_handler = bool(handler_path)
     strategy_order = getattr(plan, "strategy_order", None)
+    schema_rules = getattr(plan, "schema_rules", None)
 
     # Build effective headers from UA profile + extras
     ua_headers = build_browser_headers(plan.ua_profile, accept_lang="en-US,en;q=0.9")
@@ -730,6 +1661,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                     url,
                     strategy_order=strategy_order,
                     handler=handler_func if use_handler else None,
+                    schema_rules=schema_rules,
                 )
                 if article_data.get("extraction_successful"):
                     if not use_handler and article_data.get("content"):
@@ -857,6 +1789,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         url,
         strategy_order=strategy_order,
         handler=handler_func if use_handler else None,
+        schema_rules=schema_rules,
     )
     if article_data.get("extraction_successful") and not use_handler:
         if article_data.get("content"):

@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
@@ -347,21 +347,20 @@ class BillingEnforcer:
         """
         Get count of currently running jobs for an organization.
 
-        This currently aggregates concurrent embedding jobs per user from the
-        Embeddings_Jobs_DB user_quotas table by summing concurrent_jobs_active
-        for all org members. Other job systems (audio/chatbooks) continue to
-        enforce their own caps and are not yet included in this summary.
+        This aggregates concurrent embeddings jobs per org member from the
+        core Jobs table by summing processing jobs for the embeddings domain.
+        Other job systems (audio/chatbooks) continue to enforce their own caps
+        and are not yet included in this summary.
         """
         try:
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
             from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
-            from tldw_Server_API.app.core.DB_Management.Embeddings_Jobs_DB import EmbeddingsJobsDatabase
+            from tldw_Server_API.app.core.Jobs.manager import JobManager
 
             pool = await get_db_pool()
             repo = AuthnzOrgsTeamsRepo(db_pool=pool)
 
-            db = EmbeddingsJobsDatabase()
-            total_active = 0
+            member_ids: Set[str] = set()
             offset = 0
             batch_size = 500
 
@@ -378,18 +377,33 @@ class BillingEnforcer:
                     user_id = member.get("user_id")
                     if user_id is None:
                         continue
-                    try:
-                        quota = db.get_or_create_user_quota(str(user_id))
-                        active = int(quota.get("concurrent_jobs_active", 0))
-                        if active > 0:
-                            total_active += active
-                    except Exception:
-                        # Ignore per-user quota errors; continue best-effort aggregation
-                        continue
+                    member_ids.add(str(user_id))
 
                 if len(members) < batch_size:
                     break
                 offset += batch_size
+
+            if not member_ids:
+                return 0
+
+            jm = JobManager()
+            JobManager.set_rls_context(is_admin=True, domain_allowlist="embeddings", owner_user_id=None)
+            try:
+                summary = jm.summarize_by_owner_and_status(domain="embeddings")
+            finally:
+                JobManager.clear_rls_context()
+
+            total_active = 0
+            for row in summary:
+                owner = row.get("owner_user_id")
+                if owner is None or str(owner) not in member_ids:
+                    continue
+                if str(row.get("status")) != "processing":
+                    continue
+                try:
+                    total_active += int(row.get("count") or 0)
+                except (TypeError, ValueError):
+                    continue
 
             return int(total_active)
         except Exception as exc:

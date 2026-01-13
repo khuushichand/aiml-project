@@ -24,9 +24,24 @@ legacy org budgets from `org_subscriptions.custom_limits_json.budgets` into
 - Verify admin/org budgets endpoints return the migrated budgets.
 
 ## 4) Rollback
-- Restore the database snapshot taken before the migration.
-- Re-run the automatic migration by applying migrations (SQLite) or triggering
-  the billing-table ensure/backfill path (PostgreSQL).
+- Stop all application instances (and any migration jobs) to prevent new writes
+  during rollback.
+- Restore the database snapshot taken before the migration. This will discard
+  all transactions that occurred after the snapshot was taken.
+- Choose the path that matches your intent:
+  - **Rollback due to a migration bug (plan to stay on the new schema):** fix the
+    migration logic first, then re-run the automatic migration by applying
+    migrations (SQLite) or triggering the billing-table ensure/backfill path
+    (PostgreSQL).
+  - **Remain on the old schema temporarily:** pin the deployed application to a
+    pre-migration version (e.g., previous container tag or Git SHA), or disable
+    the auto-migration step on restart (skip any startup migration/bootstrap
+    job) to prevent reapplying migration 042. Do not restart newer builds
+    against the old schema.
+- Compatibility note: pre-migration builds expect budgets in
+  `org_subscriptions.custom_limits_json`; post-migration builds expect
+  `org_budgets.budgets_json`. Running a mismatched app version against the
+  schema will either reapply migrations or surface errors.
 
 ## 5) Notes
 - The backfill runs implicitly (SQLite at migration time; PostgreSQL when admin

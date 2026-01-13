@@ -164,6 +164,54 @@ def test_bulk_sources_and_groups_and_jobs(client_with_user):
     assert r.status_code == 200
 
 
+def test_forum_sources_feature_flag(client_with_user, monkeypatch):
+    c = client_with_user
+
+    monkeypatch.delenv("WATCHLIST_FORUMS_ENABLED", raising=False)
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "Forum Source", "url": "https://forum.example.com/", "source_type": "forum"},
+    )
+    assert r.status_code == 400
+    assert "forum_sources_disabled" in r.text
+
+    monkeypatch.setenv("WATCHLIST_FORUMS_ENABLED", "1")
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "Forum Source", "url": "https://forum.example.com/", "source_type": "forum"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_watchlists_run_stream_ws(client_with_user, tmp_path):
+    from tldw_Server_API.app.core.AuthNZ.jwt_service import create_access_token
+
+    db = WatchlistsDatabase.for_user(555)
+    job = db.create_job(
+        name="Job",
+        description=None,
+        scope_json=json.dumps({"sources": []}),
+        schedule_expr=None,
+        schedule_timezone=None,
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+    run = db.create_run(job_id=job.id, status="running")
+    log_path = tmp_path / "run.log"
+    log_path.write_text("first line\n", encoding="utf-8")
+    db.update_run(run.id, stats_json=json.dumps({"items_found": 1}), log_path=str(log_path))
+
+    token = create_access_token(555, "wluser", "admin")
+    with client_with_user.websocket_connect(f"/api/v1/watchlists/runs/{run.id}/stream?token={token}") as ws:
+        message = ws.receive_json()
+        assert message["type"] == "snapshot"
+        assert message["run"]["id"] == run.id
+        assert "log_tail" in message
+
+
 def test_items_and_outputs_flow(client_with_user, monkeypatch):
 
 

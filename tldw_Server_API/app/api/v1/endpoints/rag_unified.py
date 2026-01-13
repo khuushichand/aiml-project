@@ -1134,6 +1134,12 @@ async def rag_implicit_feedback(
             event_type=request.event_type,
             impression=request.impression_list or [],
             corpus=request.corpus,
+            chunk_ids=request.chunk_ids or [],
+            rank=request.rank,
+            session_id=request.session_id,
+            conversation_id=request.conversation_id,
+            message_id=request.message_id,
+            dwell_ms=request.dwell_ms,
         )
         return {"ok": True}
     except Exception as e:

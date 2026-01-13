@@ -3,11 +3,13 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, List, Tuple
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.RAG.rag_service.analytics_db import AnalyticsDatabase
-from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UserFeedbackStore
+from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem, UserFeedbackStore
 
 
 class _StubConnection:
@@ -124,3 +126,57 @@ def test_record_search_postgres_calls_backend_execute() -> None:
     inserted_query = calls[0][0]
     assert "INSERT INTO search_analytics" in inserted_query
     assert "%s" in inserted_query
+
+
+def test_record_event_sqlite_writes_row(tmp_path: Path) -> None:
+    db_path = tmp_path / "analytics.sqlite"
+    analytics = AnalyticsDatabase(str(db_path))
+    try:
+        analytics.record_event(
+            {
+                "event_type": "feedback",
+                "query_hash": "abc123",
+                "metrics": {"rank": 2, "dwell_ms": 3000},
+            }
+        )
+        conn = analytics.backend.connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT event_type, query_hash, metrics FROM analytics_events")
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] == "feedback"
+            assert row[1] == "abc123"
+        finally:
+            conn.close()
+    finally:
+        analytics.close()
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_maps_issues_to_analytics() -> None:
+    system = UnifiedFeedbackSystem.__new__(UnifiedFeedbackSystem)
+    system.enable_analytics = True
+    system.analytics = MagicMock()
+    system.user_feedback = None
+    system.analytics.record_search_quality = AsyncMock(return_value=True)
+    system.analytics.record_document_performance = AsyncMock(return_value=True)
+    system.analytics.record_feedback = AsyncMock(return_value=True)
+    system.analytics.record_event = AsyncMock(return_value=True)
+
+    await system.submit_feedback(
+        conversation_id="",
+        query="reset auth",
+        document_ids=[],
+        chunk_ids=[],
+        feedback_type="report",
+        issues=["missing_details"],
+        user_notes="Need the new flow",
+        session_id="sess-1",
+    )
+
+    system.analytics.record_feedback.assert_awaited()
+    payload = system.analytics.record_feedback.await_args.args[0]
+    assert payload["feedback_type"] == "report"
+    assert payload["categories"] == ["missing_details"]
+    assert payload["improvement_areas"] == ["missing_details"]

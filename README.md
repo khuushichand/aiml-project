@@ -151,6 +151,8 @@ See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.m
 
 ## Quickstart
 
+Prefer a guided setup? Use the wizard: [`Docs/Development/Wizard.md`](./Docs/Development/Wizard.md)
+
 ### Run the API
 
 Prerequisites

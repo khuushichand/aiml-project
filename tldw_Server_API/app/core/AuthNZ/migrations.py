@@ -1907,6 +1907,149 @@ def migration_046_add_org_invite_allowlist_domain(conn: sqlite3.Connection) -> N
         raise
 
 
+def migration_047_create_user_config_overrides_table(conn: sqlite3.Connection) -> None:
+    """Create the user_config_overrides table for profile preferences."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_config_overrides (
+            user_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by INTEGER,
+            updated_by INTEGER,
+            PRIMARY KEY (user_id, key),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cursor = conn.execute("PRAGMA table_info(user_config_overrides)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE user_config_overrides ADD COLUMN {decl}")
+                columns.add(name)
+
+        add_col("value_json", "value_json TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+    except Exception:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_config_overrides_user_id ON user_config_overrides(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_config_overrides_key ON user_config_overrides(key)"
+    )
+    conn.commit()
+    logger.info("Migration 047: Created user_config_overrides table")
+
+
+def rollback_047_drop_user_config_overrides(conn: sqlite3.Connection) -> None:
+    """Drop user_config_overrides table."""
+    conn.execute("DROP TABLE IF EXISTS user_config_overrides")
+    conn.commit()
+    logger.info("Rollback 047: Dropped user_config_overrides table")
+
+
+def migration_048_create_org_team_config_overrides_table(conn: sqlite3.Connection) -> None:
+    """Create org/team config overrides tables."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_config_overrides (
+            org_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by INTEGER,
+            updated_by INTEGER,
+            PRIMARY KEY (org_id, key),
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS team_config_overrides (
+            team_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by INTEGER,
+            updated_by INTEGER,
+            PRIMARY KEY (team_id, key),
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cursor = conn.execute("PRAGMA table_info(org_config_overrides)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE org_config_overrides ADD COLUMN {decl}")
+                columns.add(name)
+
+        add_col("value_json", "value_json TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+    except Exception:
+        pass
+
+    try:
+        cursor = conn.execute("PRAGMA table_info(team_config_overrides)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE team_config_overrides ADD COLUMN {decl}")
+                columns.add(name)
+
+        add_col("value_json", "value_json TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+    except Exception:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_org_config_overrides_org_id ON org_config_overrides(org_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_org_config_overrides_key ON org_config_overrides(key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_team_config_overrides_team_id ON team_config_overrides(team_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_team_config_overrides_key ON team_config_overrides(key)"
+    )
+    conn.commit()
+    logger.info("Migration 048: Created org/team config overrides tables")
+
+
+def rollback_048_drop_org_team_config_overrides(conn: sqlite3.Connection) -> None:
+    """Drop org/team config overrides tables."""
+    conn.execute("DROP TABLE IF EXISTS team_config_overrides")
+    conn.execute("DROP TABLE IF EXISTS org_config_overrides")
+    conn.commit()
+    logger.info("Rollback 048: Dropped org/team config overrides tables")
+
+
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     """Add llm_provider_overrides table for runtime provider overrides."""
     logger.info("Migration 041: START llm_provider_overrides table")
@@ -2241,6 +2384,18 @@ def get_authnz_migrations() -> List[Migration]:
             46,
             "Add org_invites allowed_email_domain",
             migration_046_add_org_invite_allowlist_domain,
+        ),
+        Migration(
+            47,
+            "Create user_config_overrides table",
+            migration_047_create_user_config_overrides_table,
+            rollback_047_drop_user_config_overrides,
+        ),
+        Migration(
+            48,
+            "Create org/team config overrides tables",
+            migration_048_create_org_team_config_overrides_table,
+            rollback_048_drop_org_team_config_overrides,
         ),
     ]
 

@@ -200,6 +200,14 @@ class AnalyticsDatabase:
         metric_value REAL,
         conversion BOOLEAN
     );
+
+    CREATE TABLE IF NOT EXISTS analytics_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        event_type TEXT NOT NULL,
+        query_hash TEXT,
+        metrics TEXT
+    );
     """
 
     _SCHEMA_POSTGRES = """
@@ -319,6 +327,14 @@ class AnalyticsDatabase:
         metric_value DOUBLE PRECISION,
         conversion BOOLEAN
     );
+
+    CREATE TABLE IF NOT EXISTS analytics_events (
+        id BIGSERIAL PRIMARY KEY,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        event_type TEXT NOT NULL,
+        query_hash TEXT,
+        metrics TEXT
+    );
     """
 
     _INDEX_STATEMENTS: Tuple[str, ...] = (
@@ -328,7 +344,9 @@ class AnalyticsDatabase:
         "CREATE INDEX IF NOT EXISTS idx_error_type ON error_tracking(error_type, timestamp DESC)",
         "CREATE INDEX IF NOT EXISTS idx_feature_name ON feature_usage(feature_name, timestamp DESC)",
         "CREATE INDEX IF NOT EXISTS idx_query_pattern ON query_patterns(pattern_hash)",
-        "CREATE INDEX IF NOT EXISTS idx_ab_test ON ab_testing(test_name, variant)"
+        "CREATE INDEX IF NOT EXISTS idx_ab_test ON ab_testing(test_name, variant)",
+        "CREATE INDEX IF NOT EXISTS idx_events_type ON analytics_events(event_type)",
+        "CREATE INDEX IF NOT EXISTS idx_events_query ON analytics_events(query_hash)"
     )
 
     def __init__(
@@ -600,6 +618,35 @@ class AnalyticsDatabase:
                 logger.debug("Recorded feedback for session: %s", session_hash)
         except Exception as exc:
             logger.error("Failed to record feedback: %s", exc)
+
+    def record_event(self, event_data: Dict[str, Any]) -> None:
+        try:
+            with self.transaction() as conn:
+                event_type = event_data.get("event_type")
+                query_hash = event_data.get("query_hash")
+                metrics = event_data.get("metrics", {})
+                if not isinstance(metrics, str):
+                    metrics = json.dumps(metrics)
+
+                timestamp = event_data.get("timestamp")
+                if timestamp:
+                    raw_query = """
+                        INSERT INTO analytics_events (timestamp, event_type, query_hash, metrics)
+                        VALUES (?, ?, ?, ?)
+                    """
+                    raw_params = (timestamp, event_type, query_hash, metrics)
+                else:
+                    raw_query = """
+                        INSERT INTO analytics_events (event_type, query_hash, metrics)
+                        VALUES (?, ?, ?)
+                    """
+                    raw_params = (event_type, query_hash, metrics)
+
+                prepared_query, prepared_params = self._prepare_backend_statement(raw_query, raw_params)
+                self._execute(conn, prepared_query, prepared_params)
+                logger.debug("Recorded analytics event type: %s", event_type)
+        except Exception as exc:
+            logger.error("Failed to record analytics event: %s", exc)
 
     def record_error(self, error_data: Dict[str, Any]) -> None:
         try:

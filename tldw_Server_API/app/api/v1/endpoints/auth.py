@@ -27,6 +27,7 @@ from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
     RegistrationResponse,
     MessageResponse,
     UserResponse,
+    DeprecatedUserResponse,
     SessionResponse,
     MFAChallengeResponse,
 )
@@ -93,6 +94,29 @@ router = APIRouter(
     tags=["authentication"],
     responses={404: {"description": "Not found"}}
 )
+
+def _build_deprecation_headers(successor: str) -> Dict[str, str]:
+    try:
+        sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "120"))
+        sunset = (datetime.now(timezone.utc) + timedelta(days=sunset_days)).strftime(
+            "%a, %d %b %Y %H:%M:%S GMT"
+        )
+    except Exception:
+        sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
+    return {
+        "Deprecation": "true",
+        "Sunset": sunset,
+        "Link": f"<{successor}>; rel=successor-version",
+    }
+
+
+def _legacy_user_me_enabled() -> bool:
+    raw = os.getenv("ENABLE_LEGACY_USER_ME_ENDPOINTS", "true")
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _legacy_warning_payload(successor: str) -> Dict[str, str]:
+    return {"warning": "deprecated_endpoint", "successor": successor}
 
 def _get_email_service():
     """Resolve the email service lazily to honor monkeypatched modules in tests."""
@@ -2307,21 +2331,37 @@ async def register(
 #
 # Test Endpoint
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=DeprecatedUserResponse, deprecated=True)
 async def get_current_user_info(
-    current_user: Dict[str, Any] = Depends(get_current_active_user)
-) -> UserResponse:
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    response: Response = None,
+) -> DeprecatedUserResponse:
     """
-    Get current user information
+    Deprecated: use /api/v1/users/me/profile.
 
     Returns:
         UserResponse with current user details
     """
-    return UserResponse(
+    successor = "/api/v1/users/me/profile"
+    if not _legacy_user_me_enabled():
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            status_code=status.HTTP_410_GONE,
+            content=_legacy_warning_payload(successor),
+        )
+    try:
+        if response is not None:
+            response.headers.update(_build_deprecation_headers(successor))
+    except Exception:
+        pass
+    return DeprecatedUserResponse(
+        warning="deprecated_endpoint",
+        successor=successor,
         id=current_user['id'],
         uuid=current_user.get('uuid') or None,
         username=current_user['username'],
-        email=current_user['email'],
+        email=current_user.get('email') or "",
         role=current_user['role'],
         is_active=current_user.get('is_active', True),
         is_verified=current_user.get('is_verified', True),

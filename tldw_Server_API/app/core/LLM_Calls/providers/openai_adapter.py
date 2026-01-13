@@ -210,6 +210,9 @@ class OpenAIAdapter(ChatProvider):
 
     def _resolve_base_url(self, request: Dict[str, Any]) -> str:
         """Resolve API base URL: app_config.openai_api.api_base_url -> env -> default."""
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
         try:
             cfg = (request or {}).get("app_config") or {}
             oa = cfg.get("openai_api") or {}

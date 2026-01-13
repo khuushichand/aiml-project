@@ -1,10 +1,20 @@
 # Auth + Registration Consolidation PRD
 
+Status: Draft (planning; not yet implemented)
+Target milestone: v0.1.x (AuthNZ consolidation release)
+PR scope note: Included with the README/feedback doc updates to capture the
+planned consolidation work and align follow-on implementation; no runtime
+changes ship as part of this document update.
+
 ## Summary
 Consolidate authentication endpoints into a single router and make the AuthNZ
 DB pool RegistrationService the only registration path. Remove duplicate auth
 modules and the unused legacy registration service implementation to reduce
 maintenance overhead and behavioral drift.
+
+## Implementation Plan
+- Staged execution and tests are tracked in
+  `Docs/Product/Completed/AuthNZ-Refactor/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`.
 
 ## Goals
 - One auth router module for all /auth endpoints.
@@ -67,6 +77,7 @@ creates drift risk, test complexity, and confusion over the authoritative path.
 - 429 behavior tests via RG policies on auth endpoints.
 
 ## Rollout
+- Target milestone: v0.1.x (AuthNZ consolidation release).
 - Stage 1: Move endpoints and validate behavior in tests.
 - Stage 2: Remove old module and update docs/imports.
 
@@ -74,5 +85,7 @@ creates drift risk, test complexity, and confusion over the authoritative path.
 - Test fixtures that import legacy auth modules directly.
 - Subtle differences in error handling between modules.
 
-## Open Questions
-- Should any legacy module be retained as a re-export for external code?
+## Decisions
+- Keep a lightweight re-export module for external imports through v0.1.x and
+  remove it in the next minor/major release after the deprecation window
+  (breaking change for external imports).

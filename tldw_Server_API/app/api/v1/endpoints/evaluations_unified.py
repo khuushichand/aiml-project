@@ -46,6 +46,10 @@ from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager,
 # Import additional services
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
+from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+    log_evaluation_deleted,
+    log_evaluation_exported,
+)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -469,6 +473,7 @@ async def delete_embeddings_abtest(
     except Exception as exc:
         logger.warning(f"A/B test cleanup failed for {test_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to delete A/B test")
+    log_evaluation_deleted(user_id=str(current_user.id), eval_id=test_id)
     try:
         if idempotency_key:
             svc.db.record_idempotency("emb_abtest_delete", idempotency_key, test_id, user_ctx)
@@ -504,6 +509,13 @@ async def export_embeddings_abtest(
                 svc.db.record_idempotency("emb_abtest_export_json", idempotency_key, f"{test_id}:json", user_ctx)
         except Exception:
             pass
+        log_evaluation_exported(
+            user_id=str(current_user.id),
+            eval_id=test_id,
+            eval_type="embeddings_abtest",
+            export_format="json",
+            total=total,
+        )
         headers = {}
         if idempotency_key:
             headers = {"Idempotency-Key": idempotency_key}
@@ -521,6 +533,13 @@ async def export_embeddings_abtest(
             svc.db.record_idempotency("emb_abtest_export_csv", idempotency_key, f"{test_id}:csv", user_ctx)
     except Exception:
         pass
+    log_evaluation_exported(
+        user_id=str(current_user.id),
+        eval_id=test_id,
+        eval_type="embeddings_abtest",
+        export_format="csv",
+        total=total,
+    )
     headers = {"Content-Disposition": f"attachment; filename=abtest_{test_id}.csv"}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key

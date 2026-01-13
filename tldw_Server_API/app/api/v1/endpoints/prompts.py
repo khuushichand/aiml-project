@@ -18,6 +18,7 @@ from fastapi import (
     Query,
     Body,
     Request,
+    Response,
     status,
     File,
     UploadFile
@@ -452,18 +453,19 @@ async def list_all_keywords(
 @router.delete(
     "/keywords/{keyword_text}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Soft delete a keyword",
     dependencies=[Depends(verify_prompts_user)]
 )
 async def delete_keyword(
     keyword_text: str,
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
-):
+) -> Response:
     try:
         success = db.soft_delete_keyword(keyword_text)
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keyword not found or already deleted.")
-        return None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ConflictError as e:
@@ -1027,13 +1029,14 @@ async def update_prompt(
 @router.delete(
     "/{prompt_identifier}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Soft delete a prompt",
     dependencies=[Depends(verify_prompts_user)]
 )
 async def delete_prompt(
     prompt_identifier: Union[int, str],
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
-):
+) -> Response:
     try:
         processed_identifier: Union[int, str] = prompt_identifier
         try: processed_identifier = int(prompt_identifier)
@@ -1043,7 +1046,7 @@ async def delete_prompt(
         if not success:
             # Could be not found or already deleted, DB layer logs warning
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found or already deleted.")
-        return None # HTTP 204 returns no body
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except ConflictError as e: # If version mismatch during delete
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except DatabaseError as e:

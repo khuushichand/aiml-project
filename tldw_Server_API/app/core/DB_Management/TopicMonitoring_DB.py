@@ -2,20 +2,28 @@ from __future__ import annotations
 
 """
 TopicMonitoring_DB
-Lightweight SQLite wrapper for topic monitoring alerts.
+Lightweight SQLite wrapper for topic monitoring storage.
 
-Table: topic_alerts
-Columns:
+Tables:
+  - monitoring_watchlists
+  - monitoring_watchlist_rules
+  - topic_alerts
+
+topic_alerts columns (key subset):
   - id INTEGER PRIMARY KEY AUTOINCREMENT
   - created_at TEXT (ISO 8601 UTC)
   - user_id TEXT
-  - scope_type TEXT  -- 'user' | 'team' | 'org'
+  - scope_type TEXT  -- 'global' | 'user' | 'team' | 'org'
   - scope_id TEXT
   - source TEXT       -- 'chat.input' | 'chat.output' | 'ingestion' | 'notes' | 'rag'
   - watchlist_id TEXT
+  - rule_id TEXT
   - rule_category TEXT
   - rule_severity TEXT
   - pattern TEXT
+  - source_id TEXT
+  - chunk_id TEXT
+  - chunk_seq INTEGER
   - text_snippet TEXT
   - metadata TEXT     -- JSON string
   - is_read INTEGER DEFAULT 0
@@ -24,13 +32,14 @@ Columns:
 This module intentionally keeps SQL usage encapsulated within DB_Management, per project guidelines.
 """
 
+import json
 import os
 import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from loguru import logger
 
@@ -46,14 +55,44 @@ class TopicAlert:
     scope_id: Optional[str]
     source: str
     watchlist_id: str
-    rule_category: Optional[str]
-    rule_severity: Optional[str]
-    pattern: str
-    text_snippet: str
+    rule_id: Optional[str] = None
+    rule_category: Optional[str] = None
+    rule_severity: Optional[str] = None
+    pattern: str = ""
+    source_id: Optional[str] = None
+    chunk_id: Optional[str] = None
+    chunk_seq: Optional[int] = None
+    text_snippet: str = ""
     metadata: Optional[Dict[str, Any]] = None
     created_at: Optional[str] = None
     is_read: int = 0
     read_at: Optional[str] = None
+
+
+@dataclass
+class WatchlistRecord:
+    id: str
+    name: str
+    description: Optional[str] = None
+    enabled: bool = True
+    scope_type: str = "user"
+    scope_id: Optional[str] = None
+    managed_by: str = "api"
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@dataclass
+class WatchlistRuleRecord:
+    rule_id: str
+    watchlist_id: str
+    pattern: str
+    category: Optional[str] = None
+    severity: Optional[str] = None
+    note: Optional[str] = None
+    tags: Optional[List[str]] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class TopicMonitoringDB:
@@ -83,10 +122,59 @@ class TopicMonitoringDB:
             pass
         return conn
 
+    @staticmethod
+    def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+        try:
+            cur = conn.execute(f"PRAGMA table_info({table})")
+            rows = cur.fetchall()
+            return any(str(row["name"]) == column for row in rows)
+        except Exception:
+            return False
+
     def _ensure_schema(self) -> None:
         with self._lock:
             conn = self._connect()
             try:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS monitoring_watchlists (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        scope_type TEXT NOT NULL,
+                        scope_id TEXT,
+                        managed_by TEXT NOT NULL DEFAULT 'api',
+                        created_at TEXT,
+                        updated_at TEXT
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS monitoring_watchlist_rules (
+                        rule_id TEXT PRIMARY KEY,
+                        watchlist_id TEXT NOT NULL,
+                        pattern TEXT NOT NULL,
+                        category TEXT,
+                        severity TEXT,
+                        note TEXT,
+                        tags TEXT,
+                        created_at TEXT,
+                        updated_at TEXT,
+                        FOREIGN KEY(watchlist_id) REFERENCES monitoring_watchlists(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_monitoring_watchlists_scope ON monitoring_watchlists(scope_type, scope_id)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_monitoring_watchlists_enabled ON monitoring_watchlists(enabled)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_monitoring_watchlist_rules_watchlist ON monitoring_watchlist_rules(watchlist_id)"
+                )
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS topic_alerts (
@@ -97,9 +185,13 @@ class TopicMonitoringDB:
                         scope_id TEXT,
                         source TEXT,
                         watchlist_id TEXT,
+                        rule_id TEXT,
                         rule_category TEXT,
                         rule_severity TEXT,
                         pattern TEXT,
+                        source_id TEXT,
+                        chunk_id TEXT,
+                        chunk_seq INTEGER,
                         text_snippet TEXT,
                         metadata TEXT,
                         is_read INTEGER DEFAULT 0,
@@ -107,9 +199,251 @@ class TopicMonitoringDB:
                     )
                     """
                 )
+                if not self._column_exists(conn, "topic_alerts", "rule_id"):
+                    conn.execute("ALTER TABLE topic_alerts ADD COLUMN rule_id TEXT")
+                if not self._column_exists(conn, "topic_alerts", "source_id"):
+                    conn.execute("ALTER TABLE topic_alerts ADD COLUMN source_id TEXT")
+                if not self._column_exists(conn, "topic_alerts", "chunk_id"):
+                    conn.execute("ALTER TABLE topic_alerts ADD COLUMN chunk_id TEXT")
+                if not self._column_exists(conn, "topic_alerts", "chunk_seq"):
+                    conn.execute("ALTER TABLE topic_alerts ADD COLUMN chunk_seq INTEGER")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_alerts_created_at ON topic_alerts(created_at)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_alerts_user ON topic_alerts(user_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_alerts_watch ON topic_alerts(watchlist_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_alerts_rule ON topic_alerts(rule_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_alerts_source ON topic_alerts(source)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_alerts_read ON topic_alerts(is_read)")
+                conn.commit()
+            finally:
+                conn.close()
+
+    @staticmethod
+    def _normalize_tags(tags: Optional[Iterable[str]]) -> Optional[List[str]]:
+        if tags is None:
+            return None
+        cleaned = {str(tag).strip() for tag in tags if tag is not None and str(tag).strip()}
+        return sorted(cleaned) if cleaned else []
+
+    @staticmethod
+    def _serialize_tags(tags: Optional[Iterable[str]]) -> Optional[str]:
+        norm = TopicMonitoringDB._normalize_tags(tags)
+        if norm is None:
+            return None
+        try:
+            return json.dumps(norm, ensure_ascii=False)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _deserialize_tags(raw: Optional[str]) -> Optional[List[str]]:
+        if raw is None:
+            return None
+        if not isinstance(raw, str) or not raw.strip():
+            return []
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return [str(x) for x in data if str(x).strip()]
+        except Exception:
+            pass
+        return []
+
+    def list_watchlists(
+        self,
+        *,
+        include_rules: bool = True,
+        enabled_only: bool = False,
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                where = " WHERE enabled = 1" if enabled_only else ""
+                rows = conn.execute(
+                    f"""
+                    SELECT id, name, description, enabled, scope_type, scope_id, managed_by, created_at, updated_at
+                    FROM monitoring_watchlists
+                    {where}
+                    ORDER BY name COLLATE NOCASE
+                    """
+                ).fetchall()
+                watchlists: List[Dict[str, Any]] = []
+                for row in rows:
+                    watchlists.append({k: row[k] for k in row.keys()})
+                if not include_rules or not watchlists:
+                    return watchlists
+                ids = [str(w["id"]) for w in watchlists if w.get("id") is not None]
+                if not ids:
+                    return watchlists
+                placeholders = ",".join("?" for _ in ids)
+                rule_rows = conn.execute(
+                    f"""
+                    SELECT rule_id, watchlist_id, pattern, category, severity, note, tags, created_at, updated_at
+                    FROM monitoring_watchlist_rules
+                    WHERE watchlist_id IN ({placeholders})
+                    ORDER BY rule_id
+                    """,
+                    ids,
+                ).fetchall()
+                rules_by_watchlist: Dict[str, List[Dict[str, Any]]] = {}
+                for row in rule_rows:
+                    item = {k: row[k] for k in row.keys()}
+                    item["tags"] = self._deserialize_tags(item.get("tags"))
+                    rules_by_watchlist.setdefault(str(item["watchlist_id"]), []).append(item)
+                for wl in watchlists:
+                    wl["rules"] = rules_by_watchlist.get(str(wl.get("id")), [])
+                return watchlists
+            finally:
+                conn.close()
+
+    def get_watchlist(self, watchlist_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, name, description, enabled, scope_type, scope_id, managed_by, created_at, updated_at
+                    FROM monitoring_watchlists
+                    WHERE id = ?
+                    """,
+                    (str(watchlist_id),),
+                ).fetchone()
+                if not row:
+                    return None
+                wl = {k: row[k] for k in row.keys()}
+                return wl
+            finally:
+                conn.close()
+
+    def get_watchlist_by_key(
+        self,
+        name: str,
+        scope_type: str,
+        scope_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                if scope_id is None:
+                    row = conn.execute(
+                        """
+                        SELECT id, name, description, enabled, scope_type, scope_id, managed_by, created_at, updated_at
+                        FROM monitoring_watchlists
+                        WHERE name = ? AND scope_type = ? AND scope_id IS NULL
+                        """,
+                        (str(name), str(scope_type)),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        """
+                        SELECT id, name, description, enabled, scope_type, scope_id, managed_by, created_at, updated_at
+                        FROM monitoring_watchlists
+                        WHERE name = ? AND scope_type = ? AND scope_id = ?
+                        """,
+                        (str(name), str(scope_type), str(scope_id)),
+                    ).fetchone()
+                if not row:
+                    return None
+                return {k: row[k] for k in row.keys()}
+            finally:
+                conn.close()
+
+    def upsert_watchlist(self, watchlist: WatchlistRecord) -> str:
+        with self._lock:
+            conn = self._connect()
+            try:
+                now = _utcnow_iso()
+                row = conn.execute(
+                    "SELECT id FROM monitoring_watchlists WHERE id = ?",
+                    (str(watchlist.id),),
+                ).fetchone()
+                if row:
+                    conn.execute(
+                        """
+                        UPDATE monitoring_watchlists
+                        SET name = ?, description = ?, enabled = ?, scope_type = ?, scope_id = ?, managed_by = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            watchlist.name,
+                            watchlist.description,
+                            1 if watchlist.enabled else 0,
+                            watchlist.scope_type,
+                            watchlist.scope_id,
+                            watchlist.managed_by,
+                            now,
+                            watchlist.id,
+                        ),
+                    )
+                else:
+                    created_at = watchlist.created_at or now
+                    conn.execute(
+                        """
+                        INSERT INTO monitoring_watchlists (
+                            id, name, description, enabled, scope_type, scope_id, managed_by, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            watchlist.id,
+                            watchlist.name,
+                            watchlist.description,
+                            1 if watchlist.enabled else 0,
+                            watchlist.scope_type,
+                            watchlist.scope_id,
+                            watchlist.managed_by,
+                            created_at,
+                            watchlist.updated_at or now,
+                        ),
+                    )
+                conn.commit()
+                return str(watchlist.id)
+            finally:
+                conn.close()
+
+    def delete_watchlist(self, watchlist_id: str) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM monitoring_watchlists WHERE id = ?",
+                    (str(watchlist_id),),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def replace_watchlist_rules(
+        self,
+        watchlist_id: str,
+        rules: List[WatchlistRuleRecord],
+    ) -> None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "DELETE FROM monitoring_watchlist_rules WHERE watchlist_id = ?",
+                    (str(watchlist_id),),
+                )
+                now = _utcnow_iso()
+                for rule in rules:
+                    conn.execute(
+                        """
+                        INSERT INTO monitoring_watchlist_rules (
+                            rule_id, watchlist_id, pattern, category, severity, note, tags, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            rule.rule_id,
+                            rule.watchlist_id,
+                            rule.pattern,
+                            rule.category,
+                            rule.severity,
+                            rule.note,
+                            self._serialize_tags(rule.tags),
+                            rule.created_at or now,
+                            rule.updated_at or now,
+                        ),
+                    )
                 conn.commit()
             finally:
                 conn.close()
@@ -122,7 +456,6 @@ class TopicMonitoringDB:
                 metadata_json = None
                 if alert.metadata is not None:
                     try:
-                        import json
                         metadata_json = json.dumps(alert.metadata, ensure_ascii=False)
                     except Exception:
                         metadata_json = None
@@ -130,8 +463,9 @@ class TopicMonitoringDB:
                     """
                     INSERT INTO topic_alerts (
                         created_at, user_id, scope_type, scope_id, source, watchlist_id,
-                        rule_category, rule_severity, pattern, text_snippet, metadata, is_read, read_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        rule_id, rule_category, rule_severity, pattern, source_id, chunk_id, chunk_seq,
+                        text_snippet, metadata, is_read, read_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         created_at,
@@ -140,9 +474,13 @@ class TopicMonitoringDB:
                         alert.scope_id,
                         alert.source,
                         alert.watchlist_id,
+                        alert.rule_id,
                         alert.rule_category,
                         alert.rule_severity,
                         alert.pattern,
+                        alert.source_id,
+                        alert.chunk_id,
+                        alert.chunk_seq,
                         alert.text_snippet,
                         metadata_json,
                         int(alert.is_read or 0),
@@ -158,24 +496,34 @@ class TopicMonitoringDB:
         self,
         user_id: str,
         watchlist_id: str,
-        pattern: str,
         source: str,
+        *,
+        pattern: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        source_id: Optional[str] = None,
         window_seconds: int = 300,
     ) -> bool:
-        """Check if an alert for the same (user, watchlist, pattern, source) exists in recent window."""
+        """Check if an alert for the same (user, watchlist, rule/pattern, source) exists in recent window."""
         # Compute threshold timestamp
         threshold = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds)).isoformat()
         with self._lock:
             conn = self._connect()
             try:
+                clauses = ["user_id = ?", "watchlist_id = ?", "source = ?", "created_at >= ?"]
+                params: List[Any] = [str(user_id), str(watchlist_id), str(source), threshold]
+                if rule_id:
+                    clauses.append("rule_id = ?")
+                    params.append(str(rule_id))
+                elif pattern:
+                    clauses.append("pattern = ?")
+                    params.append(str(pattern))
+                if source_id:
+                    clauses.append("source_id = ?")
+                    params.append(str(source_id))
+                where = " AND ".join(clauses)
                 cur = conn.execute(
-                    """
-                    SELECT 1 FROM topic_alerts
-                    WHERE user_id = ? AND watchlist_id = ? AND pattern = ? AND source = ?
-                      AND created_at >= ?
-                    LIMIT 1
-                    """,
-                    (str(user_id), str(watchlist_id), str(pattern), str(source), threshold),
+                    f"SELECT 1 FROM topic_alerts WHERE {where} LIMIT 1",
+                    params,
                 )
                 row = cur.fetchone()
                 return bool(row)
@@ -185,6 +533,11 @@ class TopicMonitoringDB:
     def list_alerts(
         self,
         user_id: Optional[str] = None,
+        source: Optional[str] = None,
+        rule_category: Optional[str] = None,
+        rule_severity: Optional[str] = None,
+        scope_type: Optional[str] = None,
+        scope_id: Optional[str] = None,
         since_iso: Optional[str] = None,
         unread_only: bool = False,
         limit: int = 100,
@@ -195,6 +548,21 @@ class TopicMonitoringDB:
         if user_id:
             clauses.append("user_id = ?")
             params.append(str(user_id))
+        if source:
+            clauses.append("source = ?")
+            params.append(str(source))
+        if rule_category:
+            clauses.append("rule_category = ?")
+            params.append(str(rule_category))
+        if rule_severity:
+            clauses.append("rule_severity = ?")
+            params.append(str(rule_severity))
+        if scope_type:
+            clauses.append("scope_type = ?")
+            params.append(str(scope_type))
+        if scope_id:
+            clauses.append("scope_id = ?")
+            params.append(str(scope_id))
         if since_iso:
             clauses.append("created_at >= ?")
             params.append(since_iso)
@@ -203,7 +571,8 @@ class TopicMonitoringDB:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
             SELECT id, created_at, user_id, scope_type, scope_id, source,
-                   watchlist_id, rule_category, rule_severity, pattern, text_snippet, metadata, is_read, read_at
+                   watchlist_id, rule_id, rule_category, rule_severity, pattern,
+                   source_id, chunk_id, chunk_seq, text_snippet, metadata, is_read, read_at
             FROM topic_alerts
             {where}
             ORDER BY created_at DESC

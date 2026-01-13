@@ -8,7 +8,7 @@
 
 import os
 from typing import Annotated, Optional, Dict, Any, List, Tuple
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status as http_status
+from fastapi import APIRouter, Depends, HTTPException, status as http_status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from pydantic import ConfigDict
@@ -30,8 +30,6 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import (
 from tldw_Server_API.app.core.config import settings, load_comprehensive_config
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
-import asyncio
-
 from tldw_Server_API.app.core.Embeddings.jobs_adapter import EmbeddingsJobsAdapter
 from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
 
@@ -57,28 +55,6 @@ def _safe_int(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
 
-
-def _job_update_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
-    raw_status = result.get("status")
-    embedding_count = _safe_int(result.get("embedding_count"))
-    chunks_processed = _safe_int(result.get("chunks_processed"))
-    error = result.get("error") or result.get("message")
-    allow_zero_embeddings = bool(result.get("allow_zero_embeddings"))
-
-    status = "completed"
-    if raw_status != "success" or (not embedding_count and not allow_zero_embeddings):
-        status = "failed"
-        if not error:
-            error = "Embedding generation returned no embeddings."
-
-    payload: Dict[str, Any] = {"status": status}
-    if embedding_count is not None:
-        payload["embedding_count"] = embedding_count
-    if chunks_processed is not None:
-        payload["chunks_processed"] = chunks_processed
-    if error and status == "failed":
-        payload["error"] = error
-    return payload
 
 
 def _parse_media_type_list(raw: Any) -> List[str]:
@@ -133,11 +109,10 @@ def _resolve_model_provider(
 
 def _embeddings_jobs_backend() -> str:
     raw = (os.getenv("EMBEDDINGS_JOBS_BACKEND") or os.getenv("TLDW_JOBS_BACKEND") or "").strip().lower()
-    if raw in {"jobs", "core"}:
+    if raw in {"jobs", "core", ""}:
         return "jobs"
-    if raw in {"redis"}:
-        return "redis"
-    return "redis"
+    logger.warning("Embeddings jobs backend override %s ignored; core Jobs is the only backend.", raw)
+    return "jobs"
 
 
 class GenerateEmbeddingsRequest(BaseModel):
@@ -161,6 +136,12 @@ class GenerateEmbeddingsRequest(BaseModel):
     force_regenerate: bool = Field(
         False,
         description="Force regeneration even if embeddings exist"
+    )
+    priority: int = Field(
+        50,
+        ge=0,
+        le=100,
+        description="Embedding job priority (0-100)"
     )
 
 class EmbeddingsStatusResponse(BaseModel):
@@ -189,6 +170,7 @@ class BatchMediaEmbeddingsRequest(BaseModel):
     chunk_size: int = Field(1000, description="Chunk size to use for each media item")
     chunk_overlap: int = Field(200, description="Chunk overlap to use for each media item")
     force_regenerate: bool = Field(False, description="Force regeneration even if embeddings exist")
+    priority: int = Field(50, ge=0, le=100, description="Embedding job priority (0-100)")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -644,7 +626,6 @@ async def get_embeddings_status(
 )
 async def generate_embeddings(
     media_id: int,
-    background_tasks: BackgroundTasks,
     request: GenerateEmbeddingsRequest,
     db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
     current_user: Annotated[User, Depends(get_request_user)],
@@ -664,42 +645,19 @@ async def generate_embeddings(
         )
         collection_name = f"user_{user_id}_media_embeddings"
 
-        adapter = EmbeddingsJobsAdapter()
-        if _embeddings_jobs_backend() == "jobs":
-            media_item = db.get_media_by_id(media_id)
-            if not media_item:
-                raise HTTPException(
-                    status_code=http_status.HTTP_404_NOT_FOUND,
-                    detail=f"Media item {media_id} not found"
-                )
-            job_id = None
-            try:
-                job_row = adapter.create_job(
-                    user_id=user_id,
-                    media_id=media_id,
-                    embedding_model=embedding_model,
-                    embedding_provider=embedding_provider,
-                    chunk_size=request.chunk_size,
-                    chunk_overlap=request.chunk_overlap,
-                    request_source="media",
-                )
-                job_id = str(job_row.get("uuid") or job_row.get("id"))
-            except Exception as e:
-                logger.warning(f"Failed to persist media embedding job: {e}")
-            return GenerateEmbeddingsResponse(
-                media_id=media_id,
-                status="accepted",
-                message="Embedding generation started",
-                embedding_count=None,
-                embedding_model=embedding_model,
-                chunks_processed=None,
-                job_id=job_id
+        if _embeddings_jobs_backend() != "jobs":
+            raise HTTPException(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Embeddings jobs backend is unavailable",
             )
 
-        # Get media content
-        media_content = await get_media_content(media_id, db)
-
-        # Persist a job record and run generation in the background
+        adapter = EmbeddingsJobsAdapter()
+        media_item = db.get_media_by_id(media_id)
+        if not media_item:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=f"Media item {media_id} not found"
+            )
         job_id = None
         try:
             job_row = adapter.create_job(
@@ -710,41 +668,13 @@ async def generate_embeddings(
                 chunk_size=request.chunk_size,
                 chunk_overlap=request.chunk_overlap,
                 request_source="media",
+                force_regenerate=request.force_regenerate,
+                stage="chunking",
+                embedding_priority=request.priority,
             )
             job_id = str(job_row.get("uuid") or job_row.get("id"))
         except Exception as e:
             logger.warning(f"Failed to persist media embedding job: {e}")
-
-        async def _run_job():
-            try:
-                result = await generate_embeddings_for_media(
-                    media_id=media_id,
-                    media_content=media_content,
-                    embedding_model=embedding_model,
-                    embedding_provider=embedding_provider,
-                    chunk_size=request.chunk_size,
-                    chunk_overlap=request.chunk_overlap,
-                    user_id=user_id
-                )
-                invalidate_rag_caches(current_user, media_id=media_id)
-                try:
-                    update_payload = _job_update_from_result(result)
-                    if job_id:
-                        adapter.update_job(job_id=job_id, user_id=user_id, **update_payload)
-                except Exception as e:
-                    logger.debug(f"media_embeddings: failed to update job status for {job_id}: {e}")
-            except Exception as e:
-                logger.error(f"Background embeddings generation failed for media {media_id}: {e}")
-                try:
-                    if job_id:
-                        adapter.update_job(job_id=job_id, user_id=user_id, status='failed', error=str(e))
-                except Exception as e:
-                    logger.debug(f"media_embeddings: failed to update job status for {job_id}: {e}")
-
-        # Schedule the job on the current event loop; avoid creating tasks from non-async background thread
-        asyncio.create_task(_run_job())
-
-        # Return accepted response with job id
         return GenerateEmbeddingsResponse(
             media_id=media_id,
             status="accepted",
@@ -791,45 +721,21 @@ async def generate_embeddings_batch(
         current_user,
         error_status=http_status.HTTP_400_BAD_REQUEST,
     )
-    adapter = EmbeddingsJobsAdapter()
-
-    job_ids: List[str] = []
-
-    if _embeddings_jobs_backend() == "jobs":
-        for media_id in media_ids:
-            media_item = db.get_media_by_id(media_id)
-            if not media_item:
-                raise HTTPException(
-                    status_code=http_status.HTTP_404_NOT_FOUND,
-                    detail=f"Media item {media_id} not found"
-                )
-            job_id: Optional[str] = None
-            try:
-                job_row = adapter.create_job(
-                    user_id=user_id,
-                    media_id=media_id,
-                    embedding_model=embedding_model,
-                    embedding_provider=embedding_provider,
-                    chunk_size=request.chunk_size,
-                    chunk_overlap=request.chunk_overlap,
-                    request_source="media_batch",
-                )
-                job_id = str(job_row.get("uuid") or job_row.get("id"))
-                job_ids.append(job_id)
-            except Exception as exc:
-                logger.warning(f"Failed to persist batch job {job_id} for media {media_id}: {exc}")
-        return BatchMediaEmbeddingsResponse(
-            status="accepted",
-            message=f"Launched {len(job_ids)} embedding jobs",
-            jobs=job_ids
+    if _embeddings_jobs_backend() != "jobs":
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Embeddings jobs backend is unavailable",
         )
 
-    # Ensure media exists before launching jobs
-    media_payloads: Dict[int, Dict[str, Any]] = {}
+    adapter = EmbeddingsJobsAdapter()
+    job_ids: List[str] = []
     for media_id in media_ids:
-        media_payloads[media_id] = await get_media_content(media_id, db)
-
-    for media_id in media_ids:
+        media_item = db.get_media_by_id(media_id)
+        if not media_item:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=f"Media item {media_id} not found"
+            )
         job_id: Optional[str] = None
         try:
             job_row = adapter.create_job(
@@ -840,42 +746,19 @@ async def generate_embeddings_batch(
                 chunk_size=request.chunk_size,
                 chunk_overlap=request.chunk_overlap,
                 request_source="media_batch",
+                force_regenerate=request.force_regenerate,
+                stage="chunking",
+                embedding_priority=request.priority,
             )
             job_id = str(job_row.get("uuid") or job_row.get("id"))
             job_ids.append(job_id)
         except Exception as exc:
             logger.warning(f"Failed to persist batch job {job_id} for media {media_id}: {exc}")
-
-        media_content = media_payloads[media_id]
-
-        async def _run_batch_job(mid: int = media_id, job_ref: str = job_id, payload: Dict[str, Any] = media_content) -> None:
-            try:
-                result = await generate_embeddings_for_media(
-                    media_id=mid,
-                    media_content=payload,
-                    embedding_model=embedding_model,
-                    embedding_provider=embedding_provider,
-                    chunk_size=request.chunk_size,
-                    chunk_overlap=request.chunk_overlap,
-                    user_id=user_id
-                )
-                try:
-                    update_payload = _job_update_from_result(result)
-                    if job_ref:
-                        adapter.update_job(job_id=job_ref, user_id=user_id, **update_payload)
-                except Exception as e:
-                    logger.debug(f"media_embeddings: index op failed: {e}")
-            except Exception as exc:
-                logger.error(f"Batch embeddings job failed for media {mid}: {exc}")
-                try:
-                    if job_ref:
-                        adapter.update_job(job_id=job_ref, user_id=user_id, status='failed', error=str(exc))
-                except Exception as e:
-                    logger.debug(f"media_embeddings: cleanup failed: {e}")
-
-        asyncio.create_task(_run_batch_job(job_ref=job_id))
-
-    return BatchMediaEmbeddingsResponse(status="accepted", job_ids=job_ids, submitted=len(job_ids))
+    return BatchMediaEmbeddingsResponse(
+        status="accepted",
+        job_ids=job_ids,
+        submitted=len(job_ids),
+    )
 
 
 @router.post(

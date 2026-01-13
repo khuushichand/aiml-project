@@ -103,6 +103,40 @@ CREATE TABLE prompt_studio_optimizations (
 - Property-based: For generators and optimizers where appropriate
 - Determinism: Avoid external LLM calls in tests; mock or simulate metrics
 
+## Local Test Workflow
+
+Quick run (SQLite + Postgres when available):
+
+```
+make prompt-studio-test
+```
+
+SQLite-only:
+
+```
+make prompt-studio-test-sqlite
+```
+
+Postgres-backed runs (required, fails if Postgres is unavailable):
+
+```
+POSTGRES_TEST_DSN=postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_users \
+make prompt-studio-test-postgres
+```
+
+Postgres helpers:
+- The test fixtures auto-start a local Docker Postgres if reachable and Docker is available.
+- Set `TLDW_TEST_NO_DOCKER=1` to disable Docker auto-start.
+- Set `TLDW_TEST_POSTGRES_REQUIRED=1` to fail instead of skipping when Postgres is unavailable.
+
+Docker (local Postgres service):
+
+```
+docker compose -f Dockerfiles/docker-compose.postgres.yml up -d
+docker compose -f Dockerfiles/docker-compose.postgres.yml ps
+```
+
+## Development Standards
 ## Development Standards
 
 - Versioning: Prompts are immutable; every update creates a new row. Do not mutate older versions.

@@ -250,6 +250,8 @@ and this project adheres to Some kind of Versioning
 
 
 ## [0.1.1.0] - 2025-X
+### Breaking
+- Prometheus scraping for MCP metrics now requires authentication with the `system.logs` permission; `MCP_PROMETHEUS_PUBLIC` no longer enables public access, is deprecated, and will be removed. Migration: update Prometheus scrape configs to send a Bearer token (API key or JWT) that includes `system.logs` (see `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md` migration note and scrape_config example).
 ### Features
 - Version 0.1
 ### Fixed

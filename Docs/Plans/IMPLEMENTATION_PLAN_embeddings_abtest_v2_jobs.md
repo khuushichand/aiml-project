@@ -19,7 +19,7 @@ Last Updated: 2026-01-12
 **Tests**:
 - Integration: enqueue + worker processes a minimal A/B test with TESTING mode.
 - Integration: failed handler retries until `max_retries` exhausted.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Collection Reuse + Cleanup
 **Goal**: Implement per-test reuse and cleanup of collections and DB rows.
@@ -30,7 +30,7 @@ Last Updated: 2026-01-12
 **Tests**:
 - Unit: reuse hash determinism and per-test reuse behavior.
 - Integration: cleanup removes collections + DB rows.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 4: Observability + CI Guard
 **Goal**: Add Jobs-backed metrics/audit events for A/B runs and enforce plan freshness in CI.
@@ -41,4 +41,4 @@ Last Updated: 2026-01-12
 **Tests**:
 - Unit: metrics/audit hooks invoked on job lifecycle.
 - CI: plan freshness check runs in workflow.
-**Status**: Not Started
+**Status**: Complete

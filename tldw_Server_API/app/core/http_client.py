@@ -302,6 +302,10 @@ class RetryPolicy:
     respect_retry_after: bool = True
     retry_on_unsafe: bool = False
 
+    @property
+    def enabled(self) -> bool:
+        return self.attempts > 1
+
 
 @dataclass
 class SSEEvent:
@@ -820,6 +824,31 @@ def _rewind_files(files: Any) -> None:
             continue
 
 
+def _validate_retry_files_seekable(files: Any, retry: Optional["RetryPolicy"]) -> None:
+    if files is None or retry is None:
+        return
+    if not retry.enabled:
+        return
+    for _, spec in _iter_file_items(files):
+        if isinstance(spec, (tuple, list)) and len(spec) >= 2:
+            file_obj = spec[1]
+        else:
+            file_obj = spec
+        if hasattr(file_obj, "seekable"):
+            try:
+                is_seekable = file_obj.seekable()
+            except Exception as exc:
+                raise ValueError(
+                    "File-like object must be seekable when retries are enabled. "
+                    "Either disable retries or use a seekable stream."
+                ) from exc
+            if is_seekable is False:
+                raise ValueError(
+                    "File-like object must be seekable when retries are enabled. "
+                    "Either disable retries or use a seekable stream."
+                )
+
+
 def _build_aiohttp_form(data: Optional[Any], files: Optional[Any]) -> Optional["aiohttp.FormData"]:
     if aiohttp is None:  # pragma: no cover
         return None
@@ -1224,9 +1253,16 @@ async def _afetch_httpx(
     cert_pinning: Optional[Dict[str, set[str]]] = None,
     verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
 ) -> "httpx.Response":
+    """Async httpx request with retries and egress enforcement.
+
+    Raises ValueError when retries are enabled and a file-like object in `files`
+    is not seekable: "File-like object must be seekable when retries are enabled.
+    Either disable retries or use a seekable stream."
+    """
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
     retry = retry or RetryPolicy()
+    _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -1599,9 +1635,16 @@ async def _afetch_aiohttp(
     cert_pinning: Optional[Dict[str, set[str]]] = None,
     verify: Optional[Any] = None,
 ) -> _AiohttpResponse:
+    """Async aiohttp request with retries and egress enforcement.
+
+    Raises ValueError when retries are enabled and a file-like object in `files`
+    is not seekable: "File-like object must be seekable when retries are enabled.
+    Either disable retries or use a seekable stream."
+    """
     if aiohttp is None:  # pragma: no cover
         raise RuntimeError("aiohttp is not available")
     retry = retry or RetryPolicy()
+    _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -2025,9 +2068,16 @@ def _fetch_httpx_response(
     retry: Optional[RetryPolicy] = None,
     cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> "httpx.Response":
+    """Sync httpx request with retries and egress enforcement.
+
+    Raises ValueError when retries are enabled and a file-like object in `files`
+    is not seekable: "File-like object must be seekable when retries are enabled.
+    Either disable retries or use a seekable stream."
+    """
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
     retry = retry or RetryPolicy()
+    _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -2322,6 +2372,10 @@ def fetch(*args, **kwargs):
 
     - If called with keyword 'method', delegates to the HTTPX response API and
       returns an httpx.Response (backward compatible with existing callers).
+      When retries are enabled and `files` are provided, file-like objects must
+      be seekable; otherwise a ValueError is raised with the message:
+      "File-like object must be seekable when retries are enabled. Either disable
+      retries or use a seekable stream."
     - Otherwise, provides a simplified fetch suitable for Web_Scraping tests:
       accepts `url` (positional), optional `headers`, `backend` (default 'httpx'),
       and returns a mapping with keys: status, headers, text, url, backend.
@@ -2354,7 +2408,8 @@ def fetch(*args, **kwargs):
     backend_norm = str(backend).lower().strip()
     if backend_norm == "auto":
         backend_norm = "curl" if _resolve_curl_session() is not None else "httpx"
-    if httpx is None and backend_norm != "curl":  # pragma: no cover
+    _hx = _resolve_httpx()
+    if _hx is None and backend_norm != "curl":  # pragma: no cover
         raise RuntimeError("httpx is not available")
 
     # Sanitize Accept-Encoding as per backend expectations
@@ -2419,7 +2474,9 @@ def fetch(*args, **kwargs):
         )
 
     # Minimal client lifecycle for simple fetch with explicit redirect handling
-    with httpx.Client(**client_kwargs) as sc:  # type: ignore[call-arg]
+    client_cls = getattr(_hx, "Client", object) if _hx is not None else object
+    sc = _instantiate_client(client_cls, client_kwargs)
+    with sc as sc:
         cur_url = url
         redirects = 0
 

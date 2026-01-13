@@ -580,7 +580,36 @@ async def set_user_tier(user_id: int, tier: str) -> None:
 
 async def get_limits_for_user(user_id: int) -> Dict[str, Optional[float]]:
     tier = await get_user_tier(user_id)
-    return TIER_LIMITS.get(tier, TIER_LIMITS["free"]).copy()
+    limits = TIER_LIMITS.get(tier, TIER_LIMITS["free"]).copy()
+    overrides = await _get_user_override_limits(user_id)
+    for key, value in overrides.items():
+        if value is not None:
+            limits[key] = value
+    return limits
+
+
+async def _get_user_override_limits(user_id: int) -> Dict[str, Optional[float]]:
+    try:
+        from tldw_Server_API.app.core.UserProfiles.overrides_repo import UserProfileOverridesRepo
+
+        pool = await get_db_pool()
+        repo = UserProfileOverridesRepo(pool)
+        await repo.ensure_tables()
+        rows = await repo.list_overrides_for_user(int(user_id))
+        overrides: Dict[str, Optional[float]] = {}
+        for row in rows:
+            key = str(row.get("key") or "")
+            value = row.get("value")
+            if value is None:
+                continue
+            if key == "limits.audio_daily_minutes":
+                overrides["daily_minutes"] = float(value)
+            elif key == "limits.audio_concurrent_jobs":
+                overrides["concurrent_jobs"] = int(value)
+        return overrides
+    except Exception as exc:
+        logger.debug("Audio quota overrides unavailable for user {}: {}", user_id, exc)
+        return {}
 
 
 async def get_daily_minutes_used(user_id: int) -> float:

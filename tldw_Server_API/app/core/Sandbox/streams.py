@@ -11,6 +11,7 @@ import time
 
 from loguru import logger
 from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 
 
 class RunStreamHub:
@@ -533,10 +534,12 @@ class RunStreamHub:
             if not url:
                 return
             try:
-                import redis  # type: ignore
-                client = redis.Redis.from_url(url)
-                # Ping to ensure connectivity
-                client.ping()
+                client = create_sync_redis_client(
+                    preferred_url=url,
+                    context="sandbox_streams",
+                    fallback_to_fake=False,
+                    decode_responses=True,
+                )
                 self._redis_client = client
                 self._redis_enabled = True
                 # Start background subscriber

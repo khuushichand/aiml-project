@@ -55,6 +55,9 @@
 - Security
   - Centralized egress/SSRF policy enforced before all outbound requests: `evaluate_url_policy` — tldw_Server_API/app/core/Security/egress.py:146
   - Browser-like headers help reduce bot detection; robots.txt honoring is configurable.
+- Observability
+  - Scrape metrics are emitted via Metrics Manager (`scrape_fetch_total`, `scrape_fetch_latency_seconds`, `scrape_content_length_bytes`, `scrape_playwright_fallback_total`, `scrape_blocked_by_robots_total`) with backend/outcome labels.
+  - JS-required heuristics (noscript prompts, anti-bot interstitials, SPA shells, domain hints) trigger early Playwright fallback when content is thin.
 
 ## 3. Developer-Related/Relevant Information for Contributors
 

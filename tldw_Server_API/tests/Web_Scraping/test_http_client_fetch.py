@@ -30,11 +30,14 @@ class DummyClient:
         return DummyResp(url, self.last_headers)
 
 
+_DUMMY_HTTP_BACKEND = types.SimpleNamespace(Client=DummyClient)
+
+
 def test_httpx_fetch_sanitizes_accept_encoding_and_backend_label(monkeypatch):
     # allow egress
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
-    # patch httpx.Client
-    monkeypatch.setattr(hc.httpx, "Client", DummyClient)
+    # swap client constructor via resolver
+    monkeypatch.setattr(hc, "_resolve_httpx", lambda: _DUMMY_HTTP_BACKEND)
 
     headers = {"Accept-Encoding": "gzip, deflate, br, zstd"}
     resp = hc.fetch("https://example.com/", headers=headers, backend="httpx")
@@ -46,8 +49,8 @@ def test_httpx_fetch_sanitizes_accept_encoding_and_backend_label(monkeypatch):
 def test_httpx_fetch_accept_encoding_case_and_params(monkeypatch):
     # allow egress
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
-    # patch httpx.Client
-    monkeypatch.setattr(hc.httpx, "Client", DummyClient)
+    # swap client constructor via resolver
+    monkeypatch.setattr(hc, "_resolve_httpx", lambda: _DUMMY_HTTP_BACKEND)
 
     # Lower-case header key with parameterized zstd; should be dropped and canonicalized
     headers = {"accept-encoding": "gzip, zstd;q=0.9, br"}
@@ -63,8 +66,8 @@ def test_httpx_fetch_accept_encoding_case_and_params(monkeypatch):
 def test_httpx_fetch_accept_encoding_all_removed(monkeypatch):
     # allow egress
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
-    # patch httpx.Client
-    monkeypatch.setattr(hc.httpx, "Client", DummyClient)
+    # swap client constructor via resolver
+    monkeypatch.setattr(hc, "_resolve_httpx", lambda: _DUMMY_HTTP_BACKEND)
 
     headers = {"Accept-Encoding": "zstd;q=0.9, zstd"}
     resp = hc.fetch("https://example.com/", headers=headers, backend="httpx")
@@ -77,8 +80,8 @@ def test_httpx_fetch_accept_encoding_all_removed(monkeypatch):
 def test_requests_fetch_sanitizes_accept_encoding(monkeypatch):
     # allow egress
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
-    # patch httpx.Client
-    monkeypatch.setattr(hc.httpx, "Client", DummyClient)
+    # swap client constructor via resolver
+    monkeypatch.setattr(hc, "_resolve_httpx", lambda: _DUMMY_HTTP_BACKEND)
 
     headers = {"Accept-Encoding": "gzip, deflate, br, zstd"}
     resp = hc.fetch("https://example.com/", headers=headers, backend="requests")

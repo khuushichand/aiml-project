@@ -11,12 +11,13 @@ Scraping and scheduling are stubbed; runs are created on trigger.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
+import asyncio
 import json
 import os
 import re
 from datetime import datetime, timezone, timedelta
 from html import escape
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, UploadFile, File, Form, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import PlainTextResponse, HTMLResponse, Response
 from loguru import logger
 from jinja2.sandbox import SandboxedEnvironment
@@ -26,6 +27,10 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     resolve_user_id_for_request,
 )
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.jwt_service import verify_token as _verify_jwt_token
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 from tldw_Server_API.app.core.Watchlists import template_store
@@ -35,6 +40,8 @@ from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _no
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
 from tldw_Server_API.app.core.exceptions import TemplateValidationError
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 # Lazy/optional notifications import: avoid blocking router load if optional deps fail
 try:
     from tldw_Server_API.app.core.Notifications import NotificationsService  # type: ignore
@@ -505,6 +512,139 @@ def _validate_youtube_feed_or_raise(url: str, source_type: str) -> None:
             ),
         )
 
+
+def _forums_enabled() -> bool:
+    return str(os.getenv("WATCHLIST_FORUMS_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _raise_if_forum_disabled(source_type: str) -> None:
+    if str(source_type).lower() == "forum" and not _forums_enabled():
+        raise HTTPException(status_code=400, detail="forum_sources_disabled")
+
+
+def _looks_like_jwt(token: Optional[str]) -> bool:
+    return isinstance(token, str) and token.count(".") == 2
+
+
+async def _resolve_watchlists_ws_user_id(
+    websocket: WebSocket,
+    *,
+    token: Optional[str],
+    api_key: Optional[str],
+) -> int:
+    if not token:
+        auth_hdr = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+        if auth_hdr and auth_hdr.lower().startswith("bearer "):
+            token = auth_hdr.split(" ", 1)[1].strip()
+    if not api_key:
+        api_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
+
+    if token and not api_key and not _looks_like_jwt(token):
+        api_key = token
+        token = None
+
+    if token:
+        payload = _verify_jwt_token(token)
+        sub = payload.get("sub")
+        if sub is None:
+            raise HTTPException(status_code=401, detail="invalid_token")
+        return int(sub)
+
+    if api_key:
+        settings = get_settings()
+        client_ip = None
+        try:
+            client = getattr(websocket, "client", None)
+            if client is not None:
+                client_ip = getattr(client, "host", None)
+        except Exception:
+            client_ip = None
+        if getattr(settings, "AUTH_MODE", None) == "single_user":
+            allowed_keys: set[str] = set()
+            primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+            if primary_key:
+                allowed_keys.add(primary_key)
+            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+            if test_key:
+                allowed_keys.add(test_key)
+            if api_key in allowed_keys and is_single_user_ip_allowed(client_ip, settings):
+                return int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+
+        api_mgr = await get_api_key_manager()
+        info = await api_mgr.validate_api_key(api_key=api_key, required_scope="read", ip_address=client_ip)
+        if not info:
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+        user_id = info.get("user_id")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+        return int(user_id)
+
+    raise HTTPException(status_code=401, detail="auth_required")
+
+
+def _read_log_chunk(
+    *,
+    log_path: Optional[str],
+    offset: int,
+    max_bytes: int,
+    inode: Optional[int],
+) -> tuple[Optional[str], int, Optional[int]]:
+    if not log_path:
+        return None, offset, inode
+    try:
+        from pathlib import Path as _Path
+
+        path = _Path(log_path)
+        if not path.exists():
+            return None, offset, inode
+        stat = path.stat()
+        current_inode = getattr(stat, "st_ino", None)
+        if inode is not None and current_inode is not None and inode != current_inode:
+            offset = 0
+        if stat.st_size < offset:
+            offset = 0
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(offset)
+            chunk = fh.read(max_bytes)
+            offset = fh.tell()
+        if not chunk:
+            return None, offset, current_inode
+        return chunk, offset, current_inode
+    except Exception:
+        return None, offset, inode
+
+
+def _read_log_tail(
+    *,
+    log_path: Optional[str],
+    max_bytes: int,
+) -> tuple[Optional[str], int, Optional[int], bool]:
+    if not log_path:
+        return None, 0, None, False
+    try:
+        from pathlib import Path as _Path
+
+        path = _Path(log_path)
+        if not path.exists():
+            return None, 0, None, False
+        stat = path.stat()
+        inode = getattr(stat, "st_ino", None)
+        start = 0
+        truncated = False
+        if stat.st_size > max_bytes:
+            start = max(0, stat.st_size - max_bytes)
+            truncated = True
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(start)
+            text = fh.read(max_bytes)
+            offset = fh.tell()
+        if not text:
+            return None, offset, inode, truncated
+        return text, offset, inode, truncated
+    except Exception:
+        return None, 0, None, False
+
 @router.post("/sources", response_model=Source, summary="Create a source")
 async def create_source(
     payload: SourceCreateRequest = Body(...),
@@ -513,6 +653,7 @@ async def create_source(
     response: Response = None,  # type: ignore[assignment]
 ):
     try:
+        _raise_if_forum_disabled(str(payload.source_type))
         # Backend normalization/validation for YouTube-as-RSS
         url_str = str(payload.url)
         orig_url_for_log = url_str
@@ -606,7 +747,7 @@ async def list_sources(
 async def export_sources_opml(
     tag: Optional[List[str]] = Query(None, description="Filter by tag(s)"),
     group: Optional[List[int]] = Query(None, description="Filter by group id(s) (OR semantics)"),
-    type: Optional[str] = Query(None, description="Filter by source_type (rss/site)"),
+    type: Optional[str] = Query(None, description="Filter by source_type (rss/site/forum)"),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
@@ -727,6 +868,7 @@ async def update_source(
         raise HTTPException(status_code=404, detail="source_not_found")
     target_type = str(payload.source_type) if (getattr(payload, "source_type", None) is not None) else str(existing.source_type)
     target_url = str(payload.url) if (getattr(payload, "url", None) is not None) else str(existing.url)
+    _raise_if_forum_disabled(target_type)
     # Normalize/validate when target_type is rss and URL is YouTube
     if target_type.lower() == "rss" and _is_youtube_url(target_url) and not _is_youtube_feed_url(target_url):
         orig_url_for_log = target_url
@@ -845,6 +987,20 @@ async def bulk_create_sources(
     created_count = 0
     errors_count = 0
     for s in payload.sources:
+        try:
+            _raise_if_forum_disabled(str(s.source_type))
+        except HTTPException as ve:
+            items.append(
+                SourcesBulkCreateItem(
+                    name=s.name,
+                    url=str(s.url),
+                    status="error",
+                    error=str(ve.detail),
+                    source_type=str(s.source_type),
+                )
+            )
+            errors_count += 1
+            continue
         # Normalize/Validate YouTube-as-RSS for each entry; collect per-entry error instead of silent skip
         try:
             url_str = str(s.url)
@@ -1925,6 +2081,132 @@ async def get_run_details(
         truncated=truncated,
         filtered_sample=filtered_sample,
     )
+
+
+# --------------------
+# WebSocket run stream
+# --------------------
+
+
+@router.websocket("/runs/{run_id}/stream")
+async def stream_run(
+    websocket: WebSocket,
+    run_id: int,
+    token: Optional[str] = Query(None),
+    api_key: Optional[str] = Query(None),
+):
+    try:
+        user_id = await _resolve_watchlists_ws_user_id(websocket, token=token, api_key=api_key)
+    except HTTPException:
+        try:
+            await websocket.close(code=4401)
+        finally:
+            return
+    db = WatchlistsDatabase.for_user(user_id)
+    try:
+        run = db.get_run(int(run_id))
+    except KeyError:
+        try:
+            await websocket.close(code=4404)
+        finally:
+            return
+
+    await websocket.accept()
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=0.0,
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "watchlists", "endpoint": "watchlists_run_ws"},
+    )
+    await stream.start()
+
+    log_tail_max = int(os.getenv("WATCHLISTS_WS_LOG_TAIL_MAX", "65536") or 65536)
+    log_chunk_max = int(os.getenv("WATCHLISTS_WS_LOG_CHUNK_MAX", "8192") or 8192)
+    poll_interval = float(os.getenv("WATCHLISTS_WS_POLL_INTERVAL", "1.0") or 1.0)
+    if poll_interval < 0.2:
+        poll_interval = 0.2
+
+    def _parse_stats(raw: Optional[str]) -> Dict[str, Any]:
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    last_status = run.status
+    last_stats_raw = run.stats_json
+    last_error = run.error_msg
+    log_text, log_offset, log_inode, log_truncated = _read_log_tail(
+        log_path=run.log_path,
+        max_bytes=log_tail_max,
+    )
+    await stream.send_json(
+        {
+            "type": "snapshot",
+            "run": {
+                "id": run.id,
+                "job_id": run.job_id,
+                "status": run.status,
+                "started_at": run.started_at,
+                "finished_at": run.finished_at,
+            },
+            "stats": _parse_stats(run.stats_json),
+            "error_msg": run.error_msg,
+            "log_tail": log_text,
+            "log_truncated": log_truncated,
+        }
+    )
+
+    try:
+        while True:
+            run = db.get_run(int(run_id))
+            stats_raw = run.stats_json
+            if run.status != last_status or stats_raw != last_stats_raw or run.error_msg != last_error:
+                await stream.send_json(
+                    {
+                        "type": "run_update",
+                        "run": {
+                            "id": run.id,
+                            "job_id": run.job_id,
+                            "status": run.status,
+                            "started_at": run.started_at,
+                            "finished_at": run.finished_at,
+                        },
+                        "stats": _parse_stats(stats_raw),
+                        "error_msg": run.error_msg,
+                    }
+                )
+                last_status = run.status
+                last_stats_raw = stats_raw
+                last_error = run.error_msg
+
+            chunk, log_offset, log_inode = _read_log_chunk(
+                log_path=run.log_path,
+                offset=log_offset,
+                max_bytes=log_chunk_max,
+                inode=log_inode,
+            )
+            if chunk:
+                await stream.send_json({"type": "log", "text": chunk})
+            elif run.status not in {"running", "queued"}:
+                await stream.send_json({"type": "complete", "status": run.status})
+                break
+            else:
+                await stream.send_json({"type": "heartbeat", "ts": datetime.utcnow().isoformat()})
+
+            await asyncio.sleep(poll_interval)
+    except WebSocketDisconnect:
+        logger.info("Watchlists WS disconnected")
+        raise
+    except Exception as exc:
+        logger.error(f"Watchlists WS error: {exc}")
+        try:
+            await stream.ws.close(code=status.WS_1011_INTERNAL_ERROR)
+        except Exception:
+            pass
 
 
 # --------------------

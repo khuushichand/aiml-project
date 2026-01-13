@@ -49,6 +49,8 @@ class ScrapePlan:
     respect_robots: bool = True
     proxies: Dict[str, str] = field(default_factory=dict)  # e.g., {"http": "http://host:port", "https": "http://host:port"}
     strategy_order: Optional[List[str]] = None
+    schema_rules: Optional[Dict[str, Any]] = None
+    llm_settings: Optional[Dict[str, Any]] = None
 
 
 def _validate_handler(handler: str, allowlist: List[str]) -> str:
@@ -138,6 +140,10 @@ class ScraperRouter:
             "respect_robots",
             "proxies",
             "strategy_order",
+            "schema_rules",
+            "schema",
+            "llm_settings",
+            "llm",
         }
         allowed_backends = {"auto", "curl", "httpx", "playwright"}
 
@@ -181,6 +187,10 @@ class ScraperRouter:
                             if isinstance(item, str):
                                 order.append(item)
                     cleaned[k] = order
+                elif k in {"schema_rules", "schema"}:
+                    cleaned[k] = v if isinstance(v, dict) else {}
+                elif k in {"llm_settings", "llm"}:
+                    cleaned[k] = v if isinstance(v, dict) else {}
                 else:
                     cleaned[k] = v
 
@@ -235,6 +245,20 @@ class ScraperRouter:
         strategy_order = rule.get("strategy_order")
         if isinstance(strategy_order, list):
             plan.strategy_order = [str(item) for item in strategy_order if isinstance(item, str)]
+        schema_rules = rule.get("schema_rules")
+        if isinstance(schema_rules, dict):
+            plan.schema_rules = schema_rules
+        else:
+            schema_alt = rule.get("schema")
+            if isinstance(schema_alt, dict):
+                plan.schema_rules = schema_alt
+        llm_settings = rule.get("llm_settings")
+        if isinstance(llm_settings, dict):
+            plan.llm_settings = llm_settings
+        else:
+            llm_alt = rule.get("llm")
+            if isinstance(llm_alt, dict):
+                plan.llm_settings = llm_alt
         return plan
 
 

@@ -17,6 +17,7 @@ Security
 - Rate limits applied to generation endpoints
 """
 
+import os
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, UploadFile, File, Form
 from fastapi.encoders import jsonable_encoder
@@ -385,9 +386,21 @@ async def list_test_cases(
 
     except DatabaseError as e:
         logger.error(f"Database error listing test cases: {e}")
+        detail = "Failed to list test cases"
+        if os.getenv("TEST_MODE", "").lower() == "true":
+            detail = f"{detail}: {e}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list test cases"
+            detail=detail,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Unexpected error listing test cases: {}", e)
+        detail = "Failed to list test cases"
+        if os.getenv("TEST_MODE", "").lower() == "true":
+            detail = f"{detail}: {e}"
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=detail,
         )
 
 @router.get("/get/{test_case_id}", response_model=StandardResponse, openapi_extra={

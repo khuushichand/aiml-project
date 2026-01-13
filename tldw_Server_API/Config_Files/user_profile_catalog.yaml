@@ -1,0 +1,293 @@
+version: 1.0.0
+updated_at: 2025-02-01T00:00:00Z
+entries:
+  - key: identity.email
+    label: Email
+    description: Primary account email address.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: internal
+    ui: text
+
+  - key: preferences.ui.theme
+    label: Theme
+    description: Preferred UI theme.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: select
+
+  - key: preferences.ui.timezone
+    label: Timezone
+    description: Preferred time zone identifier.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: select
+
+  - key: preferences.ui.locale
+    label: Locale
+    description: Preferred locale for formatting and language.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: select
+
+  - key: preferences.ui.date_format
+    label: Date Format
+    description: Preferred date format for UI rendering.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: select
+
+  - key: preferences.ui.density
+    label: Density
+    description: Preferred UI density setting.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: select
+
+  - key: preferences.chat.default_model
+    label: Default Chat Model
+    description: Default model for chat completions.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: select
+
+  - key: preferences.chat.temperature
+    label: Chat Temperature
+    description: Default sampling temperature for chat.
+    type: number
+    minimum: 0.0
+    maximum: 2.0
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: number
+
+  - key: preferences.chat.max_output_tokens
+    label: Chat Max Output Tokens
+    description: Default maximum output tokens for chat.
+    type: integer
+    minimum: 1
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: number
+
+  - key: preferences.chat.system_prompt
+    label: Chat System Prompt
+    description: Default system prompt used for chat.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: internal
+    ui: text
+
+  - key: preferences.rag.default_top_k
+    label: RAG Default Top K
+    description: Default number of results to retrieve for RAG.
+    type: integer
+    minimum: 1
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: number
+
+  - key: preferences.rag.rerank_enabled
+    label: RAG Rerank Enabled
+    description: Enable reranking of RAG results.
+    type: boolean
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: toggle
+
+  - key: preferences.media.default_chunking_template_id
+    label: Default Chunking Template
+    description: Preferred chunking template for media ingestion.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: select
+
+  - key: preferences.audio.transcription_language
+    label: Transcription Language
+    description: Preferred language for transcription.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: select
+
+  - key: preferences.audio.diarization_enabled
+    label: Diarization Enabled
+    description: Enable speaker diarization for transcription.
+    type: boolean
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: toggle
+
+  - key: preferences.audio.tts_voice
+    label: TTS Voice
+    description: Preferred text-to-speech voice.
+    type: string
+    default: null
+    editable_by: [user]
+    sensitivity: public
+    ui: select
+
+  - key: memberships.orgs.role
+    label: Organization Role
+    description: Role for the user's organization membership.
+    type: string
+    default: null
+    editable_by: [org_admin, platform_admin]
+    sensitivity: internal
+    ui: select
+
+  - key: memberships.teams.role
+    label: Team Role
+    description: Role for the user's team membership.
+    type: string
+    default: null
+    editable_by: [team_admin, org_admin, platform_admin]
+    sensitivity: internal
+    ui: select
+
+  - key: memberships.teams.member
+    label: Team Membership
+    description: Add or remove team membership.
+    type: json
+    default: null
+    editable_by: [team_admin, org_admin, platform_admin]
+    sensitivity: internal
+    ui: json
+
+  - key: limits.storage_quota_mb
+    label: Storage Quota (MB)
+    description: Storage quota for the user in MB.
+    type: integer
+    minimum: 0
+    default: null
+    editable_by: [org_admin, platform_admin]
+    sensitivity: internal
+    ui: number
+
+  - key: limits.audio_daily_minutes
+    label: Audio Daily Minutes
+    description: Daily audio minutes quota.
+    type: integer
+    minimum: 0
+    default: null
+    editable_by: [org_admin, platform_admin]
+    sensitivity: internal
+    ui: number
+
+  - key: limits.audio_concurrent_jobs
+    label: Audio Concurrent Jobs
+    description: Maximum concurrent audio jobs.
+    type: integer
+    minimum: 0
+    default: null
+    editable_by: [org_admin, platform_admin]
+    sensitivity: internal
+    ui: number
+
+  - key: limits.evaluations_per_minute
+    label: Evaluations Per Minute
+    description: Maximum evaluations per minute.
+    type: integer
+    minimum: 0
+    default: null
+    editable_by: [org_admin, platform_admin]
+    sensitivity: internal
+    ui: number
+
+  - key: limits.evaluations_per_day
+    label: Evaluations Per Day
+    description: Maximum evaluations per day.
+    type: integer
+    minimum: 0
+    default: null
+    editable_by: [org_admin, platform_admin]
+    sensitivity: internal
+    ui: number
+
+  - key: limits.prompt_studio_max_concurrent_jobs
+    label: Prompt Studio Concurrent Jobs
+    description: Maximum concurrent Prompt Studio jobs per user.
+    type: integer
+    minimum: 0
+    default: null
+    editable_by: [org_admin, platform_admin]
+    sensitivity: internal
+    ui: number
+
+  - key: limits.prompt_studio_max_queued_jobs
+    label: Prompt Studio Max Queued Jobs
+    description: Maximum queued Prompt Studio jobs per user.
+    type: integer
+    minimum: 0
+    default: null
+    editable_by: [org_admin, platform_admin]
+    sensitivity: internal
+    ui: number
+
+  - key: limits.prompt_studio_submits_per_min
+    label: Prompt Studio Submits Per Minute
+    description: Maximum Prompt Studio job submissions per minute per user.
+    type: integer
+    minimum: 0
+    default: null
+    editable_by: [org_admin, platform_admin]
+    sensitivity: internal
+    ui: number
+
+  - key: identity.role
+    label: Role
+    description: Global role assignment for the user.
+    type: string
+    default: null
+    editable_by: [platform_admin]
+    sensitivity: internal
+    ui: select
+
+  - key: identity.is_active
+    label: Active
+    description: Whether the account is active.
+    type: boolean
+    default: null
+    editable_by: [platform_admin]
+    sensitivity: internal
+    ui: toggle
+
+  - key: identity.is_verified
+    label: Verified
+    description: Whether the account is verified.
+    type: boolean
+    default: null
+    editable_by: [platform_admin]
+    sensitivity: internal
+    ui: toggle
+
+  - key: identity.is_locked
+    label: Locked
+    description: Whether the account is locked.
+    type: boolean
+    default: null
+    editable_by: [platform_admin]
+    sensitivity: internal
+    ui: toggle

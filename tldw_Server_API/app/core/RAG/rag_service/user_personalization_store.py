@@ -28,14 +28,19 @@ class Prior:
     corpus: Optional[str] = None
 
 
+_MAX_EVENT_LOG = 200
+_MAX_LIST_ITEMS = 50
+
+
 def _empty_store() -> Dict[str, Any]:
-    return {"priors": {}, "events": {}, "pairs": {}}
+    return {"priors": {}, "events": {}, "pairs": {}, "event_log": []}
 
 
 class UserPersonalizationStore:
     def __init__(self, user_id: Optional[str]) -> None:
-        self.user_id = user_id
         self.path = DatabasePaths.get_user_rag_personalization_path(user_id)
+        # Use the sanitized directory name as the canonical user id for storage/logging.
+        self.user_id = self.path.parent.name
         self._data: Dict[str, Any] = {}
         self._load()
 
@@ -53,6 +58,7 @@ class UserPersonalizationStore:
             self._data.setdefault("priors", {})
             self._data.setdefault("events", {})
             self._data.setdefault("pairs", {})
+            self._data.setdefault("event_log", [])
         except Exception as e:
             logger.warning(f"Failed loading personalization data for user {self.user_id}: {e}")
             self._data = _empty_store()
@@ -71,6 +77,13 @@ class UserPersonalizationStore:
         doc_id: Optional[str],
         corpus: Optional[str] = None,
         impression: Optional[List[str]] = None,
+        chunk_ids: Optional[List[str]] = None,
+        rank: Optional[int] = None,
+        session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
+        query: Optional[str] = None,
     ) -> None:
         now = time.time()
         # Count events
@@ -93,6 +106,33 @@ class UserPersonalizationStore:
                     break  # only compare with items above in the list
                 key = f"{doc_id}|{other}"
                 pairs[key] = int(pairs.get(key, 0)) + 1
+
+        impression_list = list(impression or [])
+        if len(impression_list) > _MAX_LIST_ITEMS:
+            impression_list = impression_list[:_MAX_LIST_ITEMS]
+        chunk_list = list(chunk_ids or [])
+        if len(chunk_list) > _MAX_LIST_ITEMS:
+            chunk_list = chunk_list[:_MAX_LIST_ITEMS]
+
+        event_log = self._data.setdefault("event_log", [])
+        event_log.append(
+            {
+                "ts": now,
+                "event_type": event_type,
+                "doc_id": doc_id,
+                "chunk_ids": chunk_list,
+                "rank": rank,
+                "dwell_ms": dwell_ms,
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "corpus": corpus,
+                "query": query,
+                "impression_list": impression_list,
+            }
+        )
+        if len(event_log) > _MAX_EVENT_LOG:
+            self._data["event_log"] = event_log[-_MAX_EVENT_LOG:]
         self._save()
 
     def get_prior(self, doc_id: str) -> float:

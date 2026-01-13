@@ -172,6 +172,32 @@ def test_db_single_user_creates_sqlite_files():
         assert (Path(tmp_dir) / "Databases" / "evaluations.db").exists()
 
 
+def test_db_dry_run_skips_writes():
+    with runner.isolated_filesystem() as tmp_dir:
+        base_dir = Path(tmp_dir) / "user_dbs"
+        auth_db = Path(tmp_dir) / "auth_users.db"
+        db_url = f"sqlite:///{auth_db.as_posix()}"
+        result = runner.invoke(
+            app,
+            ["db", "--json", "--dry-run"],
+            env={
+                "AUTH_MODE": "single_user",
+                "DATABASE_URL": db_url,
+                "USER_DB_BASE_DIR": str(base_dir),
+            },
+        )
+        assert result.exit_code == 0, result.output
+        payload = assert_wizard_json(result.output, command="db", status="ok")
+        assert payload.get("dry_run") is True
+        actions = payload.get("actions") or []
+        assert_action_field(actions, "authnz_db", "status", "would_create")
+        sqlite_action = next(action["sqlite_files"] for action in actions if "sqlite_files" in action)
+        assert all(item["status"] == "would_create" for item in sqlite_action)
+        assert not auth_db.exists()
+        assert not base_dir.exists()
+        assert not (Path(tmp_dir) / "Databases" / "evaluations.db").exists()
+
+
 def test_db_multi_user_invalid_database_url_errors():
     with runner.isolated_filesystem():
         result = runner.invoke(
