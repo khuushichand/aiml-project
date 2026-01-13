@@ -35,6 +35,9 @@ class GraphNode(BaseModel):
     type: Literal["note", "tag", "source"] = Field(..., description="Node entity type")
     label: str = Field(..., description="Human-readable label for rendering")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp (where applicable)")
+    deleted: Optional[bool] = Field(
+        None, description="Soft-deleted status (applies to notes; clients should dim/mark)"
+    )
     degree: Optional[int] = Field(None, ge=0, description="Degree in the returned subgraph")
     tag_count: Optional[int] = Field(None, ge=0, description="Number of tags on a note (if computed)")
     primary_source_id: Optional[str] = Field(

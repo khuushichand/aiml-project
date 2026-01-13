@@ -65,8 +65,11 @@ Admins need a controlled, auditable way to invite new users. The system already 
   - registration auto-assigns org membership and org role; no org selection UI.
   - if the user already exists, use `/api/v1/orgs/invites/accept` to add membership without re-registering.
 - Domain allowlist behavior:
-  - if a code specifies `allowed_email_domain`, only emails in that domain may redeem it.
-  - applies to registration codes and org invites.
+  - `allowed_email_domain` is a single domain string compared case-insensitively with exact-match only.
+    - No subdomains, no wildcards, no multiple domains per code.
+  - Creation enforces basic domain format only; full validation happens at redemption time.
+  - If a code specifies `allowed_email_domain`, only emails in that exact domain may redeem it.
+  - Applies to registration codes and org invites.
 
 ### Permissions and Scoping
 - Admin registration codes and org invites are separate systems with explicit overlap:
@@ -124,6 +127,7 @@ POST /api/v1/invites/redeem
 ### Invite Preview + Acceptance (Existing User)
 - GET `/api/v1/invites/preview?code=...`
   - Response: `{ org_name, team_name, role_to_grant, is_valid, status, expires_at, allowed_email_domain }`
+  - Privacy: `allowed_email_domain` is intentionally returned in the unauthenticated preview response so invitees can confirm domain requirements.
 - POST `/api/v1/invites/redeem`
   - Body: `{ code }`
   - Requires authenticated user; adds org membership and role defined by the invite.
@@ -158,6 +162,30 @@ Org invites (separate system) should store:
 - Revoke action is destructive and requires confirmation.
 - List defaults to active codes; expired/inactive are dimmed if shown.
 - Org-scoped registration codes display the org name and role in the list and detail view.
+
+## Configuration
+Feature flags referenced by this PRD:
+- `enable_org_scoped_registration_codes` (default: false)
+  - Toggles admin registration codes with org fields (`org_id`, `org_role`, `team_id`) and enables `/api/v1/orgs/invites/accept` to consume those codes for existing users.
+  - Does not control org invites; org invite endpoints (`/api/v1/orgs/{org_id}/invites`, `/api/v1/invites/preview`, `/api/v1/invites/redeem`) remain available based on RBAC alone.
+  - Security impact: allows admin codes to auto-assign org/team membership. Keep disabled unless admins explicitly need org-scoped admin codes; ensure audit logs capture org fields and redemption actions.
+- `org_invite_allow_missing_email` (default: false)
+  - Controls org invite redemption when `allowed_email_domain` is set but the user email is missing.
+  - When false, redemption is blocked if a domain-restricted invite cannot validate an email address.
+  - When true, redemption may proceed without an email only for org invites (not admin registration codes), effectively bypassing the domain check.
+  - Security impact: can weaken domain-based access control. Mitigations: keep disabled by default, require email capture before redeem, and monitor audit logs for missing-email redemptions.
+
+Feature matrix (flags -> behavior):
+
+| enable_org_scoped_registration_codes | org_invite_allow_missing_email | Admin registration codes org fields | Org invites redeem with missing email + allowed_email_domain |
+| --- | --- | --- | --- |
+| false | false | blocked | blocked |
+| false | true | blocked | allowed (org invites only) |
+| true | false | allowed | blocked |
+| true | true | allowed | allowed (org invites only) |
+
+Recommended safe defaults: both flags false.
+Telemetry/logging: emit audit logs for invite/code create/revoke/redeem; log domain allowlist failures and missing-email bypasses with request_id and code id for troubleshooting.
 
 ## Audit and Observability
 - Create/revoke actions must produce audit log entries.
