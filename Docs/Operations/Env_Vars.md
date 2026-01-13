@@ -48,6 +48,9 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `RAG_LLM_RERANK_MAX_DOCS`: Cap on number of documents scored by LLM reranker per query. Default `20`.
  - `RAG_TRANSFORMERS_RERANKER_MODEL`: Cross-encoder model id for fast reranking (stage 1). Default `BAAI/bge-reranker-v2-m3`.
  - `RAG_REWRITE_CACHE_PATH`: Optional override for query→rewrite cache JSONL. When unset, cache is per-user under `<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl` (deprecated alias: `USER_DB_BASE`).
+- `RAG_PRECOMPUTED_SPANS_MAX_VECTORS_PER_CORPUS`: Cap on stored span vectors per corpus (default `200000`). Config key: `[RAG] precomputed_spans_max_vectors_per_corpus`.
+- `RAG_PRECOMPUTED_SPANS_MAX_MB_PER_CORPUS`: Cap on precomputed span storage per corpus in MB (default `512`). Config key: `[RAG] precomputed_spans_max_mb_per_corpus`.
+- `RAG_PRECOMPUTED_SPANS_RETENTION_DAYS`: Retention window for precomputed spans before GC (default `30`). Config key: `[RAG] precomputed_spans_retention_days`.
 
 ### RAG Guardrails (Production Defaults)
 - `RAG_GUARDRAILS_STRICT`: When `true`, enable strict guardrails in the unified pipeline (enables numeric fidelity and hard citations by default). Useful for non-prod environments where you still want strict behavior.
@@ -112,12 +115,35 @@ Notes:
 - `RUN_MCP_TESTS`: Enable MCP unified tests (defaults to skipped). Set to `1|true|yes` to run.
 - `RUN_MOCK_OPENAI`: Enable Mock OpenAI server tests (defaults to skipped). Set to `1|true|yes` to run.
 
+## User Profile
+- `PROFILE_SLA_MS`: Base SLA threshold in milliseconds for profile reads (default `300`). Used when `PROFILE_SLA_MS_SELF` / `PROFILE_SLA_MS_ADMIN` are unset.
+- `PROFILE_SLA_MS_SELF`: SLA threshold in milliseconds for `/users/me/profile` (default inherits `PROFILE_SLA_MS`).
+- `PROFILE_SLA_MS_ADMIN`: SLA threshold in milliseconds for `/admin/users/{id}/profile` (default inherits `PROFILE_SLA_MS`).
+- `PROFILE_BATCH_BASE_MS`: Base SLA threshold in milliseconds for `/admin/users/profile` (default `800`).
+- `PROFILE_BATCH_BASE_SIZE`: Baseline page size for batch SLA scaling (default `50`). Threshold scales linearly with `page_size`.
+- `PROFILE_BATCH_TIMEOUT_SECONDS`: Soft timeout threshold for batch profile reads (default `10`). Breaches emit metrics/log warnings.
+
 ## Jobs Backend / Worker
 - `JOBS_DB_URL`: PostgreSQL DSN for the core Jobs backend (e.g., `postgresql://user:pass@host:5432/jobs`). When unset, SQLite is used (Databases/jobs.db).
 - `JOBS_LEASE_SECONDS`: Default lease granted when acquiring a job (default `60`).
 - `JOBS_LEASE_RENEW_SECONDS`: Renewal cadence while a worker processes a job (default `30`).
 - `JOBS_LEASE_RENEW_JITTER_SECONDS`: Jitter (seconds) applied to renewals to avoid herd behavior (default `5`).
 - `JOBS_LEASE_MAX_SECONDS`: Cap for acquire/renew lease seconds (default `3600`).
+- `EVALUATIONS_ABTEST_JOBS_WORKER_ENABLED`: Enable the in-process Embeddings A/B Jobs worker (`true|false`, default `false`). Alias: `EVALS_ABTEST_JOBS_WORKER_ENABLED`.
+- `EVALUATIONS_JOBS_QUEUE`: Queue name for evaluations jobs (default `default`). Alias: `EVALS_JOBS_QUEUE`.
+
+## Embeddings Jobs
+- `EMBEDDINGS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).
+- `EMBEDDINGS_JOBS_QUEUE`: Queue for embeddings stage jobs (default `default`).
+- `EMBEDDINGS_ROOT_JOBS_QUEUE`: Queue for embeddings root jobs (default `low` when stage queue is not `low`).
+- `EMBEDDINGS_JOBS_WORKER_ID`: Worker identifier for embeddings jobs (default `embeddings-jobs-<pid>`).
+- `EMBEDDINGS_JOBS_LEASE_SECONDS`: Lease duration for embeddings stage jobs (default `60`).
+- `EMBEDDINGS_JOBS_RENEW_JITTER_SECONDS`: Lease renew jitter in seconds (default `5`).
+- `EMBEDDINGS_JOBS_RENEW_THRESHOLD_SECONDS`: Renew threshold in seconds (default `10`).
+- `EMBEDDINGS_JOBS_BACKOFF_BASE_SECONDS`: Base retry backoff in seconds (default `2`).
+- `EMBEDDINGS_JOBS_BACKOFF_MAX_SECONDS`: Max retry backoff in seconds (default `30`).
+- `EMBEDDINGS_JOBS_RETRY_BACKOFF_SECONDS`: Backoff for retryable errors (default `10`).
+- `EMBEDDINGS_JOBS_EXPOSE_PROGRESS`: Include `progress_percent`/`total_chunks` in public jobs responses (`true|false`, default `false`).
 
 ## Chatbooks
 - `CHATBOOKS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).
@@ -233,11 +259,24 @@ Runtime overrides (non-persistent) are available via API:
 - `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES`: Comma-separated media types that may legitimately yield zero embeddings (e.g., `audio,video`). When set, media-embeddings jobs for these types complete successfully even if no vectors are stored.
 
 ### Backpressure & Quotas
-- `EMB_BACKPRESSURE_MAX_DEPTH`: Maximum depth across core embeddings queues (`embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`) before ingest/embeddings endpoints return HTTP 429 with `Retry-After`. Default: `25000`.
+- `EMB_BACKPRESSURE_MAX_DEPTH`: Maximum depth across core embeddings queues (`embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`, `embeddings:content`) before ingest/embeddings endpoints return HTTP 429 with `Retry-After`. Default: `25000`.
 - `EMB_BACKPRESSURE_MAX_AGE_SECONDS`: Maximum age (seconds) of the oldest message across core embeddings queues before HTTP 429. Default: `300`.
 - `EMBEDDINGS_TENANT_RPS`: Per-tenant requests per second limit for embeddings endpoints (multi-tenant mode only). `0` disables. Default: `0`.
 - `INGEST_TENANT_RPS`: Per-tenant requests per second limit for ingestion endpoints (multi-tenant mode). Falls back to `EMBEDDINGS_TENANT_RPS` if unset. `0` disables. Default: `0`.
-- `EMBEDDINGS_REDIS_URL`: Deprecated. Legacy Redis embeddings queues are removed; embeddings jobs use core Jobs storage.
+- `EMBEDDINGS_REDIS_URL`: Redis URL for embeddings Redis Streams (falls back to `REDIS_URL`).
+
+### Redis Streams Worker (Embeddings)
+- `EMBEDDINGS_REDIS_STREAM_{STAGE}`: Override stream names for `CHUNKING`, `EMBEDDING`, `STORAGE`, `CONTENT`.
+- `EMBEDDINGS_REDIS_GROUP_{STAGE}`: Override consumer group names for `CHUNKING`, `EMBEDDING`, `STORAGE`, `CONTENT`.
+- `EMBEDDINGS_REDIS_WORKERS_{STAGE}`: Worker count per stage when running `redis_worker` (default `1`).
+- `EMBEDDINGS_REDIS_POLL_INTERVAL_MS`: XREADGROUP block interval in milliseconds (default `1000`).
+- `EMBEDDINGS_REDIS_BATCH_SIZE`: XREADGROUP batch size (default `1`).
+- `EMBEDDINGS_REDIS_MAX_RETRIES`: Retry count per message before DLQ (default `2`).
+- `EMBEDDINGS_REDIS_RETRY_BACKOFF_BASE`: Base backoff seconds for retries (default `2`).
+- `EMBEDDINGS_REDIS_RETRY_BACKOFF_MAX`: Max backoff seconds for retries (default `30`).
+- `EMBEDDINGS_REDIS_IDEMPOTENCY_TTL`: Enqueue idempotency TTL seconds (default `86400`).
+- `EMBEDDINGS_REDIS_DLQ_PREFIX`: DLQ stream prefix (default `embeddings:dlq`).
+- `EMBEDDINGS_REDIS_ALLOW_STUB`: Allow in-memory stub Redis client for local runs/tests (`true|false`, default `false`).
 
 ### Priority Queues
 - `EMBEDDINGS_PRIORITY_ENABLED`: Enable per-stage priority sub-queues with weighted fair consumption (`true|false`). Default: `false`.
@@ -299,8 +338,9 @@ Quick start (local dev):
   - `ENABLE_METRICS`: Enable metrics pipeline (`true|false`, default `true`).
   - `ENABLE_TRACING`: Enable tracing pipeline (`true|false`, default `true`).
   - `ENABLE_OTEL_LOGGING`: Enable OTEL logging integration (`true|false`, default `false`).
+  - `ENABLE_OTEL_CONSOLE_METRICS_EXPORTER`: Add the console metrics exporter (`true|false`, default `false`).
   - `METRICS_RING_BUFFER_MAXLEN`: Rolling metrics sample window size (default `10000`). Set `0` or a negative value to disable the limit.
-  - `OTEL_METRICS_EXPORTER`: Comma list of metrics exporters (`prometheus,console` by default).
+  - `OTEL_METRICS_EXPORTER`: Comma list of metrics exporters (`prometheus` by default).
   - `OTEL_TRACES_EXPORTER`: Comma list of traces exporters (`console` by default).
 
 - Prometheus (pull/endpoint exporter)
@@ -328,8 +368,9 @@ Notes
 | `ENABLE_METRICS`                | `true`              | Enable metrics pipeline |
 | `ENABLE_TRACING`                | `true`              | Enable tracing pipeline |
 | `ENABLE_OTEL_LOGGING`           | `false`             | Enable OTEL logging integration |
+| `ENABLE_OTEL_CONSOLE_METRICS_EXPORTER` | `false`      | Add console metrics exporter |
 | `METRICS_RING_BUFFER_MAXLEN`    | `10000`             | Rolling metrics sample window size |
-| `OTEL_METRICS_EXPORTER`         | `prometheus,console`| Comma-separated exporters |
+| `OTEL_METRICS_EXPORTER`         | `prometheus`        | Comma-separated exporters |
 | `OTEL_TRACES_EXPORTER`          | `console`           | Comma-separated exporters |
 | `PROMETHEUS_HOST`               | `0.0.0.0`           | Bind host for Prometheus exporter |
 | `PROMETHEUS_PORT`               | `9090`              | Bind port for Prometheus exporter |

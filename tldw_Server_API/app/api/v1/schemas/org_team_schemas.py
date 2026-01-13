@@ -190,6 +190,11 @@ class OrgInviteCreateRequest(BaseModel):
     max_uses: int = Field(1, ge=1, le=1000)
     expiry_days: int = Field(7, ge=1, le=365)
     description: Optional[str] = Field(None, max_length=500)
+    allowed_email_domain: Optional[str] = Field(
+        None,
+        pattern=r"^@?[A-Za-z0-9.-]+$",
+        description="Restrict invite redemption to this email domain",
+    )
 
 
 class OrgInviteResponse(BaseModel):
@@ -208,6 +213,7 @@ class OrgInviteResponse(BaseModel):
     created_at: Optional[str] = None
     created_by: Optional[int] = None
     description: Optional[str] = None
+    allowed_email_domain: Optional[str] = None
 
 
 class OrgInviteListResponse(BaseModel):
@@ -226,6 +232,7 @@ class OrgInvitePreviewResponse(BaseModel):
     status: str
     message: Optional[str] = None
     expires_at: Optional[str] = None
+    allowed_email_domain: Optional[str] = None
 
 
 class OrgInviteRedeemRequest(BaseModel):

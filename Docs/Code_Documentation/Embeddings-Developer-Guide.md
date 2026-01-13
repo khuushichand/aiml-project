@@ -24,10 +24,10 @@ flowchart LR
     Client -->|POST /api/v1/media/{id}/embeddings| JobEndpoint[media_embeddings.py]
     SyncEndpoint --> Pipeline[Embeddings pipeline (chunking + Embeddings_Create + storage)]
     JobEndpoint --> JobsAdapter[EmbeddingsJobsAdapter]
-    JobsAdapter --> JobManager[Core Jobs JobManager]
-    JobManager --> WorkerSDK[WorkerSDK]
-    WorkerSDK --> JobsWorker[Embeddings jobs_worker]
-    JobsWorker --> Pipeline
+    JobsAdapter --> JobManager[Core Jobs JobManager (root status/billing)]
+    JobsAdapter --> RedisStreams[Redis Streams queues]
+    RedisStreams --> RedisWorker[Embeddings redis_worker]
+    RedisWorker --> Pipeline
     Pipeline --> Stores[ChromaDB + media DB updates]
 ```
 
@@ -44,7 +44,8 @@ tldw_Server_API/
 │   └── core/
 │       └── Embeddings/
 │           ├── jobs_adapter.py                  # Core Jobs adapter for embeddings jobs
-│           ├── services/jobs_worker.py          # Core Jobs worker for embeddings processing
+│           ├── services/redis_worker.py         # Redis Streams worker for media + content stages
+│           ├── services/jobs_worker.py          # Legacy Jobs worker (compat only)
 │           └── Embeddings_Server/
 │               └── Embeddings_Create.py         # Core embedding logic (OpenAI/HF/ONNX/local)
 │

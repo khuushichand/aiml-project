@@ -60,6 +60,7 @@ def _cohere_request(
     app_config: Optional[Dict[str, Any]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
+    base_url: Optional[str] = None,
 ):
     logging.debug(f"Cohere Chat: Request process starting for model '{model}' (Streaming: {streaming})")
     loaded_config_data = app_config or load_and_log_configs()
@@ -95,7 +96,7 @@ def _cohere_request(
         cohere_config.get("num_generations"), int, None
     )
 
-    api_base_url = cohere_config.get("api_base_url", "https://api.cohere.ai").rstrip("/")
+    api_base_url = (base_url or cohere_config.get("api_base_url", "https://api.cohere.ai")).rstrip("/")
     COHERE_CHAT_URL = f"{api_base_url}/v1/chat"
 
     timeout_seconds = _safe_cast(cohere_config.get("api_timeout"), float, 180.0)
@@ -252,7 +253,10 @@ def _cohere_request(
                             if event_type == "text-generation":
                                 text_chunk = cohere_event.get("text")
                                 if text_chunk:
-                                    yield openai_delta_chunk(str(text_chunk))
+                                    yield sse_data({
+                                        "choices": [{"delta": {"content": str(text_chunk)}}],
+                                        "provider_response": cohere_event,
+                                    })
                             elif event_type == "stream-end":
                                 stream_properly_closed = True
                                 yield sse_done()
@@ -343,6 +347,7 @@ def _cohere_request(
             "created": created_timestamp,
             "model": final_model,
             "choices": choices_payload,
+            "provider_response": response_data,
         }
         if usage_data:
             openai_compatible_response["usage"] = usage_data
@@ -421,6 +426,7 @@ class CohereAdapter(ChatProvider):
             "app_config": request.get("app_config"),
             "extra_headers": request.get("extra_headers"),
             "extra_body": request.get("extra_body"),
+            "base_url": request.get("base_url"),
         }
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:

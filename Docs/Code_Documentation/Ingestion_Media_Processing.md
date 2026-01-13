@@ -160,7 +160,7 @@ Chunking integration
 
 - Evented pipeline:
   - `import_mediawiki_dump(file_path, wiki_name, namespaces=None, skip_redirects=False, chunk_options_override=None, progress_callback=None, store_to_db=True, store_to_vector_db=True, api_name_vector_db=None, api_key_vector_db=None) -> Iterator[Dict[str, Any]]`.
-- Emits `progress_total`, `progress_item`, `item_result`, and final `summary` events. When `store_to_db=True`, it persists via a `MediaDatabase` instance (e.g., `db = create_media_database(...); db.add_media_with_keywords(...)`); vector store saving uses ChromaDBManager with configured embeddings.
+- Emits `progress_total`, `progress_item`, `item_result`, and final `summary` events. When `store_to_db=True`, it persists via a `MediaDatabase` instance (e.g., `db = create_media_database(...); db.add_media_with_keywords(...)`); vector store saving uses ChromaDBManager with embeddings configured from the MediaWiki embeddings settings, with `api_name_vector_db`/`api_key_vector_db` overriding the provider/model or API key as needed.
 - Safety: filename/path validation, checkpointing (atomic save/cleanup), chunking (`optimized_chunking`).
 
 ## Claims Extraction: `Claims/`
@@ -395,7 +395,7 @@ for ev in events:
 ## Notes & Limitations
 
 - HTML/XML sanitization in `Upload_Sink.py` are placeholders (return original content with a warning).
-- MediaWiki vector store saving is implemented via ChromaDBManager; it requires embeddings configuration and will log warnings when embeddings are unavailable.
+- MediaWiki vector store saving is implemented via ChromaDBManager; it requires embeddings configuration, and when embeddings are unavailable vector store saving is skipped with a warning while the rest of ingestion proceeds.
 - `XML_Ingestion_Lib.py` follows an older pattern that writes to DB directly; newer endpoints prefer DB-agnostic processors.
 - Some modules rely on optional dependencies; functions degrade gracefully with warnings when a dependency is absent.
 - Ingestion-time claim extraction is available and wired in the embeddings pipeline (see `ChromaDB_Library.py`) behind `ENABLE_INGESTION_CLAIMS`; it is not run for every add-media path by default.

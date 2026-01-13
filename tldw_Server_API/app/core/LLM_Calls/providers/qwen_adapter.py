@@ -101,8 +101,11 @@ class QwenAdapter(ChatProvider):
             merged["top_logprobs"] = cfg.get("top_logprobs")
         return merged
 
-    def _base_url(self, cfg: Optional[Dict[str, Any]]) -> str:
+    def _base_url(self, cfg: Optional[Dict[str, Any]], request: Optional[Dict[str, Any]] = None) -> str:
         # DashScope OpenAI-compatible endpoint
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip().rstrip("/")
         default_base = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
         api_base = None
         if cfg:
@@ -175,7 +178,7 @@ class QwenAdapter(ChatProvider):
             from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
             raise ChatConfigurationError(provider=self.name, message="Qwen API Key required.")
         cfg = request.get("app_config") or {}
-        url = f"{self._base_url(cfg)}/chat/completions"
+        url = f"{self._base_url(cfg, request)}/chat/completions"
         headers = self._headers(api_key)
         payload = self._build_payload(request)
         payload["stream"] = False
@@ -198,7 +201,7 @@ class QwenAdapter(ChatProvider):
             from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
             raise ChatConfigurationError(provider=self.name, message="Qwen API Key required.")
         cfg = request.get("app_config") or {}
-        url = f"{self._base_url(cfg)}/chat/completions"
+        url = f"{self._base_url(cfg, request)}/chat/completions"
         headers = self._headers(api_key)
         payload = self._build_payload(request)
         payload["stream"] = True

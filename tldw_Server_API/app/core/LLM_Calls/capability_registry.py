@@ -14,6 +14,49 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
 
 
 SCHEMA_VERSION = 1
+_VALIDATION_METRICS_REGISTERED = False
+
+
+def _ensure_validation_metrics() -> None:
+    global _VALIDATION_METRICS_REGISTERED
+    if _VALIDATION_METRICS_REGISTERED:
+        return
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import (
+            MetricDefinition,
+            MetricType,
+            get_metrics_registry,
+        )
+    except Exception:
+        return
+    try:
+        registry = get_metrics_registry()
+        metric_name = "llm_request_validation_rejections_total"
+        if metric_name not in registry.metrics:
+            registry.register_metric(
+                MetricDefinition(
+                    name=metric_name,
+                    type=MetricType.COUNTER,
+                    description="LLM request validation rejections",
+                    labels=["provider"],
+                )
+            )
+        _VALIDATION_METRICS_REGISTERED = True
+    except Exception:
+        return
+
+
+def _record_validation_rejection(provider_key: str) -> None:
+    try:
+        _ensure_validation_metrics()
+        from tldw_Server_API.app.core.Metrics import increment_counter
+
+        increment_counter(
+            "llm_request_validation_rejections_total",
+            labels={"provider": provider_key or "unknown"},
+        )
+    except Exception:
+        return
 
 # Base OpenAI-compatible request fields supported across providers.
 BASE_FIELDS: Set[str] = {
@@ -39,6 +82,7 @@ BASE_FIELDS: Set[str] = {
     "system_message",
     # Internal/common adapter fields
     "api_key",
+    "base_url",
     "app_config",
     "custom_prompt_arg",
     "extra_headers",
@@ -72,18 +116,21 @@ ALIASES: Dict[str, Dict[str, str]] = {
     "*": {
         "temp": "temperature",
         "streaming": "stream",
+        "maxp": "top_p",
         "topp": "top_p",
         "topk": "top_k",
         "minp": "min_p",
-        "maxp": "top_p",
         "system_prompt": "system_message",
         "user_identifier": "user",
+        "api_base_url": "base_url",
+        "custom_prompt": "custom_prompt_arg",
+        "custom_prompt_input": "custom_prompt_arg",
     },
     "bedrock": {"maxp": "top_p", "topp": "top_p"},
     "openai": {"maxp": "top_p"},
     "qwen": {"maxp": "top_p", "topp": "top_p"},
     "openrouter": {"maxp": "top_p", "topp": "top_p", "topk": "top_k", "minp": "min_p"},
-    "mistral": {"topk": "top_k"},
+    "mistral": {"topk": "top_k", "random_seed": "seed"},
     "google": {
         "max_output_tokens": "max_tokens",
         "stop_sequences": "stop",
@@ -92,6 +139,8 @@ ALIASES: Dict[str, Dict[str, str]] = {
     "huggingface": {"max_new_tokens": "max_tokens"},
     "anthropic": {"stop_sequences": "stop"},
     "cohere": {"stop_sequences": "stop"},
+    "llama.cpp": {"n_predict": "max_tokens"},
+    "kobold": {"max_length": "max_tokens", "stop_sequence": "stop", "num_responses": "n"},
 }
 
 # Explicit denylist for unsafe or unsupported keys.
@@ -140,6 +189,7 @@ def get_allowed_fields(provider: str) -> Set[str]:
 
 
 def _raise_nested_error(provider_key: str, field: str, message: str) -> None:
+    _record_validation_rejection(provider_key)
     raise ChatBadRequestError(
         message=f"Invalid {field}: {message}",
         provider=provider_key or None,
@@ -232,6 +282,7 @@ def validate_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, Any
     else:
         blocked_present = sorted(set(filtered.keys()) & blocked)
     if blocked_present:
+        _record_validation_rejection(provider_key)
         raise ChatBadRequestError(
             message=f"Blocked fields for provider '{provider_key}': {', '.join(blocked_present)}",
             provider=provider_key or None,
@@ -239,12 +290,14 @@ def validate_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, Any
     allowed = get_allowed_fields(provider_key)
     unsupported = sorted(set(filtered.keys()) - allowed)
     if unsupported:
+        _record_validation_rejection(provider_key)
         raise ChatBadRequestError(
             message=f"Unsupported fields for provider '{provider_key}': {', '.join(unsupported)}",
             provider=provider_key or None,
         )
     _validate_nested_fields(provider_key, filtered)
     if normalized.get("tool_choice") is not None and not (isinstance(normalized.get("tools"), list) and normalized.get("tools")):
+        _record_validation_rejection(provider_key)
         raise ChatBadRequestError(
             message="tool_choice requires tools",
             provider=provider_key or None,

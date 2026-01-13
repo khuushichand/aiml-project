@@ -128,7 +128,16 @@ def test_sqlite_migration_v9_to_v10_backfills_and_indexes(tmp_path):
 
         # Conversations should have state backfilled and new columns/indexes
         conv_cols = [row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()]
-        assert {"state", "topic_label", "cluster_id", "source", "external_ref"}.issubset(set(conv_cols))
+        assert {
+            "state",
+            "topic_label",
+            "cluster_id",
+            "source",
+            "external_ref",
+            "topic_label_source",
+            "topic_last_tagged_at",
+            "topic_last_tagged_message_id",
+        }.issubset(set(conv_cols))
         state_value = conn.execute("SELECT state FROM conversations WHERE id = 'conv-1'").fetchone()[0]
         assert state_value == "in-progress"
 
@@ -138,6 +147,7 @@ def test_sqlite_migration_v9_to_v10_backfills_and_indexes(tmp_path):
             "idx_conversations_cluster",
             "idx_conversations_last_modified",
             "idx_conversations_topic_label",
+            "idx_conversations_source_external_ref",
         }.issubset(conv_indexes)
 
         # Notes should have backlink columns
@@ -146,3 +156,16 @@ def test_sqlite_migration_v9_to_v10_backfills_and_indexes(tmp_path):
 
         note_indexes = {row[1] for row in conn.execute("PRAGMA index_list('notes')").fetchall()}
         assert {"idx_notes_conversation", "idx_notes_message"}.issubset(note_indexes)
+
+        # Flashcards should have backlink columns
+        flash_cols = [row[1] for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()]
+        assert {"conversation_id", "message_id"}.issubset(set(flash_cols))
+
+        flash_indexes = {row[1] for row in conn.execute("PRAGMA index_list('flashcards')").fetchall()}
+        assert {"idx_flashcards_conversation", "idx_flashcards_message"}.issubset(flash_indexes)
+
+        # Conversation clusters table exists
+        cluster_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'conversation_clusters'"
+        ).fetchone()
+        assert cluster_table is not None

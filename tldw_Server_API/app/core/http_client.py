@@ -83,6 +83,16 @@ def _resolve_httpx():
         return httpx  # type: ignore
 
 
+def _resolve_curl_session():
+    """Return curl_cffi Session class if available, otherwise None."""
+    try:
+        import importlib
+        mod = importlib.import_module("curl_cffi.requests")
+        return getattr(mod, "Session", None)
+    except Exception:
+        return None
+
+
 # --------------------------------------------------------------------------------------
 # Defaults & env config
 # --------------------------------------------------------------------------------------
@@ -292,6 +302,10 @@ class RetryPolicy:
     respect_retry_after: bool = True
     retry_on_unsafe: bool = False
 
+    @property
+    def enabled(self) -> bool:
+        return self.attempts > 1
+
 
 @dataclass
 class SSEEvent:
@@ -385,12 +399,14 @@ def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], bac
     """Return a copy of headers with backend-specific Accept-Encoding tweaks.
 
     - Case-insensitively reads/removes existing Accept-Encoding headers.
-    - For 'httpx' backend, removes any 'zstd' codings (with or without parameters, e.g. 'zstd;q=0.9').
+    - For 'httpx' and 'aiohttp' backends, removes any 'zstd' codings (with or without parameters, e.g. 'zstd;q=0.9').
+    - For 'requests' and 'urllib3' backends, removes 'zstd' and 'br' codings to avoid unsupported decoders.
     - Writes back a single canonical 'Accept-Encoding' header if tokens remain; otherwise removes it.
     - Best-effort: on any parsing error, leaves headers unchanged.
     """
     hdrs: Dict[str, str] = dict(headers or {})
-    if str(backend).lower() != "httpx":
+    backend_norm = str(backend).lower()
+    if backend_norm not in {"httpx", "aiohttp", "requests", "urllib3"}:
         return hdrs
     try:
         # Find all Accept-Encoding header keys regardless of case
@@ -407,14 +423,18 @@ def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], bac
             raw_vals.append(str(v))
         combined = ",".join(raw_vals)
 
-        # Parse tokens, dropping any with coding 'zstd' (case-insensitive), regardless of parameters
+        drop_cod = {"zstd"}
+        if backend_norm in {"requests", "urllib3"}:
+            drop_cod = {"zstd", "br"}
+
+        # Parse tokens, dropping any disallowed codings regardless of parameters
         filtered: list[str] = []
         for part in combined.split(','):
             token = part.strip()
             if not token:
                 continue
             coding = token.split(';', 1)[0].strip().lower()
-            if coding == 'zstd':
+            if coding in drop_cod:
                 continue
             filtered.append(token)
 
@@ -802,6 +822,31 @@ def _rewind_files(files: Any) -> None:
                 file_obj.seek(0)
         except Exception:
             continue
+
+
+def _validate_retry_files_seekable(files: Any, retry: Optional["RetryPolicy"]) -> None:
+    if files is None or retry is None:
+        return
+    if not retry.enabled:
+        return
+    for _, spec in _iter_file_items(files):
+        if isinstance(spec, (tuple, list)) and len(spec) >= 2:
+            file_obj = spec[1]
+        else:
+            file_obj = spec
+        if hasattr(file_obj, "seekable"):
+            try:
+                is_seekable = file_obj.seekable()
+            except Exception as exc:
+                raise ValueError(
+                    "File-like object must be seekable when retries are enabled. "
+                    "Either disable retries or use a seekable stream."
+                ) from exc
+            if is_seekable is False:
+                raise ValueError(
+                    "File-like object must be seekable when retries are enabled. "
+                    "Either disable retries or use a seekable stream."
+                )
 
 
 def _build_aiohttp_form(data: Optional[Any], files: Optional[Any]) -> Optional["aiohttp.FormData"]:
@@ -1208,9 +1253,16 @@ async def _afetch_httpx(
     cert_pinning: Optional[Dict[str, set[str]]] = None,
     verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
 ) -> "httpx.Response":
+    """Async httpx request with retries and egress enforcement.
+
+    Raises ValueError when retries are enabled and a file-like object in `files`
+    is not seekable: "File-like object must be seekable when retries are enabled.
+    Either disable retries or use a seekable stream."
+    """
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
     retry = retry or RetryPolicy()
+    _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -1583,9 +1635,16 @@ async def _afetch_aiohttp(
     cert_pinning: Optional[Dict[str, set[str]]] = None,
     verify: Optional[Any] = None,
 ) -> _AiohttpResponse:
+    """Async aiohttp request with retries and egress enforcement.
+
+    Raises ValueError when retries are enabled and a file-like object in `files`
+    is not seekable: "File-like object must be seekable when retries are enabled.
+    Either disable retries or use a seekable stream."
+    """
     if aiohttp is None:  # pragma: no cover
         raise RuntimeError("aiohttp is not available")
     retry = retry or RetryPolicy()
+    _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -2009,9 +2068,16 @@ def _fetch_httpx_response(
     retry: Optional[RetryPolicy] = None,
     cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> "httpx.Response":
+    """Sync httpx request with retries and egress enforcement.
+
+    Raises ValueError when retries are enabled and a file-like object in `files`
+    is not seekable: "File-like object must be seekable when retries are enabled.
+    Either disable retries or use a seekable stream."
+    """
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
     retry = retry or RetryPolicy()
+    _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -2264,11 +2330,52 @@ def _fetch_httpx_response(
                 pass
 
 
+def _fetch_curl_simple(
+    *,
+    url: str,
+    headers: Dict[str, str],
+    cookies: Optional[Dict[str, str]],
+    timeout: Optional[float],
+    impersonate: Optional[str],
+    proxies: Optional[Dict[str, str]],
+    allow_redirects: bool,
+) -> "HttpResponse":
+    CurlSession = _resolve_curl_session()
+    if CurlSession is None:
+        raise RuntimeError("curl_cffi is not installed")
+    if proxies:
+        _validate_proxies_or_raise(proxies)
+
+    req_kwargs: Dict[str, Any] = {
+        "headers": headers,
+        "cookies": cookies,
+        "allow_redirects": allow_redirects,
+    }
+    if timeout is not None:
+        req_kwargs["timeout"] = timeout
+    if proxies:
+        req_kwargs["proxies"] = proxies
+
+    with CurlSession(impersonate=impersonate) as session:
+        resp = session.get(url, **req_kwargs)
+        return HttpResponse(
+            status=int(getattr(resp, "status_code", 0)),
+            headers=dict(getattr(resp, "headers", {}) or {}),
+            text=str(getattr(resp, "text", "")),
+            url=str(getattr(resp, "url", url)),
+            backend="curl",
+        )
+
+
 def fetch(*args, **kwargs):
     """Dual-mode fetch helper.
 
     - If called with keyword 'method', delegates to the HTTPX response API and
       returns an httpx.Response (backward compatible with existing callers).
+      When retries are enabled and `files` are provided, file-like objects must
+      be seekable; otherwise a ValueError is raised with the message:
+      "File-like object must be seekable when retries are enabled. Either disable
+      retries or use a seekable stream."
     - Otherwise, provides a simplified fetch suitable for Web_Scraping tests:
       accepts `url` (positional), optional `headers`, `backend` (default 'httpx'),
       and returns a mapping with keys: status, headers, text, url, backend.
@@ -2283,6 +2390,7 @@ def fetch(*args, **kwargs):
     backend = str(kwargs.get("backend", "httpx"))
     headers = kwargs.get("headers") or {}
     cookies = kwargs.get("cookies")
+    impersonate = kwargs.get("impersonate")
     follow_redirects_cfg = kwargs.get("follow_redirects", None)
     trust_env = kwargs.get("trust_env", None)
     proxies = kwargs.get("proxies", None)
@@ -2297,11 +2405,15 @@ def fetch(*args, **kwargs):
     # Validate proxies against allowlist even in simple mode
     _validate_proxies_or_raise(proxies)
 
-    if httpx is None:  # pragma: no cover
+    backend_norm = str(backend).lower().strip()
+    if backend_norm == "auto":
+        backend_norm = "curl" if _resolve_curl_session() is not None else "httpx"
+    _hx = _resolve_httpx()
+    if _hx is None and backend_norm != "curl":  # pragma: no cover
         raise RuntimeError("httpx is not available")
 
     # Sanitize Accept-Encoding as per backend expectations
-    req_headers = _sanitize_accept_encoding_for_backend(headers, backend)
+    req_headers = _sanitize_accept_encoding_for_backend(headers, backend_norm)
 
     # Determine redirect behavior, honoring env/Config_Files when caller did not
     # explicitly supply follow_redirects.
@@ -2350,8 +2462,21 @@ def fetch(*args, **kwargs):
     if proxies is not None:
         client_kwargs["proxies"] = proxies
 
+    if backend_norm == "curl":
+        return _fetch_curl_simple(
+            url=url,
+            headers=req_headers,
+            cookies=cookies,
+            timeout=timeout,
+            impersonate=impersonate,
+            proxies=proxies,
+            allow_redirects=follow_redirects,
+        )
+
     # Minimal client lifecycle for simple fetch with explicit redirect handling
-    with httpx.Client(**client_kwargs) as sc:  # type: ignore[call-arg]
+    client_cls = getattr(_hx, "Client", object) if _hx is not None else object
+    sc = _instantiate_client(client_cls, client_kwargs)
+    with sc as sc:
         cur_url = url
         redirects = 0
 
@@ -2394,7 +2519,7 @@ def fetch(*args, **kwargs):
             headers=dict(getattr(r, "headers", {}) or {}),
             text=str(getattr(r, "text", "")),
             url=str(getattr(r, "url", cur_url)),
-            backend=str(backend),
+            backend=str(backend_norm),
         )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set, Tuple
 
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 
@@ -31,6 +31,32 @@ PROVIDER_REQUIRES_KEY: Dict[str, bool] = {
     "custom-openai-api": True,
     "custom-openai-api-2": True,
 }
+
+DEFAULT_BYOK_ALLOWED_FIELDS: Set[str] = {"org_id", "project_id"}
+
+BYOK_CREDENTIAL_FIELDS: Dict[str, Dict[str, Set[str]]] = {
+    "openai": {"allowed": {"org_id", "project_id"}, "required": set()},
+    "openrouter": {"allowed": {"org_id", "project_id"}, "required": set()},
+    "custom-openai-api": {"allowed": {"org_id", "project_id"}, "required": set()},
+    "custom-openai-api-2": {"allowed": {"org_id", "project_id"}, "required": set()},
+}
+
+
+def provider_requires_api_key(provider: str) -> bool:
+    provider_norm = (provider or "").strip().lower()
+    if not provider_norm:
+        return True
+    return PROVIDER_REQUIRES_KEY.get(provider_norm, True)
+
+
+def get_byok_credential_policy(provider: str) -> Tuple[Set[str], Set[str]]:
+    provider_norm = (provider or "").strip().lower()
+    policy = BYOK_CREDENTIAL_FIELDS.get(provider_norm, {})
+    allowed = set(policy.get("allowed", DEFAULT_BYOK_ALLOWED_FIELDS))
+    required = set(policy.get("required", set()))
+    if required and not required.issubset(allowed):
+        allowed |= required
+    return allowed or set(DEFAULT_BYOK_ALLOWED_FIELDS), required
 
 PROVIDER_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "openai": {

@@ -87,6 +87,14 @@ def _estimate_chunks(text_len: int, chunk_size: int) -> int:
     return max(1, math.ceil(text_len / size))
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    """Best-effort int conversion for Redis payloads."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 async def _ensure_redis_groups(redis_url: str, queues: List[Tuple[str, str]]) -> None:
     """Ensure Redis stream consumer groups exist for the provided queues.
 
@@ -407,6 +415,240 @@ def _write_reports(
         logger.info(f"Saved Markdown report to {out_md}")
 
 
+async def _run_redis_benchmark_synthetic(
+    args: argparse.Namespace,
+    texts: List[str],
+    run_id: str,
+) -> RunResult:
+    """Run a synthetic Redis Streams benchmark pipeline.
+
+    This fallback uses Redis Streams directly instead of the legacy EmbeddingJobManager.
+    It is intentionally minimal and mirrors the Jobs benchmark flow.
+    """
+    stream_prefix = f"bench:embeddings:{run_id}"
+    chunk_stream = f"{stream_prefix}:chunking"
+    embed_stream = f"{stream_prefix}:embedding"
+    store_stream = f"{stream_prefix}:storage"
+    group_chunk = f"bench-chunk-{run_id}"
+    group_embed = f"bench-embed-{run_id}"
+    group_store = f"bench-store-{run_id}"
+
+    queues = [
+        (chunk_stream, group_chunk),
+        (embed_stream, group_embed),
+        (store_stream, group_store),
+    ]
+    await _ensure_redis_groups(args.redis_url, queues)
+
+    created_times: Dict[str, float] = {}
+    done_ids: set[str] = set()
+    latencies_ms: List[float] = []
+    total_chunks = 0
+    completed = 0
+    failed = 0
+    done_event = asyncio.Event()
+    stop_event = asyncio.Event()
+    lock = asyncio.Lock()
+
+    async def mark_done(root_id: str, chunk_count: int, ok: bool) -> None:
+        nonlocal completed, failed, total_chunks
+        async with lock:
+            if root_id not in created_times or root_id in done_ids:
+                return
+            done_ids.add(root_id)
+            if ok:
+                completed += 1
+                total_chunks += chunk_count
+                latency = (_now_s() - created_times[root_id]) * 1000.0
+                latencies_ms.append(latency)
+            else:
+                failed += 1
+            if completed + failed >= len(created_times):
+                done_event.set()
+                stop_event.set()
+
+    async def _worker_loop(
+        *,
+        stream: str,
+        group: str,
+        consumer: str,
+        handler,
+    ) -> None:
+        client = redis.from_url(args.redis_url, decode_responses=True)
+        try:
+            block_ms = max(1, int(args.poll_interval * 1000))
+            while not stop_event.is_set():
+                try:
+                    resp = await client.xreadgroup(
+                        group,
+                        consumer,
+                        streams={stream: ">"},
+                        count=1,
+                        block=block_ms,
+                    )
+                except Exception as exc:
+                    logger.warning(f"redis worker error stream={stream} consumer={consumer}: {exc}")
+                    await asyncio.sleep(args.poll_interval)
+                    continue
+                if not resp:
+                    continue
+                for _stream_name, messages in resp:
+                    for msg_id, fields in messages:
+                        try:
+                            await handler(fields, client)
+                        except Exception as exc:
+                            logger.warning(f"redis worker handler error stream={stream} id={msg_id}: {exc}")
+                        finally:
+                            try:
+                                await client.xack(stream, group, msg_id)
+                            except Exception as exc:
+                                logger.warning(f"redis xack error stream={stream} id={msg_id}: {exc}")
+        finally:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
+    async def chunking_handler(fields: Dict[str, Any], client) -> None:
+        root_id = str(fields.get("root_id", ""))
+        text_len = _as_int(fields.get("text_len"), 0)
+        chunk_count = _estimate_chunks(text_len, args.chunk_size)
+        if args.stage_sleep_ms[0] > 0:
+            await asyncio.sleep(args.stage_sleep_ms[0] / 1000.0)
+        await client.xadd(
+            embed_stream,
+            {"root_id": root_id, "chunk_count": str(chunk_count)},
+        )
+
+    async def embedding_handler(fields: Dict[str, Any], client) -> None:
+        root_id = str(fields.get("root_id", ""))
+        chunk_count = _as_int(fields.get("chunk_count"), 0)
+        if args.stage_sleep_ms[1] > 0:
+            await asyncio.sleep(args.stage_sleep_ms[1] / 1000.0)
+        await client.xadd(
+            store_stream,
+            {"root_id": root_id, "chunk_count": str(chunk_count)},
+        )
+
+    async def storage_handler(fields: Dict[str, Any], client) -> None:
+        root_id = str(fields.get("root_id", ""))
+        chunk_count = _as_int(fields.get("chunk_count"), 0)
+        if args.stage_sleep_ms[2] > 0:
+            await asyncio.sleep(args.stage_sleep_ms[2] / 1000.0)
+        await mark_done(root_id, chunk_count, ok=True)
+
+    workers: List[asyncio.Task] = []
+    started = _now_s()
+    last_progress = started
+    last_report = started
+    last_done = 0
+    try:
+        for i in range(args.jobs_workers[0]):
+            workers.append(
+                asyncio.create_task(
+                    _worker_loop(
+                        stream=chunk_stream,
+                        group=group_chunk,
+                        consumer=f"bench-chunk-{i}",
+                        handler=chunking_handler,
+                    )
+                )
+            )
+        for i in range(args.jobs_workers[1]):
+            workers.append(
+                asyncio.create_task(
+                    _worker_loop(
+                        stream=embed_stream,
+                        group=group_embed,
+                        consumer=f"bench-embed-{i}",
+                        handler=embedding_handler,
+                    )
+                )
+            )
+        for i in range(args.jobs_workers[2]):
+            workers.append(
+                asyncio.create_task(
+                    _worker_loop(
+                        stream=store_stream,
+                        group=group_store,
+                        consumer=f"bench-store-{i}",
+                        handler=storage_handler,
+                    )
+                )
+            )
+
+        client = redis.from_url(args.redis_url, decode_responses=True)
+        try:
+            for text in texts:
+                root_id = uuid.uuid4().hex
+                created_times[root_id] = _now_s()
+                await client.xadd(
+                    chunk_stream,
+                    {
+                        "root_id": root_id,
+                        "text_len": str(len(text)),
+                        "chunk_size": str(args.chunk_size),
+                        "chunk_overlap": str(args.chunk_overlap),
+                    },
+                )
+        finally:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
+        while not done_event.is_set():
+            now = _now_s()
+            if (now - started) > args.timeout_seconds:
+                stop_event.set()
+                break
+            done_count = completed + failed
+            if done_count != last_done:
+                last_done = done_count
+                last_progress = now
+            if args.progress_log_every > 0 and (now - last_report) >= args.progress_log_every:
+                logger.info(
+                    f"redis progress: done={done_count}/{len(created_times)} "
+                    f"completed={completed} failed={failed}"
+                )
+                last_report = now
+            if args.no_progress_seconds > 0 and (now - last_progress) >= args.no_progress_seconds:
+                logger.warning("redis progress stalled: no completions observed")
+                stop_event.set()
+                break
+            await asyncio.sleep(args.poll_interval)
+    finally:
+        stop_event.set()
+        for task in workers:
+            task.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+
+    duration = _now_s() - started if created_times else 0.0
+    timed_out = (completed + failed) < len(created_times)
+    return RunResult(
+        mode="redis",
+        job_count=len(created_times),
+        completed=completed,
+        failed=failed,
+        total_chunks=total_chunks,
+        duration_s=duration,
+        latencies_ms=latencies_ms,
+        timed_out=timed_out,
+        config={
+            "redis_url": args.redis_url,
+            "redis_streams": [chunk_stream, embed_stream, store_stream],
+            "jobs_workers": args.jobs_workers,
+            "stage_sleep_ms": args.stage_sleep_ms,
+            "job_count": args.job_count,
+            "text_bytes": args.text_bytes,
+            "chunk_size": args.chunk_size,
+            "chunk_overlap": args.chunk_overlap,
+            "poll_interval": args.poll_interval,
+            "timeout_seconds": args.timeout_seconds,
+        },
+    )
+
+
 async def _run_redis_benchmark(args: argparse.Namespace, texts: List[str], run_id: str) -> RunResult:
     """Run the Redis-backed embeddings pipeline benchmark.
 
@@ -433,7 +675,11 @@ async def _run_redis_benchmark(args: argparse.Namespace, texts: List[str], run_i
         )
         from tldw_Server_API.app.core.Embeddings.queue_schemas import ChunkingConfig, JobStatus
     except Exception as e:
-        raise RuntimeError(f"Embeddings Redis pipeline imports failed: {e}") from e
+        logger.warning(
+            "Legacy Redis embeddings pipeline is unavailable; "
+            "falling back to synthetic Redis Streams benchmark."
+        )
+        return await _run_redis_benchmark_synthetic(args, texts, run_id)
 
     user_tier = UserTier(args.user_tier)
     max_jobs = max(10, args.job_count * 2)

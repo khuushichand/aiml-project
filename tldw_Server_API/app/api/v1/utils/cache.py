@@ -19,12 +19,8 @@ from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Seque
 from fastapi import Request
 from loguru import logger
 
-try:  # pragma: no cover - import guarded for environments without redis
-    import redis  # type: ignore
-except Exception:  # pragma: no cover - redis optional
-    redis = None  # type: ignore
-
 from tldw_Server_API.app.core.config import config
+from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 
 
 CacheClient = Any  # Redis-like interface (setex/get/delete/sadd/smembers/expire/scan).
@@ -45,23 +41,25 @@ def get_cache_client() -> Optional[CacheClient]:
     """
     global _CACHE_CLIENT
 
-    if not _REDIS_ENABLED or redis is None:
+    if not _REDIS_ENABLED:
         return None
     if _CACHE_CLIENT is not None:
         return _CACHE_CLIENT
     try:
-        _CACHE_CLIENT = redis.Redis(
-            host=config["REDIS_HOST"],
-            port=config["REDIS_PORT"],
-            db=config["REDIS_DB"],
+        host = config.get("REDIS_HOST", None)
+        port = config.get("REDIS_PORT", None)
+        db = config.get("REDIS_DB", None)
+        preferred_url = None
+        if host and port is not None:
+            db = db or 0
+            preferred_url = f"redis://{host}:{int(port)}/{int(db)}"
+        _CACHE_CLIENT = create_sync_redis_client(
+            preferred_url=preferred_url,
+            context="api_cache",
+            fallback_to_fake=True,
+            decode_responses=False,
         )
-        # Fail fast if connection is not usable.
-        _CACHE_CLIENT.ping()
-        logger.info(
-            "Redis cache enabled at {host}:{port}",
-            host=config["REDIS_HOST"],
-            port=config["REDIS_PORT"],
-        )
+        logger.info("Redis cache enabled")
     except Exception as exc:  # pragma: no cover - defensive; logged once
         logger.warning(f"Failed to connect to Redis cache: {exc}. Running without cache.")
         _CACHE_CLIENT = None

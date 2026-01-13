@@ -205,7 +205,7 @@ def mock_rate_limiter(monkeypatch):
     """
     from unittest.mock import Mock, AsyncMock
 
-    # Create a mock rate limiter that always allows requests
+    # Create a stub rate limiter that always allows calls
     mock_limiter = Mock()
     mock_limiter.check_rate_limit = AsyncMock(return_value=(True, {"remaining": 100, "reset_at": None}))
     mock_limiter.update_usage = AsyncMock()

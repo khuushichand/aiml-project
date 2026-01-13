@@ -79,7 +79,11 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
 
 # For chat completions
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
 # Completion schemas centralized in schemas/chat_session_schemas.py
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
@@ -785,6 +789,16 @@ async def character_chat_completion(
             fallback_resolver=_fallback_resolver,
         )
         api_key = byok_resolution.api_key
+        provider_key = (provider or "").strip().lower()
+        if provider_requires_api_key(provider_key) and not api_key:
+            record_byok_missing_credentials(provider_key, operation="character_chat")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "missing_provider_credentials",
+                    "message": f"Provider '{provider}' requires an API key.",
+                },
+            )
 
         # Attempt provider call; allow offline simulation for local-llm in test/dev.
         # Offline simulation toggle (supports new flags for clarity, backward compatible with ALLOW_LOCAL_LLM_CALLS)
@@ -1345,14 +1359,19 @@ async def update_chat_session(
         )
 
 
-@router.delete("/{chat_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Delete chat session", tags=["Chat Sessions"])
+@router.delete(
+    "/{chat_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Delete chat session",
+    tags=["Chat Sessions"],
+)
 async def delete_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
-):
+) -> Response:
     """
     Soft delete a chat session.
 
@@ -1434,6 +1453,7 @@ async def delete_chat_session(
         db.soft_delete_conversation(chat_id, exp_ver)
 
         logger.info(f"Soft deleted chat session {chat_id} by user {current_user.id}")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     except ConflictError as e:
         logger.warning(f"Conflict deleting chat session {chat_id}: {e}")

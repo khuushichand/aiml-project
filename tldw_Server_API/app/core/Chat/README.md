@@ -16,7 +16,7 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
 ## Module Map
 | File / Folder | Purpose |
 | --- | --- |
-| `chat_orchestrator.py` | Single entry point for provider calls (`chat_api_call`, `chat_api_call_async`). Delegates to adapter-backed helpers. |
+| `chat_orchestrator.py` | Orchestrates chat flows: canonical async `achat`, sync wrapper `chat`, plus provider helpers (`chat_api_call`, `chat_api_call_async`). |
 | `chat_service.py` | High-level helpers used by the FastAPI endpoint: request normalization, moderation, persistence, logging, streaming orchestration. |
 | `chat_helpers.py` | Validation, character + conversation loading/creation, history assembly, ensuring default persona, etc. |
 | `prompt_template_manager.py` + `prompt_templates/` | Jinja2-based templating for system/user/assistant messages with sandboxed rendering and bundled defaults. |
@@ -107,7 +107,7 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 - `chat_helpers.get_or_create_conversation` stores transcript metadata in `ChaChaNotes_DB`.
 - `chat_service.save_conversation_message` (see file) persists message payloads, with placeholder resolution and per-message metadata.
 - `document_generator.DocumentGeneratorService` uses chat history to produce timeline, study guide, briefing, summary, Q&A, and meeting notes documents, delegating to `chat_orchestrator.chat_api_call`.
-- `Workflows.py` calls into `chat_orchestrator.chat` to execute legacy scripted flows without relying on deprecated `App_Function_Libraries` paths.
+- `Workflows.py` calls into `chat_orchestrator.chat` to execute legacy scripted flows without relying on deprecated `App_Function_Libraries` paths (sync context only).
 
 ---
 
@@ -123,6 +123,7 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 - Rate limiter defaults are set in `rate_limiter.RateLimitConfig`; override via environment variables or injecting custom configs when instantiating the limiter.
 - Streaming idle/heartbeat intervals are read from the `[Chat-Module]` section in the config file (see `streaming_utils` constants).
 - Prompt template directory is relative to the module but can be extended by writing new JSON files.
+- `CHAT_COMMANDS_ASYNC_ONLY=1` forces async orchestration (`achat`) and blocks sync `chat(...)` usage.
 
 ---
 
@@ -165,6 +166,19 @@ response = chat_api_call(
     model="gpt-4o-mini",
     temp=0.7,
     streaming=False,
+)
+
+# Prefer async orchestration in async contexts
+from tldw_Server_API.app.core.Chat.chat_orchestrator import achat
+resp = await achat(
+    message="Hello",
+    history=[],
+    media_content=None,
+    selected_parts=[],
+    api_endpoint="openai",
+    api_key=None,
+    custom_prompt=None,
+    temperature=0.7,
 )
 
 # Apply a prompt template

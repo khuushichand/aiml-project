@@ -1117,19 +1117,10 @@ async def persist_primary_av_item(
                     max_size=_opts.get("max_size") or 500,
                     overlap=_opts.get("overlap") or 50,
                 )
-                _kind_map = {
-                    "paragraph": "text",
-                    "list_unordered": "list",
-                    "list_ordered": "list",
-                    "code_fence": "code",
-                    "table_md": "table",
-                    "header_line": "heading",
-                    "header_atx": "heading",
-                }
                 chunks_for_sql = []
                 for _it in _flat:
                     _md = _it.get("metadata") or {}
-                    _ctype = _kind_map.get(str(_md.get("paragraph_kind") or "").lower(), "text")
+                    _ctype = _ck.normalize_chunk_type(_md.get("chunk_type") or _md.get("paragraph_kind")) or "text"
                     _small: Dict[str, Any] = {}
                     if _md.get("ancestry_titles"):
                         _small["ancestry_titles"] = _md.get("ancestry_titles")
@@ -1156,12 +1147,23 @@ async def persist_primary_av_item(
                 for ec in extra_chunks_any:
                     if not isinstance(ec, dict) or "text" not in ec:
                         continue
+                    raw_chunk_type = ec.get("chunk_type") or "vlm"
+                    try:
+                        normalized_chunk_type = _ck.normalize_chunk_type(raw_chunk_type)  # type: ignore[name-defined]
+                    except Exception:
+                        try:
+                            from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
+                                Chunker as _Chunker,
+                            )
+                            normalized_chunk_type = _Chunker.normalize_chunk_type(raw_chunk_type)
+                        except Exception:
+                            normalized_chunk_type = raw_chunk_type
                     chunks_for_sql.append(
                         {
                             "text": ec.get("text", ""),
                             "start_char": ec.get("start_char"),
                             "end_char": ec.get("end_char"),
-                            "chunk_type": ec.get("chunk_type") or "vlm",
+                            "chunk_type": normalized_chunk_type or raw_chunk_type,
                             "metadata": ec.get("metadata")
                             if isinstance(ec.get("metadata"), dict)
                             else {},
@@ -2858,21 +2860,12 @@ async def persist_doc_item_and_children(
                         max_size=opts.get("max_size") or 500,
                         overlap=opts.get("overlap") or 50,
                     )
-                    kind_map = {
-                        "paragraph": "text",
-                        "list_unordered": "list",
-                        "list_ordered": "list",
-                        "code_fence": "code",
-                        "table_md": "table",
-                        "header_line": "heading",
-                        "header_atx": "heading",
-                    }
                     chunks_for_sql = []
                     for item in flat_chunks:
                         meta = item.get("metadata") or {}
-                        chunk_type = kind_map.get(
-                            str(meta.get("paragraph_kind") or "").lower(), "text"
-                        )
+                        chunk_type = chunker.normalize_chunk_type(
+                            meta.get("chunk_type") or meta.get("paragraph_kind")
+                        ) or "text"
                         small_meta: Dict[str, Any] = {}
                         if meta.get("ancestry_titles"):
                             small_meta["ancestry_titles"] = meta.get("ancestry_titles")
@@ -3020,24 +3013,12 @@ async def persist_doc_item_and_children(
                                                     or 50,
                                                 )
                                             )
-                                            kind_map_child = {
-                                                "paragraph": "text",
-                                                "list_unordered": "list",
-                                                "list_ordered": "list",
-                                                "code_fence": "code",
-                                                "table_md": "table",
-                                                "header_line": "heading",
-                                                "header_atx": "heading",
-                                            }
                                             child_chunks_for_sql = []
                                             for item in flat_child:
                                                 meta = item.get("metadata") or {}
-                                                chunk_type = kind_map_child.get(
-                                                    str(
-                                                        meta.get("paragraph_kind") or ""
-                                                    ).lower(),
-                                                    "text",
-                                                )
+                                                chunk_type = chunker_child.normalize_chunk_type(
+                                                    meta.get("chunk_type") or meta.get("paragraph_kind")
+                                                ) or "text"
                                                 small_meta: Dict[str, Any] = {}
                                                 if meta.get("ancestry_titles"):
                                                     small_meta["ancestry_titles"] = meta.get(
@@ -3271,22 +3252,12 @@ async def persist_doc_item_and_children(
                                                 overlap=opts_child.get("overlap") or 50,
                                             )
                                         )
-                                        kind_map_child = {
-                                            "paragraph": "text",
-                                            "list_unordered": "list",
-                                            "list_ordered": "list",
-                                            "code_fence": "code",
-                                            "table_md": "table",
-                                            "header_line": "heading",
-                                            "header_atx": "heading",
-                                        }
                                         child_chunks_for_sql = []
                                         for item in flat_child:
                                             meta = item.get("metadata") or {}
-                                            chunk_type = kind_map_child.get(
-                                                str(meta.get("paragraph_kind") or "").lower(),
-                                                "text",
-                                            )
+                                            chunk_type = chunker_child.normalize_chunk_type(
+                                                meta.get("chunk_type") or meta.get("paragraph_kind")
+                                            ) or "text"
                                             small_meta: Dict[str, Any] = {}
                                             if meta.get("ancestry_titles"):
                                                 small_meta["ancestry_titles"] = meta.get(

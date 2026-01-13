@@ -24,6 +24,18 @@ def test_normalize_payload_alias_fills_missing_canonical():
     assert "topk" not in normalized
 
 
+def test_normalize_payload_prefers_maxp_over_topp():
+    payload = {"topp": 0.2, "maxp": 0.9}
+    normalized = cr.normalize_payload("openai", payload)
+    assert normalized["top_p"] == 0.9
+
+
+def test_normalize_payload_alias_maps_custom_prompt():
+    payload = {"custom_prompt": "use this"}
+    normalized = cr.normalize_payload("openai", payload)
+    assert normalized["custom_prompt_arg"] == "use this"
+
+
 def test_validate_payload_rejects_unknown_fields():
 
 
@@ -33,6 +45,21 @@ def test_validate_payload_rejects_unknown_fields():
     assert "unknown_field" in str(exc.value)
 
 
+def test_validate_payload_records_rejection_metric(monkeypatch):
+    calls = []
+
+    def fake_record(provider_key: str) -> None:
+        calls.append(provider_key)
+
+    monkeypatch.setattr(cr, "_record_validation_rejection", fake_record)
+
+    payload = {"messages": [], "model": "test", "unknown_field": 1}
+    with pytest.raises(ChatBadRequestError):
+        cr.validate_payload("openai", payload)
+
+    assert calls == ["openai"]
+
+
 def test_validate_payload_allows_provider_extensions():
 
 
@@ -40,6 +67,38 @@ def test_validate_payload_allows_provider_extensions():
     normalized = cr.validate_payload("openrouter", payload)
     assert normalized["top_k"] == 5
     assert normalized["min_p"] == 0.1
+
+
+def test_validate_payload_maps_llama_n_predict():
+    payload = {"messages": [], "model": "test", "n_predict": 64}
+    normalized = cr.validate_payload("llama.cpp", payload)
+    assert normalized["max_tokens"] == 64
+
+
+def test_validate_payload_maps_kobold_aliases():
+    payload = {
+        "messages": [],
+        "model": "test",
+        "max_length": 120,
+        "stop_sequence": ["END"],
+        "num_responses": 2,
+    }
+    normalized = cr.validate_payload("kobold", payload)
+    assert normalized["max_tokens"] == 120
+    assert normalized["stop"] == ["END"]
+    assert normalized["n"] == 2
+
+
+def test_validate_payload_maps_mistral_random_seed():
+    payload = {"messages": [], "model": "test", "random_seed": 7}
+    normalized = cr.validate_payload("mistral", payload)
+    assert normalized["seed"] == 7
+
+
+def test_validate_payload_allows_base_url_override():
+    payload = {"messages": [], "model": "test", "base_url": "https://example.com/v1"}
+    normalized = cr.validate_payload("openai", payload)
+    assert normalized["base_url"] == "https://example.com/v1"
 
 
 def test_validate_payload_rejects_extension_for_other_provider():

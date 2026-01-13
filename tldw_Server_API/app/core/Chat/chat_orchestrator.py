@@ -585,6 +585,12 @@ def _get_sync_coro_timeout() -> float:
 _SYNC_CORO_TIMEOUT_SECONDS = _get_sync_coro_timeout()
 
 
+def _async_only_enabled() -> bool:
+    """Return True when CHAT_COMMANDS_ASYNC_ONLY is enabled."""
+    value = os.getenv("CHAT_COMMANDS_ASYNC_ONLY", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _run_coro_sync(coro: Awaitable[_T], timeout: float = _SYNC_CORO_TIMEOUT_SECONDS) -> _T:
     """
     Run an async coroutine from synchronous code in a loop-safe way.
@@ -1085,25 +1091,29 @@ def chat(
     Public synchronous chat entrypoint.
 
     For non-streaming calls, this function acts as a sync wrapper around the
-    async `achat` orchestrator. It is intended for use from non-async contexts
-    only; calling it from within an active event loop is an error.
+    async `achat` orchestrator. When called from a running event loop, it
+    offloads work to a worker thread and returns an awaitable future; async
+    callers should prefer awaiting `achat(...)` directly.
 
     For streaming calls, it delegates to the legacy synchronous implementation
     preserved in `_chat_sync_impl` to maintain existing generator semantics for
     legacy consumers.
     """
-    try:
-        # If this succeeds, we're on a thread with an active event loop.
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop on this thread: safe to proceed.
-        pass
-    else:
+    if _async_only_enabled():
         raise RuntimeError(
-            "chat() cannot be called from an active event loop. "
-            "Use await achat(...) or await asyncio.to_thread(chat, ...) instead."
+            "CHAT_COMMANDS_ASYNC_ONLY is enabled. "
+            "Use await achat(...) instead of chat()."
         )
     if streaming:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "chat(streaming=True) cannot be called from an active event loop. "
+                "Use await achat(...) or run streaming chat from a non-async context."
+            )
         return _chat_sync_impl(
             message=message,
             history=history,
@@ -1140,40 +1150,83 @@ def chat(
             llm_tool_choice=llm_tool_choice,
         )
 
-    return _run_achat_sync(
-        message=message,
-        history=history,
-        media_content=media_content,
-        selected_parts=selected_parts,
-        api_endpoint=api_endpoint,
-        api_key=api_key,
-        custom_prompt=custom_prompt,
-        temperature=temperature,
-        system_message=system_message,
-        streaming=streaming,
-        minp=minp,
-        maxp=maxp,
-        model=model,
-        topp=topp,
-        topk=topk,
-        chatdict_entries=chatdict_entries,
-        max_tokens=max_tokens,
-        strategy=strategy,
-        current_image_input=current_image_input,
-        image_history_mode=image_history_mode,
-        llm_max_tokens=llm_max_tokens,
-        llm_seed=llm_seed,
-        llm_stop=llm_stop,
-        llm_response_format=llm_response_format,
-        llm_n=llm_n,
-        llm_user_identifier=llm_user_identifier,
-        llm_logprobs=llm_logprobs,
-        llm_top_logprobs=llm_top_logprobs,
-        llm_logit_bias=llm_logit_bias,
-        llm_presence_penalty=llm_presence_penalty,
-        llm_frequency_penalty=llm_frequency_penalty,
-        llm_tools=llm_tools,
-        llm_tool_choice=llm_tool_choice,
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return _run_achat_sync(
+            message=message,
+            history=history,
+            media_content=media_content,
+            selected_parts=selected_parts,
+            api_endpoint=api_endpoint,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            minp=minp,
+            maxp=maxp,
+            model=model,
+            topp=topp,
+            topk=topk,
+            chatdict_entries=chatdict_entries,
+            max_tokens=max_tokens,
+            strategy=strategy,
+            current_image_input=current_image_input,
+            image_history_mode=image_history_mode,
+            llm_max_tokens=llm_max_tokens,
+            llm_seed=llm_seed,
+            llm_stop=llm_stop,
+            llm_response_format=llm_response_format,
+            llm_n=llm_n,
+            llm_user_identifier=llm_user_identifier,
+            llm_logprobs=llm_logprobs,
+            llm_top_logprobs=llm_top_logprobs,
+            llm_logit_bias=llm_logit_bias,
+            llm_presence_penalty=llm_presence_penalty,
+            llm_frequency_penalty=llm_frequency_penalty,
+            llm_tools=llm_tools,
+            llm_tool_choice=llm_tool_choice,
+        )
+
+    executor = _get_sync_executor()
+    return loop.run_in_executor(
+        executor,
+        lambda: _run_achat_sync(
+            message=message,
+            history=history,
+            media_content=media_content,
+            selected_parts=selected_parts,
+            api_endpoint=api_endpoint,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            minp=minp,
+            maxp=maxp,
+            model=model,
+            topp=topp,
+            topk=topk,
+            chatdict_entries=chatdict_entries,
+            max_tokens=max_tokens,
+            strategy=strategy,
+            current_image_input=current_image_input,
+            image_history_mode=image_history_mode,
+            llm_max_tokens=llm_max_tokens,
+            llm_seed=llm_seed,
+            llm_stop=llm_stop,
+            llm_response_format=llm_response_format,
+            llm_n=llm_n,
+            llm_user_identifier=llm_user_identifier,
+            llm_logprobs=llm_logprobs,
+            llm_top_logprobs=llm_top_logprobs,
+            llm_logit_bias=llm_logit_bias,
+            llm_presence_penalty=llm_presence_penalty,
+            llm_frequency_penalty=llm_frequency_penalty,
+            llm_tools=llm_tools,
+            llm_tool_choice=llm_tool_choice,
+        ),
     )
 
 
@@ -1464,3 +1517,14 @@ async def achat(
 #
 # End of chat_orchestrator.py
 ####################################################################################################
+    try:
+        # If this succeeds, we're on a thread with an active event loop.
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop on this thread: safe to proceed.
+        pass
+    else:
+        raise RuntimeError(
+            "chat() cannot be called from an active event loop. "
+            "Use await achat(...) or await asyncio.to_thread(chat, ...) instead."
+        )

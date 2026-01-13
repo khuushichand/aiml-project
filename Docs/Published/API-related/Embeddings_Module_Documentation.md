@@ -88,7 +88,7 @@ app/core/Embeddings/
 ├── embeddings_config.yaml             # Configuration file
 ├── jobs_adapter.py                    # Core Jobs adapter for embeddings jobs
 ├── services/
-│   └── jobs_worker.py                 # Core Jobs worker for embeddings
+│   └── redis_worker.py                # Redis Streams worker for embeddings stages
 └── Embeddings_Server/
     ├── __init__.py
     └── Embeddings_Create.py          # Core embedding logic

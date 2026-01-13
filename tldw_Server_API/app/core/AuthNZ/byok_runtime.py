@@ -223,6 +223,18 @@ def _fallback_result(
     )
 
 
+def _invalid_byok_result(provider: str, *, source: str) -> ResolvedByokCredentials:
+    return ResolvedByokCredentials(
+        provider=provider,
+        api_key=None,
+        app_config=None,
+        credential_fields={},
+        source=source,
+        allowlisted=True,
+        _touch_cb=None,
+    )
+
+
 def _build_app_config(provider: str, credential_fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not credential_fields:
         return None
@@ -325,11 +337,23 @@ async def resolve_byok_credentials(
             api_key = payload.get("api_key")
             if api_key:
                 credential_fields_raw = payload.get("credential_fields") or {}
-                credential_fields = _sanitize_credential_fields(
-                    provider_norm,
-                    credential_fields_raw,
-                    allow_base_url=allow_base_url,
-                )
+                try:
+                    credential_fields = _sanitize_credential_fields(
+                        provider_norm,
+                        credential_fields_raw,
+                        allow_base_url=allow_base_url,
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        "BYOK credential_fields invalid for user_id=%s provider=%s: %s",
+                        user_id,
+                        provider_norm,
+                        exc,
+                    )
+                    return _finalize_resolution(
+                        _invalid_byok_result(provider_norm, source="user"),
+                        byok_enabled=byok_enabled,
+                    )
                 last_used_at = _parse_last_used(user_row.get("last_used_at"))
                 return _finalize_resolution(
                     ResolvedByokCredentials(
@@ -417,11 +441,23 @@ async def resolve_byok_credentials(
             if not api_key:
                 continue
             credential_fields_raw = payload.get("credential_fields") or {}
-            credential_fields = _sanitize_credential_fields(
-                provider_norm,
-                credential_fields_raw,
-                allow_base_url=allow_base_url,
-            )
+            try:
+                credential_fields = _sanitize_credential_fields(
+                    provider_norm,
+                    credential_fields_raw,
+                    allow_base_url=allow_base_url,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "BYOK credential_fields invalid for team_id=%s provider=%s: %s",
+                    team_id,
+                    provider_norm,
+                    exc,
+                )
+                return _finalize_resolution(
+                    _invalid_byok_result(provider_norm, source="team"),
+                    byok_enabled=byok_enabled,
+                )
             last_used_at = _parse_last_used(row.get("last_used_at"))
             return _finalize_resolution(
                 ResolvedByokCredentials(
@@ -457,11 +493,23 @@ async def resolve_byok_credentials(
             if not api_key:
                 continue
             credential_fields_raw = payload.get("credential_fields") or {}
-            credential_fields = _sanitize_credential_fields(
-                provider_norm,
-                credential_fields_raw,
-                allow_base_url=allow_base_url,
-            )
+            try:
+                credential_fields = _sanitize_credential_fields(
+                    provider_norm,
+                    credential_fields_raw,
+                    allow_base_url=allow_base_url,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "BYOK credential_fields invalid for org_id=%s provider=%s: %s",
+                    org_id,
+                    provider_norm,
+                    exc,
+                )
+                return _finalize_resolution(
+                    _invalid_byok_result(provider_norm, source="org"),
+                    byok_enabled=byok_enabled,
+                )
             last_used_at = _parse_last_used(row.get("last_used_at"))
             return _finalize_resolution(
                 ResolvedByokCredentials(

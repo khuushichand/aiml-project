@@ -58,6 +58,7 @@ from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     is_http_status_error,
     is_network_error,
 )
+from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
 
 # -----------------------------------------------------------------------------
 # Session shim for non-streaming POST calls
@@ -151,6 +152,10 @@ def _call_adapter(
         app_config: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
 ) -> Any:
+    log_legacy_once(
+        "chat_calls",
+        "chat_calls is deprecated; use chat_service.perform_chat_api_call instead.",
+    )
     return perform_chat_api_call(
         api_provider=provider,
         messages=input_data,
@@ -166,6 +171,10 @@ async def _call_adapter_async(
         app_config: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
 ) -> Any:
+    log_legacy_once(
+        "chat_calls",
+        "chat_calls is deprecated; use chat_service.perform_chat_api_call instead.",
+    )
     return await perform_chat_api_call_async(
         api_provider=provider,
         messages=input_data,

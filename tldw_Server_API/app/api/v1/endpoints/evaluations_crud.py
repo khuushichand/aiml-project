@@ -218,12 +218,13 @@ async def update_evaluation(
 @crud_router.delete(
     "/{eval_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
 )
 async def delete_evaluation(
     eval_id: str,
     current_user: User = Depends(get_eval_request_user),
-):
+) -> Response:
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
         success = await svc.delete_evaluation(eval_id)

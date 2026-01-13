@@ -155,38 +155,92 @@ class AnalyticsStore:
             logger.error(f"Failed to record feedback: {e}")
             return False
 
-    async def record_document_performance(self, doc_data: Dict[str, Any]) -> bool:
+    async def record_event(self, event: "AnalyticsEvent | Dict[str, Any]") -> bool:
         """
-        Record document performance metrics.
+        Record a generic analytics event.
 
         Args:
-            doc_data: Dictionary containing document metrics
+            event: AnalyticsEvent or dict payload
 
         Returns:
             Success status
         """
         try:
+            payload = event.to_dict() if hasattr(event, "to_dict") else dict(event)
             await asyncio.get_event_loop().run_in_executor(
-                None, self.db.record_document_performance, doc_data
+                None, self.db.record_event, payload
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to record analytics event: {e}")
+            return False
+
+    async def record_search_quality(self, *, query_hash: str, relevance_score: float, clicked: bool) -> bool:
+        """
+        Record search quality metrics as a feedback event.
+
+        Args:
+            query_hash: Hashed query value
+            relevance_score: Normalized relevance score (0-1)
+            clicked: Whether any chunks were clicked
+
+        Returns:
+            Success status
+        """
+        event = AnalyticsEvent(
+            event_type=AnalyticsEventType.FEEDBACK,
+            query_hash=query_hash,
+            metrics={
+                "quality_score": relevance_score,
+                "clicked": clicked,
+            },
+        )
+        return await self.record_event(event)
+
+    async def record_document_performance(
+        self,
+        doc_data: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> bool:
+        """
+        Record document performance metrics.
+
+        Args:
+            doc_data: Dictionary containing document metrics
+            kwargs: Alternate keyword payload when doc_data is omitted
+
+        Returns:
+            Success status
+        """
+        try:
+            payload = doc_data or kwargs
+            if not payload:
+                return False
+            await asyncio.get_event_loop().run_in_executor(
+                None, self.db.record_document_performance, payload
             )
             return True
         except Exception as e:
             logger.error(f"Failed to record document performance: {e}")
             return False
 
-    async def record_error(self, error_data: Dict[str, Any]) -> bool:
+    async def record_error(self, error_data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> bool:
         """
         Record error tracking information.
 
         Args:
             error_data: Dictionary containing error information
+            kwargs: Alternate keyword payload when error_data is omitted
 
         Returns:
             Success status
         """
         try:
+            payload = error_data or kwargs
+            if not payload:
+                return False
             await asyncio.get_event_loop().run_in_executor(
-                None, self.db.record_error, error_data
+                None, self.db.record_error, payload
             )
             return True
         except Exception as e:
@@ -542,10 +596,12 @@ class UnifiedFeedbackSystem:
         query: str,
         document_ids: List[str],
         chunk_ids: List[str],
+        feedback_type: Optional[str] = None,
         relevance_score: Optional[int] = None,
         helpful: Optional[bool] = None,
         issues: Optional[List[str]] = None,
         user_notes: Optional[str] = None,
+        session_id: Optional[str] = None,
         _user_id: Optional[str] = None,  # Reserved for future use
         message_id: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -582,6 +638,14 @@ class UnifiedFeedbackSystem:
             try:
                 # Hash query for privacy
                 query_hash = hashlib.sha256(query.encode()).hexdigest()
+                resolved_type = feedback_type
+                if not resolved_type:
+                    if relevance_score is not None:
+                        resolved_type = "relevance"
+                    elif helpful is not None:
+                        resolved_type = "helpful"
+                    elif issues or user_notes:
+                        resolved_type = "report"
 
                 # Record search quality
                 if relevance_score:
@@ -594,11 +658,37 @@ class UnifiedFeedbackSystem:
                 # Record document performance
                 for doc_id in document_ids:
                     await self.analytics.record_document_performance(
-                        document_id=doc_id,
-                        relevance_score=relevance_score / 5.0 if relevance_score else None,
-                        positive_feedback=helpful is True,
-                        negative_feedback=helpful is False
+                        {
+                            "document_id": doc_id,
+                            "relevance_score": relevance_score / 5.0 if relevance_score else None,
+                            "feedback": "positive" if helpful is True else "negative" if helpful is False else None,
+                        }
                     )
+
+                categories = issues or []
+                response_quality = None
+                if helpful is True:
+                    response_quality = "helpful"
+                elif helpful is False:
+                    response_quality = "not_helpful"
+
+                rating = relevance_score
+                if rating is None and helpful is not None:
+                    rating = 1 if helpful else 0
+
+                await self.analytics.record_feedback(
+                    {
+                        "session_id": session_id,
+                        "query": query,
+                        "feedback_type": resolved_type,
+                        "rating": rating,
+                        "response_quality": response_quality,
+                        "retrieval_accuracy": None,
+                        "response_time_acceptable": None,
+                        "categories": categories,
+                        "improvement_areas": categories,
+                    }
+                )
 
                 # Record feedback event
                 event = AnalyticsEvent(
@@ -608,7 +698,8 @@ class UnifiedFeedbackSystem:
                         "relevance": relevance_score,
                         "helpful": helpful,
                         "chunks_used": len(chunk_ids),
-                        "has_notes": bool(user_notes)
+                        "has_notes": bool(user_notes),
+                        "feedback_type": resolved_type,
                     }
                 )
                 await self.analytics.record_event(event)
@@ -627,6 +718,12 @@ class UnifiedFeedbackSystem:
         event_type: str,
         impression: Optional[List[str]] = None,
         corpus: Optional[str] = None,
+        chunk_ids: Optional[List[str]] = None,
+        rank: Optional[int] = None,
+        session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
     ) -> None:
         """Record a lightweight implicit signal (click/expand/copy).
 
@@ -638,7 +735,19 @@ class UnifiedFeedbackSystem:
             try:
                 from .user_personalization_store import UserPersonalizationStore  # lazy import
                 store = UserPersonalizationStore(user_id)
-                store.record_event(event_type=event_type, doc_id=doc_id, corpus=corpus, impression=impression or [])
+                store.record_event(
+                    event_type=event_type,
+                    doc_id=doc_id,
+                    corpus=corpus,
+                    impression=impression or [],
+                    chunk_ids=chunk_ids,
+                    rank=rank,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    dwell_ms=dwell_ms,
+                    query=query,
+                )
             except ValueError as e:
                 logger.debug(f"Personalization store update skipped for user_id={user_id}: {e}")
             except Exception as e:
@@ -646,19 +755,38 @@ class UnifiedFeedbackSystem:
 
             # Emit anonymized analytics
             if self.enable_analytics and self.analytics:
+                def _hash_identifier(value: Optional[str]) -> Optional[str]:
+                    if not value:
+                        return None
+                    return hashlib.sha256(str(value).encode()).hexdigest()[:16]
+
                 qh = None
                 if query:
-                    import hashlib
                     qh = hashlib.sha256(query.encode()).hexdigest()
+                impression_list = impression or []
+                if len(impression_list) > 50:
+                    impression_list = impression_list[:50]
+                chunk_list = chunk_ids or []
+                if len(chunk_list) > 50:
+                    chunk_list = chunk_list[:50]
+                metrics = {
+                    "implicit": True,
+                    "type": event_type,
+                    "doc_id": doc_id,
+                    "chunk_ids": chunk_list,
+                    "rank": rank,
+                    "dwell_ms": dwell_ms,
+                    "corpus": corpus,
+                    "impression_list": impression_list,
+                    "session_hash": _hash_identifier(session_id),
+                    "conversation_hash": _hash_identifier(conversation_id),
+                    "message_hash": _hash_identifier(message_id),
+                }
+                metrics = {k: v for k, v in metrics.items() if v is not None}
                 evt = AnalyticsEvent(
                     event_type=AnalyticsEventType.FEEDBACK,
                     query_hash=qh,
-                    metrics={
-                        "implicit": True,
-                        "type": event_type,
-                        "doc_id": doc_id,
-                        "list_size": len(impression or []),
-                    },
+                    metrics=metrics,
                 )
                 await self.analytics.record_event(evt)
         except Exception as e:
@@ -810,9 +938,11 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
             query=context.query,
             document_ids=[doc.id for doc in context.documents],
             chunk_ids=[doc.id for doc in context.documents],  # Assuming doc.id is chunk_id
+            feedback_type=fb.get("feedback_type"),
             relevance_score=fb.get("relevance_score"),
             helpful=fb.get("helpful"),
             user_notes=fb.get("user_notes"),
+            session_id=fb.get("session_id"),
             _user_id=fb.get("user_id")
         )
 

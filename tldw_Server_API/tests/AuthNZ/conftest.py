@@ -1000,6 +1000,7 @@ async def isolated_test_environment(monkeypatch):
                 max_uses INTEGER DEFAULT 1,
                 uses_count INTEGER DEFAULT 0,
                 is_active BOOLEAN DEFAULT TRUE,
+                allowed_email_domain TEXT,
                 description TEXT,
                 metadata JSONB
             )

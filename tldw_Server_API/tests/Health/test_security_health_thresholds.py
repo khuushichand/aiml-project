@@ -6,10 +6,10 @@ def _monkeypatch_audit_summary(monkeypatch, high_risk: int, failures: int):
     from tldw_Server_API.app.api.v1.endpoints import health as health_mod
 
     class _DummyAudit:
-        async def initialize(self):
+        async def initialize(self, *args, **kwargs):
             return None
 
-        async def get_security_summary(self, hours=24):
+        async def get_security_summary(self, hours=24, **_kwargs):
             return {
                 "high_risk_events": high_risk,
                 "failure_events": failures,
@@ -74,3 +74,28 @@ def test_security_low_when_some_failures_below_threshold(monkeypatch):
     data = r.json()
     assert data["risk_level"] == "low"
     assert data["status"] == "secure"
+
+
+def test_security_health_shared_mode_scoped(monkeypatch):
+    class _ScopedAudit:
+        _shared_mode = True
+
+        async def initialize(self, *args, **kwargs):
+            return None
+
+        async def get_security_summary(self, hours=24, **kwargs):
+            assert kwargs.get("allow_cross_tenant") is False
+            return {
+                "high_risk_events": 0,
+                "failure_events": 0,
+                "unique_security_users": 0,
+                "top_failing_ips": [],
+                "total_events": 0,
+            }
+
+    from tldw_Server_API.app.api.v1.endpoints import health as health_mod
+
+    monkeypatch.setattr(health_mod, "UnifiedAuditService", lambda: _ScopedAudit())
+    client = _get_client(monkeypatch, {})
+    r = client.get("/api/v1/health/security")
+    assert r.status_code == 200 or r.status_code == 503 or r.status_code == 206

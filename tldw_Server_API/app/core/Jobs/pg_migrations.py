@@ -135,6 +135,16 @@ CREATE TABLE IF NOT EXISTS jobs_archive (
   archived_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Job dependencies (DAG edges)
+CREATE TABLE IF NOT EXISTS job_dependencies (
+  job_uuid TEXT NOT NULL,
+  depends_on_job_uuid TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (job_uuid, depends_on_job_uuid)
+);
+CREATE INDEX IF NOT EXISTS idx_job_dependencies_job ON job_dependencies(job_uuid);
+CREATE INDEX IF NOT EXISTS idx_job_dependencies_depends_on ON job_dependencies(depends_on_job_uuid);
+
 -- Status-focused partial indexes to speed common counts and lookups
 CREATE INDEX IF NOT EXISTS idx_jobs_status_queued ON jobs(domain, queue, job_type, priority, available_at, created_at) WHERE status='queued';
 CREATE INDEX IF NOT EXISTS idx_jobs_status_processing ON jobs(domain, queue, job_type, leased_until) WHERE status='processing';
@@ -293,6 +303,10 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                         except Exception:
                             pass
                         try:
+                            _p.execute("ALTER TABLE job_dependencies ENABLE ROW LEVEL SECURITY")
+                        except Exception:
+                            pass
+                        try:
                             _p.execute("ALTER TABLE jobs_archive ENABLE ROW LEVEL SECURITY")
                         except Exception:
                             pass
@@ -430,6 +444,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                     "job_queue_controls",
                     "job_sla_policies",
                     "job_attachments",
+                    "job_dependencies",
                 ):
                     _enable_rls(_table)
                 admin_expr = "COALESCE(NULLIF(current_setting('app.is_admin', true), ''), '') = 'true'"
@@ -574,6 +589,38 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                     )
                 except Exception:
                     pass
+                # job_dependencies policies (join to jobs for domain/owner)
+                try:
+                    cur.execute("DROP POLICY IF EXISTS job_dependencies_select ON job_dependencies")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_dependencies_select ON job_dependencies FOR SELECT
+                        USING (
+                          {admin_expr} OR EXISTS (
+                            SELECT 1 FROM jobs j
+                            WHERE j.uuid = job_dependencies.job_uuid
+                              AND ({domain_expr} IS NULL OR j.domain = ANY(string_to_array({domain_expr}, ',')))
+                              AND ({owner_expr} IS NULL OR j.owner_user_id = {owner_expr})
+                          )
+                        )
+                        """
+                    )
+                    cur.execute("DROP POLICY IF EXISTS job_dependencies_modify ON job_dependencies")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_dependencies_modify ON job_dependencies FOR ALL
+                        USING (
+                          {admin_expr} OR EXISTS (
+                            SELECT 1 FROM jobs j
+                            WHERE j.uuid = job_dependencies.job_uuid
+                              AND ({domain_expr} IS NULL OR j.domain = ANY(string_to_array({domain_expr}, ',')))
+                              AND ({owner_expr} IS NULL OR j.owner_user_id = {owner_expr})
+                          )
+                        )
+                        """
+                    )
+                except Exception:
+                    pass
                 # job_sla_policies policies (domain only)
                 try:
                     cur.execute("DROP POLICY IF EXISTS job_sla_policies_select ON job_sla_policies")
@@ -637,7 +684,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                             WHERE schemaname = current_schema()
                               AND tablename IN (
                                 'jobs','job_events','job_counters','job_queue_controls',
-                                'job_attachments','job_sla_policies','jobs_archive'
+                                'job_attachments','job_sla_policies','job_dependencies','jobs_archive'
                               )
                             ORDER BY tablename, polname
                             """

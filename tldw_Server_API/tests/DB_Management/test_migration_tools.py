@@ -17,7 +17,7 @@ class _StubPool:
 
 class _StubBackend:
     def __init__(self) -> None:
-        self.executed: List[str] = []
+        self.executed: List[Tuple[str, Any]] = []
         self.executed_many: List[Tuple[str, List[Tuple[Any, ...]]]] = []
 
     def transaction(self):
@@ -37,7 +37,7 @@ class _StubBackend:
         return _Ctx(self)
 
     def execute(self, sql: str, params: Any = None, connection: Any = None):
-        self.executed.append(sql)
+        self.executed.append((sql, params))
         return None
 
     def execute_many(self, sql: str, params_list: List[Tuple[Any, ...]], connection: Any = None):
@@ -77,7 +77,7 @@ def test_migrate_sqlite_to_postgres_uses_backend(monkeypatch: pytest.MonkeyPatch
     config = DatabaseConfig(backend_type=BackendType.POSTGRESQL)
     migration_tools.migrate_sqlite_to_postgres(sqlite_db, config, batch_size=10, label="test")
 
-    delete_statements = [sql for sql in stub_backend.executed if sql.startswith("DELETE FROM")]
+    delete_statements = [sql for sql, _params in stub_backend.executed if sql.startswith("DELETE FROM")]
     assert delete_statements == ["DELETE FROM child", "DELETE FROM parent"]
 
     inserted_tables = [call[0].split()[2] for call in stub_backend.executed_many]
@@ -88,6 +88,47 @@ def test_migrate_sqlite_to_postgres_uses_backend(monkeypatch: pytest.MonkeyPatch
     child_rows = stub_backend.executed_many[1][1]
     assert child_rows == [(1, 1), (2, 2)]
 
-    sequence_updates = [sql for sql in stub_backend.executed if sql.startswith("SELECT setval")]
+    sequence_updates = [sql for sql, _params in stub_backend.executed if sql.startswith("SELECT setval")]
     assert any("parent" in sql for sql in sequence_updates)
     assert any("child" in sql for sql in sequence_updates)
+
+
+def test_migrate_sqlite_to_postgres_user_scoped_truncate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "source_user.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("CREATE TABLE parent (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE child (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, parent_id INTEGER NOT NULL)")
+    conn.executemany("INSERT INTO parent (user_id, name) VALUES (?, ?)", [("u1", "p1"), ("u2", "p2")])
+    conn.executemany("INSERT INTO child (user_id, parent_id) VALUES (?, ?)", [("u1", 1), ("u2", 2)])
+    conn.commit()
+    conn.close()
+
+    stub_backend = _StubBackend()
+
+    def fake_create_backend(config: DatabaseConfig) -> _StubBackend:
+        return stub_backend
+
+    monkeypatch.setattr(migration_tools.DatabaseBackendFactory, "create_backend", fake_create_backend)
+
+    config = DatabaseConfig(backend_type=BackendType.POSTGRESQL)
+    migration_tools.migrate_sqlite_to_postgres(
+        db_path,
+        config,
+        batch_size=10,
+        label="test",
+        user_id="u1",
+    )
+
+    delete_statements = [(sql, params) for sql, params in stub_backend.executed if sql.startswith("DELETE FROM")]
+    assert delete_statements == [
+        ("DELETE FROM child WHERE user_id = %s", ("u1",)),
+        ("DELETE FROM parent WHERE user_id = %s", ("u1",)),
+    ]
+
+    inserted_tables = [call[0].split()[2] for call in stub_backend.executed_many]
+    assert inserted_tables == ["parent", "child"]
+    parent_rows = stub_backend.executed_many[0][1]
+    assert parent_rows == [(1, "u1", "p1")]
+    child_rows = stub_backend.executed_many[1][1]
+    assert child_rows == [(1, "u1", 1)]

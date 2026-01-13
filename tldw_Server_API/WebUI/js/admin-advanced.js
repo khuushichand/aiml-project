@@ -2,6 +2,62 @@
 // Externalized bindings for Admin advanced panels (virtual keys, orgs/teams, tool permissions, rate limits, tool catalog).
 
 function esc(x) { return Utils.escapeHtml(String(x ?? '')); }
+function copyText(value, label) {
+  if (!value) return;
+  const text = String(value);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success(`${label || 'Copied'} to clipboard`);
+    return;
+  }
+  window.prompt('Copy to clipboard:', text);
+}
+
+function parseJsonInput(value, label) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch (err) {
+    const msg = `${label || 'JSON'} is invalid`;
+    if (typeof Toast !== 'undefined' && Toast) Toast.error(msg);
+    throw new Error(msg);
+  }
+}
+
+let _webuiBaseUrlPromise = null;
+function normalizeWebuiBaseUrl(raw) {
+  let base = String(raw || '').trim();
+  if (!base) return window.location.origin;
+  if (base.startsWith('/')) base = window.location.origin + base;
+  return base.replace(/\/+$/, '');
+}
+
+async function resolveWebuiBaseUrl() {
+  if (_webuiBaseUrlPromise) return _webuiBaseUrlPromise;
+  _webuiBaseUrlPromise = (async () => {
+    let base = null;
+    try {
+      const res = await fetch('/webui/config.json', { cache: 'no-store' });
+      if (res.ok) {
+        const cfg = await res.json();
+        base = cfg.webui_base_url || cfg.webuiBaseUrl || cfg.webui_base || null;
+      }
+    } catch (_) {}
+    return normalizeWebuiBaseUrl(base);
+  })();
+  return _webuiBaseUrlPromise;
+}
+
+function buildWebuiLink(base, path) {
+  let root = base;
+  if (!/\/webui\/?$/.test(root)) {
+    root = `${root}/webui`;
+  }
+  root = root.replace(/\/+$/, '');
+  const cleanPath = String(path || '').replace(/^\/+/, '');
+  return `${root}/${cleanPath}`;
+}
 
 // ---------- User Registration (moved from inline) ----------
 async function adminCreateUser() {
@@ -31,6 +87,66 @@ function bindAdminUsersBasics() {
   // Create User
   const createBtn = document.getElementById('btnAdminCreateUser');
   if (createBtn) createBtn.addEventListener('click', adminCreateUser);
+}
+
+// ---------- Registration Settings ----------
+function applyRegistrationSettings(settings) {
+  if (!settings) return;
+  const enableEl = document.getElementById('regSettings_enable');
+  const requireEl = document.getElementById('regSettings_requireCode');
+  const authModeEl = document.getElementById('regSettings_authMode');
+  const profileEl = document.getElementById('regSettings_profile');
+  const selfAllowedEl = document.getElementById('regSettings_selfAllowed');
+  const warningEl = document.getElementById('regSettings_warning');
+  const createBtn = document.getElementById('btnRegCodeCreate');
+
+  if (enableEl) enableEl.checked = !!settings.enable_registration;
+  if (requireEl) requireEl.checked = !!settings.require_registration_code;
+  if (authModeEl) authModeEl.textContent = settings.auth_mode ?? 'unknown';
+  if (profileEl) profileEl.textContent = settings.profile ?? 'unknown';
+  if (selfAllowedEl) selfAllowedEl.textContent = settings.self_registration_allowed ? 'true' : 'false';
+
+  const canCreate = !!settings.enable_registration && !!settings.self_registration_allowed;
+  if (createBtn) createBtn.disabled = !canCreate;
+  if (warningEl) {
+    warningEl.textContent = canCreate
+      ? ''
+      : 'Registration is disabled or blocked by profile; code creation is locked.';
+  }
+}
+
+async function regSettingsLoad() {
+  try {
+    const res = await window.apiClient.get('/api/v1/admin/registration-settings');
+    const out = document.getElementById('adminRegSettings_result');
+    if (out) out.textContent = JSON.stringify(res, null, 2);
+    applyRegistrationSettings(res);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration settings loaded');
+  } catch (e) {
+    const out = document.getElementById('adminRegSettings_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load registration settings');
+  }
+}
+
+async function regSettingsSave() {
+  try {
+    const enableEl = document.getElementById('regSettings_enable');
+    const requireEl = document.getElementById('regSettings_requireCode');
+    const payload = {
+      enable_registration: !!enableEl?.checked,
+      require_registration_code: !!requireEl?.checked,
+    };
+    const res = await window.apiClient.post('/api/v1/admin/registration-settings', payload);
+    const out = document.getElementById('adminRegSettings_result');
+    if (out) out.textContent = JSON.stringify(res, null, 2);
+    applyRegistrationSettings(res);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration settings updated');
+  } catch (e) {
+    const out = document.getElementById('adminRegSettings_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to update registration settings');
+  }
 }
 
 // ---------- Virtual Keys (per user) ----------
@@ -72,11 +188,23 @@ async function admVKList() {
 // ---------- Registration Codes ----------
 async function rcCreate() {
   try {
+    const orgIdValue = parseInt(document.getElementById('regCode_orgId')?.value || '0', 10);
+    const teamIdValue = parseInt(document.getElementById('regCode_teamId')?.value || '0', 10);
+    if (teamIdValue && !orgIdValue) {
+      if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID is required when Team ID is set');
+      return;
+    }
+    const metadata = parseJsonInput(document.getElementById('regCode_metadata')?.value, 'Metadata');
+    const orgRoleValue = document.getElementById('regCode_orgRole')?.value || null;
     const payload = {
       max_uses: parseInt(document.getElementById('regCode_maxUses')?.value || '1', 10),
-      expires_in_days: parseInt(document.getElementById('regCode_expires')?.value || '30', 10),
+      expiry_days: parseInt(document.getElementById('regCode_expires')?.value || '30', 10),
       role_to_grant: document.getElementById('regCode_role')?.value || 'user',
-      description: document.getElementById('regCode_desc')?.value || null,
+      allowed_email_domain: (document.getElementById('regCode_allowedDomain')?.value || '').trim() || null,
+      metadata,
+      org_id: orgIdValue || null,
+      org_role: orgIdValue ? orgRoleValue : null,
+      team_id: teamIdValue || null,
     };
     const res = await window.apiClient.post('/api/v1/admin/registration-codes', payload);
     const out = document.getElementById('adminRegCodes_result');
@@ -92,7 +220,9 @@ async function rcCreate() {
 
 async function rcList() {
   try {
-    const res = await window.apiClient.get('/api/v1/admin/registration-codes');
+    const includeExpired = document.getElementById('regCode_includeExpired')?.checked;
+    const qs = includeExpired ? '?include_expired=true' : '';
+    const res = await window.apiClient.get(`/api/v1/admin/registration-codes${qs}`);
     const codes = Array.isArray(res.codes) ? res.codes : [];
     rcRenderList(codes);
     const out = document.getElementById('adminRegCodes_result');
@@ -106,11 +236,11 @@ async function rcList() {
 
 async function rcDelete(id) {
   try {
-    if (!confirm('Delete this registration code?')) return;
+    if (!confirm('Revoke this registration code?')) return;
     const res = await window.apiClient.delete(`/api/v1/admin/registration-codes/${id}`);
     const out = document.getElementById('adminRegCodes_result');
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration code deleted');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration code revoked');
     await rcList();
   } catch (e) {
     const out = document.getElementById('adminRegCodes_result');
@@ -124,19 +254,154 @@ function rcRenderList(items) {
   if (!container) return;
   if (!items.length) { container.innerHTML = '<p>No registration codes found.</p>'; return; }
   let html = '<table class="simple-table"><thead><tr>' +
-    '<th>ID</th><th>Code</th><th>Role</th><th>Uses</th><th>Max</th><th>Expires</th><th>Actions</th>' +
+    '<th>ID</th><th>Code</th><th>Role</th><th>Org</th><th>Allowed Domain</th><th>Uses</th><th>Expires</th>' +
+    '<th>Created</th><th>Created By</th><th>Status</th><th>Actions</th>' +
     '</tr></thead><tbody>';
   for (const c of items) {
     const id = esc(c.id);
+    const code = esc(c.code);
+    const orgParts = [];
+    if (c.org_id) orgParts.push(`org ${esc(c.org_id)}`);
+    if (c.org_name) orgParts.push(`name ${esc(c.org_name)}`);
+    if (c.org_role) orgParts.push(`role ${esc(c.org_role)}`);
+    if (c.team_id) orgParts.push(`team ${esc(c.team_id)}`);
+    const orgText = orgParts.join(' / ');
+    const usesText = `${esc(c.times_used ?? 0)}/${esc(c.max_uses ?? '')}`;
+    const statusParts = [];
+    const isActive = (c.is_active === undefined || c.is_active === null) ? true : !!c.is_active;
+    statusParts.push(isActive ? 'active' : 'inactive');
+    statusParts.push(c.is_valid === false ? 'invalid' : 'valid');
+    const statusText = statusParts.join(' / ');
+    const rowStyle = c.is_valid === false ? ' style="opacity:0.6;"' : '';
+    const acceptBtn = c.org_id
+      ? `<button class="btn rc-copy-accept" data-code="${code}">Copy accept link</button>`
+      : '';
     html += `
-      <tr>
+      <tr${rowStyle}>
         <td>${id}</td>
-        <td><code>${esc(c.code)}</code></td>
+        <td><code>${code}</code></td>
         <td>${esc(c.role_to_grant || '')}</td>
-        <td>${esc(c.times_used ?? 0)}</td>
-        <td>${esc(c.max_uses ?? '')}</td>
+        <td>${orgText}</td>
+        <td>${esc(c.allowed_email_domain || '')}</td>
+        <td>${usesText}</td>
         <td>${esc(c.expires_at || '')}</td>
-        <td><button class="btn btn-danger rc-delete" data-id="${id}">Delete</button></td>
+        <td>${esc(c.created_at || '')}</td>
+        <td>${esc(c.created_by || '')}</td>
+        <td>${statusText}</td>
+        <td>
+          <button class="btn rc-copy-code" data-code="${code}">Copy code</button>
+          <button class="btn rc-copy-link" data-code="${code}">Copy registration link</button>
+          ${acceptBtn}
+          <button class="btn btn-danger rc-delete" data-id="${id}">Revoke</button>
+        </td>
+      </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+// ---------- Organization Invites ----------
+async function orgInviteCreate() {
+  const orgId = parseInt(document.getElementById('orgInvite_orgId')?.value || '0', 10);
+  if (!orgId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID is required'); return; }
+  const teamIdValue = parseInt(document.getElementById('orgInvite_teamId')?.value || '0', 10);
+  const payload = {
+    team_id: teamIdValue || null,
+    role_to_grant: document.getElementById('orgInvite_role')?.value || 'member',
+    max_uses: parseInt(document.getElementById('orgInvite_maxUses')?.value || '1', 10),
+    expiry_days: parseInt(document.getElementById('orgInvite_expires')?.value || '7', 10),
+    description: (document.getElementById('orgInvite_description')?.value || '').trim() || null,
+    allowed_email_domain: (document.getElementById('orgInvite_allowedDomain')?.value || '').trim() || null,
+  };
+  try {
+    const res = await window.apiClient.post(`/api/v1/orgs/${orgId}/invites`, payload);
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = JSON.stringify(res, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Organization invite created');
+    await orgInviteList();
+  } catch (e) {
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to create org invite');
+  }
+}
+
+async function orgInviteList() {
+  const orgId = parseInt(document.getElementById('orgInvite_orgId')?.value || '0', 10);
+  if (!orgId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID is required'); return; }
+  const includeExpired = document.getElementById('orgInvite_includeExpired')?.checked;
+  const qs = includeExpired ? '?include_expired=true&include_inactive=true' : '';
+  try {
+    const res = await window.apiClient.get(`/api/v1/orgs/${orgId}/invites${qs}`);
+    const items = Array.isArray(res.items) ? res.items : [];
+    orgInviteRenderList(items);
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = 'Loaded';
+  } catch (e) {
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to list org invites');
+  }
+}
+
+async function orgInviteRevoke(inviteId) {
+  const orgId = parseInt(document.getElementById('orgInvite_orgId')?.value || '0', 10);
+  if (!orgId || !inviteId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID and invite ID are required'); return; }
+  if (!confirm('Revoke this organization invite?')) return;
+  try {
+    await window.apiClient.delete(`/api/v1/orgs/${orgId}/invites/${inviteId}`);
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = 'Invite revoked';
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Organization invite revoked');
+    await orgInviteList();
+  } catch (e) {
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to revoke org invite');
+  }
+}
+
+function orgInviteRenderList(items) {
+  const container = document.getElementById('adminOrgInvites_list');
+  if (!container) return;
+  if (!items.length) { container.innerHTML = '<p>No organization invites found.</p>'; return; }
+  let html = '<table class="simple-table"><thead><tr>' +
+    '<th>ID</th><th>Code</th><th>Org</th><th>Team</th><th>Role</th><th>Allowed Domain</th>' +
+    '<th>Uses</th><th>Expires</th><th>Created</th><th>Created By</th><th>Status</th><th>Actions</th>' +
+    '</tr></thead><tbody>';
+  for (const invite of items) {
+    const id = esc(invite.id);
+    const code = esc(invite.code);
+    const usesText = `${esc(invite.uses_count ?? 0)}/${esc(invite.max_uses ?? '')}`;
+    const isActive = invite.is_active === undefined || invite.is_active === null ? true : !!invite.is_active;
+    let isExpired = false;
+    if (invite.expires_at) {
+      const parsed = Date.parse(invite.expires_at);
+      if (!Number.isNaN(parsed)) {
+        isExpired = parsed < Date.now();
+      }
+    }
+    const statusParts = [isActive ? 'active' : 'inactive'];
+    if (isExpired) statusParts.push('expired');
+    const rowStyle = isExpired ? ' style="opacity:0.6;"' : '';
+    html += `
+      <tr${rowStyle}>
+        <td>${id}</td>
+        <td><code>${code}</code></td>
+        <td>${esc(invite.org_id || '')}</td>
+        <td>${esc(invite.team_name || invite.team_id || '')}</td>
+        <td>${esc(invite.role_to_grant || '')}</td>
+        <td>${esc(invite.allowed_email_domain || '')}</td>
+        <td>${usesText}</td>
+        <td>${esc(invite.expires_at || '')}</td>
+        <td>${esc(invite.created_at || '')}</td>
+        <td>${esc(invite.created_by || '')}</td>
+        <td>${statusParts.join(' / ')}</td>
+        <td>
+          <button class="btn org-invite-copy-code" data-code="${code}">Copy code</button>
+          <button class="btn org-invite-copy-link" data-code="${code}">Copy redeem link</button>
+          <button class="btn btn-danger org-invite-revoke" data-id="${id}">Revoke</button>
+        </td>
       </tr>`;
   }
   html += '</tbody></table>';
@@ -231,6 +496,7 @@ function adminDownloadLLMUsageCSV() {
 function _auditBuildQueryParams(overrides = {}) {
   const q = new URLSearchParams();
   const fmt = overrides.format ?? (document.getElementById('audit_format')?.value || 'json');
+  const maxRows = overrides.max_rows ?? overrides.maxRows;
   q.append('format', fmt);
   const minRisk = overrides.min_risk_score ?? (document.getElementById('audit_min_risk')?.value || '').trim();
   const userId = overrides.user_id ?? (document.getElementById('audit_user_id')?.value || '').trim();
@@ -239,6 +505,7 @@ function _auditBuildQueryParams(overrides = {}) {
   const fname = overrides.filename ?? (document.getElementById('audit_filename')?.value || '').trim();
   const start = overrides.start_time ?? (document.getElementById('audit_start')?.value || '').trim();
   const end = overrides.end_time ?? (document.getElementById('audit_end')?.value || '').trim();
+  if (maxRows) q.append('max_rows', maxRows);
   if (minRisk) q.append('min_risk_score', minRisk);
   if (userId) q.append('user_id', userId);
   if (ev) q.append('event_type', ev);
@@ -249,16 +516,21 @@ function _auditBuildQueryParams(overrides = {}) {
   return q.toString();
 }
 
+function _auditBuildHeaders() {
+  const headers = {};
+  const client = window.apiClient;
+  if (client && client.token) {
+    if (client.authMode === 'single-user' || (client.authMode === 'multi-user' && client.preferApiKeyInMultiUser)) headers['X-API-KEY'] = client.token;
+    else if (client.authMode === 'multi-user') headers['Authorization'] = `Bearer ${client.token}`;
+    else headers['X-API-KEY'] = client.token;
+  }
+  return headers;
+}
+
 async function _auditFetchAndDownload(qs, format) {
   try {
     const url = `${window.apiClient.baseUrl}/api/v1/audit/export?${qs}`;
-    const headers = {};
-    const client = window.apiClient;
-    if (client && client.token) {
-      if (client.authMode === 'single-user' || (client.authMode === 'multi-user' && client.preferApiKeyInMultiUser)) headers['X-API-KEY'] = client.token;
-      else if (client.authMode === 'multi-user') headers['Authorization'] = `Bearer ${client.token}`;
-      else headers['X-API-KEY'] = client.token;
-    }
+    const headers = _auditBuildHeaders();
     const res = await fetch(url, { headers });
     const text = await res.text();
     if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
@@ -294,17 +566,43 @@ function adminAuditDownloadApiEventsCSV() {
   _auditFetchAndDownload(qs, 'csv');
 }
 
+function adminAuditPresetOrgInvites() {
+  const eventTypeEl = document.getElementById('audit_event_type');
+  const categoryEl = document.getElementById('audit_category');
+  const startEl = document.getElementById('audit_start');
+  const endEl = document.getElementById('audit_end');
+  const filenameEl = document.getElementById('audit_filename');
+  if (eventTypeEl) eventTypeEl.value = 'DATA_WRITE,DATA_UPDATE';
+  if (categoryEl) categoryEl.value = 'DATA_MODIFICATION';
+  const now = new Date();
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  if (startEl) startEl.value = dayAgo.toISOString().replace('Z', '+00:00');
+  if (endEl) endEl.value = now.toISOString().replace('Z', '+00:00');
+  if (filenameEl) filenameEl.value = 'audit_org_invites.json';
+  if (typeof Toast !== 'undefined' && Toast) Toast.success('Org invite audit filters applied');
+}
+
+function adminAuditPresetRegistrationCodes() {
+  const eventTypeEl = document.getElementById('audit_event_type');
+  const categoryEl = document.getElementById('audit_category');
+  const startEl = document.getElementById('audit_start');
+  const endEl = document.getElementById('audit_end');
+  const filenameEl = document.getElementById('audit_filename');
+  if (eventTypeEl) eventTypeEl.value = 'DATA_WRITE,DATA_UPDATE';
+  if (categoryEl) categoryEl.value = 'DATA_MODIFICATION';
+  const now = new Date();
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  if (startEl) startEl.value = dayAgo.toISOString().replace('Z', '+00:00');
+  if (endEl) endEl.value = now.toISOString().replace('Z', '+00:00');
+  if (filenameEl) filenameEl.value = 'audit_registration_codes.json';
+  if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration code audit filters applied');
+}
+
 async function adminAuditPreviewJSON() {
   try {
     const qs = _auditBuildQueryParams({ format: 'json' });
     const url = `${window.apiClient.baseUrl}/api/v1/audit/export?${qs}`;
-    const headers = {};
-    const client = window.apiClient;
-    if (client && client.token) {
-      if (client.authMode === 'single-user' || (client.authMode === 'multi-user' && client.preferApiKeyInMultiUser)) headers['X-API-KEY'] = client.token;
-      else if (client.authMode === 'multi-user') headers['Authorization'] = `Bearer ${client.token}`;
-      else headers['X-API-KEY'] = client.token;
-    }
+    const headers = _auditBuildHeaders();
     const res = await fetch(url, { headers });
     const text = await res.text();
     if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
@@ -318,6 +616,29 @@ async function adminAuditPreviewJSON() {
   } catch (e) {
     const pre = document.getElementById('adminAuditPreview');
     if (pre) pre.textContent = `Preview failed: ${e.message || e}`;
+  }
+}
+
+async function adminAuditStatusCheck() {
+  const el = document.getElementById('adminAuditStatus');
+  if (!el) return;
+  el.textContent = 'Audit logging: checking...';
+  try {
+    const qs = _auditBuildQueryParams({ format: 'json', max_rows: 1 });
+    const url = `${window.apiClient.baseUrl}/api/v1/audit/export?${qs}`;
+    const headers = _auditBuildHeaders();
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      if (res.status === 403) {
+        el.textContent = 'Audit logging: permission denied';
+      } else {
+        el.textContent = `Audit logging: unavailable (HTTP ${res.status})`;
+      }
+      return;
+    }
+    el.textContent = 'Audit logging: active';
+  } catch (e) {
+    el.textContent = 'Audit logging: unavailable';
   }
 }
 
@@ -1498,8 +1819,46 @@ function bindAdminAdvanced() {
     if (t && t.classList?.contains('rc-delete')) {
       const id = parseInt(t.getAttribute('data-id') || '0', 10);
       if (id) rcDelete(id);
+    } else if (t && t.classList?.contains('rc-copy-code')) {
+      copyText(t.getAttribute('data-code'), 'Code');
+    } else if (t && t.classList?.contains('rc-copy-link')) {
+      const code = t.getAttribute('data-code') || '';
+      resolveWebuiBaseUrl().then((base) => {
+        const url = buildWebuiLink(base, `auth.html?code=${encodeURIComponent(code)}`);
+        copyText(url, 'Registration link');
+      });
+    } else if (t && t.classList?.contains('rc-copy-accept')) {
+      const code = t.getAttribute('data-code') || '';
+      resolveWebuiBaseUrl().then((base) => {
+        const url = buildWebuiLink(base, `accept-invite.html?code=${encodeURIComponent(code)}`);
+        copyText(url, 'Acceptance link');
+      });
     }
   });
+
+  // Organization Invites
+  document.getElementById('btnOrgInviteCreate')?.addEventListener('click', orgInviteCreate);
+  document.getElementById('btnOrgInviteList')?.addEventListener('click', orgInviteList);
+  document.getElementById('adminOrgInvites_list')?.addEventListener('click', (e) => {
+    const t = e.target;
+    if (t && t.classList?.contains('org-invite-revoke')) {
+      const id = parseInt(t.getAttribute('data-id') || '0', 10);
+      if (id) orgInviteRevoke(id);
+    } else if (t && t.classList?.contains('org-invite-copy-code')) {
+      copyText(t.getAttribute('data-code'), 'Code');
+    } else if (t && t.classList?.contains('org-invite-copy-link')) {
+      const code = t.getAttribute('data-code') || '';
+      resolveWebuiBaseUrl().then((base) => {
+        const url = buildWebuiLink(base, `redeem-invite.html?code=${encodeURIComponent(code)}`);
+        copyText(url, 'Redeem link');
+      });
+    }
+  });
+
+  // Registration Settings
+  document.getElementById('btnRegSettingsLoad')?.addEventListener('click', regSettingsLoad);
+  document.getElementById('btnRegSettingsSave')?.addEventListener('click', regSettingsSave);
+  if (document.getElementById('regSettings_enable')) regSettingsLoad();
 
   // LLM Usage (query/download) controls
   document.getElementById('btnAdminLLMUsageQuery')?.addEventListener('click', adminQueryLLMUsage);
@@ -1510,6 +1869,9 @@ function bindAdminAdvanced() {
   document.getElementById('btnAdminAuditLast24h')?.addEventListener('click', adminAuditDownloadLast24hHighRisk);
   document.getElementById('btnAdminAuditApiEvents')?.addEventListener('click', adminAuditDownloadApiEventsCSV);
   document.getElementById('btnAdminAuditPreview')?.addEventListener('click', adminAuditPreviewJSON);
+  document.getElementById('btnAdminAuditOrgInvites')?.addEventListener('click', adminAuditPresetOrgInvites);
+  document.getElementById('btnAdminAuditRegCodes')?.addEventListener('click', adminAuditPresetRegistrationCodes);
+  adminAuditStatusCheck();
 
   // LLM Usage Charts controls
   document.getElementById('btnAdminLoadLLMCharts')?.addEventListener('click', adminLoadLLMCharts);
@@ -1607,8 +1969,10 @@ export default {
   tpListPerms, tpCreatePerm, tpDeletePerm, tpGrantToRole, tpRevokeFromRole, tpListRoleToolPerms, tpGrantByPrefix, tpRevokeByPrefix,
   rlUpsertRole, rlUpsertUser, rlReset,
   rcCreate, rcList, rcDelete, rcRenderList,
+  orgInviteCreate, orgInviteList, orgInviteRevoke, orgInviteRenderList,
   adminQueryLLMUsage, adminDownloadLLMUsageCSV,
-  adminAuditDownload, adminAuditDownloadLast24hHighRisk, adminAuditDownloadApiEventsCSV, adminAuditPreviewJSON,
+  adminAuditDownload, adminAuditDownloadLast24hHighRisk, adminAuditDownloadApiEventsCSV, adminAuditPreviewJSON, adminAuditStatusCheck,
+  adminAuditPresetOrgInvites, adminAuditPresetRegistrationCodes,
   adminLoadLLMCharts,
   admUserKeyRotate, admUserKeyRevoke,
   adminLoadCleanupSettings: adminLoadCleanupSettings,

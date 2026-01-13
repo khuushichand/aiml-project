@@ -203,6 +203,94 @@ def test_outputs_preview_with_inline_data_and_generate(client_with_user, tmp_pat
     assert any(it["id"] == oid for it in lst.get("items", []))
 
 
+def test_outputs_generate_variants_and_ingest(client_with_user, monkeypatch):
+    client = client_with_user
+
+    class DummyTTS:
+        async def generate_speech(self, req):  # noqa: ARG002 - signature used by TTS service
+            yield b"FAKEAUDIO"
+
+    async def _fake_get_tts_service_v2(*args, **kwargs):  # noqa: ARG002
+        return DummyTTS()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.tts_service_v2.get_tts_service_v2",
+        _fake_get_tts_service_v2,
+    )
+
+    base_payload = {
+        "name": "base-briefing",
+        "type": "briefing_markdown",
+        "format": "md",
+        "body": "# Briefing\n{{ items|length }} items",
+        "description": "Base output",
+        "is_default": False,
+    }
+    r = client.post("/api/v1/outputs/templates", json=base_payload)
+    assert r.status_code == 200, r.text
+    base_id = r.json()["id"]
+
+    mece_payload = {
+        "name": "mece-default",
+        "type": "mece_markdown",
+        "format": "md",
+        "body": "# MECE\n{% for item in items %}- {{ item.title }}\n{% endfor %}",
+        "description": "MECE output",
+        "is_default": True,
+    }
+    r = client.post("/api/v1/outputs/templates", json=mece_payload)
+    assert r.status_code == 200, r.text
+
+    tts_payload = {
+        "name": "tts-default",
+        "type": "tts_audio",
+        "format": "mp3",
+        "body": "Audio briefing for {{ items|length }} items.",
+        "description": "TTS output",
+        "is_default": True,
+    }
+    r = client.post("/api/v1/outputs/templates", json=tts_payload)
+    assert r.status_code == 200, r.text
+
+    inline_ctx = {
+        "items": [
+            {
+                "title": "Story A",
+                "url": "https://example.com/a",
+                "domain": "example.com",
+                "summary": "A",
+                "published_at": "2024-01-01",
+                "tags": ["tag-a"],
+            }
+        ]
+    }
+
+    r = client.post(
+        "/api/v1/outputs",
+        json={
+            "template_id": base_id,
+            "data": inline_ctx,
+            "title": "Daily",
+            "generate_mece": True,
+            "generate_tts": True,
+            "ingest_to_media_db": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    base = r.json()
+    assert base["media_item_id"] is not None
+
+    r = client.get("/api/v1/outputs", params={"type": "mece_markdown"})
+    assert r.status_code == 200
+    mece_outputs = r.json()["items"]
+    assert any(item.get("media_item_id") for item in mece_outputs)
+
+    r = client.get("/api/v1/outputs", params={"type": "tts_audio"})
+    assert r.status_code == 200
+    tts_outputs = r.json()["items"]
+    assert any(item.get("media_item_id") for item in tts_outputs)
+
+
 def test_outputs_create_sanitizes_title_and_enforces_base_dir(client_with_user):
 
     client = client_with_user

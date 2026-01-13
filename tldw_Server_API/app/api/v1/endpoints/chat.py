@@ -28,13 +28,14 @@ from tldw_Server_API.app.core.Utils.image_validation import (
 )
 import asyncio
 import sys
+import math
 import json
 import time
 import uuid
 from functools import partial, lru_cache
 from collections import defaultdict, deque
-from typing import Any, Callable, Dict, List, Optional, Tuple
-from datetime import date, datetime, timezone
+from typing import Any, Callable, Dict, List, Optional, Tuple, Literal
+from datetime import date, datetime, timezone, timedelta
 from unittest.mock import Mock
 from weakref import WeakKeyDictionary
 import threading
@@ -46,6 +47,8 @@ from fastapi import (
     Depends,
     Header,
     HTTPException,
+    Path,
+    Query,
     Request,
     status,
 )
@@ -94,6 +97,19 @@ from tldw_Server_API.app.api.v1.schemas.chat_knowledge_schemas import (
     KnowledgeSaveRequest,
     KnowledgeSaveResponse,
 )
+from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
+    ConversationListResponse,
+    ConversationListItem,
+    ConversationListPagination,
+    ConversationUpdateRequest,
+    ConversationTreeResponse,
+    ConversationTreeNode,
+    ConversationTreePagination,
+    ConversationMetadata,
+    ChatAnalyticsResponse,
+    ChatAnalyticsBucket,
+    ChatAnalyticsPagination,
+)
 # Note: streaming utilities are handled inside chat_service. No direct import needed here.
 from tldw_Server_API.app.core.Chat.chat_helpers import (
     validate_request_payload,
@@ -125,6 +141,9 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_streaming_call,
     execute_non_stream_call,
     queue_is_active,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    map_sender_to_role,
 )
 _ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from tldw_Server_API.app.core.config import loaded_config_data
@@ -183,6 +202,7 @@ from .chat_dictionaries import (
 API_KEYS = SCHEMAS_API_KEYS
 
 router = APIRouter()
+conversations_alias_router = APIRouter()
 
 router.include_router(chat_dictionaries.router)
 router.include_router(chat_documents.router)
@@ -219,6 +239,19 @@ MAX_IMAGES_PER_REQUEST: int = int(_chat_config.get('max_images_per_request', 10)
 MAX_BASE64_BYTES: int = get_max_base64_bytes()
 # Provider fallback setting - disabled by default for production stability
 ENABLE_PROVIDER_FALLBACK: bool = _chat_config.get('enable_provider_fallback', 'False').lower() == 'true'
+def _cfg_float(key: str, fallback: float) -> float:
+    try:
+        raw = _chat_config.get(key)
+        return float(raw) if raw is not None else fallback
+    except Exception:
+        return fallback
+
+RECENCY_HALF_LIFE_DAYS: float = _cfg_float("half_life_days", 14.0)
+CHAT_BM25_WEIGHT: float = _cfg_float("w_bm25", 0.65)
+CHAT_RECENCY_WEIGHT: float = _cfg_float("w_recency", 0.35)
+ANALYTICS_MAX_RANGE_DAYS: int = int(_chat_config.get("analytics_max_range_days", 180))
+TREE_MESSAGE_CAP_DEFAULT: int = int(_chat_config.get("tree_message_cap_default", 200))
+TREE_MESSAGE_CAP_MAX: int = int(_chat_config.get("tree_message_cap_max", 500))
 
 # Chat-Commands feature toggles (env overrides take priority)
 def _cfg_bool_cmds(env_name: str, cfg_key: str, fallback: bool) -> bool:
@@ -1859,13 +1892,14 @@ async def create_chat_completion(
 
             # Centralized provider capabilities
             try:
-                from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+                from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
             except Exception:
-                PROVIDER_REQUIRES_KEY = {}
+                def provider_requires_api_key(_provider: str) -> bool:  # type: ignore[misc]
+                    return True
             # Allow explicit mock forcing in tests even if provider key is absent
             _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
             _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
-            if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
+            if provider_requires_api_key(target_api_provider) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 record_byok_missing_credentials(target_api_provider, operation="chat")
                 raise HTTPException(
@@ -1877,7 +1911,7 @@ async def create_chat_completion(
                 )
             # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
             # This avoids depending on external network calls in CI and matches integration test expectations.
-            if _test_mode_flag and provider_api_key and PROVIDER_REQUIRES_KEY.get(target_api_provider, False):
+            if _test_mode_flag and provider_api_key and provider_requires_api_key(target_api_provider):
                 # Treat keys with obvious invalid patterns as authentication failures in test mode.
                 invalid_patterns = ("invalid-", "test-invalid-", "bad-key-", "dummy-invalid-")
                 if any(str(provider_api_key).lower().startswith(p) for p in invalid_patterns):
@@ -1920,6 +1954,7 @@ async def create_chat_completion(
                 final_system_message=final_system_message,
                 app_config=app_config_override,
             )
+            cleaned_args["request"] = request
 
             def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
                 override_default = get_override_default_model(target_provider)
@@ -1960,7 +1995,7 @@ async def create_chat_completion(
             async def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
                 refreshed_resolution = await _resolve_byok(target_provider)
                 provider_api_key_new = refreshed_resolution.api_key
-                if PROVIDER_REQUIRES_KEY.get(target_provider, False) and not provider_api_key_new:
+                if provider_requires_api_key(target_provider) and not provider_api_key_new:
                     logger.error(
                         f"API key for provider '{target_provider}' is missing or not configured (fallback)."
                     )
@@ -1981,6 +2016,7 @@ async def create_chat_completion(
                     final_system_message=final_system_message,
                     app_config=refreshed_resolution.app_config,
                 )
+                refreshed_args["request"] = request
                 refreshed_model = refreshed_args.get("model")
                 use_default_model = False
                 if not refreshed_model:
@@ -2664,6 +2700,107 @@ def _estimate_tokens_for_queue(request_json: str) -> int:
         return 1
 
 
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value).strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _parse_iso_datetime(value: str, field_name: str) -> datetime:
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be ISO-8601 timestamp",
+        ) from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_weights(w_bm25: float, w_recency: float) -> Tuple[float, float]:
+    total = (w_bm25 or 0.0) + (w_recency or 0.0)
+    if total <= 0:
+        return 0.65, 0.35
+    return (w_bm25 / total), (w_recency / total)
+
+
+def _calculate_recency(dt_value: Optional[datetime], half_life_days: float) -> float:
+    if dt_value is None or half_life_days <= 0:
+        return 0.0
+    now = datetime.now(timezone.utc)
+    age_days = max(0.0, (now - dt_value).total_seconds() / 86400.0)
+    return math.exp(-age_days / half_life_days)
+
+
+def _verify_conversation_ownership(
+    db: CharactersRAGDB,
+    conversation_id: str,
+    current_user: User,
+) -> Dict[str, Any]:
+    conversation = db.get_conversation_by_id(conversation_id)
+    if not conversation or conversation.get("deleted"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    conv_client_id = conversation.get("client_id")
+    user_id = current_user.id
+    if conv_client_id is None or user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+    try:
+        if int(conv_client_id) != int(user_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+    except (TypeError, ValueError):
+        if str(conv_client_id) != str(user_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+    return conversation
+
+
+def _replace_conversation_keywords(
+    db: CharactersRAGDB,
+    conversation_id: str,
+    keywords: List[str],
+) -> None:
+    existing = db.get_keywords_for_conversation(conversation_id)
+    existing_map = {str(k.get("keyword") or "").strip().lower(): int(k.get("id")) for k in existing if k.get("id")}
+    target = {str(k).strip() for k in keywords if k is not None and str(k).strip()}
+    target_map = {t.lower(): t for t in target}
+
+    for key, kw_id in existing_map.items():
+        if key not in target_map:
+            try:
+                db.unlink_conversation_from_keyword(conversation_id, kw_id)
+            except Exception as exc:
+                logger.warning("Failed to unlink keyword %s from %s: %s", kw_id, conversation_id, exc)
+
+    for key, original in target_map.items():
+        if key in existing_map:
+            continue
+        try:
+            kw = db.get_keyword_by_text(original)
+            if not kw:
+                kw_id = db.add_keyword(original)
+                kw = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+            if kw and kw.get("id") is not None:
+                db.link_conversation_to_keyword(conversation_id, int(kw["id"]))
+        except Exception as exc:
+            logger.warning("Failed to link keyword %s to %s: %s", original, conversation_id, exc)
+
+
 @router.post(
     "/knowledge/save",
     response_model=KnowledgeSaveResponse,
@@ -2707,11 +2844,13 @@ async def save_chat_knowledge(
             if message.get("conversation_id") != payload.conversation_id:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is not in conversation")
 
-        if payload.export_to != "none" and not _chat_connectors_enabled():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Chat connectors v2 are disabled; enable CHAT_CONNECTORS_V2_ENABLED to export.",
-            )
+        export_status = "not_requested"
+        export_job_id: Optional[str] = None
+        if payload.export_to != "none":
+            if _chat_connectors_enabled():
+                export_status = "queued"
+            else:
+                export_status = "skipped_disabled"
 
         conv_title = conversation.get("title") or f"Conversation {payload.conversation_id}"
         safe_title = conv_title[:200]
@@ -2749,6 +2888,8 @@ async def save_chat_knowledge(
                         "notes": f"From {safe_title}",
                         "source_ref_type": "note",
                         "source_ref_id": note_id,
+                        "conversation_id": payload.conversation_id,
+                        "message_id": payload.message_id,
                         "model_type": "basic",
                     }
                 )
@@ -2758,9 +2899,526 @@ async def save_chat_knowledge(
             flashcard_id=flashcard_id,
             conversation_id=payload.conversation_id,
             message_id=payload.message_id,
+            export_status=export_status,
+            export_job_id=export_job_id,
         )
     except HTTPException:
         raise
     except Exception as exc:
         logger.error(f"Failed to save chat knowledge snippet: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snippet") from exc
+
+
+@router.get(
+    "/conversations",
+    response_model=ConversationListResponse,
+    summary="List/search conversations with filters and ranking",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
+    ],
+)
+@conversations_alias_router.get(
+    "/conversations",
+    response_model=ConversationListResponse,
+    summary="List/search conversations with filters and ranking [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
+    ],
+    include_in_schema=False,
+)
+async def list_chat_conversations(
+    query: Optional[str] = Query(None, description="Search term for conversation title"),
+    state: Optional[str] = Query(None, description="Conversation state"),
+    topic_label: Optional[str] = Query(None, description="Topic label filter (use * for prefix)"),
+    keywords: Optional[List[str]] = Query(None, description="Keyword filters (repeatable)"),
+    cluster_id: Optional[str] = Query(None, description="Cluster ID filter"),
+    character_id: Optional[int] = Query(None, description="Character ID filter"),
+    start_date: Optional[str] = Query(None, description="ISO-8601 start date"),
+    end_date: Optional[str] = Query(None, description="ISO-8601 end date"),
+    date_field: Literal["last_modified", "created_at"] = Query("last_modified", description="Date field for filtering"),
+    order_by: Literal["bm25", "recency", "hybrid", "topic"] = Query("recency", description="Ranking mode"),
+    limit: int = Query(50, ge=1, le=200, description="Items per page"),
+    offset: int = Query(0, ge=0, description="Offset"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        topic_filter = topic_label.strip() if topic_label else None
+        topic_prefix = False
+        if topic_filter and topic_filter.endswith("*"):
+            topic_prefix = True
+            topic_filter = topic_filter[:-1]
+        if topic_filter is not None and topic_filter.strip() == "":
+            topic_filter = None
+
+        kw_list = [k.strip() for k in (keywords or []) if k and k.strip()]
+        kw_list = kw_list or None
+
+        start_iso = _parse_iso_datetime(start_date, "start_date").isoformat() if start_date else None
+        end_iso = _parse_iso_datetime(end_date, "end_date").isoformat() if end_date else None
+
+        rows = db.search_conversations(
+            query,
+            client_id=str(current_user.id),
+            character_id=character_id,
+            state=state,
+            topic_label=topic_filter,
+            topic_prefix=topic_prefix,
+            cluster_id=cluster_id,
+            keywords=kw_list,
+            start_date=start_iso,
+            end_date=end_iso,
+            date_field=date_field,
+        )
+
+        max_bm25 = max((row.get("bm25_raw") or 0.0) for row in rows) if rows else 0.0
+        w_bm25, w_recency = _normalize_weights(CHAT_BM25_WEIGHT, CHAT_RECENCY_WEIGHT)
+
+        for row in rows:
+            bm25_raw = row.get("bm25_raw") or 0.0
+            bm25_norm = min((bm25_raw / max_bm25), 1.0) if max_bm25 else 0.0
+            dt = _coerce_datetime(row.get("last_modified")) or _coerce_datetime(row.get("created_at"))
+            recency = _calculate_recency(dt, RECENCY_HALF_LIFE_DAYS)
+            row["_bm25_norm"] = bm25_norm
+            row["_recency"] = recency
+            row["_hybrid"] = (w_bm25 * bm25_norm) + (w_recency * recency)
+            row["_sort_dt"] = dt or datetime.fromtimestamp(0, tz=timezone.utc)
+            label = row.get("topic_label")
+            row["_topic_sort"] = str(label).strip().lower() if label else None
+
+        if order_by == "bm25":
+            rows.sort(
+                key=lambda r: (
+                    -(r.get("_bm25_norm") or 0.0),
+                    -(r.get("_sort_dt").timestamp()),
+                    r.get("id") or "",
+                )
+            )
+        elif order_by == "hybrid":
+            rows.sort(
+                key=lambda r: (
+                    -(r.get("_hybrid") or 0.0),
+                    -(r.get("_sort_dt").timestamp()),
+                    r.get("id") or "",
+                )
+            )
+        elif order_by == "topic":
+            rows.sort(
+                key=lambda r: (
+                    r.get("_topic_sort") is None,
+                    r.get("_topic_sort") or "",
+                    -(r.get("_bm25_norm") or 0.0),
+                    -(r.get("_recency") or 0.0),
+                    r.get("id") or "",
+                )
+            )
+        else:
+            rows.sort(
+                key=lambda r: (
+                    -(r.get("_recency") or 0.0),
+                    -(r.get("_sort_dt").timestamp()),
+                    r.get("id") or "",
+                )
+            )
+
+        total = len(rows)
+        page_rows = rows[offset: offset + limit]
+        items: List[ConversationListItem] = []
+        for row in page_rows:
+            conv_id = row.get("id") or ""
+            keyword_rows = db.get_keywords_for_conversation(conv_id)
+            keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
+            try:
+                message_count = db.count_messages_for_conversation(conv_id)
+            except Exception:
+                message_count = 0
+
+            bm25_norm = row.get("_bm25_norm") if order_by in {"bm25", "hybrid"} else None
+            items.append(
+                ConversationListItem(
+                    id=conv_id,
+                    character_id=row.get("character_id"),
+                    title=row.get("title"),
+                    state=row.get("state") or "in-progress",
+                    topic_label=row.get("topic_label"),
+                    bm25_norm=bm25_norm,
+                    last_modified=_coerce_datetime(row.get("last_modified")) or datetime.now(timezone.utc),
+                    created_at=_coerce_datetime(row.get("created_at")) or datetime.now(timezone.utc),
+                    message_count=message_count,
+                    keywords=keywords_list,
+                    cluster_id=row.get("cluster_id"),
+                    source=row.get("source"),
+                    external_ref=row.get("external_ref"),
+                    version=row.get("version") or 1,
+                )
+            )
+
+        pagination = ConversationListPagination(
+            limit=limit,
+            offset=offset,
+            total=total,
+            has_more=(offset + limit) < total,
+        )
+        return ConversationListResponse(items=items, pagination=pagination)
+    except InputError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Conversation list failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list conversations") from exc
+
+
+@router.patch(
+    "/conversations/{conversation_id}",
+    response_model=ConversationListItem,
+    summary="Update conversation metadata",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.update")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.update")),
+    ],
+)
+@conversations_alias_router.patch(
+    "/conversations/{conversation_id}",
+    response_model=ConversationListItem,
+    summary="Update conversation metadata [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.update")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.update")),
+    ],
+    include_in_schema=False,
+)
+async def update_chat_conversation(
+    payload: ConversationUpdateRequest,
+    conversation_id: str = Path(..., description="Conversation ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+        if conversation.get("version", 1) != payload.version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Version mismatch. Expected {payload.version}, found {conversation.get('version', 1)}",
+            )
+
+        update_fields = payload.model_dump(exclude_unset=True)
+        keywords_payload = update_fields.pop("keywords", None)
+        update_fields.pop("version", None)
+
+        topic_label_changed = "topic_label" in payload.model_fields_set
+        if topic_label_changed:
+            raw_label = update_fields.get("topic_label")
+            normalized_label = str(raw_label).strip() if raw_label is not None else ""
+            latest_message = db.get_latest_message_for_conversation(conversation_id)
+            latest_message_id = latest_message.get("id") if latest_message else None
+            if normalized_label:
+                update_fields["topic_label"] = normalized_label
+                update_fields["topic_label_source"] = "manual"
+                update_fields["topic_last_tagged_at"] = datetime.now(timezone.utc).isoformat()
+                update_fields["topic_last_tagged_message_id"] = latest_message_id
+            else:
+                update_fields["topic_label"] = None
+                update_fields["topic_label_source"] = None
+                update_fields["topic_last_tagged_at"] = None
+                update_fields["topic_last_tagged_message_id"] = None
+
+        allowed_fields = {
+            "state",
+            "topic_label",
+            "topic_label_source",
+            "topic_last_tagged_at",
+            "topic_last_tagged_message_id",
+            "cluster_id",
+            "external_ref",
+            "source",
+        }
+        update_data = {k: v for k, v in update_fields.items() if k in allowed_fields}
+        db.update_conversation(conversation_id, update_data, payload.version)
+
+        if "keywords" in payload.model_fields_set:
+            _replace_conversation_keywords(db, conversation_id, keywords_payload or [])
+
+        if topic_label_changed:
+            try:
+                from tldw_Server_API.app.core.Chat.conversation_enrichment import schedule_conversation_clustering
+
+                schedule_conversation_clustering(db)
+            except Exception as exc:
+                logger.debug("Conversation clustering skipped after manual topic update: %s", exc)
+
+        updated = db.get_conversation_by_id(conversation_id) or conversation
+        keyword_rows = db.get_keywords_for_conversation(conversation_id)
+        keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
+        try:
+            message_count = db.count_messages_for_conversation(conversation_id)
+        except Exception:
+            message_count = 0
+
+        return ConversationListItem(
+            id=updated.get("id") or conversation_id,
+            character_id=updated.get("character_id"),
+            title=updated.get("title"),
+            state=updated.get("state") or "in-progress",
+            topic_label=updated.get("topic_label"),
+            bm25_norm=None,
+            last_modified=_coerce_datetime(updated.get("last_modified")) or datetime.now(timezone.utc),
+            created_at=_coerce_datetime(updated.get("created_at")) or datetime.now(timezone.utc),
+            message_count=message_count,
+            keywords=keywords_list,
+            cluster_id=updated.get("cluster_id"),
+            source=updated.get("source"),
+            external_ref=updated.get("external_ref"),
+            version=updated.get("version") or payload.version + 1,
+        )
+    except ConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InputError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Conversation update failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update conversation") from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}/tree",
+    response_model=ConversationTreeResponse,
+    summary="Get conversation message tree",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.tree")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.tree")),
+    ],
+)
+@conversations_alias_router.get(
+    "/conversations/{conversation_id}/tree",
+    response_model=ConversationTreeResponse,
+    summary="Get conversation message tree [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.tree")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.tree")),
+    ],
+    include_in_schema=False,
+)
+async def get_conversation_tree(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    limit: int = Query(50, ge=1, le=200, description="Root threads per page"),
+    offset: int = Query(0, ge=0, description="Root thread offset"),
+    max_depth: int = Query(4, ge=1, le=20, description="Max depth for the tree"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+        character_name = None
+        if conversation.get("character_id"):
+            card = db.get_character_card_by_id(int(conversation.get("character_id")))
+            character_name = card.get("name") if card else None
+
+        total_messages = db.count_messages_for_conversation(conversation_id)
+        messages: List[Dict[str, Any]] = []
+        batch_size = 1000
+        current_offset = 0
+        while current_offset < total_messages:
+            batch = db.get_messages_for_conversation(
+                conversation_id,
+                limit=batch_size,
+                offset=current_offset,
+                order_by_timestamp="ASC",
+            )
+            if not batch:
+                break
+            messages.extend(batch)
+            current_offset += len(batch)
+
+        nodes: Dict[str, ConversationTreeNode] = {}
+        roots: List[ConversationTreeNode] = []
+        for msg in messages:
+            msg_id = msg.get("id")
+            if not msg_id:
+                continue
+            created_at = _coerce_datetime(msg.get("timestamp")) or datetime.now(timezone.utc)
+            node = ConversationTreeNode(
+                id=msg_id,
+                role=map_sender_to_role(msg.get("sender"), character_name),
+                content=msg.get("content") or "",
+                created_at=created_at,
+                children=[],
+                truncated=False,
+            )
+            nodes[msg_id] = node
+
+        for msg in messages:
+            msg_id = msg.get("id")
+            if not msg_id or msg_id not in nodes:
+                continue
+            parent_id = msg.get("parent_message_id")
+            if parent_id and parent_id in nodes:
+                nodes[parent_id].children.append(nodes[msg_id])
+            else:
+                roots.append(nodes[msg_id])
+
+        total_root_threads = len(roots)
+        root_page = roots[offset: offset + limit]
+
+        message_cap = min(max(TREE_MESSAGE_CAP_DEFAULT, 1), TREE_MESSAGE_CAP_MAX)
+        count = 0
+
+        def prune_node(node: ConversationTreeNode, depth: int) -> Optional[ConversationTreeNode]:
+            nonlocal count
+            if count >= message_cap:
+                return None
+            count += 1
+            if depth >= max_depth:
+                if node.children:
+                    node.truncated = True
+                    node.children = []
+                return node
+            pruned_children: List[ConversationTreeNode] = []
+            for child in node.children:
+                if count >= message_cap:
+                    node.truncated = True
+                    break
+                pruned = prune_node(child, depth + 1)
+                if pruned:
+                    pruned_children.append(pruned)
+                else:
+                    node.truncated = True
+                    break
+            if len(pruned_children) < len(node.children):
+                node.truncated = True
+            node.children = pruned_children
+            return node
+
+        pruned_roots: List[ConversationTreeNode] = []
+        for root in root_page:
+            if count >= message_cap:
+                break
+            pruned = prune_node(root, 1)
+            if pruned:
+                pruned_roots.append(pruned)
+
+        pagination = ConversationTreePagination(
+            limit=limit,
+            offset=offset,
+            total_root_threads=total_root_threads,
+            has_more=(offset + len(pruned_roots)) < total_root_threads,
+        )
+
+        metadata = ConversationMetadata(
+            id=conversation.get("id") or conversation_id,
+            title=conversation.get("title"),
+            state=conversation.get("state") or "in-progress",
+            topic_label=conversation.get("topic_label"),
+            last_modified=_coerce_datetime(conversation.get("last_modified")) or datetime.now(timezone.utc),
+        )
+
+        return ConversationTreeResponse(
+            conversation=metadata,
+            root_threads=pruned_roots,
+            pagination=pagination,
+            depth_cap=max_depth,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Conversation tree failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load conversation tree") from exc
+
+
+@router.get(
+    "/analytics",
+    response_model=ChatAnalyticsResponse,
+    summary="Conversation analytics histogram",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.analytics")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.analytics")),
+    ],
+)
+async def get_chat_analytics(
+    start_date: str = Query(..., description="ISO-8601 start date"),
+    end_date: str = Query(..., description="ISO-8601 end date"),
+    bucket_granularity: Literal["day", "week"] = Query("day", description="Bucket granularity"),
+    limit: int = Query(100, ge=1, le=1000, description="Buckets per page"),
+    offset: int = Query(0, ge=0, description="Bucket offset"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        start_dt = _parse_iso_datetime(start_date, "start_date")
+        end_dt = _parse_iso_datetime(end_date, "end_date")
+        if end_dt < start_dt:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_date must be >= start_date")
+        if (end_dt - start_dt).days > ANALYTICS_MAX_RANGE_DAYS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Date range exceeds maximum of {ANALYTICS_MAX_RANGE_DAYS} days",
+            )
+
+        rows = db.search_conversations(
+            None,
+            client_id=str(current_user.id),
+            start_date=start_dt.isoformat(),
+            end_date=end_dt.isoformat(),
+            date_field="last_modified",
+        )
+
+        buckets: Dict[Tuple[datetime, Optional[str], str], int] = {}
+        for row in rows:
+            dt = _coerce_datetime(row.get("last_modified")) or _coerce_datetime(row.get("created_at"))
+            if not dt:
+                continue
+            if dt < start_dt or dt > end_dt:
+                continue
+            if bucket_granularity == "week":
+                bucket_date = (dt - timedelta(days=dt.weekday())).date()
+            else:
+                bucket_date = dt.date()
+            bucket_start = datetime.combine(bucket_date, datetime.min.time(), tzinfo=timezone.utc)
+            state_val = row.get("state") or "in-progress"
+            topic_val = row.get("topic_label")
+            key = (bucket_start, topic_val, state_val)
+            buckets[key] = buckets.get(key, 0) + 1
+
+        sorted_keys = sorted(
+            buckets.keys(),
+            key=lambda k: (k[0], k[1] is None, k[1] or "", k[2]),
+        )
+        total = len(sorted_keys)
+        page_keys = sorted_keys[offset: offset + limit]
+        bucket_items = [
+            ChatAnalyticsBucket(
+                bucket_start=key[0],
+                topic_label=key[1],
+                state=key[2],
+                count=buckets[key],
+            )
+            for key in page_keys
+        ]
+
+        pagination = ChatAnalyticsPagination(
+            limit=limit,
+            offset=offset,
+            total=total,
+            has_more=(offset + limit) < total,
+        )
+        return ChatAnalyticsResponse(
+            buckets=bucket_items,
+            pagination=pagination,
+            bucket_granularity=bucket_granularity,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Chat analytics failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch analytics") from exc

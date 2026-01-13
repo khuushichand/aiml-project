@@ -262,7 +262,7 @@ curl -sS "$API/characters/rate-limit-status" -H "X-API-KEY: $KEY"
 - Message metadata/tool-calls: store via endpoints that accept `tool_calls` and retrieve with `db.get_message_metadata(message_id)` (see `character_messages.py`).
 - Rate limits: tune in `character_rate_limiter.py` or via env/settings (`CHARACTER_RATE_LIMIT_*`, `MAX_*`). Defaults (current): `MAX_CHATS_PER_USER=100`, `MAX_MESSAGES_PER_CHAT=1000`, `MAX_MESSAGES_PER_CHAT_SOFT=1000` (non-persisted completions), `MAX_CHAT_COMPLETIONS_PER_MINUTE=20`, `MAX_MESSAGE_SENDS_PER_MINUTE=60`.
 - Provider integration: Character Chat builds standard OpenAI-style `messages` for `/api/v1/chat/completions`. Extend provider logic in the Chat module (`core/Chat/*`).
- - Dictionary application: Pre-gen dictionary logic lives in the Chat module (`chat()`); Character Chat `/complete-v2` does not apply it by default.
+- Dictionary application: Pre-gen dictionary logic lives in the Chat module (`chat()`); Character Chat `/complete-v2` does not apply it by default.
 
 ## Error Handling & Guardrails
 - Validation: Pydantic schemas enforce inputs; import/path errors surface as `InputError`/`ConflictError` mapped to HTTP 400/409.

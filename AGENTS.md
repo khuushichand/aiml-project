@@ -188,6 +188,7 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
   - Unit tests for individual components
   - Integration tests for API endpoints
   - Property-based tests for complex logic
+  - (Property-based tests use frameworks like Hypothesis to validate invariants across many generated inputs; use for algorithms, parsers, and stateful systems.)
 - **Fixtures**: Use pytest fixtures for database and dependency injection
 - **Mocking**: Mock external services (LLMs, transcription services)
 - **Test Markers**: `unit`, `integration`, `external_api`, `local_llm_service`
@@ -388,7 +389,7 @@ This guide is maintained to help coding agents understand the project structure,
 
 ### 1. Planning & Staging
 
-Break complex work into 3-5 stages. Document in a uniquely named plan file for the specific task (avoid generic names like `IMPLEMENTATION.md` or `IMPLEMENTATION_PLAN.md`), for example `IMPLEMENTATION_PLAN_<short_task_slug>.md`:
+Break complex work into 3-5 stages. Document in a uniquely named plan file for the specific task (avoid generic names like `IMPLEMENTATION.md` or `IMPLEMENTATION_PLAN.md`), for example `IMPLEMENTATION_PLAN_<short_task_slug>.md` (e.g., `IMPLEMENTATION_PLAN_feedback_system.md`, `IMPLEMENTATION_PLAN_auth_refactor.md`):
 
 ```markdown
 ## Stage N: [Name]

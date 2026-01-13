@@ -30,6 +30,8 @@ See also: `Docs/Published/Code_Documentation/Ingestion_Pipeline_Audio.md` for th
   - Export chat history; fetch messages formatted for completions
   - Use Chat API for LLM replies with `conversation_id`/`character_id`
   - See: [API Design](API_Design.md) for character chat endpoints overview
+- Conversation metadata API: list/search, tree view, analytics, and knowledge-save under `/api/v1/chat/conversations` and `/api/v1/chat/analytics` (alias: `/api/v1/chats/conversations`)
+  - Includes ranking modes (`bm25|recency|hybrid|topic`) and topic/state filters
 
 #### RAG (Retrieval-Augmented Generation) - `/api/v1/rag`
 
@@ -71,3 +73,19 @@ The RAG module provides advanced search and question-answering capabilities acro
 For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
 - [RAG API Documentation](RAG_API_Documentation.md) - Architecture and implementation details
+
+#### Reading List - `/api/v1/reading`
+
+Reading List supports URL capture, clean text extraction, tagging, import/export, and actions (summarize/TTS).
+
+- `POST /api/v1/reading/save` - save a URL
+- `GET /api/v1/reading/items` - list/search items
+- `GET /api/v1/reading/items/{id}` - item detail
+- `PATCH /api/v1/reading/items/{id}` - update metadata
+- `DELETE /api/v1/reading/items/{id}` - delete (soft/hard)
+- `POST /api/v1/reading/items/{id}/summarize` - summarize
+- `POST /api/v1/reading/items/{id}/tts` - TTS audio
+- `POST /api/v1/reading/import` - Pocket/Instapaper import
+- `GET /api/v1/reading/export` - JSONL/ZIP export
+
+See: [Reading List API](Reading_List_API.md)

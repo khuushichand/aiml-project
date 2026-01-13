@@ -173,8 +173,16 @@ class TelemetryConfig:
         self.otlp_insecure = os.getenv("OTEL_EXPORTER_OTLP_INSECURE", "true").lower() == "true"
 
         # Exporter selection
-        self.metrics_exporters = os.getenv("OTEL_METRICS_EXPORTER", "prometheus,console").split(",")
-        self.traces_exporters = os.getenv("OTEL_TRACES_EXPORTER", "console").split(",")
+        self.metrics_exporters = [
+            exporter.strip()
+            for exporter in os.getenv("OTEL_METRICS_EXPORTER", "prometheus").split(",")
+            if exporter.strip()
+        ]
+        self.traces_exporters = [
+            exporter.strip()
+            for exporter in os.getenv("OTEL_TRACES_EXPORTER", "console").split(",")
+            if exporter.strip()
+        ]
 
         # Prometheus Configuration
         self.prometheus_port = int(os.getenv("PROMETHEUS_PORT", "9090"))
@@ -184,6 +192,9 @@ class TelemetryConfig:
         self.enable_metrics = os.getenv("ENABLE_METRICS", "true").lower() == "true"
         self.enable_tracing = os.getenv("ENABLE_TRACING", "true").lower() == "true"
         self.enable_logging = os.getenv("ENABLE_OTEL_LOGGING", "false").lower() == "true"
+        self.enable_console_metrics_exporter = (
+            os.getenv("ENABLE_OTEL_CONSOLE_METRICS_EXPORTER", "false").lower() == "true"
+        )
         self.enable_profiling = os.getenv("ENABLE_PROFILING", "false").lower() == "true"
 
         # Performance settings
@@ -191,6 +202,9 @@ class TelemetryConfig:
         self.traces_export_batch_size = int(os.getenv("TRACES_EXPORT_BATCH_SIZE", "512"))
         self.traces_export_timeout = int(os.getenv("TRACES_EXPORT_TIMEOUT_MS", "30000"))
         self.sample_rate = float(os.getenv("METRICS_SAMPLE_RATE", "1.0"))
+
+        if self.enable_console_metrics_exporter and "console" not in self.metrics_exporters:
+            self.metrics_exporters.append("console")
 
         # Additional metadata
         self.hostname = socket.gethostname()

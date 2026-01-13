@@ -27,12 +27,12 @@ The embeddings service is implemented as part of the FastAPI application and sup
 - Best for: Personal use, small teams, development
 
 ### Enterprise Architecture (≥5 concurrent users)
-- Implementation: Core Jobs worker (`core/Embeddings/services/jobs_worker.py`)
-- Processing: Queue-based Jobs pipeline (chunking → embedding → storage) via core Jobs
-- Infra: Jobs DB (SQLite/Postgres) and worker processes; no Redis required
+- Implementation: Redis Streams worker (`core/Embeddings/services/redis_worker.py`)
+- Processing: Queue-based Redis pipeline (chunking → embedding → storage + content) with Jobs as the root status/billing record
+- Infra: Redis + Jobs DB (SQLite/Postgres) and worker processes
 - Best for: Production, multi-tenant, high volume
 
-Note: The “mode” depends on which processes you run (API only vs API + Jobs worker). There is no runtime flag that switches the API behavior; `EMBEDDINGS_MODE` is a deployment convention, not an API setting.
+Note: The “mode” depends on which processes you run (API only vs API + Redis worker). There is no runtime flag that switches the API behavior; `EMBEDDINGS_MODE` is a deployment convention, not an API setting.
 
 ---
 
@@ -169,22 +169,31 @@ pip install -e .
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### Environment and Jobs Worker
+### Environment and Redis Worker
 ```bash
 export JOBS_DB_URL="sqlite:///Databases/jobs.db"  # optional; set Postgres URL for shared Jobs DB
+export REDIS_URL="redis://localhost:6379"
 ```
 
-Use `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml` to control chunking/embedding defaults. Start the core Jobs worker:
+Start the Redis Streams worker (stage workers controlled via env vars):
 
 ```bash
-python -m tldw_Server_API.app.core.Embeddings.services.jobs_worker
+export EMBEDDINGS_REDIS_WORKERS_CHUNKING=2
+export EMBEDDINGS_REDIS_WORKERS_EMBEDDING=2
+export EMBEDDINGS_REDIS_WORKERS_STORAGE=1
+export EMBEDDINGS_REDIS_WORKERS_CONTENT=1
+python -m tldw_Server_API.app.core.Embeddings.services.redis_worker --stage all
 ```
 
-### Docker Compose (API + Jobs Worker)
+### Docker Compose (API + Redis Worker)
 ```yaml
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
   api:
     build: .
     ports: ["8000:8000"]
@@ -192,15 +201,21 @@ services:
       - AUTH_MODE=single_user
       - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
     volumes:
       - ./Databases/user_databases:/app/Databases/user_databases
       - ./models/embedding_models_data:/app/models/embedding_models_data
 
-  jobs-worker:
+  redis-worker:
     build: .
-    command: python -m tldw_Server_API.app.core.Embeddings.services.jobs_worker
+    command: python -m tldw_Server_API.app.core.Embeddings.services.redis_worker --stage all
     environment:
+      - REDIS_URL=redis://redis:6379
       - JOBS_DB_URL=sqlite:///Databases/jobs.db
+      - EMBEDDINGS_REDIS_WORKERS_CHUNKING=2
+      - EMBEDDINGS_REDIS_WORKERS_EMBEDDING=2
+      - EMBEDDINGS_REDIS_WORKERS_STORAGE=1
+      - EMBEDDINGS_REDIS_WORKERS_CONTENT=1
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - ./Databases:/app/Databases
@@ -208,7 +223,7 @@ services:
 ```
 
 ### Kubernetes (example)
-Deploy API and jobs worker as separate Deployments. Ensure the Jobs DB (SQLite volume or Postgres service) is reachable. Health probes should use `GET /api/v1/embeddings/health` on the API.
+Deploy API and Redis worker as separate Deployments. Ensure Redis and the Jobs DB (SQLite volume or Postgres service) are reachable. Health probes should use `GET /api/v1/embeddings/health` on the API.
 
 ---
 
@@ -312,7 +327,7 @@ curl -X POST -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 Symptom: OOM or slow responses.
 Actions:
 - Prefer smaller models (e.g., `text-embedding-3-small`, `all-MiniLM-L6-v2`)
-- Reduce concurrent load; scale out using additional Jobs workers
+- Reduce concurrent load; scale out using additional Redis workers
 - For HF models, unload inactive models sooner (see `model_unload_timeout` in YAML)
 
 ### 3) Slow Embeddings

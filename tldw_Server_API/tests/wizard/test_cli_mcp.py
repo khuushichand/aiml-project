@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from typer.testing import CliRunner
+
+from tldw_Server_API.cli.wizard.cli import app
+from tldw_Server_API.tests.wizard.helpers import assert_action_field, assert_wizard_json
+
+
+runner = CliRunner()
+
+
+def test_mcp_add_writes_config_and_backup():
+    with runner.isolated_filesystem():
+        config_path = Path("cursor_settings.json")
+        config_path.write_text("{}", encoding="utf-8")
+        url = "ws://localhost:8000/api/v1/mcp/ws"
+        result = runner.invoke(
+            app,
+            ["mcp", "add", "--client", "cursor", "--config-path", str(config_path), "--server-url", url, "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        payload = assert_wizard_json(result.output, command="mcp", status="ok")
+        actions = payload.get("actions") or []
+        assert_action_field(actions, "mcp_client", "status", "updated")
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        assert data["mcpServers"]["tldw_server"]["url"] == url
+        backups = list(config_path.parent.glob("cursor_settings.json.*.bak"))
+        assert backups
+
+
+def test_mcp_add_dry_run_does_not_write():
+    with runner.isolated_filesystem():
+        config_path = Path("cursor_settings.json")
+        original = "{}\n"
+        config_path.write_text(original, encoding="utf-8")
+        result = runner.invoke(
+            app,
+            [
+                "mcp",
+                "add",
+                "--client",
+                "cursor",
+                "--config-path",
+                str(config_path),
+                "--json",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        payload = assert_wizard_json(result.output, command="mcp", status="ok")
+        actions = payload.get("actions") or []
+        assert_action_field(actions, "mcp_client", "status", "updated")
+        assert config_path.read_text(encoding="utf-8") == original
+        mcp_action = next(action["mcp_client"] for action in actions if "mcp_client" in action)
+        assert "diff" in mcp_action
+
+
+def test_mcp_remove_removes_entry():
+    with runner.isolated_filesystem():
+        config_path = Path("cursor_settings.json")
+        config_path.write_text(
+            json.dumps({"mcpServers": {"tldw_server": {"url": "ws://example"}}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        result = runner.invoke(
+            app,
+            [
+                "mcp",
+                "remove",
+                "--client",
+                "cursor",
+                "--config-path",
+                str(config_path),
+                "--json",
+                "--yes",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        payload = assert_wizard_json(result.output, command="mcp", status="ok")
+        actions = payload.get("actions") or []
+        assert_action_field(actions, "mcp_client", "status", "updated")
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        assert "mcpServers" not in data
+
+
+def test_mcp_add_unchanged_skips_backup():
+    with runner.isolated_filesystem():
+        config_path = Path("cursor_settings.json")
+        config_path.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "tldw_server": {
+                            "headers": {"X-API-KEY": "YOUR_API_KEY"},
+                            "transport": "websocket",
+                            "url": "ws://127.0.0.1:8000/api/v1/mcp/ws",
+                        }
+                    }
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result = runner.invoke(
+            app,
+            ["mcp", "add", "--client", "cursor", "--config-path", str(config_path), "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        payload = assert_wizard_json(result.output, command="mcp", status="ok")
+        actions = payload.get("actions") or []
+        assert_action_field(actions, "mcp_client", "status", "unchanged")
+        backups = list(config_path.parent.glob("cursor_settings.json.*.bak"))
+        assert not backups

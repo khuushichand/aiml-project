@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class WatchlistRule(BaseModel):
+    rule_id: Optional[str] = Field(None, description="Optional stable rule identifier")
     pattern: str = Field(..., description="Literal or /regex/ pattern")
     category: Optional[str] = Field(None, description="Logical category, e.g., 'adult', 'violence', 'self_harm'")
     severity: Optional[str] = Field("info", description="info | warning | critical")
@@ -18,7 +19,8 @@ class Watchlist(BaseModel):
     description: Optional[str] = None
     enabled: bool = True
     scope_type: str = Field("user", description="global | user | team | org")
-    scope_id: str = Field(..., description="The corresponding subject id")
+    scope_id: Optional[str] = Field(None, description="The corresponding subject id (null for global)")
+    managed_by: Optional[str] = Field(None, description="config | api")
     rules: List[WatchlistRule] = Field(default_factory=list)
 
 
@@ -48,9 +50,13 @@ class AlertItem(BaseModel):
     scope_id: Optional[str] = None
     source: str
     watchlist_id: Optional[str] = None
+    rule_id: Optional[str] = None
     rule_category: Optional[str] = None
     rule_severity: Optional[str] = None
     pattern: Optional[str] = None
+    source_id: Optional[str] = None
+    chunk_id: Optional[str] = None
+    chunk_seq: Optional[int] = None
     text_snippet: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
     is_read: bool = False

@@ -584,11 +584,12 @@ def validate_provider_configuration(
         Tuple of (is_valid, error_message)
     """
     try:
-        from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+        from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
     except Exception:
-        PROVIDER_REQUIRES_KEY = {}
+        def provider_requires_api_key(_provider: str) -> bool:  # type: ignore[misc]
+            return True
 
-    if PROVIDER_REQUIRES_KEY.get(provider, False):
+    if provider_requires_api_key(provider):
         api_key = api_keys.get(provider)
         if not api_key:
             return False, f"API key for provider '{provider}' is missing or not configured."

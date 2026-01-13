@@ -12,6 +12,11 @@ class OutputCreateRequest(BaseModel):
     run_id: Optional[int] = Field(default=None, description="Run to select items from (future)")
     title: Optional[str] = None
     data: Optional[Dict[str, object]] = Field(default=None, description="Inline context override (advanced)")
+    generate_mece: bool = Field(default=False, description="Generate a MECE variant output")
+    mece_template_id: Optional[int] = Field(default=None, description="Override template id for MECE output")
+    generate_tts: bool = Field(default=False, description="Generate a TTS audio variant output")
+    tts_template_id: Optional[int] = Field(default=None, description="Override template id for TTS output")
+    ingest_to_media_db: bool = Field(default=False, description="Ingest outputs into Media DB")
     tts_model: Optional[str] = Field(default=None, description="TTS model id, e.g., 'kokoro', 'tts-1'")
     tts_voice: Optional[str] = Field(default=None, description="TTS voice id, e.g., 'af_heart'")
     tts_speed: Optional[float] = Field(default=None, ge=0.25, le=4.0, description="TTS speed override")
@@ -23,6 +28,7 @@ class OutputArtifact(BaseModel):
     type: str
     format: Literal["md", "html", "mp3"]
     storage_path: str
+    media_item_id: Optional[int] = None
     created_at: datetime
 
 

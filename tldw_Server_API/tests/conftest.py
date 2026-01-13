@@ -4,6 +4,8 @@ Pytest configuration for the main test suite.
 Registers shared test plugins and provides common fixtures.
 """
 
+pytest_plugins = ["tldw_Server_API.tests._plugins.http_client_patch_guard"]
+
 import os
 from pathlib import Path
 try:
@@ -38,6 +40,11 @@ os.environ.pop("PROFILE", None)
 os.environ["DISABLE_AUTHNZ_SCHEDULER"] = "1"
 os.environ["AUTHNZ_SCHEDULER_DISABLED"] = "1"
 os.environ["WORKFLOWS_SCHEDULER_ENABLED"] = "false"
+# Ensure ingestion backpressure/tenant quotas don't leak from developer envs into tests.
+os.environ["EMBEDDINGS_TENANT_RPS"] = "0"
+os.environ["INGEST_TENANT_RPS"] = "0"
+os.environ["EMB_BACKPRESSURE_MAX_DEPTH"] = "999999999"
+os.environ["EMB_BACKPRESSURE_MAX_AGE_SECONDS"] = "999999999"
 # Relax webhook egress for test replay/egress simulations (no real network used in test short-circuit paths)
 os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
 os.environ.setdefault("WORKFLOWS_WEBHOOK_ALLOWLIST", "*")
@@ -116,6 +123,10 @@ _RISKY_ENV_KEYS = (
     "LOG_COLOR",
     "FORCE_COLOR",
     "PY_COLORS",
+    "EMB_BACKPRESSURE_MAX_DEPTH",
+    "EMB_BACKPRESSURE_MAX_AGE_SECONDS",
+    "EMBEDDINGS_TENANT_RPS",
+    "INGEST_TENANT_RPS",
 )
 
 

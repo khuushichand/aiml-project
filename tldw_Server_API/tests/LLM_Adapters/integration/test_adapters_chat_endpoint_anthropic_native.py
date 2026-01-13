@@ -3,7 +3,7 @@ Integration tests for /api/v1/chat/completions using Anthropic adapter native HT
 
 Behavior:
 - If ANTHROPIC_API_KEY is set, make a real API call via the adapter.
-- Otherwise, mock httpx.Client to avoid network and keep deterministic behavior.
+- Otherwise, replace the adapter HTTP client to avoid network and keep deterministic behavior.
 """
 
 from __future__ import annotations

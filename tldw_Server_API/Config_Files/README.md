@@ -166,6 +166,8 @@ For each type in `chunking_types` (`article|audio|book|document|mediawiki_articl
 - `database_url` (dsn): Auth DB URL; default uses SQLite file.
 - `enable_registration` (bool)
 - `require_registration_code` (bool)
+- `enable_org_scoped_registration_codes` (bool)
+- `org_invite_allow_missing_email` (bool): Allow org invite redemption when user email is missing.
 - `rate_limit_enabled` (bool)
 - `rate_limit_per_minute` (int)
 - `rate_limit_burst` (int)
@@ -173,6 +175,7 @@ For each type in `chunking_types` (`article|audio|book|document|mediawiki_articl
 - `refresh_token_expire_days` (int)
 - `byok_enabled` (bool): Enable per-user BYOK keys (ignored in single_user mode).
 - `byok_allowed_providers` (csv): Optional allowlist of providers eligible for BYOK.
+- `byok_allowed_base_url_providers` (csv): Optional allowlist of providers that may set BYOK `base_url`.
 - `byok_encryption_key` (str): Base64-encoded 32-byte key for BYOK secret encryption (AES-GCM).
 - `byok_secondary_encryption_key` (str): Secondary BYOK encryption key for dual-read during rotations.
 
@@ -299,6 +302,9 @@ VibeVoice:
 - `web_scraper_api_timeout|web_scraper_api_retry|web_scraper_api_retry_delay` (int)
 - `web_scraper_retry_count` (int)
 - `web_scraper_stealth_playwright` (bool)
+- `custom_scrapers_yaml_path` (path, optional): override custom scraper router rules file
+- `web_scraper_default_backend` (str, default `auto`): `auto|curl|httpx|playwright`
+- `web_scraper_ua_mode` (str, default `fixed`): `fixed|rotate`
   - Crawl flags (env overrides file):
     - `web_crawl_strategy` (str) → `WEB_CRAWL_STRATEGY` (default `default`)
     - `web_crawl_include_external` (bool) → `WEB_CRAWL_INCLUDE_EXTERNAL` (default `false`)

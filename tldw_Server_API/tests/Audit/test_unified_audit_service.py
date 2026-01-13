@@ -212,13 +212,19 @@ async def test_shared_mode_sets_tenant_user_id(temp_db_path):
     )
     await service.initialize()
     try:
-        ctx = AuditContext(user_id="tenant-1")
+        ctx = AuditContext(user_id="101")
         await service.log_event(
             event_type=AuditEventType.DATA_READ,
             context=ctx,
             resource_type="doc",
             resource_id="shared1",
         )
+        await service.log_event(
+            event_type=AuditEventType.DATA_READ,
+            resource_type="doc",
+            resource_id="shared-missing",
+        )
+        await service.log_event(event_type=AuditEventType.SYSTEM_START)
         await service.flush()
 
         async with aiosqlite.connect(temp_db_path) as db:
@@ -227,23 +233,59 @@ async def test_shared_mode_sets_tenant_user_id(temp_db_path):
                 cols = await cur.fetchall()
             assert "tenant_user_id" in {c["name"] for c in cols}
 
+            async with db.execute("PRAGMA user_version") as cur:
+                version_row = await cur.fetchone()
+            assert int(version_row[0]) >= 1
+
             async with db.execute("PRAGMA table_info(audit_daily_stats)") as cur:
                 stats_cols = await cur.fetchall()
             assert "tenant_user_id" in {c["name"] for c in stats_cols}
 
-            async with db.execute("SELECT tenant_user_id FROM audit_events LIMIT 1") as cur:
+            async with db.execute(
+                "SELECT tenant_user_id FROM audit_events WHERE resource_id = ? LIMIT 1",
+                ("shared1",),
+            ) as cur:
                 row = await cur.fetchone()
-            assert row["tenant_user_id"] == "tenant-1"
+            assert row["tenant_user_id"] == "101"
 
-        await service.log_event(event_type=AuditEventType.SYSTEM_START)
-        await service.flush()
         async with aiosqlite.connect(temp_db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT tenant_user_id FROM audit_events WHERE context_user_id IS NULL LIMIT 1"
+                "SELECT tenant_user_id FROM audit_events WHERE resource_id = ? LIMIT 1",
+                ("shared-missing",),
+            ) as cur:
+                missing_row = await cur.fetchone()
+            assert missing_row["tenant_user_id"] == "unidentified_user"
+            async with db.execute(
+                "SELECT tenant_user_id FROM audit_events WHERE event_type = ? LIMIT 1",
+                (AuditEventType.SYSTEM_START.value,),
             ) as cur:
                 row2 = await cur.fetchone()
             assert row2["tenant_user_id"] == "system"
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_shared_mode_rejects_non_numeric_tenant_id(temp_db_path):
+    service = UnifiedAuditService(
+        db_path=temp_db_path,
+        storage_mode="shared",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await service.initialize()
+    try:
+        ctx = AuditContext(user_id="tenant-1")
+        with pytest.raises(ValueError):
+            await service.log_event(
+                event_type=AuditEventType.DATA_READ,
+                context=ctx,
+                resource_type="doc",
+                resource_id="invalid-tenant",
+            )
     finally:
         await service.stop()
 

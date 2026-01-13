@@ -161,3 +161,120 @@ async def test_single_user_bootstrap_reuses_preseeded_primary_key_postgres(
     assert row["scope"] == "admin"
     assert row["status"] == "active"
     assert int(row["is_virtual"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_single_user_bootstrap_fails_with_extra_active_user_postgres(
+    isolated_test_environment,
+    monkeypatch,
+):
+    client, _db_name = isolated_test_environment
+    assert isinstance(client, TestClient)
+
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_conflict_key_pg_123")
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+
+    await pool.execute(
+        """
+        INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
+        VALUES (?, ?, ?, ?, TRUE, TRUE, 'user')
+        ON CONFLICT (id) DO NOTHING
+        """,
+        999,
+        "extra_user",
+        "extra@example.local",
+        "",
+    )
+
+    ok = await bootstrap_single_user_profile()
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_single_user_bootstrap_fails_with_multiple_primary_keys_postgres(
+    isolated_test_environment,
+    monkeypatch,
+):
+    client, _db_name = isolated_test_environment
+    assert isinstance(client, TestClient)
+
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_multi_key_pg_123")
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    settings = get_settings()
+    single_user_id = settings.SINGLE_USER_FIXED_ID
+
+    await pool.execute(
+        """
+        INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
+        VALUES (?, ?, ?, ?, TRUE, TRUE, 'admin')
+        ON CONFLICT (id) DO NOTHING
+        """,
+        single_user_id,
+        "single_user",
+        "single_user@example.local",
+        "",
+    )
+
+    manager = APIKeyManager()
+    await manager.initialize()
+
+    primary_value = settings.SINGLE_USER_API_KEY
+    primary_hash = manager.hash_api_key(primary_value)
+    primary_prefix = (primary_value[:10] + "...") if len(primary_value) > 10 else primary_value
+
+    extra_value = "extra_single_user_key_pg_456"
+    extra_hash = manager.hash_api_key(extra_value)
+    extra_prefix = (extra_value[:10] + "...") if len(extra_value) > 10 else extra_value
+
+    await pool.execute(
+        """
+        INSERT INTO api_keys (
+            user_id, key_hash, key_prefix, name, description,
+            scope, status, is_virtual
+        ) VALUES (?, ?, ?, ?, ?, ?, 'active', FALSE)
+        ON CONFLICT (key_hash) DO NOTHING
+        """,
+        single_user_id,
+        primary_hash,
+        primary_prefix,
+        "primary key",
+        "Primary API key",
+        "admin",
+    )
+    await pool.execute(
+        """
+        INSERT INTO api_keys (
+            user_id, key_hash, key_prefix, name, description,
+            scope, status, is_virtual
+        ) VALUES (?, ?, ?, ?, ?, ?, 'active', FALSE)
+        ON CONFLICT (key_hash) DO NOTHING
+        """,
+        single_user_id,
+        extra_hash,
+        extra_prefix,
+        "extra key",
+        "Extra API key",
+        "read",
+    )
+
+    ok = await bootstrap_single_user_profile()
+    assert ok is False

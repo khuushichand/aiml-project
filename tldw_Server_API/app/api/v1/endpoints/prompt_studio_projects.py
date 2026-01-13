@@ -22,6 +22,7 @@ See also
 - Prompt Studio Evaluations API: /api/v1/prompt-studio/evaluations
 """
 
+import os
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Request, Header
 from fastapi.encoders import jsonable_encoder
@@ -166,6 +167,8 @@ async def create_project(
         Created project details
     """
     try:
+        if not isinstance(idempotency_key, str):
+            idempotency_key = None
         # Idempotency: return existing project when the same key is reused
         user_id_str = str(user_context.get("user_id", "anonymous"))
         if idempotency_key:
@@ -255,7 +258,7 @@ async def create_project(
 async def list_projects(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
-    status: Optional[str] = Query(None, description="Filter by status"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
     include_deleted: bool = Query(False, description="Include deleted projects"),
     search: Optional[str] = Query(None, description="Search in name and description"),
     user_context: Dict = Depends(get_prompt_studio_user),
@@ -280,7 +283,7 @@ async def list_projects(
         # Get projects for user
         result = db.list_projects(
             user_id=user_context["user_id"] if not user_context["is_admin"] else None,
-            status=status,
+            status=status_filter,
             include_deleted=include_deleted,
             page=page,
             per_page=per_page,
@@ -301,9 +304,21 @@ async def list_projects(
 
     except DatabaseError as e:
         logger.error(f"Database error listing projects: {e}")
+        detail = "Failed to list projects"
+        if os.getenv("TEST_MODE", "").lower() == "true":
+            detail = f"{detail}: {e}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list projects"
+            detail=detail,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Unexpected error listing projects: {}", e)
+        detail = "Failed to list projects"
+        if os.getenv("TEST_MODE", "").lower() == "true":
+            detail = f"{detail}: {e}"
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=detail,
         )
 
 # Compatibility: GET on base path without trailing slash
@@ -324,7 +339,7 @@ async def list_projects_simple(
     return await list_projects(
         page=page,
         per_page=per_page,
-        status=status_filter,
+        status_filter=status_filter,
         include_deleted=include_deleted,
         search=search,
         user_context=user_context,

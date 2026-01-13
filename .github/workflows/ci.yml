@@ -21,6 +21,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  http-client-patch-guard:
+    name: HTTP Client Patch Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Guard against raw HTTP client patching
+        run: |
+          python Helper_Scripts/checks/guard_http_client_patching.py
   syntax-check:
     name: Syntax Check (compileall)
     runs-on: ubuntu-latest
@@ -92,6 +106,95 @@ jobs:
         run: npm run lint
         working-directory: tldw-frontend
 
+  wizard-tests:
+    name: Wizard Tests (Coverage Gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: tldw_user
+          POSTGRES_PASSWORD: TestPassword123!
+          POSTGRES_DB: tldw_content
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U tldw_user -d tldw_content"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PYTHONPATH: .
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      TEST_MODE: 'true'
+      DISABLE_HEAVY_STARTUP: '1'
+      POSTGRES_TEST_HOST: 127.0.0.1
+      POSTGRES_TEST_DB: tldw_content
+      POSTGRES_TEST_USER: tldw_user
+      POSTGRES_TEST_PASSWORD: TestPassword123!
+      TEST_DB_HOST: 127.0.0.1
+      TEST_DB_USER: tldw_user
+      TEST_DB_PASSWORD: TestPassword123!
+      TEST_DB_NAME: tldw_test
+      TLDW_TEST_POSTGRES_REQUIRED: '1'
+      WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: '3.12'
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev,multiplayer
+
+      - name: Install pg client and wait for PG
+        uses: ./.github/actions/wait-for-postgres
+        with:
+          host: 127.0.0.1
+          port: ${{ job.services.postgres.ports[5432] }}
+          user: tldw_user
+
+      - name: Export PG env vars
+        shell: bash
+        run: |
+          echo "POSTGRES_TEST_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
+          echo "TEST_DB_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
+          echo "TEST_DATABASE_URL=postgresql://tldw_user:TestPassword123!@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
+          echo "DATABASE_URL=postgresql://tldw_user:TestPassword123!@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
+
+      - name: Ensure base DB exists
+        shell: bash
+        env:
+          PGPASSWORD: ${{ env.POSTGRES_TEST_PASSWORD }}
+        run: |
+          PORT="${{ job.services.postgres.ports[5432] }}"
+          DB_NAME="${POSTGRES_TEST_DB:-tldw_content}"
+          DB_USER="${POSTGRES_TEST_USER:-tldw_user}"
+          echo "Ensuring database '$DB_NAME' exists on port $PORT as user $DB_USER"
+          psql -h 127.0.0.1 -p "$PORT" -U "$DB_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
+            psql -h 127.0.0.1 -p "$PORT" -U "$DB_USER" -d postgres -c "CREATE DATABASE ${DB_NAME}"
+
+      - name: Run wizard tests (coverage gate)
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin \
+            tldw_Server_API/tests/wizard \
+            --cov=tldw_Server_API/cli/wizard --cov-report=term-missing --cov-fail-under=80
+
   full-suite-linux:
     name: Full Suite (Ubuntu / Python ${{ matrix.python }})
     runs-on: ubuntu-latest
@@ -135,6 +238,8 @@ jobs:
       # Align AuthNZ_Postgres conftest default DB name with tests
       TEST_DB_NAME: tldw_test
       TLDW_TEST_POSTGRES_REQUIRED: '1'
+      REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports[6379] }}/0
+      EMBEDDINGS_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports[6379] }}/0
       # Allow mock-host test URLs in strict egress environments
       WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
     steps:

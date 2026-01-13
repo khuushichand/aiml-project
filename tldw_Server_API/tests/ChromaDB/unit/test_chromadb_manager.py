@@ -499,7 +499,10 @@ class TestContentProcessing:
         media_id = "media_123"
 
         # Setup mocks
-        mock_chunk_for_embed.return_value = [{"text": "chunk1", "metadata": {}}, {"text": "chunk2", "metadata": {}}]
+        mock_chunk_for_embed.return_value = [
+            {"text": "chunk1", "metadata": {"paragraph_kind": "header_atx", "start_index": 5, "end_index": 12}},
+            {"text": "chunk2", "metadata": {}},
+        ]
         mock_create_emb.return_value = [[0.1, 0.2], [0.3, 0.4]]
 
         mock_collection = MagicMock()
@@ -516,6 +519,14 @@ class TestContentProcessing:
         mock_chunk_for_embed.assert_called_once()
         mock_create_emb.assert_called_once()
         mock_collection.upsert.assert_called_once()
+
+        args, kwargs = mock_collection.upsert.call_args
+        metadatas = kwargs.get("metadatas") or []
+        assert len(metadatas) == 2
+        assert metadatas[0].get("chunk_type") == "heading"
+        assert metadatas[0].get("start_char") == 5
+        assert metadatas[0].get("end_char") == 12
+        assert metadatas[1].get("chunk_type") == "text"
 
     @patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chunk_for_embedding')
     @patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.create_embeddings_batch')

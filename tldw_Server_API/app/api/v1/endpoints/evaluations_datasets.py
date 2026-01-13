@@ -153,12 +153,16 @@ async def get_dataset(
         )
 
 
-@datasets_router.delete("/datasets/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
+@datasets_router.delete(
+    "/datasets/{dataset_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
 async def delete_dataset(
     dataset_id: str,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
-):
+) -> Response:
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
         ok = await svc.delete_dataset(dataset_id, deleted_by=user_id)
@@ -168,7 +172,7 @@ async def delete_dataset(
                 error_type="not_found_error",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
-        return {"status": "deleted"}
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException:
         raise
     except Exception as e:

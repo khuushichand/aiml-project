@@ -200,7 +200,7 @@ export default function LogsPage() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold">System Logs</h1>
-              <p className="text-muted-foreground">Query recent logs captured in memory.</p>
+              <p className="text-muted-foreground">Query recent logs aggregated across workers.</p>
             </div>
             <Button
               variant="outline"
@@ -332,6 +332,7 @@ export default function LogsPage() {
                       <TableHead>Level</TableHead>
                       <TableHead>Message</TableHead>
                       <TableHead>Logger</TableHead>
+                      <TableHead>Request ID</TableHead>
                       <TableHead>Org/User</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -369,6 +370,9 @@ export default function LogsPage() {
                         </TableCell>
                         <TableCell className="max-w-[240px] truncate">
                           {entry.logger || entry.module || '—'}
+                        </TableCell>
+                        <TableCell className="max-w-[200px] truncate">
+                          {entry.request_id || '—'}
                         </TableCell>
                         <TableCell>
                           {entry.org_id ? `Org ${entry.org_id}` : '—'}{' '}

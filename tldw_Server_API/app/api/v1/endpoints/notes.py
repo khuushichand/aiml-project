@@ -15,6 +15,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     status,
     Body,
     Header  # Keep Header for expected_version
@@ -448,16 +449,6 @@ async def create_note(
         if len(safe_title_log) > 30:
             safe_title_log = safe_title_log[:30] + "..."
         logger.info(f"User (via DB instance client_id: {db.client_id}) creating note: Title='{safe_title_log}'")
-        # Topic monitoring (non-blocking) for title and content
-        try:
-            mon = get_topic_monitoring_service()
-            uid = getattr(db, 'client_id', None)
-            if note_in.title:
-                mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.title, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
-            if note_in.content:
-                mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.content, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
-        except Exception:
-            pass
         # Compute title (auto-generate if requested)
         effective_title = (note_in.title or "").strip()
         if not effective_title:
@@ -492,6 +483,32 @@ async def create_note(
         )
         if note_id is None:  # Should be caught by exceptions
             raise CharactersRAGDBError("Note creation failed to return an ID.")
+
+        # Topic monitoring (non-blocking) for title and content
+        try:
+            mon = get_topic_monitoring_service()
+            uid = getattr(db, 'client_id', None)
+            src_id = str(note_id)
+            if effective_title:
+                mon.schedule_evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=effective_title,
+                    source="notes.create",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                    source_id=src_id,
+                )
+            if note_in.content:
+                mon.schedule_evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=note_in.content,
+                    source="notes.create",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                    source_id=src_id,
+                )
+        except Exception:
+            pass
 
         # Handle optional keywords: create if needed and link to this note
         try:
@@ -979,10 +996,25 @@ async def update_note(
         try:
             mon = get_topic_monitoring_service()
             uid = getattr(db, 'client_id', None)
+            src_id = str(note_id)
             if 'title' in update_data and update_data['title']:
-                mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['title']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
+                mon.schedule_evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=str(update_data['title']),
+                    source="notes.update",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                    source_id=src_id,
+                )
             if 'content' in update_data and update_data['content']:
-                mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['content']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
+                mon.schedule_evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=str(update_data['content']),
+                    source="notes.update",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                    source_id=src_id,
+                )
         except Exception:
             pass
         if update_data:
@@ -1119,6 +1151,7 @@ async def patch_note(
 @router.delete(
     "/{note_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Soft-delete a note",
     tags=["notes"],
     responses={
@@ -1133,7 +1166,7 @@ async def delete_note(
         rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
         current_user: User = Depends(get_request_user),
         _: None = Depends(rbac_rate_limit("notes.delete")),
-):
+) -> Response:
     try:
         # Rate limit: notes.delete
         try:
@@ -1154,7 +1187,7 @@ async def delete_note(
             raise CharactersRAGDBError("Note soft delete reported non-success without specific exception.")
         logger.info(
             f"Note '{note_id}' soft-deleted successfully (or was already deleted) for user (DB client_id: {db.client_id}).")
-        return  # FastAPI handles 204 No Content
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as e:
         handle_db_errors(e, "note")
 
@@ -1219,16 +1252,6 @@ async def bulk_create_notes(
 
     for item in request.notes:
         try:
-            # Topic monitoring (non-blocking) per item
-            try:
-                mon = get_topic_monitoring_service()
-                uid = getattr(db, 'client_id', None)
-                if getattr(item, 'title', None):
-                    mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=item.title, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
-                if getattr(item, 'content', None):
-                    mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=item.content, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
-            except Exception:
-                pass
             # Compute title per item
             effective_title = (getattr(item, 'title', None) or "").strip()
             if not effective_title:
@@ -1261,6 +1284,32 @@ async def bulk_create_notes(
             )
             if not note_id:
                 raise CharactersRAGDBError("Failed to create note (no ID returned)")
+
+            # Topic monitoring (non-blocking) per item
+            try:
+                mon = get_topic_monitoring_service()
+                uid = getattr(db, 'client_id', None)
+                src_id = str(note_id)
+                if effective_title:
+                    mon.schedule_evaluate_and_alert(
+                        user_id=str(uid) if uid else None,
+                        text=effective_title,
+                        source="notes.bulk_create",
+                        scope_type="user",
+                        scope_id=str(uid) if uid else None,
+                        source_id=src_id,
+                    )
+                if getattr(item, 'content', None):
+                    mon.schedule_evaluate_and_alert(
+                        user_id=str(uid) if uid else None,
+                        text=item.content,
+                        source="notes.bulk_create",
+                        scope_type="user",
+                        scope_id=str(uid) if uid else None,
+                        source_id=src_id,
+                    )
+            except Exception:
+                pass
 
             # Attach keywords if provided
             try:
@@ -1433,6 +1482,7 @@ async def list_keywords_endpoint(  # Renamed to avoid conflict
 @router.delete(
     "/keywords/{keyword_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Soft-delete a keyword",
     tags=["Keywords (for Notes)"],
     responses={
@@ -1447,7 +1497,7 @@ async def delete_keyword(
         rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
         current_user: User = Depends(get_request_user),
         _: None = Depends(rbac_rate_limit("keywords.delete")),
-):
+) -> Response:
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.delete")
@@ -1467,7 +1517,7 @@ async def delete_keyword(
             raise CharactersRAGDBError("Keyword soft delete reported non-success without specific exception.")
         logger.info(
             f"Keyword '{keyword_id}' soft-deleted successfully (or was already deleted) for user (DB client_id: {db.client_id}).")
-        return
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as e:
         handle_db_errors(e, "keyword")
 

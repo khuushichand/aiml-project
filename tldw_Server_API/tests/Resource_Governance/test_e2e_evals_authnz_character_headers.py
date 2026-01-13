@@ -309,3 +309,53 @@ async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path
         assert r2.headers.get("X-RateLimit-Remaining") == "0"
         reset = r2.headers.get("X-RateLimit-Reset")
         assert reset is not None and int(reset) >= 1
+
+
+@pytest.mark.asyncio
+async def test_e2e_auth_deny_headers_retry_after(monkeypatch, tmp_path):
+    db_path = tmp_path / "authnz_auth_e2e.db"
+    await _init_authnz_sqlite(db_path, monkeypatch)
+
+    # Minimal app with RG middleware; enforce requests-only deny semantics for
+    # an auth endpoint.
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
+    monkeypatch.setenv("RG_ENABLED", "1")
+    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_POLICY_STORE", "file")
+
+    policy = (
+        "schema_version: 1\n"
+        "policies:\n"
+        "  auth.small:\n"
+        "    requests: { rpm: 1 }\n"
+        "    scopes: [ip]\n"
+        "route_map:\n"
+        "  by_path:\n"
+        "    /api/v1/auth/forgot-password: auth.small\n"
+    )
+    p = tmp_path / "rg_auth.yaml"
+    p.write_text(policy, encoding="utf-8")
+
+    monkeypatch.setenv("RG_POLICY_PATH", str(p))
+    monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
+
+    from tldw_Server_API.app.main import app
+
+    _reset_rg_state(app)
+
+    with _with_rg_middleware(app):
+        with TestClient(app) as client:
+            payload = {"email": "rate-limit@example.com"}
+            r1 = client.post("/api/v1/auth/forgot-password", json=payload)
+            assert r1.status_code != 429
+
+            r2 = client.post("/api/v1/auth/forgot-password", json=payload)
+
+    assert r2.status_code in (429, 503)
+    if r2.status_code == 429:
+        retry_after = r2.headers.get("Retry-After")
+        assert retry_after is not None
+        assert r2.headers.get("X-RateLimit-Limit") == "1"
+        assert r2.headers.get("X-RateLimit-Remaining") == "0"
+        reset = r2.headers.get("X-RateLimit-Reset")
+        assert reset is not None and int(reset) >= 1

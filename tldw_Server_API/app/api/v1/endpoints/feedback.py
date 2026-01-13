@@ -280,10 +280,12 @@ async def submit_explicit_feedback(
             query=resolved_query,
             document_ids=document_ids,
             chunk_ids=chunk_ids,
+            feedback_type=payload.feedback_type,
             relevance_score=payload.relevance_score,
             helpful=payload.helpful,
             issues=issues or None,
             user_notes=payload.user_notes,
+            session_id=payload.session_id,
             _user_id=current_user.username if current_user else None,
             message_id=payload.message_id,
         )

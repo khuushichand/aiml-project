@@ -734,6 +734,60 @@ class AuthnzOrgsTeamsRepo:
             logger.error(f"AuthnzOrgsTeamsRepo.list_team_members failed: {exc}")
             raise
 
+    async def update_team_member_role(
+        self,
+        *,
+        team_id: int,
+        user_id: int,
+        role: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Update a team member's role.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    row = await conn.fetchrow(
+                        """
+                        UPDATE team_members
+                        SET role = $3
+                        WHERE team_id = $1 AND user_id = $2
+                        RETURNING team_id, user_id, role
+                        """,
+                        team_id,
+                        user_id,
+                        role,
+                    )
+                    return dict(row) if row else None
+
+                await conn.execute(
+                    """
+                    UPDATE team_members
+                    SET role = ?
+                    WHERE team_id = ? AND user_id = ?
+                    """,
+                    (role, team_id, user_id),
+                )
+                cur = await conn.execute(
+                    """
+                    SELECT team_id, user_id, role
+                    FROM team_members
+                    WHERE team_id = ? AND user_id = ?
+                    """,
+                    (team_id, user_id),
+                )
+                row = await cur.fetchone()
+                if row:
+                    return {
+                        "team_id": row[0],
+                        "user_id": row[1],
+                        "role": row[2],
+                    }
+                return None
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzOrgsTeamsRepo.update_team_member_role failed: {exc}")
+            raise
+
     async def list_memberships_for_user(self, user_id: int) -> List[Dict[str, Any]]:
         """
         List team memberships (including org_id) for a user.

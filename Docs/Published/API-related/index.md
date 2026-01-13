@@ -12,5 +12,6 @@ Use the sidebar to browse available API docs. For a quick map of OpenAPI tags to
 
 - Audio Jobs API: Audio_Jobs_API.md (background audio processing with Jobs)
 - Chunking API: Chunking_API_Documentation.md (text/file chunking + capabilities)
+- Reading List API: Reading_List_API.md (capture, import/export, summarize, TTS)
 
 See also: `Docs/Published/Code_Documentation/Ingestion_Pipeline_Audio.md` for the audio processing endpoint (`POST /api/v1/media/process-audios`).

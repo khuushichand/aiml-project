@@ -147,6 +147,8 @@ async def create_prompt(
         Created prompt details
     """
     try:
+        if not isinstance(idempotency_key, str):
+            idempotency_key = None
         # Validate prompt length
         if prompt_data.system_prompt and len(prompt_data.system_prompt) > security_config.max_prompt_length:
             raise HTTPException(

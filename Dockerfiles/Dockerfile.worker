@@ -37,8 +37,10 @@ ENV PYTHONPATH=/app:$PYTHONPATH
 
 # Default environment variables
 ENV REDIS_URL=redis://localhost:6379
-ENV WORKER_TYPE=chunking
-ENV NUM_WORKERS=1
+ENV EMBEDDINGS_REDIS_WORKERS_CHUNKING=1
+ENV EMBEDDINGS_REDIS_WORKERS_EMBEDDING=1
+ENV EMBEDDINGS_REDIS_WORKERS_STORAGE=1
+ENV EMBEDDINGS_REDIS_WORKERS_CONTENT=1
 ENV LOG_LEVEL=INFO
 
 # Health check
@@ -46,4 +48,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)" || exit 1
 
 # Default command (will be overridden in docker-compose)
-CMD ["python", "-m", "tldw_Server_API.app.core.Embeddings.start_workers"]
+CMD ["python", "-m", "tldw_Server_API.app.core.Embeddings.services.redis_worker", "--stage", "all"]

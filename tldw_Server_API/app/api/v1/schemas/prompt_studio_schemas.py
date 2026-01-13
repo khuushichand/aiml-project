@@ -75,7 +75,7 @@ class EvaluationResponse(TimestampMixin, UUIDMixin):
     status: EvaluationStatus = Field(..., description="Current status")
     error_message: Optional[str] = Field(None, description="Error message if failed")
     tags: List[str] = Field(default_factory=list, description="Tags")
-    completed_at: Optional[str] = Field(None, description="Completion timestamp")
+    completed_at: Optional[datetime] = Field(None, description="Completion timestamp")
 
     model_config = ConfigDict(from_attributes=True)
 

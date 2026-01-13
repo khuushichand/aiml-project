@@ -147,6 +147,7 @@ async def get_prompt_studio_user(
         pass
 
     # 1) Test mode: prefer patched hook if available; otherwise use deterministic test user id
+    client_id_value = x_client_id if isinstance(x_client_id, str) else None
     if os.getenv("TEST_MODE", "").lower() == "true":
         try:
             maybe_user = get_current_active_user()  # may be sync or async, or None
@@ -161,7 +162,7 @@ async def get_prompt_studio_user(
 
         user_context = {
             "user_id": uid,
-            "client_id": x_client_id or "test-client",
+            "client_id": client_id_value or "test-client",
             "is_authenticated": True,
             # Tests treat single-user as admin for convenience
             "is_admin": True,
@@ -179,13 +180,20 @@ async def get_prompt_studio_user(
         if isinstance(maybe_user, dict) and maybe_user.get("id") is not None:
             user_context = {
                 "user_id": str(maybe_user.get("id")),
-                "client_id": x_client_id or "web",
+                "client_id": client_id_value or "web",
                 "is_authenticated": True,
                 "is_admin": True,
                 "permissions": ["all"],
                 "rg_policy_id": getattr(request.state, "rg_policy_id", None),
             }
             request.state.user_context = user_context
+            try:
+                from tldw_Server_API.app.core.Prompt_Management.prompt_studio.quota_config import (
+                    apply_prompt_studio_quota_policy,
+                )
+                await apply_prompt_studio_quota_policy(user_context["user_id"])
+            except Exception as exc:
+                logger.debug("Prompt Studio quota policy lookup failed: {}", exc)
             return user_context
     except Exception:
         # Ignore and fall through to standard handling
@@ -300,6 +308,14 @@ async def get_prompt_studio_user(
 
     # Store in request state for downstream use
     request.state.user_context = user_context
+
+    try:
+        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.quota_config import (
+            apply_prompt_studio_quota_policy,
+        )
+        await apply_prompt_studio_quota_policy(user_context["user_id"])
+    except Exception as exc:
+        logger.debug("Prompt Studio quota policy lookup failed: {}", exc)
 
     return user_context
 

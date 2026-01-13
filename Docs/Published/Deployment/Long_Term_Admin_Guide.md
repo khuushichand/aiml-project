@@ -75,6 +75,8 @@ SQLite (file copy)
 cp Databases/*.db /backups/sqlite_$(date +%F)/
 ```
 
+Admin Data Ops backups (per-dataset) are available via `/api/v1/admin/backups` for `media`, `chacha`, `prompts`, `evaluations`, `audit`, and `authnz`. A full bundle export/import workflow is planned; see `Docs/Product/DB_Exports_SQLite_PRD.md`.
+
 Disaster recovery (Compose)
 1. Provision a new host with Docker/Compose, same `.env` and volumes.
 2. Restore DB dumps/files and persistent volumes.

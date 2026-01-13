@@ -5,6 +5,7 @@ import os
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import normalize_provider_name
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import get_byok_credential_policy
 from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthContext,
     AuthPrincipal,
@@ -32,8 +33,6 @@ DEFAULT_BYOK_ALLOWED_PROVIDERS: Set[str] = {
     "voyage",
     "zai",
 }
-
-DEFAULT_ALLOWED_CREDENTIAL_FIELDS: Set[str] = {"org_id", "project_id"}
 
 
 def resolve_byok_base_url_allowlist() -> Set[str]:
@@ -72,7 +71,7 @@ def validate_credential_fields(
         raise ValueError("credential_fields must be an object")
 
     provider_norm = normalize_provider_name(provider)
-    allowed_keys = set(DEFAULT_ALLOWED_CREDENTIAL_FIELDS)
+    allowed_keys, required_keys = get_byok_credential_policy(provider_norm)
     if allow_base_url and provider_norm in resolve_byok_base_url_allowlist():
         allowed_keys.add("base_url")
     cleaned: Dict[str, Any] = {}
@@ -82,6 +81,9 @@ def validate_credential_fields(
         if isinstance(value, str) and value.strip() == "":
             raise ValueError(f"Credential field '{key}' cannot be empty")
         cleaned[key] = value
+    for required_key in required_keys:
+        if required_key not in cleaned:
+            raise ValueError(f"Credential field '{required_key}' is required")
     return cleaned
 
 

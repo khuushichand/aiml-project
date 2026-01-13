@@ -202,6 +202,18 @@ class TestV2Chunker:
         assert all("\u202e" not in ch for ch in plain_chunks)
         assert any("\u202e" in row["text"] for row in hier_chunks)
 
+    def test_hierarchical_flat_includes_chunk_type(self):
+        """Flattened hierarchical chunks should include a normalized chunk_type."""
+        chunker = Chunker()
+        text = "# Heading\n\nParagraph content.\n\n- list item"
+        chunks = chunker.chunk_text_hierarchical_flat(text, method="sentences", max_size=20, overlap=0)
+
+        assert chunks
+        for chunk in chunks:
+            md = chunk.get("metadata", {})
+            chunk_type = md.get("chunk_type")
+            assert isinstance(chunk_type, str) and chunk_type
+
     def test_code_mode_ast_forces_ast_strategy_even_without_language_hint(self):
         """Explicit code_mode='ast' should route to the AST strategy regardless of language hints."""
         chunker = Chunker()

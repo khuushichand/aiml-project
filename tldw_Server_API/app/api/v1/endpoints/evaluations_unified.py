@@ -46,6 +46,10 @@ from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager,
 # Import additional services
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
+from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+    log_evaluation_deleted,
+    log_evaluation_exported,
+)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -54,7 +58,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
 # Create router
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
@@ -159,7 +163,7 @@ async def _validate_provider_credentials(
     """Validate required provider credentials for evaluation endpoints."""
     if (
         eval_type in {"geval", "rag", "response_quality"}
-        and PROVIDER_REQUIRES_KEY.get(provider_key, False)
+        and provider_requires_api_key(provider_key)
         and not provider_api_key
         and not _is_eval_test_mode()
     ):
@@ -184,8 +188,10 @@ async def _resolve_and_validate_eval_provider(
     provider_name = (request.api_name or "openai").strip() or "openai"
     provider_key = provider_name.lower()
     raw_api_key = getattr(request, "api_key", None)
-    explicit_key = (raw_api_key or "").strip() if raw_api_key else None
-    provider_api_key = explicit_key
+    if raw_api_key:
+        logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
+    explicit_key = None
+    provider_api_key = None
     byok_resolution: Optional[ResolvedByokCredentials] = None
 
     if not provider_api_key:
@@ -442,10 +448,10 @@ async def delete_embeddings_abtest(
     current_user: User = Depends(get_eval_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
-    """Cancel/cleanup an embeddings A/B test (stub)."""
+    """Cancel/cleanup an embeddings A/B test."""
+    svc = get_unified_evaluation_service_for_user(current_user.id)
     # Idempotency: if prior mapping exists, return canonical response without side effects
     try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
         if idempotency_key:
             prior = svc.db.lookup_idempotency("emb_abtest_delete", idempotency_key, user_ctx)
             if prior:
@@ -454,8 +460,20 @@ async def delete_embeddings_abtest(
     except Exception:
         pass
 
-    # Perform delete/cleanup (stubbed)
-    logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
+    try:
+        from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import cleanup_abtest_resources
+        cleanup_abtest_resources(
+            svc.db,
+            str(current_user.id),
+            test_id,
+            delete_db=True,
+            delete_idempotency=True,
+        )
+        logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
+    except Exception as exc:
+        logger.warning(f"A/B test cleanup failed for {test_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to delete A/B test")
+    log_evaluation_deleted(user_id=str(current_user.id), eval_id=test_id)
     try:
         if idempotency_key:
             svc.db.record_idempotency("emb_abtest_delete", idempotency_key, test_id, user_ctx)
@@ -491,6 +509,13 @@ async def export_embeddings_abtest(
                 svc.db.record_idempotency("emb_abtest_export_json", idempotency_key, f"{test_id}:json", user_ctx)
         except Exception:
             pass
+        log_evaluation_exported(
+            user_id=str(current_user.id),
+            eval_id=test_id,
+            eval_type="embeddings_abtest",
+            export_format="json",
+            total=total,
+        )
         headers = {}
         if idempotency_key:
             headers = {"Idempotency-Key": idempotency_key}
@@ -508,6 +533,13 @@ async def export_embeddings_abtest(
             svc.db.record_idempotency("emb_abtest_export_csv", idempotency_key, f"{test_id}:csv", user_ctx)
     except Exception:
         pass
+    log_evaluation_exported(
+        user_id=str(current_user.id),
+        eval_id=test_id,
+        eval_type="embeddings_abtest",
+        export_format="csv",
+        total=total,
+    )
     headers = {"Content-Disposition": f"attachment; filename=abtest_{test_id}.csv"}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
@@ -1306,9 +1338,11 @@ async def batch_evaluate(
             explicit_key: Optional[str] = None
             if isinstance(eval_request, dict):
                 provider_name = (eval_request.get("api_name") or "openai").strip() or "openai"
-                explicit_key = (eval_request.get("api_key") or "").strip() if eval_request.get("api_key") else None
+                raw_api_key = eval_request.get("api_key")
+                if raw_api_key:
+                    logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
             provider_key = provider_name.lower()
-            provider_api_key = explicit_key
+            provider_api_key = None
             byok_resolution = None
 
             if eval_type in {"geval", "rag", "response_quality"} and not provider_api_key:

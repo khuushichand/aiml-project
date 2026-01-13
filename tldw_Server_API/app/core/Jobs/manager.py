@@ -1418,6 +1418,124 @@ class JobManager:
         finally:
             conn.close()
 
+    def _get_dependency_uuids(self, job_uuid: str) -> List[str]:
+        if not job_uuid:
+            return []
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with conn:
+                    with self._pg_cursor(conn) as cur:
+                        cur.execute(
+                            "SELECT depends_on_job_uuid FROM job_dependencies WHERE job_uuid = %s",
+                            (str(job_uuid),),
+                        )
+                        rows = cur.fetchall() or []
+                        return [str(row.get("depends_on_job_uuid")) for row in rows if row.get("depends_on_job_uuid")]
+            else:
+                with conn:
+                    rows = conn.execute(
+                        "SELECT depends_on_job_uuid FROM job_dependencies WHERE job_uuid = ?",
+                        (str(job_uuid),),
+                    ).fetchall()
+                    return [str(row[0]) for row in rows if row and row[0]]
+        finally:
+            conn.close()
+
+    def _dependency_path_exists(self, start_uuid: str, target_uuid: str) -> bool:
+        if not start_uuid or not target_uuid:
+            return False
+        to_visit = [str(start_uuid)]
+        seen = set()
+        while to_visit:
+            current = to_visit.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            deps = self._get_dependency_uuids(current)
+            if target_uuid in deps:
+                return True
+            for dep in deps:
+                if dep and dep not in seen:
+                    to_visit.append(dep)
+        return False
+
+    def add_job_dependency(self, job_uuid: str, depends_on_job_uuid: str) -> bool:
+        if not job_uuid or not depends_on_job_uuid:
+            raise ValueError("job_uuid and depends_on_job_uuid are required")
+        if str(job_uuid) == str(depends_on_job_uuid):
+            raise ValueError("Job cannot depend on itself")
+        job = self.get_job_by_uuid(str(job_uuid))
+        dep = self.get_job_by_uuid(str(depends_on_job_uuid))
+        if not job or not dep:
+            raise ValueError("Both jobs must exist to create dependency")
+        if str(job.get("domain")) != str(dep.get("domain")):
+            raise ValueError("Dependencies must share domain")
+        if str(job.get("owner_user_id")) != str(dep.get("owner_user_id")):
+            raise ValueError("Dependencies must share owner_user_id")
+        if self._dependency_path_exists(str(depends_on_job_uuid), str(job_uuid)):
+            raise ValueError("Dependency would create a cycle")
+
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with conn:
+                    with self._pg_cursor(conn) as cur:
+                        cur.execute(
+                            (
+                                "INSERT INTO job_dependencies (job_uuid, depends_on_job_uuid) "
+                                "VALUES (%s, %s) ON CONFLICT (job_uuid, depends_on_job_uuid) DO NOTHING"
+                            ),
+                            (str(job_uuid), str(depends_on_job_uuid)),
+                        )
+                        return cur.rowcount > 0
+            else:
+                with conn:
+                    cur = conn.execute(
+                        "INSERT OR IGNORE INTO job_dependencies (job_uuid, depends_on_job_uuid) VALUES (?, ?)",
+                        (str(job_uuid), str(depends_on_job_uuid)),
+                    )
+                    return (cur.rowcount or 0) > 0
+        finally:
+            conn.close()
+
+    def _cancel_dependent_jobs(self, job_uuid: Optional[str], *, reason: str) -> None:
+        if not job_uuid:
+            return
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with conn:
+                    with self._pg_cursor(conn) as cur:
+                        cur.execute(
+                            (
+                                "SELECT j.id FROM job_dependencies jd "
+                                "JOIN jobs j ON j.uuid = jd.job_uuid "
+                                "WHERE jd.depends_on_job_uuid = %s AND j.status IN ('queued','processing')"
+                            ),
+                            (str(job_uuid),),
+                        )
+                        rows = cur.fetchall() or []
+                        ids = [int(row.get("id")) for row in rows if row.get("id") is not None]
+            else:
+                with conn:
+                    rows = conn.execute(
+                        (
+                            "SELECT j.id FROM job_dependencies jd "
+                            "JOIN jobs j ON j.uuid = jd.job_uuid "
+                            "WHERE jd.depends_on_job_uuid = ? AND j.status IN ('queued','processing')"
+                        ),
+                        (str(job_uuid),),
+                    ).fetchall()
+                    ids = [int(row[0]) for row in rows if row and row[0] is not None]
+        finally:
+            conn.close()
+        for dep_id in ids:
+            try:
+                self.cancel_job(dep_id, reason=reason)
+            except Exception:
+                continue
+
     def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
         """Fetch a job by numeric id.
 
@@ -1929,6 +2047,13 @@ class JobManager:
                 req = 30
         lease_seconds = max(1, min(max_lease, int(req)))
         conn = self._connect()
+        dep_cond = (
+            " AND (status != 'queued' OR NOT EXISTS ("
+            "SELECT 1 FROM job_dependencies jd "
+            "JOIN jobs dep ON dep.uuid = jd.depends_on_job_uuid "
+            "WHERE jd.job_uuid = jobs.uuid AND dep.status <> 'completed'"
+            "))"
+        )
         try:
             if self.backend == "postgres":
                 with conn:
@@ -1945,16 +2070,20 @@ class JobManager:
                             else:
                                 _order = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             _cond_owner = (" AND owner_user_id = %s" if owner_user_id else "")
-                            _sql = (
-                                "WITH picked AS ("
-                                "  SELECT id FROM jobs WHERE domain=%s AND queue=%s AND ("
-                                "    (status='queued' AND (available_at IS NULL OR available_at <= NOW())) OR"
-                                "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
-                                "  )"
-                                + _cond_owner + _order +
-                                ") "
-                                "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s "
-                                "WHERE id IN (SELECT id FROM picked) RETURNING *"
+                            _sql = "".join(
+                                [
+                                    "WITH picked AS (",
+                                    "  SELECT id FROM jobs WHERE domain=%s AND queue=%s AND (",
+                                    "    (status='queued' AND (available_at IS NULL OR available_at <= NOW())) OR",
+                                    "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))",
+                                    "  )",
+                                    dep_cond,
+                                    _cond_owner,
+                                    _order,
+                                    ") ",
+                                    "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s ",
+                                    "WHERE id IN (SELECT id FROM picked) RETURNING *",
+                                ]
                             )
                             cur.execute(
                                 _sql,
@@ -1972,6 +2101,7 @@ class JobManager:
                                 "  (status = 'processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
                                 ")"
                             )
+                            base += dep_cond
                             params: List[Any] = [domain, queue]
                             if owner_user_id:
                                 base += " AND owner_user_id = %s"
@@ -2093,6 +2223,7 @@ class JobManager:
                             "  (status = 'processing' AND (leased_until IS NULL OR leased_until <= DATETIME('now')))"
                             ")"
                         )
+                        sub += dep_cond
                         params_sub: List[Any] = [domain, queue]
                         if owner_user_id:
                             sub += " AND owner_user_id = ?"
@@ -2167,6 +2298,7 @@ class JobManager:
                             "  (status = 'processing' AND (leased_until IS NULL OR leased_until <= DATETIME('now')))"
                             ")"
                         )
+                        base += dep_cond
                         params: List[Any] = [domain, queue]
                         if owner_user_id:
                             base += " AND owner_user_id = ?"
@@ -2449,6 +2581,116 @@ class JobManager:
         finally:
             conn.close()
 
+    def update_job_progress(
+        self,
+        job_id: int,
+        *,
+        progress_percent: Optional[float] = None,
+        progress_message: Optional[str] = None,
+    ) -> bool:
+        """Update progress fields on a job without touching lease state."""
+        if progress_percent is None and progress_message is None:
+            return False
+        if progress_percent is not None:
+            progress_percent = max(0.0, min(100.0, float(progress_percent)))
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with conn:
+                    with self._pg_cursor(conn) as cur:
+                        sets: List[str] = []
+                        params: List[Any] = []
+                        if progress_percent is not None:
+                            sets.append("progress_percent = %s")
+                            params.append(float(progress_percent))
+                        if progress_message is not None:
+                            sets.append("progress_message = %s")
+                            params.append(str(progress_message))
+                        if not sets:
+                            return False
+                        params.append(int(job_id))
+                        cur.execute(
+                            f"UPDATE jobs SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s",
+                            tuple(params),
+                        )
+                        return cur.rowcount > 0
+            else:
+                with conn:
+                    sets2: List[str] = []
+                    params2: List[Any] = []
+                    if progress_percent is not None:
+                        sets2.append("progress_percent = ?")
+                        params2.append(float(progress_percent))
+                    if progress_message is not None:
+                        sets2.append("progress_message = ?")
+                        params2.append(str(progress_message))
+                    if not sets2:
+                        return False
+                    params2.append(int(job_id))
+                    sql = f"UPDATE jobs SET {', '.join(sets2)}, updated_at = DATETIME('now') WHERE id = ?"
+                    cur2 = conn.execute(sql, tuple(params2))
+                    return (cur2.rowcount or 0) > 0
+        finally:
+            conn.close()
+
+    def update_job_result(
+        self,
+        job_id: int,
+        *,
+        result: Dict[str, Any],
+        merge: bool = True,
+    ) -> bool:
+        """Update the result payload on a job without changing status."""
+        if result is None:
+            return False
+        job = self.get_job(int(job_id))
+        if not job:
+            return False
+        existing = job.get("result")
+        if merge and isinstance(existing, dict) and isinstance(result, dict):
+            res_obj: Dict[str, Any] = dict(existing)
+            res_obj.update(result)
+        else:
+            res_obj = result
+
+        max_bytes = int(os.getenv("JOBS_MAX_JSON_BYTES", "1048576") or "1048576")
+        truncate = str(os.getenv("JOBS_JSON_TRUNCATE", "")).lower() in {"1", "true", "yes", "y", "on"}
+        try:
+            res_json = json.dumps(res_obj)
+        except (TypeError, ValueError):
+            raise ValueError("Result payload must be JSON-serializable")
+        res_bytes = len(res_json.encode("utf-8"))
+        if res_bytes > max_bytes:
+            if truncate:
+                res_obj = {"_truncated": True, "len_bytes": res_bytes}
+            else:
+                raise ValueError(f"Result too large: {res_bytes} bytes > limit {max_bytes}")
+
+        try:
+            res_obj = self._maybe_encrypt_json(res_obj, str(job.get("domain")))
+        except Exception:
+            pass
+
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with conn:
+                    with self._pg_cursor(conn) as cur:
+                        cur.execute(
+                            "UPDATE jobs SET result = %s::jsonb, updated_at = NOW() WHERE id = %s",
+                            (json.dumps(res_obj) if res_obj is not None else None, int(job_id)),
+                        )
+                        return cur.rowcount > 0
+            else:
+                with conn:
+                    cur = conn.execute(
+                        "UPDATE jobs SET result = ?, updated_at = DATETIME('now') WHERE id = ?",
+                        (json.dumps(res_obj) if res_obj is not None else None, int(job_id)),
+                    )
+                    return (cur.rowcount or 0) > 0
+        finally:
+            conn.close()
+
     def complete_job(
         self,
         job_id: int,
@@ -2552,7 +2794,7 @@ class JobManager:
                                         d.strip().lower()
                                         for d in os.getenv(
                                             "JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS",
-                                            "chatbooks",
+                                            "chatbooks,embeddings",
                                         ).split(",")
                                         if d.strip()
                                     }
@@ -2560,7 +2802,7 @@ class JobManager:
                                     row_dom = cur.fetchone()
                                     dom_val = str(row_dom.get("domain") or "").lower() if row_dom else ""
                                 except Exception:
-                                    allow = {"chatbooks"}
+                                    allow = {"chatbooks", "embeddings"}
                                     dom_val = ""
                                 if dom_val in allow:
                                     cur.execute(
@@ -2720,11 +2962,11 @@ class JobManager:
                         if not ok:
                             # Admin-style finalize: optionally allow completing queued without lease when enforcement is disabled
                             try:
-                                allow = {d.strip().lower() for d in (os.getenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "chatbooks").split(",")) if d.strip()}
+                                allow = {d.strip().lower() for d in (os.getenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "chatbooks,embeddings").split(",")) if d.strip()}
                                 row_dom = conn.execute("SELECT domain FROM jobs WHERE id = ?", (job_id,)).fetchone()
                                 dom_val = str(row_dom[0]).lower() if row_dom and row_dom[0] else ""
                             except Exception:
-                                allow = {"chatbooks"}; dom_val = ""
+                                allow = {"chatbooks", "embeddings"}; dom_val = ""
                             if dom_val in allow:
                                 conn.execute(
                                     (
@@ -3106,7 +3348,10 @@ class JobManager:
                                 logger.info(f"[JM TEST MUT] fail_job enter job_id={job_id} retryable={retryable} backoff={backoff_seconds} enforce={enforce} backend=pg")
                             except Exception:
                                 pass
-                        cur.execute("SELECT status, completion_token, retry_count, failure_streak_code, failure_streak_count, domain, queue, job_type FROM jobs WHERE id = %s", (int(job_id),))
+                        cur.execute(
+                            "SELECT status, completion_token, retry_count, failure_streak_code, failure_streak_count, domain, queue, job_type, uuid FROM jobs WHERE id = %s",
+                            (int(job_id),),
+                        )
                         elem = cur.fetchone()
                         if elem:
                             st = str(elem.get("status"))
@@ -3208,6 +3453,13 @@ class JobManager:
                                     ),
                                 )
                             if cur.rowcount > 0:
+                                try:
+                                    cur.execute("SELECT status, uuid FROM jobs WHERE id = %s", (int(job_id),))
+                                    _srow = cur.fetchone()
+                                    if _srow and str(_srow.get("status")) == "quarantined":
+                                        self._cancel_dependent_jobs(_srow.get("uuid"), reason="dependency_failed")
+                                except Exception:
+                                    pass
                                 try:
                                     if elem:
                                         increment_retries(dict(elem))
@@ -3442,6 +3694,10 @@ class JobManager:
                                     emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
                                 except Exception:
                                     pass
+                                try:
+                                    self._cancel_dependent_jobs(d.get("uuid"), reason="dependency_failed")
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                         if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1","true","yes","y","on"}:
@@ -3463,7 +3719,10 @@ class JobManager:
                         except Exception:
                             pass
                     # For metrics, fetch labels
-                    rowl = conn.execute("SELECT status, completion_token, domain, queue, job_type FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                    rowl = conn.execute(
+                        "SELECT status, completion_token, domain, queue, job_type, uuid FROM jobs WHERE id = ?",
+                        (job_id,),
+                    ).fetchone()
                     if rowl:
                         st = str(rowl[0])
                         ct = rowl[1]
@@ -3559,6 +3818,12 @@ class JobManager:
                                 ),
                             )
                         if conn.total_changes > 0:
+                            try:
+                                rowq = conn.execute("SELECT status, uuid FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                                if rowq and str(rowq[0]) == "quarantined":
+                                    self._cancel_dependent_jobs(rowq[1], reason="dependency_failed")
+                            except Exception:
+                                pass
                             try:
                                 if rowl:
                                     dtmp = dict(rowl)
@@ -3774,6 +4039,10 @@ class JobManager:
                                 emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
                             except Exception:
                                 pass
+                            try:
+                                self._cancel_dependent_jobs(d.get("uuid"), reason="dependency_failed")
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1","true","yes","y","on"}:
@@ -3805,7 +4074,7 @@ class JobManager:
                                 pass
                         # Capture grouping keys for gauges
                         try:
-                            cur.execute("SELECT domain, queue, job_type FROM jobs WHERE id = %s", (int(job_id),))
+                            cur.execute("SELECT domain, queue, job_type, uuid FROM jobs WHERE id = %s", (int(job_id),))
                             row0 = cur.fetchone()
                         except Exception:
                             row0 = None
@@ -3848,6 +4117,11 @@ class JobManager:
                                     emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
                             except Exception:
                                 pass
+                            try:
+                                if row0 and row0.get("uuid"):
+                                    self._cancel_dependent_jobs(row0.get("uuid"), reason=(reason or "dependency_cancelled"))
+                            except Exception:
+                                pass
                             if _test_mode:
                                 try:
                                     cur.execute("SELECT COUNT(*) AS c FROM jobs")
@@ -3886,6 +4160,11 @@ class JobManager:
                                 emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
                         except Exception:
                             pass
+                        try:
+                            if ok and row0 and row0.get("uuid"):
+                                self._cancel_dependent_jobs(row0.get("uuid"), reason=(reason or "dependency_cancelled"))
+                        except Exception:
+                            pass
                         if _test_mode:
                             try:
                                 cur.execute("SELECT COUNT(*) AS c FROM jobs")
@@ -3906,7 +4185,10 @@ class JobManager:
                             pass
                     # Capture grouping keys for gauges
                     try:
-                        row0 = conn.execute("SELECT domain, queue, job_type FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                        row0 = conn.execute(
+                            "SELECT domain, queue, job_type, uuid FROM jobs WHERE id = ?",
+                            (job_id,),
+                        ).fetchone()
                     except Exception:
                         row0 = None
                     # cancel queued immediately (capture ready vs scheduled for counters)
@@ -3945,6 +4227,11 @@ class JobManager:
                             if row0:
                                 ev = {"id": int(job_id), "domain": row0["domain"], "queue": row0["queue"], "job_type": row0["job_type"]}
                                 emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
+                        except Exception:
+                            pass
+                        try:
+                            if row0 and row0["uuid"]:
+                                self._cancel_dependent_jobs(row0["uuid"], reason=(reason or "dependency_cancelled"))
                         except Exception:
                             pass
                         if _test_mode:
@@ -3989,6 +4276,158 @@ class JobManager:
                             emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
                     except Exception:
                         pass
+                    try:
+                        if ok and row0 and row0["uuid"]:
+                            self._cancel_dependent_jobs(row0["uuid"], reason=(reason or "dependency_cancelled"))
+                    except Exception:
+                        pass
+                    return ok
+        finally:
+            conn.close()
+
+    def release_job(
+        self,
+        job_id: int,
+        *,
+        worker_id: Optional[str] = None,
+        lease_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        enforce: Optional[bool] = None,
+    ) -> bool:
+        """Release a processing job back to queued without retry penalties."""
+        if enforce is None:
+            enforce = self._should_enforce_ack()
+        if enforce and (not worker_id or not lease_id):
+            return False
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with conn:
+                    with self._pg_cursor(conn) as cur:
+                        cur.execute(
+                            "SELECT domain, queue, job_type, available_at, status, worker_id, lease_id FROM jobs WHERE id = %s",
+                            (int(job_id),),
+                        )
+                        row = cur.fetchone()
+                        if not row or row.get("status") != "processing":
+                            return False
+                        if enforce and (row.get("worker_id") != worker_id or row.get("lease_id") != lease_id):
+                            return False
+                        if enforce:
+                            cur.execute(
+                                (
+                                    "UPDATE jobs SET status = 'queued', leased_until = NULL, worker_id = NULL, lease_id = NULL, "
+                                    "acquired_at = NULL, started_at = NULL, updated_at = NOW() "
+                                    "WHERE id = %s AND status = 'processing' AND worker_id = %s AND lease_id = %s"
+                                ),
+                                (int(job_id), worker_id, lease_id),
+                            )
+                        else:
+                            cur.execute(
+                                (
+                                    "UPDATE jobs SET status = 'queued', leased_until = NULL, worker_id = NULL, lease_id = NULL, "
+                                    "acquired_at = NULL, started_at = NULL, updated_at = NOW() "
+                                    "WHERE id = %s AND status = 'processing'"
+                                ),
+                                (int(job_id),),
+                            )
+                        ok = cur.rowcount > 0
+                        if ok:
+                            try:
+                                self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
+                            except Exception:
+                                pass
+                        try:
+                            if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                                _now = self._clock.now_utc()
+                                _av = _parse_dt(row.get("available_at"))
+                                if _av is not None and _av.tzinfo is None:
+                                    _av = _av.replace(tzinfo=_tz.utc)
+                                is_sched = bool(row.get("available_at")) and ((_av or _now) > _now)
+                                add_ready = 1 if not is_sched else 0
+                                add_sched = 1 if is_sched else 0
+                                cur.execute(
+                                    (
+                                        "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(%s,%s,%s,0,0,0,0) "
+                                        "ON CONFLICT (domain,queue,job_type) DO UPDATE SET "
+                                        "ready_count = job_counters.ready_count + %s, "
+                                        "scheduled_count = job_counters.scheduled_count + %s, "
+                                        "processing_count = GREATEST(job_counters.processing_count - 1, 0), "
+                                        "updated_at = NOW()"
+                                    ),
+                                    (row["domain"], row["queue"], row["job_type"], int(add_ready), int(add_sched)),
+                                )
+                        except Exception:
+                            pass
+                        if ok and reason:
+                            try:
+                                ev = {"id": int(job_id), "domain": row["domain"], "queue": row["queue"], "job_type": row["job_type"]}
+                                emit_job_event("job.released", job=ev, attrs={"reason": reason})
+                            except Exception:
+                                pass
+                        return ok
+            else:
+                with conn:
+                    row = conn.execute(
+                        "SELECT domain, queue, job_type, available_at, status, worker_id, lease_id FROM jobs WHERE id = ?",
+                        (job_id,),
+                    ).fetchone()
+                    if not row or row["status"] != "processing":
+                        return False
+                    if enforce and (row["worker_id"] != worker_id or row["lease_id"] != lease_id):
+                        return False
+                    if enforce:
+                        conn.execute(
+                            (
+                                "UPDATE jobs SET status = 'queued', leased_until = NULL, worker_id = NULL, lease_id = NULL, "
+                                "acquired_at = NULL, started_at = NULL, updated_at = DATETIME('now') "
+                                "WHERE id = ? AND status = 'processing' AND worker_id = ? AND lease_id = ?"
+                            ),
+                            (job_id, worker_id, lease_id),
+                        )
+                    else:
+                        conn.execute(
+                            (
+                                "UPDATE jobs SET status = 'queued', leased_until = NULL, worker_id = NULL, lease_id = NULL, "
+                                "acquired_at = NULL, started_at = NULL, updated_at = DATETIME('now') "
+                                "WHERE id = ? AND status = 'processing'"
+                            ),
+                            (job_id,),
+                        )
+                    ok = conn.total_changes > 0
+                    if ok:
+                        try:
+                            self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
+                        except Exception:
+                            pass
+                    try:
+                        if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                            _now = self._clock.now_utc()
+                            _av = _parse_dt(row["available_at"]) if row["available_at"] else None
+                            if _av is not None and _av.tzinfo is None:
+                                _av = _av.replace(tzinfo=_tz.utc)
+                            is_sched = bool(row["available_at"]) and ((_av or _now) > _now)
+                            add_ready = 1 if not is_sched else 0
+                            add_sched = 1 if is_sched else 0
+                            conn.execute(
+                                (
+                                    "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,0,0,0) "
+                                    "ON CONFLICT(domain,queue,job_type) DO UPDATE SET "
+                                    "ready_count = ready_count + ?, "
+                                    "scheduled_count = scheduled_count + ?, "
+                                    "processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, "
+                                    "updated_at = DATETIME('now')"
+                                ),
+                                (row["domain"], row["queue"], row["job_type"], int(add_ready), int(add_ready), int(add_sched), int(add_sched)),
+                            )
+                    except Exception:
+                        pass
+                    if ok and reason:
+                        try:
+                            ev = {"id": int(job_id), "domain": row["domain"], "queue": row["queue"], "job_type": row["job_type"]}
+                            emit_job_event("job.released", job=ev, attrs={"reason": reason})
+                        except Exception:
+                            pass
                     return ok
         finally:
             conn.close()
@@ -5027,6 +5466,30 @@ class JobManager:
                     conn.execute("INSERT INTO job_attachments(job_id,kind,content_text,url) VALUES(?,?,?,?)", (int(job_id), kind, content_text, url))
                     rid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                     return int(rid)
+        finally:
+            conn.close()
+
+    def count_processing_for_owner(self, *, domain: str, owner_user_id: str) -> int:
+        """Count processing jobs with active leases for a specific owner."""
+        if not owner_user_id:
+            return 0
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with self._pg_cursor(conn) as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND owner_user_id=%s AND status='processing' AND leased_until IS NOT NULL AND leased_until > NOW()",
+                        (domain, owner_user_id),
+                    )
+                    row = cur.fetchone()
+                    return int((row.get("c") if isinstance(row, dict) else 0) or 0)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE domain=? AND owner_user_id=? AND status='processing' AND leased_until IS NOT NULL AND leased_until > DATETIME('now')",
+                (domain, owner_user_id),
+            ).fetchone()
+            return int(row[0] or 0)
+        except Exception:
+            return 0
         finally:
             conn.close()
 

@@ -44,6 +44,9 @@ class GroqAdapter(ChatProvider):
         return os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
     def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
         try:
             cfg = (request or {}).get("app_config") or {}
             g = cfg.get("groq_api") or {}

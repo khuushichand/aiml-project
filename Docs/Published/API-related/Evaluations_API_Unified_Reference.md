@@ -420,7 +420,7 @@ Start execution. Response `{ "test_id": "...", "status": "running", "progress": 
 Summary: `{ "test_id": "...", "status": "...", "arms": [ {"arm_id":"...","provider":"...","model":"...","metrics": {"ndcg": 0.72}, "latency_ms": {"p50": 30.3} } ] }`.
 
 `GET /api/v1/evaluations/embeddings/abtest/{test_id}/results`
-Paginated results. Response `{ "summary": {...}, "page": 1, "page_size": 50, "total": 120 }`.
+Paginated results. Response `{ "summary": {...}, "results": [ { "result_id": "...", "test_id": "...", "arm_id": "...", "query_id": "...", "ranked_ids": ["..."], "scores": [0.9], "metrics": {"ndcg": 0.72}, "latency_ms": 12.3, "ranked_distances": [0.1], "ranked_metadatas": [{"source": "..."}], "ranked_documents": ["..."], "rerank_scores": [0.7], "created_at": "2026-01-12T00:00:00Z" } ], "page": 1, "page_size": 50, "total": 120 }`.
 
 `GET /api/v1/evaluations/embeddings/abtest/{test_id}/significance?metric=ndcg`
 Statistical significance for chosen metric.

@@ -16,6 +16,7 @@ Returned item structure (normalized):
 from __future__ import annotations
 
 import os
+import re
 import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
@@ -24,7 +25,7 @@ from urllib.parse import urljoin
 import xml.etree.ElementTree as ET
 from loguru import logger
 from lxml import html
-from lxml.etree import XPathError
+from lxml.etree import XPath, XPathError
 from lxml.html import HtmlElement
 
 from tldw_Server_API.app.core.Security.egress import is_url_allowed_for_tenant, is_url_allowed
@@ -141,6 +142,695 @@ def _extract_value(
         if value:
             return value
     return None
+
+
+def _normalize_selector_expr(selector: Optional[str], *, css: Optional[str] = None, xpath: Optional[str] = None) -> Optional[str]:
+    """Normalize selector inputs into a single expression string."""
+    if selector and str(selector).strip():
+        return str(selector).strip()
+    if css and str(css).strip():
+        return f"css:{str(css).strip()}"
+    if xpath and str(xpath).strip():
+        return str(xpath).strip()
+    return None
+
+
+def _field_selector(field: Dict[str, Any]) -> Optional[str]:
+    return _normalize_selector_expr(
+        field.get("selector"),
+        css=field.get("css"),
+        xpath=field.get("xpath"),
+    )
+
+
+def _base_selector(rules: Dict[str, Any]) -> Optional[str]:
+    return _normalize_selector_expr(
+        rules.get("baseSelector") or rules.get("base_selector"),
+        css=rules.get("baseCss") or rules.get("base_css"),
+        xpath=rules.get("baseXpath") or rules.get("base_xpath"),
+    )
+
+
+def _normalize_field_definitions(fields: Any) -> List[Dict[str, Any]]:
+    if isinstance(fields, list):
+        return [f for f in fields if isinstance(f, dict)]
+    if isinstance(fields, dict):
+        normalized: List[Dict[str, Any]] = []
+        for name, spec in fields.items():
+            if isinstance(spec, dict):
+                entry = dict(spec)
+            else:
+                entry = {"selector": spec}
+            entry.setdefault("name", str(name))
+            normalized.append(entry)
+        return normalized
+    return []
+
+
+def _number_normalize(value: str) -> Optional[str]:
+    text = (value or "").strip()
+    if not text:
+        return None
+    text = text.replace(",", "")
+    text = re.sub(r"\s+", "", text)
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    return match.group(0) if match else None
+
+
+def _apply_single_transform(value: str, transform: Any, base_url: str) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(transform, str):
+        name = transform.strip().lower()
+        params: Dict[str, Any] = {}
+    elif isinstance(transform, dict):
+        name = str(transform.get("name") or transform.get("type") or "").strip().lower()
+        params = transform
+    else:
+        return value
+    if name == "lowercase":
+        return value.lower()
+    if name == "uppercase":
+        return value.upper()
+    if name == "strip":
+        return value.strip()
+    if name == "regex_replace":
+        pattern = params.get("pattern")
+        repl = params.get("repl", "")
+        if not isinstance(pattern, str):
+            return value
+        try:
+            return re.sub(pattern, str(repl), value)
+        except Exception:
+            return value
+    if name == "urljoin":
+        try:
+            return urljoin(base_url, value)
+        except Exception:
+            return value
+    if name == "date_normalize":
+        normalized = _normalize_datetime(value, params.get("format") if isinstance(params.get("format"), str) else None)
+        return normalized or value
+    if name == "number_normalize":
+        normalized = _number_normalize(value)
+        return normalized or value
+    return value
+
+
+def _apply_transforms(value: Any, transforms: Any, base_url: str) -> Any:
+    if value is None or not transforms:
+        return value
+    transform_list = transforms if isinstance(transforms, list) else [transforms]
+    if isinstance(value, list):
+        return [v for v in (_apply_transforms(v, transform_list, base_url) for v in value) if v is not None]
+    if isinstance(value, dict):
+        return value
+    result: Optional[str] = str(value)
+    for transform in transform_list:
+        result = _apply_single_transform(result, transform, base_url)
+        if result is None:
+            break
+    return result
+
+
+def _safe_template_format(template: str, context: Dict[str, Any]) -> str:
+    class _SafeDict(dict):
+        def __missing__(self, key: str) -> str:
+            return ""
+
+    return template.format_map(_SafeDict(context))
+
+
+def _extract_text_from_node(node: Any) -> Optional[str]:
+    return _coerce_value(node)
+
+
+def _extract_html_from_node(node: Any) -> Optional[str]:
+    if isinstance(node, HtmlElement):
+        try:
+            return html.tostring(node, encoding="unicode")
+        except Exception:
+            return None
+    return _coerce_value(node)
+
+
+def _extract_attribute_from_node(node: Any, attr: Optional[str]) -> Optional[str]:
+    if not attr:
+        return None
+    if isinstance(node, HtmlElement):
+        value = node.get(attr)
+        return value.strip() if isinstance(value, str) and value.strip() else None
+    return None
+
+
+def _extract_regex_from_text(text: str, field: Dict[str, Any]) -> Optional[str]:
+    pattern = field.get("pattern") or field.get("regex")
+    if not isinstance(pattern, str) or not text:
+        return None
+    flags = 0
+    if field.get("ignore_case") is True:
+        flags |= re.IGNORECASE
+    try:
+        compiled = re.compile(pattern, flags)
+    except Exception:
+        return None
+    match = compiled.search(text)
+    if not match:
+        return None
+    group = field.get("group")
+    try:
+        return match.group(group) if group is not None else match.group(0)
+    except Exception:
+        return match.group(0)
+
+
+def _extract_list_items(
+    node: HtmlElement,
+    field: Dict[str, Any],
+    *,
+    base_url: str,
+    context: Dict[str, Any],
+) -> Optional[List[Any]]:
+    selector = _field_selector(field)
+    nodes = _select_nodes(node, selector) if selector else []
+    if not nodes:
+        return None
+    item_selector = _normalize_selector_expr(
+        field.get("item_selector") or field.get("itemSelector"),
+        css=field.get("itemCss") or field.get("item_css"),
+        xpath=field.get("itemXpath") or field.get("item_xpath"),
+    )
+    item_type = str(field.get("itemType") or field.get("item_type") or "text").strip().lower()
+    attr = field.get("attribute") or field.get("attr")
+    join_with = str(field.get("join_with") or " ")
+    values: List[Any] = []
+    for match in nodes:
+        target_nodes = [match]
+        if item_selector and isinstance(match, HtmlElement):
+            target_nodes = _select_nodes(match, item_selector)
+        if not target_nodes:
+            continue
+        if item_type == "attribute":
+            value = _extract_attribute_from_node(target_nodes[0], str(attr) if attr else None)
+        elif item_type == "html":
+            value = _extract_html_from_node(target_nodes[0])
+        elif item_type == "regex":
+            base_text = _extract_text_from_node(target_nodes[0]) or ""
+            value = _extract_regex_from_text(base_text, field)
+        else:
+            if len(target_nodes) > 1:
+                value = _reduce_matches(target_nodes, join_with)
+            else:
+                value = _extract_text_from_node(target_nodes[0])
+        if value:
+            values.append(value)
+    if not values:
+        return None
+    transforms = field.get("transforms")
+    return _apply_transforms(values, transforms, base_url)
+
+
+def _extract_fields_from_node(
+    node: HtmlElement,
+    fields: Sequence[Dict[str, Any]],
+    *,
+    base_url: str,
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    extracted: Dict[str, Any] = {}
+    computed_fields: List[Dict[str, Any]] = []
+    ctx = dict(context or {})
+
+    for field in fields:
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+        field_type = str(field.get("type") or "text").strip().lower()
+        if field_type == "computed":
+            computed_fields.append(field)
+            continue
+
+        if field_type == "nested":
+            selector = _field_selector(field)
+            matches = _select_nodes(node, selector) if selector else [node]
+            nested_fields = _normalize_field_definitions(field.get("fields") or {})
+            value = None
+            if matches and nested_fields:
+                value = _extract_fields_from_node(matches[0], nested_fields, base_url=base_url, context=ctx)
+        elif field_type == "nested_list":
+            selector = _field_selector(field)
+            matches = _select_nodes(node, selector) if selector else []
+            nested_fields = _normalize_field_definitions(field.get("fields") or {})
+            value = None
+            if matches and nested_fields:
+                items: List[Dict[str, Any]] = []
+                for match in matches:
+                    if not isinstance(match, HtmlElement):
+                        continue
+                    item = _extract_fields_from_node(match, nested_fields, base_url=base_url, context=ctx)
+                    if item:
+                        items.append(item)
+                if items:
+                    value = items
+        elif field_type == "list":
+            value = _extract_list_items(node, field, base_url=base_url, context=ctx)
+        else:
+            selector = _field_selector(field)
+            matches = _select_nodes(node, selector) if selector else []
+            if not matches:
+                value = None
+            elif field_type == "attribute":
+                attr = field.get("attribute") or field.get("attr")
+                value = _extract_attribute_from_node(matches[0], str(attr) if attr else None)
+            elif field_type == "html":
+                value = _extract_html_from_node(matches[0])
+            elif field_type == "regex":
+                base_text = _extract_text_from_node(matches[0]) or ""
+                value = _extract_regex_from_text(base_text, field)
+            else:
+                join_with = str(field.get("join_with") or " ")
+                if len(matches) > 1:
+                    value = _reduce_matches(matches, join_with)
+                else:
+                    value = _extract_text_from_node(matches[0])
+
+        value = _apply_transforms(value, field.get("transforms"), base_url)
+        if value is not None:
+            extracted[name] = value
+            ctx[name] = value
+
+    for field in computed_fields:
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+        value = None
+        if "template" in field and isinstance(field.get("template"), str):
+            value = _safe_template_format(field["template"], ctx)
+        else:
+            source = field.get("from")
+            if isinstance(source, list):
+                join_with = str(field.get("join_with") or " ")
+                parts = [str(ctx.get(item, "")) for item in source]
+                value = join_with.join(part for part in parts if part)
+            elif isinstance(source, str):
+                value = ctx.get(source)
+            elif "value" in field:
+                value = field.get("value")
+        value = _apply_transforms(value, field.get("transforms"), base_url)
+        if value is not None:
+            extracted[name] = value
+            ctx[name] = value
+
+    return extracted
+
+
+def _is_schema_dsl(rules: Dict[str, Any]) -> bool:
+    return isinstance(rules.get("fields"), list) or isinstance(rules.get("baseFields"), (list, dict))
+
+
+def _has_nonempty_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(_has_nonempty_value(item) for item in value)
+    if isinstance(value, dict):
+        return any(_has_nonempty_value(item) for item in value.values())
+    return True
+
+
+def _is_fragile_class_name(value: str) -> bool:
+    if not value:
+        return False
+    if value.startswith("css-") and len(value) >= 8:
+        return True
+    if len(value) >= 12 and re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        digits = sum(ch.isdigit() for ch in value)
+        letters = sum(ch.isalpha() for ch in value)
+        return digits >= 2 and letters >= 4
+    return False
+
+
+def _fragile_css_classes(selector: str) -> List[str]:
+    if not selector.strip().startswith("css:"):
+        return []
+    expr = selector.strip()[4:]
+    classes = re.findall(r"\.([A-Za-z0-9_-]+)", expr)
+    attr_classes = re.findall(r'class\s*[*^$]?=\s*["\']([^"\']+)["\']', expr)
+    candidates = classes + attr_classes
+    return [cls for cls in candidates if _is_fragile_class_name(cls)]
+
+_SCHEMA_SELECTOR_KEYS = (
+    "entry_xpath",
+    "entry_selector",
+    "item_xpath",
+    "items_xpath",
+    "base_xpath",
+    "base_selector",
+    "title_xpath",
+    "title_selector",
+    "summary_xpath",
+    "summary_selector",
+    "description_xpath",
+    "content_xpath",
+    "content_selector",
+    "author_xpath",
+    "author_selector",
+    "published_xpath",
+    "date_xpath",
+    "date_selector",
+    "link_xpath",
+    "url_xpath",
+    "guid_xpath",
+    "id_xpath",
+)
+_PAGINATION_SELECTOR_KEYS = (
+    "next_xpath",
+    "next_selector",
+    "next_link_xpath",
+    "next_link_selector",
+)
+
+_WATCHLIST_MULTI_KEYS = {
+    "summary_xpath",
+    "summary_selector",
+    "description_xpath",
+    "content_xpath",
+    "content_selector",
+    "entry_xpath",
+    "entry_selector",
+    "item_xpath",
+    "items_xpath",
+}
+
+
+def _iter_rule_selectors(rules: Dict[str, Any]) -> List[tuple[str, str]]:
+    selectors: List[tuple[str, str]] = []
+    for key in _SCHEMA_SELECTOR_KEYS:
+        value = rules.get(key)
+        for expr in _ensure_sequence(value):
+            selectors.append((key, expr))
+    pagination = rules.get("pagination")
+    if isinstance(pagination, dict):
+        for key in _PAGINATION_SELECTOR_KEYS:
+            value = pagination.get(key)
+            for expr in _ensure_sequence(value):
+                selectors.append((f"pagination.{key}", expr))
+    alternates = rules.get("alternates")
+    if isinstance(alternates, list):
+        for idx, alt in enumerate(alternates):
+            if not isinstance(alt, dict):
+                continue
+            for key, expr in _iter_rule_selectors(alt):
+                selectors.append((f"alternates[{idx}].{key}", expr))
+    return selectors
+
+
+def _iter_watchlist_selector_specs(rules: Dict[str, Any]) -> List[Dict[str, Any]]:
+    specs: List[Dict[str, Any]] = []
+    for key in _SCHEMA_SELECTOR_KEYS:
+        value = rules.get(key)
+        for expr in _ensure_sequence(value):
+            specs.append(
+                {
+                    "key": key,
+                    "selector": expr,
+                    "allow_multiple": key in _WATCHLIST_MULTI_KEYS,
+                    "expect_nonzero": True,
+                    "check_html": True,
+                }
+            )
+    pagination = rules.get("pagination")
+    if isinstance(pagination, dict):
+        for key in _PAGINATION_SELECTOR_KEYS:
+            value = pagination.get(key)
+            for expr in _ensure_sequence(value):
+                specs.append(
+                    {
+                        "key": f"pagination.{key}",
+                        "selector": expr,
+                        "allow_multiple": True,
+                        "expect_nonzero": False,
+                        "check_html": True,
+                    }
+                )
+    alternates = rules.get("alternates")
+    if isinstance(alternates, list):
+        for idx, alt in enumerate(alternates):
+            if not isinstance(alt, dict):
+                continue
+            for spec in _iter_watchlist_selector_specs(alt):
+                alt_spec = dict(spec)
+                alt_spec["key"] = f"alternates[{idx}].{spec['key']}"
+                specs.append(alt_spec)
+    return specs
+
+
+def _iter_schema_dsl_selector_specs(rules: Dict[str, Any]) -> List[Dict[str, Any]]:
+    specs: List[Dict[str, Any]] = []
+    base_selector = _base_selector(rules)
+    if base_selector:
+        specs.append(
+            {
+                "key": "baseSelector",
+                "selector": base_selector,
+                "allow_multiple": False,
+                "expect_nonzero": True,
+                "check_html": True,
+            }
+        )
+
+    def _walk_fields(fields: Sequence[Dict[str, Any]], prefix: str) -> None:
+        for field in fields:
+            name = str(field.get("name") or "").strip()
+            if not name:
+                continue
+            field_type = str(field.get("type") or "text").strip().lower()
+            selector = _field_selector(field)
+            if selector:
+                specs.append(
+                    {
+                        "key": f"{prefix}{name}",
+                        "selector": selector,
+                        "allow_multiple": field_type in {"list", "nested_list"},
+                        "expect_nonzero": True,
+                        "check_html": True,
+                    }
+                )
+            item_selector = _normalize_selector_expr(
+                field.get("item_selector") or field.get("itemSelector"),
+                css=field.get("itemCss") or field.get("item_css"),
+                xpath=field.get("itemXpath") or field.get("item_xpath"),
+            )
+            if item_selector:
+                specs.append(
+                    {
+                        "key": f"{prefix}{name}.item_selector",
+                        "selector": item_selector,
+                        "allow_multiple": True,
+                        "expect_nonzero": False,
+                        "check_html": False,
+                    }
+                )
+            if field_type in {"nested", "nested_list"}:
+                nested_fields = _normalize_field_definitions(field.get("fields") or {})
+                if nested_fields:
+                    _walk_fields(nested_fields, f"{prefix}{name}.")
+
+    base_fields = _normalize_field_definitions(rules.get("baseFields") or [])
+    fields = _normalize_field_definitions(rules.get("fields") or [])
+    _walk_fields(base_fields, "baseFields.")
+    _walk_fields(fields, "fields.")
+    return specs
+
+
+def validate_selector_rules(rules: Dict[str, Any], *, html_text: Optional[str] = None) -> Dict[str, Any]:
+    errors: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+    compile_specs: List[Dict[str, Any]] = [
+        {"key": key, "selector": expr} for key, expr in _iter_rule_selectors(rules or {})
+    ]
+    dsl_specs = _iter_schema_dsl_selector_specs(rules or {}) if _is_schema_dsl(rules or {}) else []
+    compile_specs.extend(dsl_specs)
+
+    for spec in compile_specs:
+        key = spec.get("key")
+        expr = spec.get("selector")
+        stripped = (expr or "").strip()
+        if not stripped:
+            continue
+        if stripped.startswith("css:"):
+            css_expr = stripped[4:].strip()
+            if not css_expr:
+                continue
+            try:
+                from lxml.cssselect import CSSSelector
+
+                CSSSelector(css_expr)
+            except Exception as exc:
+                errors.append({"key": key, "selector": stripped, "error": str(exc)})
+            continue
+        try:
+            XPath(stripped)
+        except Exception as exc:
+            errors.append({"key": key, "selector": stripped, "error": str(exc)})
+
+    if html_text:
+        try:
+            document = html.fromstring(html_text)
+        except Exception as exc:
+            warnings.append({"key": "document", "selector": "", "warning": "html_parse_failed", "detail": str(exc)})
+            return {"errors": errors, "warnings": warnings}
+        specs = _iter_watchlist_selector_specs(rules or {})
+        specs.extend(dsl_specs)
+        for spec in specs:
+            if not spec.get("check_html", True):
+                continue
+            expr = spec.get("selector")
+            stripped = (expr or "").strip()
+            if not stripped:
+                continue
+            matches = _select_nodes(document, stripped)
+            count = len(matches)
+            if spec.get("expect_nonzero", True) and count == 0:
+                warnings.append({"key": spec.get("key"), "selector": stripped, "warning": "no_matches"})
+            if not spec.get("allow_multiple", False) and count > 1:
+                warnings.append(
+                    {"key": spec.get("key"), "selector": stripped, "warning": "non_unique_selector", "count": count}
+                )
+            if stripped.startswith("css:"):
+                for cls in _fragile_css_classes(stripped):
+                    warnings.append(
+                        {
+                            "key": spec.get("key"),
+                            "selector": stripped,
+                            "warning": "fragile_selector",
+                            "detail": f"fragile class '{cls}'",
+                        }
+                    )
+
+    return {"errors": errors, "warnings": warnings}
+
+
+def extract_schema_fields(html_text: str, base_url: str, rules: Dict[str, Any]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "url": base_url,
+        "extraction_successful": False,
+    }
+    if not html_text:
+        return result
+    if not isinstance(rules, dict) or not rules:
+        return result
+    try:
+        document = html.fromstring(html_text)
+    except Exception as exc:
+        result["error"] = f"HTML parse failed: {exc}"
+        return result
+
+    try:
+        document.make_links_absolute(base_url)
+    except Exception:
+        pass
+
+    if _is_schema_dsl(rules):
+        schema_name = rules.get("name")
+        base_selector = _base_selector(rules)
+        nodes: List[HtmlElement] = []
+        if base_selector:
+            nodes.extend([n for n in _select_nodes(document, base_selector) if isinstance(n, HtmlElement)])
+        base_node = nodes[0] if nodes else document
+
+        schema_fields: Dict[str, Any] = {}
+        base_fields = _normalize_field_definitions(rules.get("baseFields") or [])
+        fields = _normalize_field_definitions(rules.get("fields") or [])
+        if base_fields:
+            schema_fields.update(_extract_fields_from_node(base_node, base_fields, base_url=base_url, context={}))
+        if fields:
+            schema_fields.update(_extract_fields_from_node(base_node, fields, base_url=base_url, context=schema_fields))
+
+        if isinstance(schema_name, str) and schema_name.strip():
+            result["schema_name"] = schema_name.strip()
+        result["schema_fields"] = schema_fields
+
+        for key in ("title", "summary", "content", "author", "published", "published_raw", "date"):
+            if key not in schema_fields:
+                continue
+            value = schema_fields.get(key)
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                joined = "\n".join(item.strip() for item in value if item and item.strip())
+                result[key] = joined if joined else value
+            else:
+                result[key] = value
+
+        result["extraction_successful"] = any(_has_nonempty_value(value) for value in schema_fields.values())
+        return result
+
+    base_selectors = (
+        rules.get("base_xpath")
+        or rules.get("base_selector")
+        or rules.get("entry_xpath")
+        or rules.get("entry_selector")
+        or rules.get("item_xpath")
+        or rules.get("items_xpath")
+    )
+    nodes: List[HtmlElement] = []
+    for selector in _ensure_sequence(base_selectors):
+        nodes.extend([n for n in _select_nodes(document, selector) if isinstance(n, HtmlElement)])
+    base_node = nodes[0] if nodes else document
+
+    summary_join = str(rules.get("summary_join_with") or " ")
+    content_join = str(rules.get("content_join_with") or "\n")
+
+    title = _extract_value(
+        base_node,
+        rules.get("title_xpath") or rules.get("title_selector"),
+        join=False,
+    )
+    summary = _extract_value(
+        base_node,
+        rules.get("summary_xpath")
+        or rules.get("description_xpath")
+        or rules.get("summary_selector"),
+        join=True,
+        join_with=summary_join,
+    )
+    content = _extract_value(
+        base_node,
+        rules.get("content_xpath") or rules.get("content_selector"),
+        join=True,
+        join_with=content_join,
+    )
+    author = _extract_value(
+        base_node,
+        rules.get("author_xpath") or rules.get("author_selector"),
+        join=False,
+    )
+    published_raw = _extract_value(
+        base_node,
+        rules.get("published_xpath")
+        or rules.get("date_xpath")
+        or rules.get("date_selector"),
+        join=False,
+    )
+
+    if title:
+        result["title"] = title
+    if summary:
+        result["summary"] = summary
+    if content:
+        result["content"] = content
+    if author:
+        result["author"] = author
+    if published_raw:
+        result["published_raw"] = published_raw
+        fmt = rules.get("published_format") or rules.get("date_format")
+        parsed = _normalize_datetime(published_raw, fmt if isinstance(fmt, str) else None)
+        if parsed:
+            result["published"] = parsed
+
+    result["extraction_successful"] = bool(content or summary or title)
+    return result
 
 
 def _coerce_int(value: Any, default: Optional[int] = None) -> Optional[int]:

@@ -1,6 +1,6 @@
 # Monitoring TLDW Embeddings Jobs
 
-This folder contains a ready-to-import Grafana dashboard and basic guidance to scrape Prometheus metrics from the API process. The embeddings Jobs worker runs through core Jobs and does not expose a standalone Prometheus endpoint.
+This folder contains a ready-to-import Grafana dashboard and basic guidance to scrape Prometheus metrics from the API process. The embeddings Redis Streams worker does not expose a standalone Prometheus endpoint; root Jobs metrics and API counters are exported by the API process.
 
 ## Prometheus Scrape Setup
 
@@ -31,10 +31,10 @@ Notes:
 
 Import the provided dashboards:
 
-- Embeddings Jobs (legacy orchestrator dashboard; update if you still use it): `monitoring/grafana_embeddings_orchestrator.json`
-- Workflows: `monitoring/grafana_workflows.json`
-- Service Overview: `monitoring/grafana_service_overview.json`
-- Tenant Overview: `monitoring/grafana_tenant_overview.json`
+- Embeddings Redis Streams (queue/depth panels driven by Redis + API metrics): `Docs/Operations/monitoring/grafana_embeddings_orchestrator.json`
+- Workflows: `Docs/Operations/monitoring/grafana_workflows.json`
+- Service Overview: `Docs/Operations/monitoring/grafana_service_overview.json`
+- Tenant Overview: `Docs/Operations/monitoring/grafana_tenant_overview.json`
   - Panels:
     - SSE Connections, Disconnects, Summary Failures
     - Queue Depth by queue
@@ -76,10 +76,10 @@ In Grafana:
 
 ## Alertmanager
 
-An example Alertmanager configuration is provided at `monitoring/alertmanager_example.yml` with Slack and PagerDuty receivers. Replace placeholders with your credentials/integration keys and point your Alertmanager to this file via its `--config.file` or mounted configmap.
+An example Alertmanager configuration is provided at `Docs/Operations/monitoring/alertmanager_example.yml` with Slack and PagerDuty receivers. Replace placeholders with your credentials/integration keys and point your Alertmanager to this file via its `--config.file` or mounted configmap.
 3. Select the correct Prometheus data source
 
-SLO alert rules for the embeddings pipeline are provided in `monitoring/alerts/embeddings_slos.yaml` and include:
+SLO alert rules for the embeddings pipeline are provided in `Docs/Operations/monitoring/alerts/embeddings_slos.yaml` and include:
 
 - Error budget burn (>0.5% failures over 1h)
 - Queue age p95 > 2 minutes per queue
@@ -89,7 +89,7 @@ Add the file to your Prometheus `rule_files` section, for example:
 
 ```yaml
 rule_files:
-  - monitoring/alerts/*.yaml
+  - Docs/Operations/monitoring/alerts/*.yaml
 ```
 
 Claims monitoring alert rules live in `Docs/Monitoring/claims_alerts_prometheus.yaml`. Add the file to your Prometheus `rule_files` list and keep the runbook (`Docs/Operations/Claims_Alerts_Runbook.md`) alongside Alertmanager receiver routing so on-call responders have clear remediation steps.
@@ -100,7 +100,7 @@ Core Jobs metrics exported by the API process (filter by `domain="embeddings"`):
 
 - `jobs.queued` (gauge): queued jobs by domain/queue
 - `jobs.processing` (gauge): in-flight jobs by domain/queue
-- `jobs.backlog` (gauge): queued + processing
+- `jobs.backlog` (gauge): queued + scheduled
 - `jobs.queue_latency_seconds` (histogram): enqueue-to-start latency
 - `jobs.duration_seconds` (histogram): processing duration
 - `jobs.retries_total` (counter): retries by domain/job_type
@@ -108,5 +108,5 @@ Core Jobs metrics exported by the API process (filter by `domain="embeddings"`):
 
 ## Troubleshooting
 
-- If Jobs metrics are empty, verify the Jobs DB is reachable and the embeddings Jobs worker is running.
+- If Jobs metrics are empty, verify the Jobs DB is reachable and the embeddings Redis worker is running.
 - If metrics endpoints return 401/403, use admin credentials (single-user API key or admin JWT role).

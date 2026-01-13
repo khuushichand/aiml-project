@@ -98,6 +98,9 @@ class MistralAdapter(ChatProvider):
         return os.getenv("MISTRAL_API_BASE", "https://api.mistral.ai/v1").rstrip("/")
 
     def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
         try:
             cfg = (request or {}).get("app_config") or {}
             mcfg = cfg.get("mistral_api") or {}

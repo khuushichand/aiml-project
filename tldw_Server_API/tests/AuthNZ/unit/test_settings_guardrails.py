@@ -56,3 +56,78 @@ def test_single_user_production_accepts_new_format(monkeypatch):
         API_PREFIX="/api/v1",
     )
     monkeypatch.delenv("tldw_production", raising=False)
+
+
+def test_single_user_production_rejects_legacy_format(monkeypatch):
+    import sys
+
+    legacy_key = "legacy-key-1234567890123456"
+
+    monkeypatch.setenv("tldw_production", "true")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("E2E_TEST_BASE_URL", raising=False)
+
+    pytest_mod = sys.modules.pop("pytest", None)
+    try:
+        with pytest.raises(ValueError):
+            Settings(
+                AUTH_MODE="single_user",
+                SINGLE_USER_API_KEY=legacy_key,
+                PASSWORD_MIN_LENGTH=8,
+                PASSWORD_REQUIRE_UPPERCASE=True,
+                PASSWORD_REQUIRE_LOWERCASE=True,
+                PASSWORD_REQUIRE_DIGIT=True,
+                PASSWORD_REQUIRE_SPECIAL=False,
+                REGISTRATION_ENABLED=True,
+                REGISTRATION_REQUIRE_CODE=False,
+                REGISTRATION_CODES=[],
+                DEFAULT_USER_ROLE="user",
+                DEFAULT_STORAGE_QUOTA_MB=1000,
+                EMAIL_VERIFICATION_REQUIRED=False,
+                CORS_ORIGINS=["*"],
+                API_PREFIX="/api/v1",
+            )
+    finally:
+        if pytest_mod is not None:
+            sys.modules["pytest"] = pytest_mod
+    monkeypatch.delenv("tldw_production", raising=False)
+
+
+def test_single_user_production_allows_legacy_format_with_override(monkeypatch):
+    import sys
+
+    legacy_key = "legacy-key-1234567890123456"
+
+    monkeypatch.setenv("tldw_production", "true")
+    monkeypatch.setenv("TLDW_ALLOW_LEGACY_SINGLE_USER_KEY", "true")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("E2E_TEST_BASE_URL", raising=False)
+
+    pytest_mod = sys.modules.pop("pytest", None)
+    try:
+        Settings(
+            AUTH_MODE="single_user",
+            SINGLE_USER_API_KEY=legacy_key,
+            PASSWORD_MIN_LENGTH=8,
+            PASSWORD_REQUIRE_UPPERCASE=True,
+            PASSWORD_REQUIRE_LOWERCASE=True,
+            PASSWORD_REQUIRE_DIGIT=True,
+            PASSWORD_REQUIRE_SPECIAL=False,
+            REGISTRATION_ENABLED=True,
+            REGISTRATION_REQUIRE_CODE=False,
+            REGISTRATION_CODES=[],
+            DEFAULT_USER_ROLE="user",
+            DEFAULT_STORAGE_QUOTA_MB=1000,
+            EMAIL_VERIFICATION_REQUIRED=False,
+            CORS_ORIGINS=["*"],
+            API_PREFIX="/api/v1",
+        )
+    finally:
+        if pytest_mod is not None:
+            sys.modules["pytest"] = pytest_mod
+    monkeypatch.delenv("TLDW_ALLOW_LEGACY_SINGLE_USER_KEY", raising=False)
+    monkeypatch.delenv("tldw_production", raising=False)

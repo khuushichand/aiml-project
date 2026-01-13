@@ -39,7 +39,10 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     get_api_keys,
     DEFAULT_LLM_PROVIDER,
 )
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
@@ -63,6 +66,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
@@ -537,6 +541,16 @@ async def run_speech_chat_turn(
 
         app_config = ensure_app_config(byok_resolution.app_config)
         api_key = provider_api_key or resolve_provider_api_key_from_config(llm_provider, app_config)
+        provider_key = (llm_provider or "").strip().lower()
+        if provider_requires_api_key(provider_key) and not api_key:
+            record_byok_missing_credentials(provider_key, operation="speech_chat")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "missing_provider_credentials",
+                    "message": f"Provider '{llm_provider}' requires an API key.",
+                },
+            )
 
         if adapter is not None:
             resolved_model = llm_model or resolve_provider_model(llm_provider, app_config)

@@ -7,6 +7,29 @@
 - Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
 - OpenAPI tags: `chat`, `chat-dictionaries`, `chat-documents`
 
+## Conversation Metadata Endpoints
+Conversation list/search, lifecycle updates, message trees, analytics, and knowledge-save endpoints live under `/api/v1/chat`. Session CRUD for character chats remains under `/api/v1/chats`.
+
+Endpoints:
+- `GET /api/v1/chat/conversations` — list/search conversations with filters and ranking (`order_by=bm25|recency|hybrid|topic`).
+- `PATCH /api/v1/chat/conversations/{id}` — update state/topic/keywords with optimistic locking (`version` in body).
+- `GET /api/v1/chat/conversations/{id}/tree` — root-thread tree view with `max_depth` + truncation.
+- `GET /api/v1/chat/analytics` — UTC histogram buckets by date/topic/state.
+- `POST /api/v1/chat/knowledge/save` — save a snippet to Notes/Flashcards with backlinks.
+
+Note:
+- `/api/v1/chats` continues to serve character chat session CRUD and exports.
+- Alias: `/api/v1/chats/conversations` maps to the conversation list/update/tree endpoints above.
+
+Parameter glossary:
+- `query`: full-text search term applied to conversation title.
+- `state`: conversation lifecycle state (`in-progress`, `resolved`, `backlog`, `non-viable`).
+- `topic_label`: exact topic label match; append `*` for prefix search.
+- `keywords`: repeatable query parameter; all values must match (AND).
+- `order_by`: `bm25` (text relevance), `recency` (last_modified), `hybrid` (weighted blend), `topic` (alphabetical topic).
+- `start_date`/`end_date`: ISO-8601 range bounds for analytics.
+- `bucket_granularity`: `day` or `week` for analytics buckets.
+
 ## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`

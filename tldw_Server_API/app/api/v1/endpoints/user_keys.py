@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
@@ -172,6 +172,8 @@ async def upsert_user_provider_key(
         key_hint=key_hint_for_api_key(api_key),
         metadata=payload.metadata,
         updated_at=now,
+        created_by=int(current_user["id"]),
+        updated_by=int(current_user["id"]),
     )
     return UserProviderKeyResponse(
         provider=provider_norm,
@@ -370,14 +372,23 @@ async def test_user_provider_key(
     return ProviderKeyTestResponse(provider=provider_norm, status="valid", model=model_used)
 
 
-@router.delete("/keys/{provider}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/keys/{provider}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
 async def delete_user_provider_key(
     provider: str,
     current_user: Dict[str, Any] = Depends(get_current_active_user),
-) -> None:
+) -> Response:
     _require_byok_enabled()
     provider_norm = normalize_provider_name(provider)
     repo = await _get_user_repo()
-    deleted = await repo.delete_secret(int(current_user["id"]), provider_norm)
+    deleted = await repo.delete_secret(
+        int(current_user["id"]),
+        provider_norm,
+        revoked_by=int(current_user["id"]),
+    )
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

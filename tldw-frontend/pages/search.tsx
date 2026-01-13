@@ -1002,7 +1002,18 @@ export default function SearchPage() {
                             try {
                               await navigator.clipboard.writeText(copyText);
                               show({ title: 'Answer with citations copied', variant: 'success' });
-                              void sendImplicitFeedback({ event_type: 'citation_used' });
+                              const docIds = documents
+                                .map((d: Record<string, any>, i: number) => buildDocId(d, `doc-${i + 1}`))
+                                .filter(Boolean);
+                              const chunkIds = documents.flatMap((d: Record<string, any>) => buildChunkIds(d));
+                              const singleDoc = docIds.length === 1 ? documents[0] : null;
+                              void sendImplicitFeedback({
+                                event_type: 'citation_used',
+                                doc_id: docIds.length === 1 ? docIds[0] : undefined,
+                                chunk_ids: chunkIds.length ? chunkIds : undefined,
+                                impression_list: docIds.length ? docIds : undefined,
+                                corpus: singleDoc ? buildCorpus(singleDoc) : undefined,
+                              });
                             } catch {
                               show({ title: 'Copy failed', variant: 'danger' });
                             }

@@ -1,0 +1,414 @@
+from __future__ import annotations
+
+import asyncio
+import uuid
+
+from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.main import app
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
+    add_org_member,
+    add_team_member,
+    create_organization,
+    create_team,
+    list_memberships_for_user,
+    list_org_memberships_for_user,
+)
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
+
+
+def _run_async(coro):
+    return asyncio.run(coro)
+
+
+def _get_user_id(client: TestClient, auth_headers) -> int:
+    resp = client.get("/api/v1/users/me/profile", headers=auth_headers)
+    assert resp.status_code == 200
+    return resp.json()["user"]["id"]
+
+
+def test_user_profile_update_preferences(auth_headers) -> None:
+    with TestClient(app) as client:
+        resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "preferences.ui.theme", "value": "paper"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert "preferences.ui.theme" in payload["applied"]
+
+        profile_resp = client.get(
+            "/api/v1/users/me/profile",
+            params={"sections": "preferences"},
+            headers=auth_headers,
+        )
+        assert profile_resp.status_code == 200
+        profile = profile_resp.json()
+
+        effective_resp = client.get(
+            "/api/v1/users/me/profile",
+            params={"sections": "effective_config"},
+            headers=auth_headers,
+        )
+        assert effective_resp.status_code == 200
+        effective = effective_resp.json()
+
+    assert profile.get("preferences", {}).get("preferences.ui.theme") == "paper"
+    assert effective.get("effective_config", {}).get("preferences.ui.theme") == "paper"
+
+
+def test_user_profile_preferences_include_sources(auth_headers) -> None:
+    with TestClient(app) as client:
+        resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "preferences.ui.theme", "value": "paper"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+
+        profile_resp = client.get(
+            "/api/v1/users/me/profile",
+            params={"sections": "preferences", "include_sources": "true"},
+            headers=auth_headers,
+        )
+        assert profile_resp.status_code == 200
+        preferences = profile_resp.json().get("preferences", {})
+
+    entry = preferences.get("preferences.ui.theme")
+    assert entry.get("value") == "paper"
+    assert entry.get("source") == "user"
+
+
+def test_admin_profile_update_storage_quota(auth_headers) -> None:
+    with TestClient(app) as client:
+        user_id = _get_user_id(client, auth_headers)
+        resp = client.patch(
+            f"/api/v1/admin/users/{user_id}/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "limits.storage_quota_mb", "value": 4096},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert "limits.storage_quota_mb" in payload["applied"]
+
+        profile_resp = client.get(
+            f"/api/v1/admin/users/{user_id}/profile",
+            params={"sections": "quotas"},
+            headers=auth_headers,
+        )
+        assert profile_resp.status_code == 200
+        profile = profile_resp.json()
+
+    assert profile.get("quotas", {}).get("storage_quota_mb") == 4096
+
+
+def test_user_profile_update_no_updates(auth_headers) -> None:
+    with TestClient(app) as client:
+        resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={"updates": []},
+        )
+        assert resp.status_code == 400
+        payload = resp.json()
+        assert payload.get("error_code") == "profile_update_invalid"
+        assert payload.get("errors")
+
+
+def test_user_profile_update_version_conflict(auth_headers) -> None:
+    with TestClient(app) as client:
+        resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "profile_version": "2000-01-01T00:00:00Z",
+                "updates": [
+                    {"key": "preferences.ui.theme", "value": "midnight"},
+                ],
+            },
+        )
+        assert resp.status_code == 409
+        payload = resp.json()
+        assert payload.get("error_code") == "profile_version_mismatch"
+        assert payload.get("errors")
+
+
+def test_user_profile_update_unknown_key(auth_headers) -> None:
+    with TestClient(app) as client:
+        resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "preferences.ui.unknown", "value": "oops"},
+                ],
+            },
+        )
+        assert resp.status_code == 400
+        payload = resp.json()
+        assert payload.get("error_code") == "profile_update_unknown_key"
+        assert payload.get("errors")
+
+
+def test_user_profile_update_forbidden_key(auth_headers) -> None:
+    with TestClient(app) as client:
+        resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "limits.storage_quota_mb", "value": 1024},
+                ],
+            },
+        )
+        assert resp.status_code == 403
+        payload = resp.json()
+        assert payload.get("error_code") == "profile_update_forbidden"
+        assert payload.get("errors")
+
+
+def test_user_profile_update_invalid_value(auth_headers) -> None:
+    with TestClient(app) as client:
+        resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "preferences.ui.theme", "value": 123},
+                ],
+            },
+        )
+        assert resp.status_code == 422
+        payload = resp.json()
+        assert payload.get("error_code") == "profile_update_invalid"
+        assert payload.get("errors")
+
+
+def test_admin_profile_update_org_role(auth_headers) -> None:
+    with TestClient(app) as client:
+        user_id = _get_user_id(client, auth_headers)
+        suffix = uuid.uuid4().hex[:8]
+
+        async def _setup():
+            org = await create_organization(name=f"Profile Org {suffix}", owner_user_id=None)
+            await add_org_member(org_id=int(org["id"]), user_id=user_id, role="member")
+            return int(org["id"])
+
+        org_id = _run_async(_setup())
+
+        resp = client.patch(
+            f"/api/v1/admin/users/{user_id}/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "memberships.orgs.role", "value": {"org_id": org_id, "role": "admin"}}
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert "memberships.orgs.role" in resp.json().get("applied", [])
+
+        async def _fetch_roles():
+            return await list_org_memberships_for_user(user_id)
+
+        orgs = _run_async(_fetch_roles())
+        target = next(item for item in orgs if int(item.get("org_id")) == org_id)
+        assert target.get("role") == "admin"
+
+
+def test_admin_profile_update_team_role(auth_headers) -> None:
+    with TestClient(app) as client:
+        user_id = _get_user_id(client, auth_headers)
+        suffix = uuid.uuid4().hex[:8]
+
+        async def _setup():
+            org = await create_organization(name=f"Profile Team Org {suffix}", owner_user_id=None)
+            await add_org_member(org_id=int(org["id"]), user_id=user_id, role="member")
+            team = await create_team(org_id=int(org["id"]), name=f"Team {suffix}")
+            await add_team_member(team_id=int(team["id"]), user_id=user_id, role="member")
+            return int(team["id"])
+
+        team_id = _run_async(_setup())
+
+        resp = client.patch(
+            f"/api/v1/admin/users/{user_id}/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "memberships.teams.role", "value": {"team_id": team_id, "role": "lead"}}
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert "memberships.teams.role" in resp.json().get("applied", [])
+
+        async def _fetch_team_roles():
+            return await list_memberships_for_user(user_id)
+
+        teams = _run_async(_fetch_team_roles())
+        target = next(item for item in teams if int(item.get("team_id")) == team_id)
+        assert target.get("role") == "lead"
+
+
+def test_admin_profile_update_team_member_add_remove(auth_headers) -> None:
+    with TestClient(app) as client:
+        user_id = _get_user_id(client, auth_headers)
+        suffix = uuid.uuid4().hex[:8]
+
+        async def _setup():
+            org = await create_organization(name=f"Profile Team Org 2 {suffix}", owner_user_id=None)
+            await add_org_member(org_id=int(org["id"]), user_id=user_id, role="member")
+            team_a = await create_team(org_id=int(org["id"]), name=f"Team A {suffix}")
+            team_b = await create_team(org_id=int(org["id"]), name=f"Team B {suffix}")
+            await add_team_member(team_id=int(team_a["id"]), user_id=user_id, role="member")
+            return int(team_a["id"]), int(team_b["id"])
+
+        team_a_id, team_b_id = _run_async(_setup())
+
+        resp = client.patch(
+            f"/api/v1/admin/users/{user_id}/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {
+                        "key": "memberships.teams.member",
+                        "value": {"team_id": team_b_id, "action": "add", "role": "member"},
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert "memberships.teams.member" in resp.json().get("applied", [])
+
+        async def _list_memberships():
+            return await list_memberships_for_user(user_id)
+
+        memberships = _run_async(_list_memberships())
+        team_ids = {int(item.get("team_id")) for item in memberships}
+        assert team_b_id in team_ids
+
+        resp = client.patch(
+            f"/api/v1/admin/users/{user_id}/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {
+                        "key": "memberships.teams.member",
+                        "value": {"team_id": team_a_id, "action": "remove"},
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert "memberships.teams.member" in resp.json().get("applied", [])
+
+        memberships = _run_async(_list_memberships())
+        team_ids = {int(item.get("team_id")) for item in memberships}
+        assert team_a_id not in team_ids
+
+
+def test_admin_profile_update_audio_limits(auth_headers) -> None:
+    with TestClient(app) as client:
+        user_id = _get_user_id(client, auth_headers)
+        resp = client.patch(
+            f"/api/v1/admin/users/{user_id}/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "limits.audio_daily_minutes", "value": 120},
+                    {"key": "limits.audio_concurrent_jobs", "value": 4},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert "limits.audio_daily_minutes" in payload.get("applied", [])
+        assert "limits.audio_concurrent_jobs" in payload.get("applied", [])
+
+        profile_resp = client.get(
+            f"/api/v1/admin/users/{user_id}/profile",
+            params={"sections": "quotas"},
+            headers=auth_headers,
+        )
+        assert profile_resp.status_code == 200
+        quotas = profile_resp.json().get("quotas", {})
+        audio = quotas.get("audio", {})
+        assert audio.get("daily_minutes_limit") == 120
+        assert audio.get("concurrent_jobs_limit") == 4
+
+
+def test_admin_profile_update_evaluations_limits(auth_headers) -> None:
+    with TestClient(app) as client:
+        user_id = _get_user_id(client, auth_headers)
+        resp = client.patch(
+            f"/api/v1/admin/users/{user_id}/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {"key": "limits.evaluations_per_minute", "value": 42},
+                    {"key": "limits.evaluations_per_day", "value": 900},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert "limits.evaluations_per_minute" in payload.get("applied", [])
+        assert "limits.evaluations_per_day" in payload.get("applied", [])
+
+        profile_resp = client.get(
+            f"/api/v1/admin/users/{user_id}/profile",
+            params={"sections": "quotas"},
+            headers=auth_headers,
+        )
+        assert profile_resp.status_code == 200
+        quotas = profile_resp.json().get("quotas", {})
+        evaluations = quotas.get("evaluations", {})
+        limits = evaluations.get("limits", {})
+        assert limits.get("per_minute", {}).get("evaluations") == 42
+        assert limits.get("daily", {}).get("evaluations") == 900
+
+
+def test_admin_profile_update_identity_locked(auth_headers) -> None:
+    with TestClient(app) as client:
+        profile_resp = client.get("/api/v1/users/me/profile", headers=auth_headers)
+        assert profile_resp.status_code == 200
+        user = profile_resp.json().get("user", {})
+        user_id = int(user.get("id"))
+        username = user.get("username")
+        assert username
+
+        resp = client.patch(
+            f"/api/v1/admin/users/{user_id}/profile",
+            headers=auth_headers,
+            json={"updates": [{"key": "identity.is_locked", "value": True}]},
+        )
+        assert resp.status_code == 200
+        assert "identity.is_locked" in resp.json().get("applied", [])
+
+        limiter = get_rate_limiter()
+        is_locked, _ = _run_async(limiter.check_lockout(str(username), attempt_type="login"))
+        assert is_locked is True
+
+        resp = client.patch(
+            f"/api/v1/admin/users/{user_id}/profile",
+            headers=auth_headers,
+            json={"updates": [{"key": "identity.is_locked", "value": False}]},
+        )
+        assert resp.status_code == 200
+        assert "identity.is_locked" in resp.json().get("applied", [])
+
+        is_locked, _ = _run_async(limiter.check_lockout(str(username), attempt_type="login"))
+        assert is_locked is False

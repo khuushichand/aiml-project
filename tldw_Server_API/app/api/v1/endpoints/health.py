@@ -324,7 +324,10 @@ async def api_security_health():
             except TypeError:
                 # Back-compat for stubs/older signatures (tests monkeypatch this).
                 await initialize()
-        summary = await service_instance.get_security_summary()  # type: ignore[assignment]
+        allow_cross_tenant = not bool(getattr(service_instance, "_shared_mode", False))
+        summary = await service_instance.get_security_summary(  # type: ignore[assignment]
+            allow_cross_tenant=allow_cross_tenant
+        )
         response["summary"] = summary
         status_bits = _calculate_security_status(summary)
         response.update(status_bits)

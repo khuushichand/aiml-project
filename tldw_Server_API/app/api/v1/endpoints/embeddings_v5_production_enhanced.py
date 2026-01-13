@@ -406,7 +406,7 @@ def _tenant_rps_runtime() -> int:
 
 async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, float]:
     """Return (max_queue_depth, max_queue_age_seconds) for core embeddings queues."""
-    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
     depths = []
     ages = []
     now = time.time()
@@ -544,14 +544,14 @@ async def _get_redis_client() -> aioredis.Redis:
 
 def _dlq_stream_name(stage: str) -> str:
     stage = stage.strip().lower()
-    if stage not in {"chunking", "embedding", "storage"}:
-        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage")
+    if stage not in {"chunking", "embedding", "storage", "content"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage|content")
     return f"embeddings:{stage}:dlq"
 
 def _live_stream_name(stage: str) -> str:
     stage = stage.strip().lower()
-    if stage not in {"chunking", "embedding", "storage"}:
-        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage")
+    if stage not in {"chunking", "embedding", "storage", "content"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage|content")
     return f"embeddings:{stage}"
 
 MAX_BATCH_SIZE = _cfg_int("EMBEDDINGS_MAX_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE)
@@ -2994,6 +2994,7 @@ async def list_collections(current_user: User = Depends(get_request_user)) -> Li
 @router.delete(
     "/embeddings/collections/{collection_name}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a ChromaDB collection"
 )
 async def delete_collection(
@@ -3295,7 +3296,7 @@ def _redact_obj(obj: Any, depth: int = 0) -> Any:
     dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def list_dlq_items(
-    stage: str = Query("embedding", description="Stage: chunking|embedding|storage"),
+    stage: str = Query("embedding", description="Stage: chunking|embedding|storage|content"),
     count: int = Query(50, ge=1, le=500, description="Max items to return"),
     job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
     _current_user: User = Depends(get_request_user),
@@ -3366,7 +3367,7 @@ async def list_dlq_items(
 
 
 class DLQRequeueRequest(BaseModel):
-    stage: str = Field(..., description="Stage: chunking|embedding|storage")
+    stage: str = Field(..., description="Stage: chunking|embedding|storage|content")
     entry_id: str = Field(..., description="Redis stream entry ID")
     delete_from_dlq: bool = Field(default=True)
     override_fields: Optional[Dict[str, Any]] = Field(default=None, description="Optional field overrides before requeue")
@@ -3583,7 +3584,7 @@ async def get_dlq_stats(
 ):
     client = await _get_redis_client()
     try:
-        queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+        queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
         depths = {}
         dlq_depths = {}
         for q in queues:
@@ -3704,14 +3705,14 @@ async def set_dlq_state(req: DLQStateSetRequest, current_user: User = Depends(ge
 # ---------------------------------------------------------------------------
 
 class StageControlRequest(BaseModel):
-    stage: str  # chunking|embedding|storage|all
+    stage: str  # chunking|embedding|storage|content|all
     action: str  # pause|resume|drain
 
 
 def _stage_key(stage: str, suffix: str) -> str:
     stage = stage.strip().lower()
-    if stage not in {"chunking", "embedding", "storage"}:
-        raise HTTPException(status_code=400, detail="Invalid stage; must be chunking|embedding|storage")
+    if stage not in {"chunking", "embedding", "storage", "content"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be chunking|embedding|storage|content")
     return f"embeddings:stage:{stage}:{suffix}"
 
 
@@ -3724,7 +3725,7 @@ async def get_stage_status(current_user: User = Depends(get_request_user)):
     client = await _get_redis_client()
     try:
         out = {}
-        for st in ("chunking", "embedding", "storage"):
+        for st in ("chunking", "embedding", "storage", "content"):
             paused = await client.get(_stage_key(st, "paused"))
             drain = await client.get(_stage_key(st, "drain"))
             out[st] = {
@@ -3744,7 +3745,7 @@ async def get_stage_status(current_user: User = Depends(get_request_user)):
 async def control_stage(req: StageControlRequest, current_user: User = Depends(get_request_user)):
     client = await _get_redis_client()
     try:
-        stages = [req.stage] if req.stage != "all" else ["chunking", "embedding", "storage"]
+        stages = [req.stage] if req.stage != "all" else ["chunking", "embedding", "storage", "content"]
         for st in stages:
             if req.action == "pause":
                 await client.set(_stage_key(st, "paused"), "1")
@@ -3953,7 +3954,8 @@ async def schedule_reembed(
 ):
     """Create a media embeddings Jobs row to re-embed content.
 
-    Domain: embeddings, Queue: EMBEDDINGS_JOBS_QUEUE (default), Job Type: media_embeddings.
+    Domain: embeddings, Queue: EMBEDDINGS_JOBS_QUEUE (default),
+    Job Types: embeddings_pipeline (root) with Redis Streams chunking stage.
     """
     # Build payload
     uid = str(req.user_id or current_user.id)
@@ -3966,6 +3968,8 @@ async def schedule_reembed(
         "operation_id": req.operation_id,
         "user_tier": req.user_tier or "free",
         "embedder_version": req.embedder_version,
+        "current_stage": "chunking",
+        "force_regenerate": False,
     }
     # Construct default idempotency/dedupe if not provided
     idempotency_key = req.idempotency_key or f"reembed:{uid}:{int(req.media_id)}:{req.embedder_name or ''}:{req.embedder_version or ''}"
@@ -3977,30 +3981,66 @@ async def schedule_reembed(
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         jm = JobManager(backend=backend, db_url=db_url)
-        queue = os.getenv("EMBEDDINGS_JOBS_QUEUE", "default")
+        queue = (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip() or "default"
+        root_queue = (os.getenv("EMBEDDINGS_ROOT_JOBS_QUEUE") or "").strip()
+        if not root_queue:
+            root_queue = "low" if queue != "low" else "default"
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
         priority = max(1, min(10, int((req.priority or 50) / 10)))
-        row = jm.create_job(
+        root_row = jm.create_job(
             domain="embeddings",
-            queue=queue,
-            job_type="media_embeddings",
+            queue=root_queue,
+            job_type="embeddings_pipeline",
             payload=payload,
             owner_user_id=uid,
             priority=priority,
             idempotency_key=idempotency_key,
             request_id=rid,
         )
+        from tldw_Server_API.app.core.Embeddings import redis_pipeline
+
+        stage_payload = dict(payload)
+        stage_payload["root_job_uuid"] = root_row.get("uuid")
+        stage_payload["parent_job_uuid"] = root_row.get("uuid")
+        stage_payload["user_id"] = uid
+        if rid:
+            stage_payload["request_id"] = rid
+        if tp:
+            stage_payload["trace_id"] = tp
+        if idempotency_key:
+            stage_payload["idempotency_key"] = f"{idempotency_key}:chunking"
+        try:
+            stream_id = redis_pipeline.enqueue_chunking_job(
+                payload=stage_payload,
+                root_job_uuid=str(root_row.get("uuid") or ""),
+                force_regenerate=False,
+                require_redis=not redis_pipeline.allow_stub(),
+            )
+        except Exception:
+            try:
+                jm.fail_job(
+                    int(root_row["id"]),
+                    error="Failed to enqueue re-embed job to Redis",
+                    retryable=False,
+                    enforce=False,
+                )
+            except Exception:
+                pass
+            raise
         get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="reembed", traceparent=tp).info(
-            "Scheduled re-embed job: job_id=%s media_id=%s", row.get("id"), payload.get("media_id")
+            "Scheduled re-embed job: root_id=%s stream_id=%s media_id=%s",
+            root_row.get("id"),
+            stream_id,
+            payload.get("media_id"),
         )
         return ReembedScheduleResponse(
-            id=int(row.get("id")),
-            uuid=row.get("uuid"),
-            status=str(row.get("status")),
-            domain=str(row.get("domain")),
-            queue=str(row.get("queue")),
-            job_type=str(row.get("job_type")),
+            id=int(root_row.get("id")),
+            uuid=root_row.get("uuid"),
+            status=str(root_row.get("status")),
+            domain=str(root_row.get("domain")),
+            queue=str(root_row.get("queue")),
+            job_type=str(root_row.get("job_type")),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to schedule re-embed: {e}")
@@ -4020,13 +4060,13 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
         now_ts = _now()
 
     # Build the same structure as get_dlq_stats and add queue ages and stage flags
-    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
     depths: Dict[str, int] = {}
     dlq_depths: Dict[str, int] = {}
     ages: Dict[str, float] = {}
     # Optional per-priority depths when priority routing is enabled
     priority_enabled = str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes")
-    priority_depths: Dict[str, Dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}}
+    priority_depths: Dict[str, Dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}, "content": {}}
     for q in queues:
         try:
             depths[q] = await client.xlen(q)
@@ -4069,6 +4109,7 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
         "chunking": {"processed": 0, "failed": 0},
         "embedding": {"processed": 0, "failed": 0},
         "storage": {"processed": 0, "failed": 0},
+        "content": {"processed": 0, "failed": 0},
     }
     try:
         cursor = 0
@@ -4098,7 +4139,7 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
 
     # stage flags
     flags: Dict[str, Dict[str, bool]] = {}
-    for st in ("chunking", "embedding", "storage"):
+    for st in ("chunking", "embedding", "storage", "content"):
         p = await client.get(f"embeddings:stage:{st}:paused")
         d = await client.get(f"embeddings:stage:{st}:drain")
         flags[st] = {

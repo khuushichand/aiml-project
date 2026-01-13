@@ -132,6 +132,69 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/chat-knowledge-save
+  - id: chat.conversations.list
+    description: List and search chat conversations with filters and ranking.
+    resource_tags:
+      - chat
+      - conversations
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-conversations-list
+  - id: chat.conversations.update
+    description: Update chat conversation metadata and tags.
+    resource_tags:
+      - chat
+      - conversations
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-conversations-update
+  - id: chat.conversations.tree
+    description: Retrieve chat conversation message tree for navigation.
+    resource_tags:
+      - chat
+      - conversations
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-conversations-tree
+  - id: chat.analytics
+    description: Retrieve chat analytics histograms and summaries.
+    resource_tags:
+      - chat
+      - analytics
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-analytics
   - id: audio.speech
     description: Generate speech audio from text using TTS providers.
     resource_tags:

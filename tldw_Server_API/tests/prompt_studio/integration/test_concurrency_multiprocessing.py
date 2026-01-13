@@ -78,46 +78,60 @@ def _worker_acquire_loop(spec: Dict[str, Any], out_ids):
 
 
 @pytest.mark.integration
-def test_parallel_acquire_distinct_jobs_multiprocessing(prompt_studio_dual_backend_db):
+def test_parallel_acquire_distinct_jobs_multiprocessing(prompt_studio_dual_backend_db, tmp_path):
     label, db = prompt_studio_dual_backend_db
-    # Prepare a moderate number of jobs
-    total = 18
-    for i in range(total):
-        db.create_job(
-            job_type="evaluation",
-            entity_id=100 + i,
-            payload={"i": i},
-            priority=5,
-        )
+    mp_db = None
+    db_to_use = db
+    if label == "sqlite":
+        mp_db_path = tmp_path / "prompt_studio_mp.sqlite"
+        mp_db = PromptStudioDatabase(str(mp_db_path), client_id="mp-session")
+        db_to_use = mp_db
 
-    spec = _spec_from_db(db)
+    try:
+        # Prepare a moderate number of jobs
+        total = 18
+        for i in range(total):
+            db_to_use.create_job(
+                job_type="evaluation",
+                entity_id=100 + i,
+                payload={"i": i},
+                priority=5,
+            )
 
-    # Spawn a handful of workers
-    with Manager() as manager:
-        out_ids = manager.list()
-        procs = [Process(target=_worker_acquire_loop, args=(spec, out_ids)) for _ in range(4)]
-        try:
-            for p in procs:
-                p.start()
-            for p in procs:
-                p.join(timeout=10)
-        except KeyboardInterrupt:
-            # On interrupt, terminate all child processes promptly
+        spec = _spec_from_db(db_to_use)
+
+        # Spawn a handful of workers
+        with Manager() as manager:
+            out_ids = manager.list()
+            procs = [Process(target=_worker_acquire_loop, args=(spec, out_ids)) for _ in range(4)]
+            try:
+                for p in procs:
+                    p.start()
+                for p in procs:
+                    p.join(timeout=10)
+            except KeyboardInterrupt:
+                # On interrupt, terminate all child processes promptly
+                for p in procs:
+                    if p.is_alive():
+                        p.terminate()
+                for p in procs:
+                    try:
+                        p.join(2)
+                    except Exception:
+                        pass
+                raise
+            # Ensure processes are terminated if hanging
             for p in procs:
                 if p.is_alive():
                     p.terminate()
-            for p in procs:
-                try:
                     p.join(2)
-                except Exception:
-                    pass
-            raise
-        # Ensure processes are terminated if hanging
-        for p in procs:
-            if p.is_alive():
-                p.terminate()
-                p.join(2)
 
-        got = list(out_ids)
-        assert len(got) == total, f"Expected {total} acquired jobs, got {len(got)} for backend {label}"
-        assert len(set(got)) == total, "Duplicate job acquisitions detected across processes"
+            got = list(out_ids)
+            assert len(got) == total, f"Expected {total} acquired jobs, got {len(got)} for backend {label}"
+            assert len(set(got)) == total, "Duplicate job acquisitions detected across processes"
+    finally:
+        if mp_db is not None:
+            try:
+                mp_db.close()
+            except Exception:
+                pass

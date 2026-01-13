@@ -126,6 +126,9 @@ describe('SearchPage source feedback', () => {
         '/rag/feedback/implicit',
         expect.objectContaining({
           event_type: 'citation_used',
+          doc_id: 'doc-1',
+          impression_list: ['doc-1'],
+          corpus: 'media_db',
         })
       );
     });

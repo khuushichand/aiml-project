@@ -65,7 +65,12 @@ Note: This map focuses on the most important, stable routes. Many modules expose
     {"method": "GET",  "path": "/jobs/{job_id}", "summary": "Audio job status"}
   ],
   "/api/v1/chat": [
-    {"method": "POST", "path": "/completions", "summary": "OpenAI-compatible chat completions"}
+    {"method": "POST", "path": "/completions", "summary": "OpenAI-compatible chat completions"},
+    {"method": "GET",  "path": "/conversations", "summary": "List/search conversations"},
+    {"method": "PATCH","path": "/conversations/{conversation_id}", "summary": "Update conversation metadata"},
+    {"method": "GET",  "path": "/conversations/{conversation_id}/tree", "summary": "Conversation message tree"},
+    {"method": "GET",  "path": "/analytics", "summary": "Chat analytics buckets"},
+    {"method": "POST", "path": "/knowledge/save", "summary": "Save snippet to Notes/Flashcards"}
   ],
   "/api/v1/chunking": [
     {"method": "POST", "path": "/chunk_text", "summary": "Chunk raw text"},
@@ -332,6 +337,11 @@ Note: This map focuses on the most important, stable routes. Many modules expose
 | /api/v1/audio | WS | /api/v1/audio/stream/transcribe | Real-time STT |
 | /api/v1/audio | GET | /api/v1/audio/voices/catalog | TTS voice catalog |
 | /api/v1/chat | POST | /api/v1/chat/completions | Chat completions (OpenAI) |
+| /api/v1/chat | GET | /api/v1/chat/conversations | List/search conversations |
+| /api/v1/chat | PATCH | /api/v1/chat/conversations/{conversation_id} | Update conversation metadata |
+| /api/v1/chat | GET | /api/v1/chat/conversations/{conversation_id}/tree | Conversation message tree |
+| /api/v1/chat | GET | /api/v1/chat/analytics | Chat analytics buckets |
+| /api/v1/chat | POST | /api/v1/chat/knowledge/save | Save snippet to Notes/Flashcards |
 | /api/v1/characters | GET | /api/v1/characters | List characters |
 | /api/v1/characters | POST | /api/v1/characters | Create character |
 | /api/v1/characters | GET | /api/v1/characters/{character_id} | Get character |

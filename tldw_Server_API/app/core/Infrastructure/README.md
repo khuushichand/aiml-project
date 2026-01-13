@@ -35,7 +35,7 @@ Centralized helpers for shared runtime infrastructure. Today this module focuses
   - Metrics (optional during early startup): hooks into `tldw_Server_API.app.core.Metrics.metrics_manager.get_metrics_registry`.
 - Data Models & DB:
   - No relational tables. Interacts with Redis using well‑known keys used by other modules, e.g.:
-    - Embeddings streams: `embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`, plus `:dlq` variants.
+    - Embeddings streams: `embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`, `embeddings:content`, plus `:dlq` variants.
     - Rate limit counters: `rl:req:{user}:{window}`, `rl:tok:{user}:{YYYYMMDD}`.
     - Tenant RPS: `embeddings:tenant:rps:{user}`, `ingest:tenant:rps:{user}:{ts}`.
     - Privilege cache generation key/channel: e.g., `privilege:cache:generation`, `privilege:cache:invalidate`.

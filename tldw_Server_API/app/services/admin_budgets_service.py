@@ -240,6 +240,34 @@ def _inflate_budget_payload(flat: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _apply_budget_response_defaults(budgets: Dict[str, Any]) -> Dict[str, Any]:
+    """Add explicit response defaults for optional budget sub-fields."""
+    if not budgets:
+        return {}
+    normalized = dict(budgets)
+
+    thresholds = normalized.get("alert_thresholds")
+    if thresholds is not None:
+        if not isinstance(thresholds, dict):
+            thresholds = {}
+        else:
+            thresholds = dict(thresholds)
+        if thresholds.get("per_metric") is None:
+            thresholds["per_metric"] = {}
+        normalized["alert_thresholds"] = thresholds
+
+    enforcement = normalized.get("enforcement_mode")
+    enforcement_payload: Dict[str, Any] = {}
+    if isinstance(enforcement, dict):
+        enforcement_payload.update(enforcement)
+    if enforcement_payload.get("global") is None:
+        enforcement_payload["global"] = "none"
+    if enforcement_payload.get("per_metric") is None:
+        enforcement_payload["per_metric"] = {}
+    normalized["enforcement_mode"] = enforcement_payload
+    return normalized
+
+
 def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
     plan_name = row.get("plan_name") or "free"
     plan_display_name = row.get("plan_display_name") or plan_name.title()
@@ -252,6 +280,7 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
     if not budgets_payload and isinstance(custom_limits, dict) and "budgets" in custom_limits:
         budgets_payload = _normalize_budget_payload(custom_limits.get("budgets"))
     budgets = _flatten_budget_payload(budgets_payload)
+    budgets_with_defaults = _apply_budget_response_defaults(budgets)
     if isinstance(custom_limits, dict) and "budgets" in custom_limits:
         custom_limits = dict(custom_limits)
         custom_limits.pop("budgets", None)
@@ -259,8 +288,8 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
     effective_limits = dict(plan_limits)
     if isinstance(custom_limits, dict) and custom_limits:
         effective_limits.update(custom_limits)
-    if budgets:
-        effective_limits["budgets"] = _inflate_budget_payload(budgets)
+    if budgets_with_defaults:
+        effective_limits["budgets"] = _inflate_budget_payload(budgets_with_defaults)
 
     return {
         "org_id": int(row.get("org_id")),
@@ -268,7 +297,7 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "org_slug": row.get("org_slug"),
         "plan_name": plan_name,
         "plan_display_name": plan_display_name,
-        "budgets": budgets,
+        "budgets": budgets_with_defaults,
         "custom_limits": custom_limits,
         "effective_limits": effective_limits,
         "updated_at": row.get("budgets_updated_at") or row.get("updated_at"),
@@ -650,7 +679,7 @@ async def upsert_org_budget(
         try:
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg
 
-            await ensure_billing_tables_pg()
+            await ensure_billing_tables_pg(run_backfill=False)
         except Exception as exc:
             logger.debug(f"admin budgets: ensure billing tables skipped/failed: {exc}")
 
@@ -751,12 +780,6 @@ async def upsert_org_budget(
 
     row_dict = dict(sub_row) if not isinstance(sub_row, dict) else sub_row
     custom_limits = _parse_json_payload(row_dict.get("custom_limits_json"))
-    cleaned_custom_limits = custom_limits
-    removed_custom_budget = False
-    if isinstance(custom_limits, dict) and "budgets" in custom_limits:
-        cleaned_custom_limits = dict(custom_limits)
-        cleaned_custom_limits.pop("budgets", None)
-        removed_custom_budget = True
 
     budget_row = await _fetchrow(
         db,
@@ -812,31 +835,6 @@ async def upsert_org_budget(
     else:
         row_dict["budgets_json"] = budgets_payload
         row_dict["budgets_updated_at"] = budget_row.get("updated_at") if budget_row else None
-
-    if removed_custom_budget:
-        payload = json.dumps(cleaned_custom_limits) if cleaned_custom_limits else None
-        if pg:
-            await db.execute(
-                """
-                UPDATE org_subscriptions
-                SET custom_limits_json = $2::jsonb, updated_at = $3
-                WHERE org_id = $1
-                """,
-                org_id,
-                payload,
-                now,
-            )
-        else:
-            await db.execute(
-                """
-                UPDATE org_subscriptions
-                SET custom_limits_json = ?, updated_at = ?
-                WHERE org_id = ?
-                """,
-                (payload, now, org_id),
-            )
-        row_dict["custom_limits_json"] = payload
-        row_dict["updated_at"] = now
 
     row_dict.update(
         {

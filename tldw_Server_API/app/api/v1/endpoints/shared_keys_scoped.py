@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
@@ -177,6 +177,7 @@ async def upsert_org_shared_key(
 
     repo = await _get_shared_byok_repo()
     now = datetime.now(timezone.utc)
+    actor_id = int(user.get("id"))
     row = await repo.upsert_secret(
         scope_type="org",
         scope_id=org_id,
@@ -185,6 +186,8 @@ async def upsert_org_shared_key(
         key_hint=key_hint_for_api_key(api_key),
         metadata=payload.metadata,
         updated_at=now,
+        created_by=actor_id,
+        updated_by=actor_id,
     )
     return SharedProviderKeyResponse(
         scope_type="org",
@@ -303,18 +306,26 @@ async def test_org_shared_key(
 @router.delete(
     "/orgs/{org_id}/keys/shared/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def delete_org_shared_key(
     org_id: int,
     provider: str,
     user: dict = Depends(get_current_user),
-) -> None:
+) -> Response:
     _require_byok_enabled()
     await _require_org_manager(user, org_id)
     repo = await _get_shared_byok_repo()
-    deleted = await repo.delete_secret("org", org_id, normalize_provider_name(provider))
+    actor_id = int(user.get("id"))
+    deleted = await repo.delete_secret(
+        "org",
+        org_id,
+        normalize_provider_name(provider),
+        revoked_by=actor_id,
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -382,6 +393,7 @@ async def upsert_team_shared_key(
 
     repo = await _get_shared_byok_repo()
     now = datetime.now(timezone.utc)
+    actor_id = int(user.get("id"))
     row = await repo.upsert_secret(
         scope_type="team",
         scope_id=team_id,
@@ -390,6 +402,8 @@ async def upsert_team_shared_key(
         key_hint=key_hint_for_api_key(api_key),
         metadata=payload.metadata,
         updated_at=now,
+        created_by=actor_id,
+        updated_by=actor_id,
     )
     return SharedProviderKeyResponse(
         scope_type="team",
@@ -508,15 +522,23 @@ async def test_team_shared_key(
 @router.delete(
     "/teams/{team_id}/keys/shared/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def delete_team_shared_key(
     team_id: int,
     provider: str,
     user: dict = Depends(get_current_user),
-) -> None:
+) -> Response:
     _require_byok_enabled()
     await _require_team_manager(user, team_id)
     repo = await _get_shared_byok_repo()
-    deleted = await repo.delete_secret("team", team_id, normalize_provider_name(provider))
+    actor_id = int(user.get("id"))
+    deleted = await repo.delete_secret(
+        "team",
+        team_id,
+        normalize_provider_name(provider),
+        revoked_by=actor_id,
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

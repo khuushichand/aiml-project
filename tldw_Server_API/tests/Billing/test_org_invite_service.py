@@ -41,6 +41,7 @@ from tldw_Server_API.app.services.org_invite_service import (
     RedemptionResult,
     get_invite_service,
 )
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 class TestInviteValidationResult:
@@ -355,6 +356,123 @@ class TestOrgInviteService:
         mock_orgs_repo.add_org_member.assert_called_once_with(org_id=1, user_id=100, role="member")
         mock_invites_repo.record_redemption.assert_called_once()
         mock_invites_repo.increment_uses_count.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_redeem_invite_domain_allowlist_mismatch(self, service, mock_invites_repo, mock_orgs_repo):
+        """Redeeming invite with mismatched domain should fail."""
+        tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat()
+        mock_invites_repo.get_invite_by_code.return_value = {
+            "id": 1,
+            "org_id": 1,
+            "org_name": "Test Org",
+            "is_active": True,
+            "expires_at": tomorrow,
+            "uses_count": 0,
+            "max_uses": 5,
+            "role_to_grant": "member",
+            "allowed_email_domain": "example.com",
+        }
+        mock_orgs_repo.get_org_member.return_value = None
+
+        result = await service.redeem_invite(
+            code="DOMAINCODE",
+            user_id=100,
+            user_email="user@other.com",
+        )
+
+        assert result.success is False
+        assert "allowed email domain" in (result.message or "").lower()
+        mock_orgs_repo.add_org_member.assert_not_called()
+        reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_redeem_invite_domain_allowlist_missing_email_blocks(
+        self, service, mock_invites_repo, mock_orgs_repo, monkeypatch
+    ):
+        """Redeeming invite without email should fail when fallback is disabled."""
+        monkeypatch.delenv("ORG_INVITE_ALLOW_MISSING_EMAIL", raising=False)
+        reset_settings()
+        tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat()
+        mock_invites_repo.get_invite_by_code.return_value = {
+            "id": 1,
+            "org_id": 1,
+            "org_name": "Test Org",
+            "is_active": True,
+            "expires_at": tomorrow,
+            "uses_count": 0,
+            "max_uses": 5,
+            "role_to_grant": "member",
+            "allowed_email_domain": "example.com",
+        }
+        mock_orgs_repo.get_org_member.return_value = None
+
+        result = await service.redeem_invite(
+            code="DOMAINMISS",
+            user_id=100,
+            user_email=None,
+        )
+
+        assert result.success is False
+        assert "allowed email domain" in (result.message or "").lower()
+        mock_orgs_repo.add_org_member.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_redeem_invite_domain_allowlist_missing_email_fallback(
+        self, service, mock_invites_repo, mock_orgs_repo, monkeypatch
+    ):
+        """Redeeming invite without email should succeed when fallback is enabled."""
+        monkeypatch.setenv("ORG_INVITE_ALLOW_MISSING_EMAIL", "true")
+        reset_settings()
+        tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat()
+        mock_invites_repo.get_invite_by_code.return_value = {
+            "id": 1,
+            "org_id": 1,
+            "org_name": "Test Org",
+            "is_active": True,
+            "expires_at": tomorrow,
+            "uses_count": 0,
+            "max_uses": 5,
+            "role_to_grant": "member",
+            "allowed_email_domain": "example.com",
+        }
+        mock_orgs_repo.get_org_member.return_value = None
+
+        result = await service.redeem_invite(
+            code="DOMAINFALLBACK",
+            user_id=100,
+            user_email=None,
+        )
+
+        assert result.success is True
+        mock_orgs_repo.add_org_member.assert_called_once_with(org_id=1, user_id=100, role="member")
+        monkeypatch.delenv("ORG_INVITE_ALLOW_MISSING_EMAIL", raising=False)
+        reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_redeem_invite_domain_allowlist_match(self, service, mock_invites_repo, mock_orgs_repo):
+        """Redeeming invite with matching domain should succeed."""
+        tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat()
+        mock_invites_repo.get_invite_by_code.return_value = {
+            "id": 1,
+            "org_id": 1,
+            "org_name": "Test Org",
+            "is_active": True,
+            "expires_at": tomorrow,
+            "uses_count": 0,
+            "max_uses": 5,
+            "role_to_grant": "member",
+            "allowed_email_domain": "example.com",
+        }
+        mock_orgs_repo.get_org_member.return_value = None
+
+        result = await service.redeem_invite(
+            code="DOMAINOK",
+            user_id=100,
+            user_email="User@Example.com",
+        )
+
+        assert result.success is True
+        mock_orgs_repo.add_org_member.assert_called_once_with(org_id=1, user_id=100, role="member")
 
     @pytest.mark.asyncio
     async def test_redeem_invite_with_team(self, service, mock_invites_repo, mock_orgs_repo):

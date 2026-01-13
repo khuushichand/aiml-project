@@ -93,5 +93,11 @@
     document.getElementById('reg-form')?.addEventListener('submit', handleRegister);
     document.getElementById('login-form')?.addEventListener('submit', handleLogin);
     document.getElementById('copy-token-btn')?.addEventListener('click', handleCopyToken);
+
+    const codeParam = new URLSearchParams(window.location.search).get('code');
+    if (codeParam) {
+      const regCode = document.getElementById('reg_code');
+      if (regCode) regCode.value = codeParam;
+    }
   });
 })();

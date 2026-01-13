@@ -1121,6 +1121,16 @@ class MetricsRegistry:
                 labels=["domain"],
             )
         )
+        self.register_metric(
+            MetricDefinition(
+                name="scrape_content_length_bytes",
+                type=MetricType.HISTOGRAM,
+                description="Extracted scrape content length in bytes",
+                unit="bytes",
+                labels=["backend"],
+                buckets=[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072],
+            )
+        )
 
         # Security metrics
         self.register_metric(

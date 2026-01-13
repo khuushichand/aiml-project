@@ -327,7 +327,9 @@ class RegistrationService:
                 if registration_code and not created_by:
                     # Validate and use registration code (optional when not required)
                     code_info = await self._validate_and_use_registration_code(
-                        registration_code, conn
+                        registration_code,
+                        conn,
+                        user_email=email,
                     )
                     role = code_info.get('role_to_grant', role)
 
@@ -414,7 +416,13 @@ class RegistrationService:
                 # Log registration in audit log
                 await self._log_registration(
                     user_id, username, email, role,
-                    created_by, registration_code is not None, conn
+                    created_by,
+                    registration_code is not None,
+                    conn,
+                    registration_code_id=code_info.get("id") if code_info else None,
+                    registration_code_org_id=code_info.get("org_id") if code_info else None,
+                    registration_code_org_role=code_info.get("org_role") if code_info else None,
+                    registration_code_team_id=code_info.get("team_id") if code_info else None,
                 )
 
                 # If we get here, everything succeeded
@@ -440,6 +448,10 @@ class RegistrationService:
                     "is_active": is_active,
                     "is_verified": is_verified,
                     "storage_quota_mb": storage_quota,
+                    "registration_code_id": code_info.get("id") if code_info else None,
+                    "registration_code_org_id": code_info.get("org_id") if code_info else None,
+                    "registration_code_org_role": code_info.get("org_role") if code_info else None,
+                    "registration_code_team_id": code_info.get("team_id") if code_info else None,
                 }
 
         except Exception as e:
@@ -474,7 +486,22 @@ class RegistrationService:
             await self.initialize()
 
         async with self.db_pool.transaction() as conn:
-            code_info = await self._validate_and_use_registration_code(code, conn)
+            user_email = None
+            if hasattr(conn, "fetchrow"):
+                user_row = await conn.fetchrow("SELECT email FROM users WHERE id = $1", user_id)
+                if user_row:
+                    user_email = user_row["email"]
+            else:
+                cursor = await conn.execute("SELECT email FROM users WHERE id = ?", (user_id,))
+                row = await cursor.fetchone()
+                if row:
+                    user_email = row[0]
+
+            code_info = await self._validate_and_use_registration_code(
+                code,
+                conn,
+                user_email=user_email,
+            )
             org_id = code_info.get("org_id")
             if org_id is None:
                 raise InvalidRegistrationCodeError("Invite code does not grant organization access")
@@ -492,12 +519,15 @@ class RegistrationService:
                 "org_role": code_info.get("org_role") or "member",
                 "team_id": code_info.get("team_id"),
                 "was_already_member": was_already_member,
+                "registration_code_id": code_info.get("id"),
             }
 
     async def _validate_and_use_registration_code(
         self,
         code: str,
-        conn
+        conn,
+        *,
+        user_email: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Validate and consume a registration code
@@ -517,7 +547,7 @@ class RegistrationService:
             code_row = await conn.fetchrow(
                 """
                 SELECT id, role_to_grant, times_used, max_uses,
-                       expires_at, is_active, description,
+                       expires_at, is_active, description, allowed_email_domain,
                        org_id, org_role, team_id, metadata
                 FROM registration_codes
                 WHERE code = $1
@@ -541,6 +571,25 @@ class RegistrationService:
             if code_row['times_used'] >= code_row['max_uses']:
                 raise RegistrationCodeExhaustedError()
 
+            code_info = dict(code_row)
+            code_info = self._merge_org_scope_from_metadata(code_info)
+
+            if code_info.get("org_id") is not None and not self.settings.ENABLE_ORG_SCOPED_REGISTRATION_CODES:
+                raise InvalidRegistrationCodeError("Org-scoped registration codes are disabled")
+
+            allowed_domain = code_info.get("allowed_email_domain")
+            if allowed_domain:
+                normalized = str(allowed_domain).strip().lower().lstrip("@")
+                if not user_email:
+                    raise InvalidRegistrationCodeError(
+                        "Registration code is restricted to allowed email domain"
+                    )
+                email_domain = user_email.split("@")[-1].lower()
+                if email_domain != normalized:
+                    raise InvalidRegistrationCodeError(
+                        "Registration code is restricted to allowed email domain"
+                    )
+
             # Update usage count
             await conn.execute(
                 """
@@ -551,15 +600,14 @@ class RegistrationService:
                 code_row['id']
             )
 
-            code_info = dict(code_row)
-            return self._merge_org_scope_from_metadata(code_info)
+            return code_info
 
         else:
             # SQLite - Manual locking with transaction
             cursor = await conn.execute(
                 """
                 SELECT id, role_to_grant, times_used, max_uses,
-                       expires_at, is_active, description,
+                       expires_at, is_active, description, allowed_email_domain,
                        org_id, org_role, team_id, metadata
                 FROM registration_codes
                 WHERE code = ?
@@ -580,10 +628,11 @@ class RegistrationService:
                 "expires_at": datetime.fromisoformat(code_row[4]),
                 "is_active": code_row[5],
                 "description": code_row[6],
-                "org_id": code_row[7],
-                "org_role": code_row[8],
-                "team_id": code_row[9],
-                "metadata": code_row[10],
+                "allowed_email_domain": code_row[7],
+                "org_id": code_row[8],
+                "org_role": code_row[9],
+                "team_id": code_row[10],
+                "metadata": code_row[11],
             }
 
             # Validate
@@ -596,6 +645,24 @@ class RegistrationService:
             if code_info['times_used'] >= code_info['max_uses']:
                 raise RegistrationCodeExhaustedError()
 
+            code_info = self._merge_org_scope_from_metadata(code_info)
+
+            if code_info.get("org_id") is not None and not self.settings.ENABLE_ORG_SCOPED_REGISTRATION_CODES:
+                raise InvalidRegistrationCodeError("Org-scoped registration codes are disabled")
+
+            allowed_domain = code_info.get("allowed_email_domain")
+            if allowed_domain:
+                normalized = str(allowed_domain).strip().lower().lstrip("@")
+                if not user_email:
+                    raise InvalidRegistrationCodeError(
+                        "Registration code is restricted to allowed email domain"
+                    )
+                email_domain = user_email.split("@")[-1].lower()
+                if email_domain != normalized:
+                    raise InvalidRegistrationCodeError(
+                        "Registration code is restricted to allowed email domain"
+                    )
+
             # Update usage
             await conn.execute(
                 """
@@ -606,7 +673,7 @@ class RegistrationService:
                 (code_info['id'],)
             )
 
-            return self._merge_org_scope_from_metadata(code_info)
+            return code_info
 
     async def _add_password_to_history(
         self,
@@ -646,7 +713,11 @@ class RegistrationService:
         role: str,
         created_by: Optional[int],
         used_code: bool,
-        conn
+        conn,
+        registration_code_id: Optional[int] = None,
+        registration_code_org_id: Optional[int] = None,
+        registration_code_org_role: Optional[str] = None,
+        registration_code_team_id: Optional[int] = None,
     ):
         """Log registration in audit log"""
         try:
@@ -655,7 +726,11 @@ class RegistrationService:
                 "email": email,
                 "role": role,
                 "used_registration_code": used_code,
-                "created_by": created_by
+                "created_by": created_by,
+                "registration_code_id": registration_code_id,
+                "registration_code_org_id": registration_code_org_id,
+                "registration_code_org_role": registration_code_org_role,
+                "registration_code_team_id": registration_code_team_id,
             }
 
             if hasattr(conn, 'execute'):

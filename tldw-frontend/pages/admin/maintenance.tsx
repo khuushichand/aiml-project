@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
@@ -102,6 +103,17 @@ export default function AdminMaintenancePage() {
     <Layout>
       <div className="mx-auto max-w-3xl space-y-6">
         <h1 className="text-2xl font-bold text-gray-900">Admin Maintenance</h1>
+
+        <div className="rounded-md border bg-white p-4">
+          <div className="mb-2 text-lg font-semibold text-gray-800">Admin Data Ops</div>
+          <p className="mb-3 text-sm text-gray-600">Manage backups, retention policies, and exports.</p>
+          <Link
+            href="/admin/data-ops"
+            className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Open Data Ops
+          </Link>
+        </div>
 
         <div className="rounded-md border bg-white p-4">
           <div className="mb-2 text-lg font-semibold text-gray-800">Chat Model Aliases Cache</div>

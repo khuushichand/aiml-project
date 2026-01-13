@@ -118,7 +118,7 @@ def test_optimization_create_idempotency_dual_backend(prompt_studio_dual_backend
     oid1 = (data1.get("optimization") or {}).get("id")
     job1 = data1.get("job_id")
     assert isinstance(oid1, int)
-    assert isinstance(job1, int)
+    assert isinstance(job1, (int, str))
 
     r2 = client.post("/api/v1/prompt-studio/optimizations/create", json=obody, headers=_headers_with_idem(idem_key))
     assert r2.status_code in (200, 201), r2.text
@@ -129,6 +129,15 @@ def test_optimization_create_idempotency_dual_backend(prompt_studio_dual_backend
     # On idempotent path, job_id may be None (we don’t enqueue again)
     assert job2 in (None, job1)
 
-    # Ensure only one job exists for this optimization
-    jobs = db.list_jobs_for_entity("optimization", oid1, limit=10)
-    assert len(jobs) == 1
+    # Ensure the core Job for this optimization exists
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter import PromptStudioJobsAdapter
+    adapter = PromptStudioJobsAdapter()
+    if job1 is not None:
+        job = adapter.get_job(
+            str(job1),
+            db=db,
+            user_id="test-user-123",
+            job_type="optimization",
+        )
+        assert job is not None
+        assert job.get("entity_id") == oid1

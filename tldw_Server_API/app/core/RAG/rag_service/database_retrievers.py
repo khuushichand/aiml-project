@@ -54,6 +54,85 @@ def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
     return text
 
 
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
+            try:
+                return int(stripped)
+            except Exception:
+                return None
+    return None
+
+
+def _get_metadata_value(metadata: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in metadata and metadata.get(key) is not None:
+            return metadata.get(key)
+        citation = metadata.get("citation")
+        if isinstance(citation, dict) and citation.get(key) is not None:
+            return citation.get(key)
+        dotted_key = f"citation.{key}"
+        if dotted_key in metadata and metadata.get(dotted_key) is not None:
+            return metadata.get(dotted_key)
+    return None
+
+
+def _apply_location_metadata(document: Document) -> None:
+    metadata = document.metadata or {}
+
+    if document.start_char is None:
+        start_val = _get_metadata_value(metadata, "start_char", "start_index", "start_offset", "paragraph_start")
+        start_int = _coerce_int(start_val)
+        if start_int is not None:
+            document.start_char = start_int
+
+    if document.end_char is None:
+        end_val = _get_metadata_value(metadata, "end_char", "end_index", "end_offset", "paragraph_end")
+        end_int = _coerce_int(end_val)
+        if end_int is not None:
+            document.end_char = end_int
+
+    if document.chunk_index is None:
+        chunk_val = _get_metadata_value(metadata, "chunk_index")
+        chunk_int = _coerce_int(chunk_val)
+        if chunk_int is not None:
+            document.chunk_index = chunk_int
+
+    if document.total_chunks is None:
+        total_val = _get_metadata_value(metadata, "total_chunks")
+        total_int = _coerce_int(total_val)
+        if total_int is not None:
+            document.total_chunks = total_int
+
+    if document.page_number is None:
+        page_val = _get_metadata_value(metadata, "page_number", "page", "page_no")
+        page_int = _coerce_int(page_val)
+        if page_int is not None:
+            document.page_number = page_int
+
+    if document.paragraph_number is None:
+        para_val = _get_metadata_value(metadata, "paragraph_number", "paragraph")
+        para_int = _coerce_int(para_val)
+        if para_int is not None:
+            document.paragraph_number = para_int
+
+    if document.section_title is None:
+        section_val = _get_metadata_value(metadata, "section_title", "section")
+        if section_val is None:
+            section_path = metadata.get("section_path")
+            if isinstance(section_path, str) and section_path.strip():
+                section_val = section_path.split(" > ")[-1]
+        if isinstance(section_val, str) and section_val.strip():
+            document.section_title = section_val.strip()
+
+
 @dataclass
 class RetrievalConfig:
     """Configuration for database retrieval."""
@@ -407,6 +486,7 @@ class MediaDBRetriever(BaseRetriever):
                     u.end_char,
                     u.chunk_type,
                     u.chunk_index,
+                    u.metadata AS chunk_metadata,
                     m.title,
                     m.type AS media_type,
                     m.url,
@@ -424,7 +504,7 @@ class MediaDBRetriever(BaseRetriever):
             sql = (
                 "SELECT "
                 " u.uuid AS chunk_uuid, u.id AS chunk_rowid, u.media_id, u.chunk_text,"
-                " u.start_char, u.end_char, u.chunk_type, u.chunk_index,"
+                " u.start_char, u.end_char, u.chunk_type, u.chunk_index, u.metadata AS chunk_metadata,"
                 " m.title, m.type AS media_type, m.url,"
                 " ts_rank(u.unvectorized_chunks_fts_tsv, to_tsquery('english', ?)) AS rank"
                 " FROM unvectorizedmediachunks u"
@@ -527,21 +607,38 @@ class MediaDBRetriever(BaseRetriever):
                     except Exception:
                         pass
 
+                raw_meta = row.get("chunk_metadata")
+                if raw_meta is not None:
+                    extra_meta: Optional[Dict[str, Any]] = None
+                    try:
+                        if isinstance(raw_meta, dict):
+                            extra_meta = raw_meta
+                        elif isinstance(raw_meta, (bytes, bytearray)):
+                            extra_meta = json.loads(raw_meta.decode("utf-8", "ignore"))
+                        elif isinstance(raw_meta, str):
+                            extra_meta = json.loads(raw_meta)
+                    except Exception:
+                        extra_meta = None
+                    if isinstance(extra_meta, dict):
+                        for key, value in extra_meta.items():
+                            if key not in md and value is not None:
+                                md[key] = value
+
             chunk_uuid = str(row.get('chunk_uuid'))
             content_text = (row.get('chunk_text') or "")
 
-            docs.append(
-                Document(
-                    id=chunk_uuid,
-                    content=content_text,
-                    source=DataSource.MEDIA_DB,
-                    metadata=md,
-                    score=float(score_val),
-                    start_char=md.get('start_char'),
-                    end_char=md.get('end_char'),
-                    chunk_index=md.get('chunk_index'),
-                )
+            doc = Document(
+                id=chunk_uuid,
+                content=content_text,
+                source=DataSource.MEDIA_DB,
+                metadata=md,
+                score=float(score_val),
+                start_char=md.get('start_char'),
+                end_char=md.get('end_char'),
+                chunk_index=md.get('chunk_index'),
             )
+            _apply_location_metadata(doc)
+            docs.append(doc)
 
         return docs
 
@@ -627,6 +724,8 @@ class MediaDBRetriever(BaseRetriever):
                 )
             )
         documents.sort(key=lambda doc: getattr(doc, 'score', 0.0), reverse=True)
+        for doc in documents:
+            _apply_location_metadata(doc)
         return documents
 
     async def retrieve_with_keywords(
@@ -677,6 +776,11 @@ class MediaDBRetriever(BaseRetriever):
         if not self.vector_store:
             logger.warning("Vector store not initialized, falling back to FTS")
             return await self._retrieve_fts(query, media_type, **kwargs)
+
+        def _finalize_docs(documents: List[Document]) -> List[Document]:
+            for doc in documents:
+                _apply_location_metadata(doc)
+            return documents
 
         try:
             # Allow callers to provide a precomputed query vector (e.g., HyDE)
@@ -828,7 +932,7 @@ class MediaDBRetriever(BaseRetriever):
                         )
                     )
                 logger.debug(f"Retrieved {len(documents)} documents from vector search (baseline)")
-                return documents
+                return _finalize_docs(documents)
 
             # 2) HYDE search on question vectors
             k_hyde = max(1, int(k * hyde_k_frac))
@@ -900,7 +1004,7 @@ class MediaDBRetriever(BaseRetriever):
                 merged.sort(key=lambda d: d.score, reverse=True)
                 documents = merged[:k]
                 logger.debug(f"Retrieved {len(documents)} documents from vector search (HYDE merged, media-level)")
-                return documents
+                return _finalize_docs(documents)
 
             # Chunk-level merge (by parent_chunk_id)
             # Build best-per-parent maps for base and HYDE
@@ -958,7 +1062,7 @@ class MediaDBRetriever(BaseRetriever):
             chunk_docs.sort(key=lambda d: d.score, reverse=True)
             documents = chunk_docs[:k]
             logger.debug(f"Retrieved {len(documents)} documents from vector search (HYDE merged, chunk-level)")
-            return documents
+            return _finalize_docs(documents)
 
         except Exception as e:
             logger.error(f"Vector search failed: {e}")

@@ -17,6 +17,13 @@ from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDat
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
+    ABTEST_JOBS_CLEANUP_TYPE,
+    ABTEST_JOBS_DOMAIN,
+    abtest_jobs_idempotency_key,
+    abtest_jobs_manager,
+    abtest_jobs_queue,
+)
 from tldw_Server_API.app.core.Evaluations.metrics_retrieval import (
     recall_at_k, mrr, ndcg, hit_at_k,
 )
@@ -99,6 +106,21 @@ def _get_model_revision(provider: str, model: str) -> Dict[str, Optional[str]]:
     return meta
 
 
+def _collection_exists(manager: ChromaDBManager, name: str) -> bool:
+    try:
+        collections = manager.list_collections()
+    except Exception:
+        return False
+    for coll in collections:
+        if isinstance(coll, dict):
+            if coll.get("name") == name:
+                return True
+        else:
+            if getattr(coll, "name", None) == name:
+                return True
+    return False
+
+
 async def build_collections_vector_only(
     db: EvaluationsDatabase,
     config: EmbeddingsABTestConfig,
@@ -118,6 +140,18 @@ async def build_collections_vector_only(
 
     results: List[Dict[str, str]] = []
     pipeline_hash = _compute_pipeline_hash(config)
+    existing_arms = {}
+    for arm in db.get_abtest_arms(test_id) or []:
+        try:
+            idx = arm.get("arm_index")
+        except AttributeError:
+            continue
+        if idx is None:
+            continue
+        try:
+            existing_arms[int(idx)] = arm
+        except (TypeError, ValueError):
+            continue
 
     # Prepare chunker
     cconf = ChunkerConfig(
@@ -150,18 +184,62 @@ async def build_collections_vector_only(
         pass
 
     for i, arm in enumerate(config.arms):
+        collection_name = f"user_{user_id}_abtest_{test_id}_arm_{i}"
+        collection_hash = _compute_collection_hash(config, i)
+        existing = existing_arms.get(i)
+        if (
+            config.reuse_existing
+            and existing
+            and existing.get("collection_hash") == collection_hash
+            and existing.get("collection_name") == collection_name
+            and existing.get("status") == "ready"
+            and _collection_exists(manager, collection_name)
+        ):
+            # Reuse only within the same test lifecycle (collection name is test-scoped).
+            stats_payload = None
+            meta_payload = None
+            try:
+                if existing.get("stats_json"):
+                    stats_payload = json.loads(existing.get("stats_json") or "{}")
+            except Exception:
+                stats_payload = None
+            try:
+                if existing.get("metadata_json"):
+                    meta_payload = json.loads(existing.get("metadata_json") or "{}")
+            except Exception:
+                meta_payload = None
+            db.upsert_abtest_arm(
+                test_id=test_id,
+                arm_index=i,
+                provider=arm.provider,
+                model_id=arm.model,
+                dimensions=existing.get("dimensions") or arm.dimensions,
+                collection_hash=collection_hash,
+                pipeline_hash=pipeline_hash,
+                collection_name=collection_name,
+                status='ready',
+                stats_json=stats_payload,
+                metadata_json=meta_payload,
+            )
+            results.append({"arm_id": existing.get("arm_id"), "collection_name": collection_name})
+            continue
+
         arm_id = db.upsert_abtest_arm(
             test_id=test_id,
             arm_index=i,
             provider=arm.provider,
             model_id=arm.model,
             dimensions=arm.dimensions,
-            collection_hash=_compute_collection_hash(config, i),
+            collection_hash=collection_hash,
             pipeline_hash=pipeline_hash,
             status='preparing',
         )
 
-        collection_name = f"user_{user_id}_abtest_{test_id}_arm_{i}"
+        try:
+            if _collection_exists(manager, collection_name):
+                manager.delete_collection(collection_name)
+        except Exception:
+            pass
 
         # Chunk entire corpus
         all_texts: List[str] = []
@@ -210,7 +288,7 @@ async def build_collections_vector_only(
             provider=arm.provider,
             model_id=arm.model,
             dimensions=emb_dim or arm.dimensions,
-            collection_hash=_compute_collection_hash(config, i),
+            collection_hash=collection_hash,
             pipeline_hash=pipeline_hash,
             collection_name=collection_name,
             status='ready',
@@ -461,8 +539,66 @@ async def run_abtest_full(
         aggregates = await run_vector_search_and_score(db, config, test_id, user_id, arm_info)
         sig = compute_significance(db, test_id, metric='ndcg')
         db.set_abtest_status(test_id, 'completed', stats_json={"aggregates": aggregates, "significance": sig, "progress": {"phase": 1.0}})
+        cleanup = getattr(config, "cleanup_policy", None)
+        if cleanup and bool(getattr(cleanup, "on_complete", False)):
+            try:
+                cleanup_abtest_resources(db, user_id, test_id, delete_db=True, delete_idempotency=True)
+            except Exception as exc:
+                logger.warning(f"Failed to cleanup A/B test {test_id} after completion: {exc}")
+        elif cleanup and getattr(cleanup, "ttl_hours", None):
+            try:
+                from datetime import datetime, timedelta, timezone
+
+                ttl_hours = int(cleanup.ttl_hours)
+                if ttl_hours > 0:
+                    abtest_jobs_manager().create_job(
+                        domain=ABTEST_JOBS_DOMAIN,
+                        queue=abtest_jobs_queue(),
+                        job_type=ABTEST_JOBS_CLEANUP_TYPE,
+                        payload={"test_id": test_id, "user_id": user_id},
+                        owner_user_id=str(user_id),
+                        priority=5,
+                        max_retries=1,
+                        available_at=datetime.now(timezone.utc) + timedelta(hours=ttl_hours),
+                        idempotency_key=abtest_jobs_idempotency_key(test_id, "cleanup"),
+                    )
+            except Exception as exc:
+                logger.warning(f"Failed to enqueue cleanup job for A/B test {test_id}: {exc}")
     except Exception as e:
         db.set_abtest_status(test_id, 'failed', stats_json={"error": str(e)})
+
+
+def cleanup_abtest_resources(
+    db: EvaluationsDatabase,
+    user_id: str,
+    test_id: str,
+    *,
+    delete_db: bool,
+    delete_idempotency: bool,
+) -> Dict[str, int]:
+    from tldw_Server_API.app.core.config import settings as app_settings
+
+    deleted = 0
+    embedding_config = app_settings.get("EMBEDDING_CONFIG", {}).copy()
+    embedding_config["USER_DB_BASE_DIR"] = app_settings.get("USER_DB_BASE_DIR")
+    manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
+    arms = db.get_abtest_arms(test_id)
+    for arm in arms:
+        cname = arm.get("collection_name")
+        if not cname:
+            continue
+        try:
+            manager.delete_collection(cname)
+            deleted += 1
+        except Exception as exc:
+            logger.warning(f"Cleanup failed for collection {cname}: {exc}")
+    db_deleted = 0
+    if delete_db:
+        try:
+            db_deleted = int(db.delete_abtest(test_id, delete_idempotency=delete_idempotency))
+        except Exception as exc:
+            logger.warning(f"Cleanup failed for A/B test rows {test_id}: {exc}")
+    return {"collections_deleted": deleted, "abtests_deleted": db_deleted}
 
 
 def _sign_test_pvalue(wins: int, losses: int) -> float:

@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
-VALID_STAGES = {"chunking", "embedding", "storage"}
+VALID_STAGES = {"chunking", "embedding", "storage", "content"}
 
 CURRENT_VERSION = 1
 CURRENT_SCHEMA = "tldw.embeddings.v1"
@@ -60,6 +60,11 @@ def validate_schema(stage: str, payload: Mapping[str, Any]) -> None:
         raise ValueError("payload must be a mapping")
     if not payload:
         raise ValueError("payload is empty")
+
+    if stage_normalized == "content":
+        if payload.get("content") is None and payload.get("text") is None:
+            raise ValueError("payload missing content/text for content stage")
+        return
 
     try:
         import jsonschema  # type: ignore

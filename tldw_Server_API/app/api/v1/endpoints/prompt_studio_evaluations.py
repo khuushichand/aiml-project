@@ -25,6 +25,7 @@ import os
 from loguru import logger
 
 from ....core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from ....core.DB_Management.backends.base import BackendType
 from ....core.Prompt_Management.prompt_studio.test_runner import TestRunner
 from ....core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -33,7 +34,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
 )
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -202,7 +203,7 @@ async def create_evaluation(
         provider_api_key = byok_resolution.api_key
         app_config_override = byok_resolution.app_config
 
-        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_prompt_studio_test_mode():
+        if provider_requires_api_key(provider_key) and not provider_api_key and not _is_prompt_studio_test_mode():
             record_byok_missing_credentials(provider_key, operation="prompt_studio")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -583,12 +584,35 @@ async def delete_evaluation(
         conn = db.get_connection()
         cursor = conn.cursor()
 
-        # Soft delete
-        cursor.execute("""
-            UPDATE prompt_studio_evaluations
-            SET deleted = 1, deleted_at = ?
-            WHERE id = ?
-        """, (datetime.now().isoformat(), evaluation_id))
+        supports_soft_delete = False
+        try:
+            if db.backend_type == BackendType.POSTGRESQL and db.backend is not None:
+                table_info = db.backend.get_table_info(
+                    "prompt_studio_evaluations",
+                    connection=conn.raw_connection,
+                )
+                columns = {info.get("name") for info in table_info}
+            else:
+                cursor.execute("PRAGMA table_info(prompt_studio_evaluations)")
+                columns = {row[1] for row in cursor.fetchall()}
+            supports_soft_delete = "deleted" in columns and "deleted_at" in columns
+        except Exception as exc:
+            logger.debug("Failed to check prompt_studio_evaluations columns: %s", exc)
+
+        if supports_soft_delete:
+            cursor.execute(
+                """
+                UPDATE prompt_studio_evaluations
+                SET deleted = 1, deleted_at = ?
+                WHERE id = ?
+                """,
+                (datetime.now().isoformat(), evaluation_id),
+            )
+        else:
+            cursor.execute(
+                "DELETE FROM prompt_studio_evaluations WHERE id = ?",
+                (evaluation_id,),
+            )
 
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Evaluation not found")
@@ -751,7 +775,7 @@ async def run_evaluation_async(
             provider_api_key = byok_resolution.api_key
             app_config_override = byok_resolution.app_config
 
-        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_prompt_studio_test_mode():
+        if provider_requires_api_key(provider_key) and not provider_api_key and not _is_prompt_studio_test_mode():
             raise RuntimeError(f"Provider '{provider_name}' requires an API key.")
 
         # Fetch prompt

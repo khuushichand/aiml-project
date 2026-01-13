@@ -128,7 +128,7 @@ class EvaluationManager:
             expected = test_case.get("expected_outputs") or {}
 
             # Format prompt with inputs
-            formatted_user_prompt = prompt.get("user_prompt", "")
+            formatted_user_prompt = prompt.get("user_prompt") or ""
             for key, value in inputs.items():
                 formatted_user_prompt = formatted_user_prompt.replace(f"{{{key}}}", str(value))
 

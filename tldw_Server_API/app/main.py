@@ -794,7 +794,10 @@ else:
         logger.warning(f"Audio jobs endpoints unavailable; skipping import: {_audio_jobs_err}")
         _HAS_AUDIO_JOBS = False
     # Chat Endpoint
-    from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
+    from tldw_Server_API.app.api.v1.endpoints.chat import (
+        router as chat_router,
+        conversations_alias_router,
+    )
 
     # Character Endpoints
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
@@ -959,7 +962,10 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     _HAS_UNIFIED_EVALUATIONS = False
     # Minimal chat/character endpoints to support lightweight tests
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
-    from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
+    from tldw_Server_API.app.api.v1.endpoints.chat import (
+        router as chat_router,
+        conversations_alias_router,
+    )
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
@@ -1988,6 +1994,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Audio Jobs worker: {e}")
 
+    # Evaluations Embeddings A/B Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs_worker import (
+            run_embeddings_abtest_jobs_worker as _run_abtest_jobs,
+        )
+
+        _enabled = _os.getenv("EVALUATIONS_ABTEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if not _enabled:
+            _enabled = _os.getenv("EVALS_ABTEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if _enabled:
+            evals_abtest_jobs_stop_event = _asyncio.Event()
+            evals_abtest_jobs_task = _asyncio.create_task(_run_abtest_jobs(evals_abtest_jobs_stop_event))
+            logger.info("Embeddings A/B Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Embeddings A/B Jobs worker disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start Embeddings A/B Jobs worker: {e}")
+
     # Jobs metrics gauges worker (SLO percentiles)
     try:
         import os as _os
@@ -2590,6 +2616,16 @@ async def lifespan(app: FastAPI):
                     audio_jobs_task.cancel()
             else:
                 audio_jobs_task.cancel()
+        if "evals_abtest_jobs_task" in locals() and evals_abtest_jobs_task:
+            if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
+                try:
+                    evals_abtest_jobs_stop_event.set()
+                    await _asyncio.wait_for(evals_abtest_jobs_task, timeout=5.0)
+                    logger.info("Embeddings A/B Jobs worker stopped via stop_event")
+                except Exception:
+                    evals_abtest_jobs_task.cancel()
+            else:
+                evals_abtest_jobs_task.cancel()
         if "claims_task" in locals() and claims_task:
             claims_task.cancel()
         if "jobs_prune_task" in locals() and jobs_prune_task:
@@ -3916,7 +3952,7 @@ if WEBUI_DIR.exists():
         )
         from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
         from fastapi.responses import JSONResponse
-        from tldw_Server_API.app.core.config import load_comprehensive_config
+        from tldw_Server_API.app.core.config import load_comprehensive_config, get_config_value
 
         config = {
             "apiUrl": "",  # Empty means use same origin
@@ -3928,6 +3964,9 @@ if WEBUI_DIR.exists():
         import os as _os
 
         _is_prod_env = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+        webui_base_url = _os.getenv("TLDW_WEBUI_BASE_URL") or get_config_value("Server", "webui_base_url")
+        if isinstance(webui_base_url, str) and webui_base_url.strip():
+            config["webui_base_url"] = webui_base_url.strip()
         profile_hint = None
         try:
             profile_hint = get_profile()
@@ -4281,6 +4320,7 @@ elif _MINIMAL_TEST_APP:
     app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     # Include lightweight chat/character routes needed by tests
     app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    app.include_router(conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     app.include_router(
         character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
@@ -4490,6 +4530,7 @@ elif _MINIMAL_TEST_APP:
     # Auth endpoints (login/register/refresh/logout/me)
     try:
         app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+        logger.info("Auth router consolidated: endpoints/auth.py (minimal test app)")
     except Exception as _auth_min_err:
         logger.debug(f"Skipping auth router in minimal test app: {_auth_min_err}")
     # Users endpoints (sessions, change-password, storage, me)
@@ -4713,6 +4754,7 @@ else:
 
     _include_if_enabled("audit", audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
     _include_if_enabled("auth", auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+    logger.info("Auth router consolidated: endpoints/auth.py")
     _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
     _include_if_enabled("users", user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
 
@@ -4778,6 +4820,8 @@ else:
     # Guard optional routers that may not be imported in ULTRA_MINIMAL_APP
     if "chat_router" in locals():
         _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    if "conversations_alias_router" in locals():
+        _include_if_enabled("chat", conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     # Tools (MCP-backed server tool execution) - include if initial guarded import succeeded
     if "tools_router" in locals() and tools_router is not None:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)

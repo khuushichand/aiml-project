@@ -37,6 +37,10 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_processor import JobProcessor
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.quota_config import (
+    apply_prompt_studio_quota_policy,
+    apply_prompt_studio_quota_defaults,
+)
 
 
 _PROMPT_STUDIO_DOMAIN = "prompt_studio"
@@ -59,6 +63,7 @@ _PROCESSOR_CACHE: Dict[str, JobProcessor] = {}
 
 
 def _jobs_manager() -> JobManager:
+    apply_prompt_studio_quota_defaults()
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
     if not db_url:
         return JobManager()
@@ -89,6 +94,33 @@ def _normalize_payload(value: Any) -> Dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _build_worker_config(*, worker_id: str, queue: str) -> WorkerConfig:
+    lease_seconds = _coerce_int(os.getenv("PROMPT_STUDIO_JOBS_LEASE_SECONDS"), 60)
+    renew_jitter_seconds = _coerce_int(os.getenv("PROMPT_STUDIO_JOBS_RENEW_JITTER_SECONDS"), 5)
+    renew_threshold_seconds = _coerce_int(os.getenv("PROMPT_STUDIO_JOBS_RENEW_THRESHOLD_SECONDS"), 10)
+
+    heartbeat_raw = (os.getenv("TLDW_PS_HEARTBEAT_SECONDS") or "").strip()
+    if heartbeat_raw:
+        heartbeat_seconds = _coerce_int(heartbeat_raw, 0)
+        if heartbeat_seconds > 0:
+            max_threshold = max(1, lease_seconds - 1) if lease_seconds > 1 else 1
+            desired_threshold = max(1, lease_seconds - heartbeat_seconds)
+            renew_threshold_seconds = min(max_threshold, desired_threshold)
+
+    return WorkerConfig(
+        domain=_PROMPT_STUDIO_DOMAIN,
+        queue=queue,
+        worker_id=worker_id,
+        lease_seconds=lease_seconds,
+        renew_jitter_seconds=renew_jitter_seconds,
+        renew_threshold_seconds=renew_threshold_seconds,
+        backoff_base_seconds=_coerce_int(os.getenv("PROMPT_STUDIO_JOBS_BACKOFF_BASE_SECONDS"), 2),
+        backoff_max_seconds=_coerce_int(os.getenv("PROMPT_STUDIO_JOBS_BACKOFF_MAX_SECONDS"), 30),
+        retry_on_exception=True,
+        retry_backoff_seconds=_coerce_int(os.getenv("PROMPT_STUDIO_JOBS_RETRY_BACKOFF_SECONDS"), 10),
+    )
 
 
 def _get_db(user_id: str):
@@ -158,27 +190,37 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
     return await processor.process_generation_job(payload, entity_id)
 
 
+async def _inflight_quota_guard(job: Dict[str, Any], jm: JobManager) -> bool:
+    owner = job.get("owner_user_id")
+    if owner is None or str(owner).strip() == "":
+        return True
+    owner_id = str(owner)
+    try:
+        await apply_prompt_studio_quota_policy(owner_id)
+    except Exception as exc:
+        logger.debug("Prompt Studio quota policy lookup failed for {}: {}", owner_id, exc)
+    try:
+        max_inflight = jm._quota_get("JOBS_QUOTA_MAX_INFLIGHT", _PROMPT_STUDIO_DOMAIN, owner_id)
+    except Exception:
+        max_inflight = 0
+    if not max_inflight:
+        return True
+    current = jm.count_processing_for_owner(domain=_PROMPT_STUDIO_DOMAIN, owner_user_id=owner_id)
+    if current > int(max_inflight):
+        logger.info("Prompt Studio inflight quota reached for user {}; requeueing job {}", owner_id, job.get("id"))
+        return False
+    return True
+
+
 async def main() -> None:
     worker_id = (os.getenv("PROMPT_STUDIO_JOBS_WORKER_ID") or f"prompt-studio-jobs-{os.getpid()}").strip()
     queue = (os.getenv("PROMPT_STUDIO_JOBS_QUEUE") or "default").strip() or "default"
-
-    cfg = WorkerConfig(
-        domain=_PROMPT_STUDIO_DOMAIN,
-        queue=queue,
-        worker_id=worker_id,
-        lease_seconds=_coerce_int(os.getenv("PROMPT_STUDIO_JOBS_LEASE_SECONDS"), 60),
-        renew_jitter_seconds=_coerce_int(os.getenv("PROMPT_STUDIO_JOBS_RENEW_JITTER_SECONDS"), 5),
-        renew_threshold_seconds=_coerce_int(os.getenv("PROMPT_STUDIO_JOBS_RENEW_THRESHOLD_SECONDS"), 10),
-        backoff_base_seconds=_coerce_int(os.getenv("PROMPT_STUDIO_JOBS_BACKOFF_BASE_SECONDS"), 2),
-        backoff_max_seconds=_coerce_int(os.getenv("PROMPT_STUDIO_JOBS_BACKOFF_MAX_SECONDS"), 30),
-        retry_on_exception=True,
-        retry_backoff_seconds=_coerce_int(os.getenv("PROMPT_STUDIO_JOBS_RETRY_BACKOFF_SECONDS"), 10),
-    )
+    cfg = _build_worker_config(worker_id=worker_id, queue=queue)
 
     jm = _jobs_manager()
     sdk = WorkerSDK(jm, cfg)
     logger.info(f"Prompt Studio Jobs worker starting (queue={queue}, worker_id={worker_id})")
-    await sdk.run(handler=_handle_job)
+    await sdk.run(handler=_handle_job, acquire_guard=lambda job: _inflight_quota_guard(job, jm))
 
 
 if __name__ == "__main__":

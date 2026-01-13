@@ -14,7 +14,7 @@
 The tldw_server Embeddings System provides a comprehensive solution for generating text embeddings through multiple providers. The system offers two distinct paths to accommodate different use cases:
 
 1. **Synchronous API** (`embeddings_v5_production_enhanced.py`) - Direct request-response model with circuit breaker, ideal for single-user and small deployments
-2. **Jobs Worker Architecture** - Queue-based processing for enterprise/multi-tenant deployments via the core Jobs worker (`core/Embeddings/services/jobs_worker.py`)
+2. **Redis Streams Worker Architecture** - Queue-based processing for enterprise/multi-tenant deployments via Redis Streams (`core/Embeddings/services/redis_worker.py`) with Jobs as the root status/billing record
 
 ### Key Features (Production Path)
 - 🌐 Providers: OpenAI and HuggingFace supported today; ONNX and Local API supported by the core engine. Additional providers (Cohere, Google, Mistral, Voyage) are present in configuration but not fully wired in the embedding call path yet.

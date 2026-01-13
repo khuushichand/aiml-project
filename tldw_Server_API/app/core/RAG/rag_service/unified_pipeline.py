@@ -206,6 +206,40 @@ try:
 except ImportError:
     UnifiedFeedbackSystem = None
 
+
+def _normalize_chunk_type_value(value: Any) -> Optional[str]:
+    try:
+        if Chunker is not None:
+            normalized = Chunker.normalize_chunk_type(value)  # type: ignore[attr-defined]
+            if normalized:
+                return normalized
+    except Exception:
+        pass
+    if value is None:
+        return None
+    try:
+        raw = str(value).strip().lower()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    aliases = {
+        "header": "heading",
+        "header_atx": "heading",
+        "header_line": "heading",
+        "hr": "heading",
+        "paragraph": "text",
+        "list_unordered": "list",
+        "list_ordered": "list",
+        "code_fence": "code",
+        "table_md": "table",
+    }
+    if raw in aliases:
+        return aliases[raw]
+    if raw in {"image", "video", "audio", "file", "media"}:
+        return "media"
+    return raw
+
 try:
     from .user_personalization_store import UserPersonalizationStore
 except ImportError:
@@ -1728,9 +1762,18 @@ async def unified_rag_pipeline(
         # ========== OPTIONAL CHUNK TYPE FILTER (metadata-based) ==========
         if chunk_type_filter and result.documents:
             try:
-                allowed = {str(t).lower() for t in chunk_type_filter}
+                allowed: set[str] = set()
+                for t in chunk_type_filter:
+                    norm = _normalize_chunk_type_value(t)
+                    if norm:
+                        allowed.add(norm)
                 before = len(result.documents)
-                result.documents = [d for d in result.documents if str((d.metadata or {}).get("chunk_type", "")).lower() in allowed]
+                filtered_docs = []
+                for d in result.documents:
+                    doc_type = _normalize_chunk_type_value((d.metadata or {}).get("chunk_type"))
+                    if doc_type and doc_type in allowed:
+                        filtered_docs.append(d)
+                result.documents = filtered_docs
                 result.metadata["chunk_type_filter_before"] = before
                 result.metadata["chunk_type_filter_after"] = len(result.documents)
             except Exception:

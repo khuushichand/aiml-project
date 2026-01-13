@@ -272,6 +272,8 @@ auth_mode = single_user
 database_url = sqlite:///./Databases/users.db
 enable_registration = true
 require_registration_code = false
+enable_org_scoped_registration_codes = false
+org_invite_allow_missing_email = false
 rate_limit_enabled = true
 rate_limit_per_minute = 60
 rate_limit_burst = 10
@@ -279,6 +281,7 @@ access_token_expire_minutes = 30
 refresh_token_expire_days = 7
 byok_enabled = false
 byok_allowed_providers =
+byok_allowed_base_url_providers = openai,anthropic,zai,moonshot,openrouter,bedrock
 byok_encryption_key =
 byok_secondary_encryption_key =
 
@@ -478,6 +481,15 @@ agentic_cache_backend = memory
 # but short enough to avoid unbounded growth in ephemeral cache state for idle tabs
 # and background jobs.
 agentic_cache_ttl_sec = 600
+
+# Precomputed span index caps (late-interaction spans stored per corpus)
+# Env overrides:
+# - RAG_PRECOMPUTED_SPANS_MAX_VECTORS_PER_CORPUS
+# - RAG_PRECOMPUTED_SPANS_MAX_MB_PER_CORPUS
+# - RAG_PRECOMPUTED_SPANS_RETENTION_DAYS
+precomputed_spans_max_vectors_per_corpus = 200000
+precomputed_spans_max_mb_per_corpus = 512
+precomputed_spans_retention_days = 30
 
 # Enable/disable implicit feedback capture (click/copy/expand/dwell/citation-used)
 # Env override: IMPLICIT_FEEDBACK_ENABLED=true|false (default true)
@@ -1057,6 +1069,10 @@ web_scraper_api_retry = 3
 web_scraper_api_retry_delay = 1
 web_scraper_retry_count = 3
 web_scraper_stealth_playwright = False
+custom_scrapers_yaml_path = tldw_Server_API/Config_Files/custom_scrapers.yaml
+web_scraper_default_backend = auto
+web_scraper_ua_mode = fixed
+web_scraper_respect_robots = True
 
 [Logging]
 log_level = INFO
@@ -1064,6 +1080,9 @@ log_file = ./Logs/tldw_app_logs.json
 log_metrics_file = ./Logs/tldw_metrics_logs.json
 max_bytes =
 backup_count = 5
+# System log aggregation (admin system logs)
+system_log_file_path = Databases/system_logs.jsonl
+system_log_file_max_entries = 5000
 
 [Moderation]
 enabled = False

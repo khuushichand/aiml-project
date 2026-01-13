@@ -159,11 +159,82 @@ async def test_admin_endpoints_pg(test_db_pool):
         vk = r.json()
         assert 'key' in vk and vk['id'] > 0
 
+        # Create a scoped virtual key tied to org/team
+        r = client.post(
+            f"/api/v1/admin/users/{user_id}/virtual-keys",
+            json={
+                "name": "pg-vk-team",
+                "allowed_endpoints": ["chat.completions"],
+                "budget_day_tokens": 200,
+                "org_id": org["id"],
+                "team_id": team["id"],
+            }
+        )
+        assert r.status_code == 200, r.text
+        vk_scoped = r.json()
+        assert 'key' in vk_scoped and vk_scoped['id'] > 0
+
+        base_ts = datetime.utcnow().replace(microsecond=0)
+        older_ts = base_ts - timedelta(days=2)
+        newer_ts = base_ts - timedelta(days=1)
+        await pool.execute(
+            "UPDATE api_keys SET status = $1, created_at = $2 WHERE id = $3",
+            "revoked",
+            older_ts,
+            vk["id"],
+        )
+        await pool.execute(
+            "UPDATE api_keys SET created_at = $1 WHERE id = $2",
+            newer_ts,
+            vk_scoped["id"],
+        )
+
         # List virtual keys
         r = client.get(f"/api/v1/admin/users/{user_id}/virtual-keys")
         assert r.status_code == 200
         arr = r.json()
         assert any(k['id'] == vk['id'] for k in arr)
+        assert any(k['id'] == vk_scoped['id'] for k in arr)
+
+        # Filter by name
+        r = client.get(f"/api/v1/admin/users/{user_id}/virtual-keys", params={"name": "pg-vk-team"})
+        assert r.status_code == 200
+        arr = r.json()
+        assert len(arr) == 1 and arr[0]["id"] == vk_scoped["id"]
+
+        # Filter by status
+        r = client.get(f"/api/v1/admin/users/{user_id}/virtual-keys", params={"status": "revoked"})
+        assert r.status_code == 200
+        arr = r.json()
+        assert len(arr) == 1 and arr[0]["id"] == vk["id"]
+
+        # Filter by org_id/team_id
+        r = client.get(f"/api/v1/admin/users/{user_id}/virtual-keys", params={"org_id": org["id"]})
+        assert r.status_code == 200
+        arr = r.json()
+        assert len(arr) == 1 and arr[0]["id"] == vk_scoped["id"]
+
+        r = client.get(f"/api/v1/admin/users/{user_id}/virtual-keys", params={"team_id": team["id"]})
+        assert r.status_code == 200
+        arr = r.json()
+        assert len(arr) == 1 and arr[0]["id"] == vk_scoped["id"]
+
+        # Filter by created_at window
+        r = client.get(
+            f"/api/v1/admin/users/{user_id}/virtual-keys",
+            params={"created_after": (older_ts + timedelta(hours=12)).isoformat() + "Z"},
+        )
+        assert r.status_code == 200
+        arr = r.json()
+        assert len(arr) == 1 and arr[0]["id"] == vk_scoped["id"]
+
+        r = client.get(
+            f"/api/v1/admin/users/{user_id}/virtual-keys",
+            params={"created_before": (older_ts + timedelta(hours=12)).isoformat() + "Z"},
+        )
+        assert r.status_code == 200
+        arr = r.json()
+        assert len(arr) == 1 and arr[0]["id"] == vk["id"]
 
         # Fetch user details via admin endpoint (AuthnzUsersRepo-backed)
         r = client.get(f"/api/v1/admin/users/{user_id}")

@@ -55,8 +55,11 @@ class BedrockAdapter(ChatProvider):
             return False
         return True
 
-    def _base_url(self) -> str:
+    def _base_url(self, request: Optional[Dict[str, Any]] = None) -> str:
         # Allow explicit base override; otherwise derive from runtime endpoint or region
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip().rstrip("/")
         runtime = os.getenv("BEDROCK_RUNTIME_ENDPOINT")
         if runtime:
             # Expect a hostname like https://bedrock-runtime.us-west-2.amazonaws.com
@@ -148,7 +151,7 @@ class BedrockAdapter(ChatProvider):
 
         api_key = request.get("api_key")
         headers = self._headers(api_key)
-        url = f"{self._base_url().rstrip('/')}/v1/chat/completions"
+        url = f"{self._base_url(request).rstrip('/')}/v1/chat/completions"
         payload = self._build_payload(request)
         payload["stream"] = False
         payload = merge_extra_body(payload, request)
@@ -168,7 +171,7 @@ class BedrockAdapter(ChatProvider):
 
         api_key = request.get("api_key")
         headers = self._headers(api_key)
-        url = f"{self._base_url().rstrip('/')}/v1/chat/completions"
+        url = f"{self._base_url(request).rstrip('/')}/v1/chat/completions"
         payload = self._build_payload(request)
         payload["stream"] = True
         payload = merge_extra_body(payload, request)

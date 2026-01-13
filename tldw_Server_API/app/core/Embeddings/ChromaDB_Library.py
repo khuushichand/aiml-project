@@ -25,7 +25,7 @@ from chromadb.api.models.Collection import Collection
 from chromadb.api.types import QueryResult
 #
 # Local Imports:
-from tldw_Server_API.app.core.Chunking import chunk_for_embedding  # Using V2 through compatibility layer
+from tldw_Server_API.app.core.Chunking import chunk_for_embedding, Chunker  # Using V2 through compatibility layer
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 # Import embeddings creation lazily/safely to avoid hard dependency at import time
 try:
@@ -938,6 +938,28 @@ class ChromaDBManager:
 
                     ids = [f"{media_id}_chunk_{i}" for i in range(len(chunks))]  # 0-indexed chunks
 
+                    def _coerce_int(value: Any) -> Optional[int]:
+                        if value is None or isinstance(value, bool):
+                            return None
+                        if isinstance(value, int):
+                            return value
+                        if isinstance(value, float):
+                            return int(value)
+                        if isinstance(value, str):
+                            stripped = value.strip()
+                            if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
+                                try:
+                                    return int(stripped)
+                                except Exception:
+                                    return None
+                        return None
+
+                    def _normalize_chunk_type(value: Any) -> Optional[str]:
+                        try:
+                            return Chunker.normalize_chunk_type(value)
+                        except Exception:
+                            return None
+
                     metadatas = []
                     for i, chunk_info in enumerate(chunks):
                         meta = {
@@ -951,7 +973,77 @@ class ChromaDBManager:
                                 chunk_info['text']) > 200 else chunk_info['text']
                         }
                         # Add metadata from chunk_for_embedding
-                        meta.update(chunk_info.get('metadata', {}))
+                        chunk_meta = chunk_info.get('metadata', {}) or {}
+                        meta.update(chunk_meta)
+
+                        raw_chunk_type = (
+                            chunk_meta.get("chunk_type")
+                            or chunk_info.get("chunk_type")
+                            or chunk_meta.get("paragraph_kind")
+                            or chunk_meta.get("type")
+                            or chunk_meta.get("kind")
+                        )
+                        normalized_chunk_type = _normalize_chunk_type(raw_chunk_type)
+                        if normalized_chunk_type:
+                            meta["chunk_type"] = normalized_chunk_type
+                        elif "chunk_type" not in meta:
+                            meta["chunk_type"] = "text"
+
+                        start_val = (
+                            meta.get("start_char")
+                            or chunk_meta.get("start_char")
+                            or chunk_meta.get("start_index")
+                            or chunk_meta.get("start_offset")
+                        )
+                        end_val = (
+                            meta.get("end_char")
+                            or chunk_meta.get("end_char")
+                            or chunk_meta.get("end_index")
+                            or chunk_meta.get("end_offset")
+                        )
+                        start_int = _coerce_int(start_val)
+                        if start_int is not None:
+                            meta["start_char"] = start_int
+                        end_int = _coerce_int(end_val)
+                        if end_int is not None:
+                            meta["end_char"] = end_int
+
+                        citation_payload = chunk_meta.get("citation")
+                        if not isinstance(citation_payload, dict):
+                            citation_payload = {}
+
+                        def _citation_value(key: str, aliases: Tuple[str, ...] = ()) -> Any:
+                            if key in citation_payload:
+                                return citation_payload.get(key)
+                            for alias in aliases:
+                                if alias in chunk_meta:
+                                    return chunk_meta.get(alias)
+                            if key in chunk_meta:
+                                return chunk_meta.get(key)
+                            return None
+
+                        citation_numeric_fields = {
+                            "page_number": ("page", "page_no"),
+                            "paragraph_number": (),
+                            "line_number": (),
+                            "slide_number": (),
+                            "row_number": (),
+                            "column_number": (),
+                            "start_timestamp_ms": ("start_ts_ms", "start_ts"),
+                            "end_timestamp_ms": ("end_ts_ms", "end_ts"),
+                        }
+                        for field_key, aliases in citation_numeric_fields.items():
+                            dest_key = f"citation.{field_key}"
+                            if dest_key in meta:
+                                continue
+                            value = _citation_value(field_key, aliases)
+                            coerced = _coerce_int(value)
+                            if coerced is not None:
+                                meta[dest_key] = coerced
+
+                        sheet_name = _citation_value("sheet_name")
+                        if sheet_name and "citation.sheet_name" not in meta:
+                            meta["citation.sheet_name"] = str(sheet_name)
 
                         # Merge in any base-level metadata provided by caller (base first, then chunk-specific)
                         if base_metadata:

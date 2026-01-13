@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const mocks = vi.hoisted(() => ({
@@ -44,6 +44,10 @@ import ChatPage from '@/pages/chat';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  Object.defineProperty(navigator, 'clipboard', {
+    value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    configurable: true,
+  });
   mocks.apiClient.get.mockImplementation((url: string) => {
     if (url.startsWith('/llm/providers')) {
       return Promise.resolve({ providers: [] });
@@ -148,23 +152,99 @@ describe('ChatPage feedback (streaming)', () => {
 
   it('emits dwell_time implicit feedback after a response settles', async () => {
     vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTimeAsync });
+    render(<ChatPage />);
+
+    const composer = screen.getByPlaceholderText('Type your message…');
+    fireEvent.change(composer, { target: { value: 'Hello' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await vi.advanceTimersByTimeAsync(3100);
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+
+    expect(mocks.apiClient.post).toHaveBeenCalledWith(
+      '/rag/feedback/implicit',
+      expect.objectContaining({
+        event_type: 'dwell_time',
+        message_id: 'msg_1',
+        dwell_ms: 3000,
+      })
+    );
+  });
+
+  it('emits citation_used implicit feedback when copying citations', async () => {
+    const user = userEvent.setup();
+    mocks.streamSSE.mockImplementation(async (_url, _opts, onDelta, onJSON, onDone) => {
+      if (onJSON) onJSON({ tldw_system_message_id: 'sys_1' });
+      if (onDelta) onDelta('Answer text\n\nSources:\n- Doc 1');
+      if (onJSON) onJSON({ tldw_message_id: 'msg_1' });
+      if (onDone) onDone();
+    });
+
     render(<ChatPage />);
 
     const composer = screen.getByPlaceholderText('Type your message…');
     await user.type(composer, 'Hello');
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
-    await screen.findByText('Hello from stream');
-    await vi.advanceTimersByTimeAsync(3100);
+    const assistantContainer = await screen.findByTestId('message-container-msg_1');
+    const copyButton = within(assistantContainer).getByRole('button', { name: /Copy with citations/i });
+    await user.click(copyButton);
 
     await waitFor(() => {
       expect(mocks.apiClient.post).toHaveBeenCalledWith(
         '/rag/feedback/implicit',
         expect.objectContaining({
-          event_type: 'dwell_time',
+          event_type: 'citation_used',
           message_id: 'msg_1',
-          dwell_ms: 3000,
+        })
+      );
+    });
+  });
+
+  it('includes document ids for citation_used when tool results include documents', async () => {
+    const user = userEvent.setup();
+    mocks.streamSSE.mockImplementation(async (_url, _opts, onDelta, onJSON, onDone) => {
+      if (onJSON) onJSON({ tldw_system_message_id: 'sys_1' });
+      if (onDelta) onDelta('Answer text\n\nSources:\n- Doc 1');
+      if (onJSON) {
+        onJSON({
+          tldw_tool_results: [
+            {
+              name: 'rag.search',
+              content: {
+                documents: [
+                  { id: 'doc-1', metadata: { chunk_id: 'chunk-1', corpus: 'media_db' } },
+                ],
+              },
+            },
+          ],
+        });
+      }
+      if (onJSON) onJSON({ tldw_message_id: 'msg_1' });
+      if (onDone) onDone();
+    });
+
+    render(<ChatPage />);
+
+    const composer = screen.getByPlaceholderText('Type your message…');
+    await user.type(composer, 'Hello');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const assistantContainer = await screen.findByTestId('message-container-msg_1');
+    const copyButton = within(assistantContainer).getByRole('button', { name: /Copy with citations/i });
+    await user.click(copyButton);
+
+    await waitFor(() => {
+      expect(mocks.apiClient.post).toHaveBeenCalledWith(
+        '/rag/feedback/implicit',
+        expect.objectContaining({
+          event_type: 'citation_used',
+          message_id: 'msg_1',
+          doc_id: 'doc-1',
+          chunk_ids: ['chunk-1'],
+          impression_list: ['doc-1'],
+          corpus: 'media_db',
         })
       );
     });

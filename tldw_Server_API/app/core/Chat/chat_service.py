@@ -56,6 +56,7 @@ from tldw_Server_API.app.core.Moderation.moderation_service import get_moderatio
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
+    ChatBadRequestError,
     ChatConfigurationError,
     ChatProviderError,
 )
@@ -611,6 +612,42 @@ def resolve_provider_api_key(
     return normalized_value, debug_info
 
 
+def _resolve_base_url_override(provider: str, chat_args: Dict[str, Any]) -> Optional[str]:
+    base_url = chat_args.get("base_url")
+    if base_url is None:
+        base_url = chat_args.get("api_base_url")
+    if base_url is None:
+        return None
+    provider_key = (provider or "").strip().lower()
+    from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
+        is_trusted_base_url_request,
+        resolve_byok_base_url_allowlist,
+        validate_base_url_override,
+    )
+
+    allowlist = resolve_byok_base_url_allowlist()
+    if provider_key not in allowlist:
+        raise ChatBadRequestError(
+            provider=provider_key or None,
+            message=f"base_url override is not enabled for provider '{provider_key}'",
+        )
+    trusted_override = bool(chat_args.get("trusted_base_url_override"))
+    if not trusted_override:
+        request_obj = chat_args.get("request") or chat_args.get("caller_request")
+        principal = chat_args.get("principal")
+        user = chat_args.get("auth_user")
+        trusted_override = is_trusted_base_url_request(request_obj, principal=principal, user=user)
+    if not trusted_override:
+        raise ChatBadRequestError(
+            provider=provider_key or None,
+            message="base_url override requires a trusted caller",
+        )
+    try:
+        return validate_base_url_override(base_url)
+    except ValueError as exc:
+        raise ChatBadRequestError(provider=provider_key or None, message=str(exc)) from exc
+
+
 def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
     """Translate chat_api_call-style args into an adapter request payload."""
     from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
@@ -662,6 +699,10 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
         "app_config": app_config,
     }
 
+    base_url_override = _resolve_base_url_override(provider, chat_args)
+    if base_url_override:
+        request["base_url"] = base_url_override
+
     stream_value = chat_args.get("stream")
     if stream_value is None:
         stream_value = chat_args.get("streaming")
@@ -678,6 +719,13 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
         "model",
         "api_key",
         "app_config",
+        "base_url",
+        "api_base_url",
+        "request",
+        "caller_request",
+        "principal",
+        "auth_user",
+        "trusted_base_url_override",
         "stream",
         "streaming",
     }
@@ -942,6 +990,11 @@ async def moderate_input_messages(
         req_user_id = None
 
     eff_policy = moderation_service.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+    conv_id = None
+    try:
+        conv_id = getattr(request_data, "conversation_id", None)
+    except Exception:
+        conv_id = None
 
     async def _moderate_text_in_place(text: str) -> str:
         # Topic monitoring (non-blocking)
@@ -964,6 +1017,7 @@ async def moderate_input_messages(
                     scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                     team_ids=team_ids,
                     org_ids=org_ids,
+                    source_id=str(conv_id) if conv_id is not None else None,
                 )
         except Exception as _e:
             logger.debug(f"Topic monitoring (input) skipped: {_e}")
@@ -1952,6 +2006,8 @@ async def execute_streaming_call(
             from tldw_Server_API.app.core.Chat.streaming_utils import StopStreamWithError
 
             pending_audit_tasks: list[asyncio.Task[Any]] = []
+            stream_id = _uuid.uuid4().hex
+            chunk_seq = 0
 
             def _track_audit_task(task: "asyncio.Task[Any]") -> None:
                 pending_audit_tasks.append(task)
@@ -1993,6 +2049,7 @@ async def execute_streaming_call(
                 return eff_policy.redact_replacement
 
             def _out_transform(s: str) -> str:
+                nonlocal chunk_seq
                 try:
                     mon = None
                     try:
@@ -2008,6 +2065,8 @@ async def execute_streaming_call(
                     except Exception:
                         pass
                     if mon is not None and s:
+                        chunk_seq += 1
+                        chunk_id = f"{stream_id}:{chunk_seq}"
                         mon.schedule_evaluate_and_alert(
                             user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                             text=s,
@@ -2016,6 +2075,9 @@ async def execute_streaming_call(
                             scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                             team_ids=team_ids,
                             org_ids=org_ids,
+                            source_id=stream_id,
+                            chunk_id=chunk_id,
+                            chunk_seq=chunk_seq,
                         )
                 except Exception as _e:
                     logger.debug(f"Topic monitoring (stream chunk) skipped: {_e}")
@@ -2596,6 +2658,7 @@ async def execute_non_stream_call(
                             scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                             team_ids=team_ids,
                             org_ids=org_ids,
+                            source_id=str(final_conversation_id) if final_conversation_id else None,
                         )
                 except Exception as _ex:
                     logger.debug(f"Topic monitoring (non-stream final) skipped: {_ex}")

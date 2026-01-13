@@ -1,11 +1,11 @@
 # Embeddings Scale-Out Architecture Design
 
-Status: Deprecated (superseded by core Jobs worker pipeline)
-Last Updated: 2026-01-10
+Status: Active (Redis Streams pipeline with Jobs root status)
+Last Updated: 2026-01-12
 
 ## Overview
 
-This document previously described a Redis Streams-based orchestrator/worker topology. The embeddings pipeline now runs on the core Jobs subsystem; see `tldw_Server_API/app/core/Embeddings/services/jobs_worker.py` and `tldw_Server_API/app/core/Jobs/` for the current architecture.
+This document describes the Redis Streams-based embeddings pipeline. Stage execution runs on Redis Streams workers while root job status and billing remain in core Jobs. See `tldw_Server_API/app/core/Embeddings/services/redis_worker.py` and `tldw_Server_API/app/core/Jobs/` for the current architecture.
 
 Scope and audience
 - Scope: Embeddings pipeline (chunk → embed → store) and its orchestration.
@@ -15,14 +15,14 @@ Scope and audience
 
 Active components (current):
 - Core Jobs manager: `tldw_Server_API/app/core/Jobs/manager.py`
-- Embeddings jobs adapter: `tldw_Server_API/app/core/Embeddings/jobs_adapter.py`
-- Embeddings jobs worker: `tldw_Server_API/app/core/Embeddings/services/jobs_worker.py`
-- Config: `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml`
+- Embeddings jobs adapter (root Jobs status/billing): `tldw_Server_API/app/core/Embeddings/jobs_adapter.py`
+- Embeddings Redis worker (stage execution): `tldw_Server_API/app/core/Embeddings/services/redis_worker.py`
+- Redis Streams pipeline helpers: `tldw_Server_API/app/core/Embeddings/redis_pipeline.py`
 - Vector store helpers: `tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py`
 
 Notes:
-- Core Jobs tables (SQLite/Postgres) are the queue backend; Redis is no longer required for embeddings orchestration.
-- The public REST endpoint (`/api/v1/embeddings`) remains single-request; core Jobs are used for media batch embeddings and background processing.
+- Redis Streams provide the stage queues; core Jobs tables (SQLite/Postgres) store the root job status/billing record.
+- The public REST endpoint (`/api/v1/embeddings`) remains single-request; root Jobs are used for media batch embeddings and background processing.
 - Production API path and engine details: `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py` and `Embeddings_Server/Embeddings_Create.py`.
 
 ## Architecture
@@ -50,16 +50,17 @@ Queue names and consumer groups (defaults)
 - Chunking: `embeddings:chunking` / group `chunking-workers`
 - Embedding: `embeddings:embedding` / group `embedding-workers`
 - Storage: `embeddings:storage` / group `storage-workers`
+- Content: `embeddings:content` / group `content-workers`
 
 ## Component Design
 
-### 1) Job Manager (Redis Streams)
+### 1) Redis Streams Pipeline (enqueue + routing)
 Responsibilities
-- Accept embedding jobs (per media, per user) and emit `ChunkingMessage` to `embeddings:chunking`.
-- Track job status in Redis Hash `job:{job_id}`; expose status/lookup and cancellation.
-- Enforce per-tier limits and quotas; compute effective priority with aging and usage penalties.
+- Accept embedding jobs (per media, per user) and emit payloads to `embeddings:chunking` or `embeddings:content`.
+- Keep job status in core Jobs (root job) rather than Redis-only hashes.
+- Enforce per-tier limits and quotas at the API layer (backpressure + tenant RPS).
 
-Implementation entry: `tldw_Server_API/app/core/Embeddings/job_manager.py`
+Implementation entry: `tldw_Server_API/app/core/Embeddings/redis_pipeline.py` and `tldw_Server_API/app/core/Embeddings/services/redis_worker.py`
 
 ### 2) Worker Types
 
@@ -68,12 +69,16 @@ Chunking Workers
 - Scaling: CPU-bound; horizontally scalable.
 - Config: `ChunkingWorkerPoolConfig` (default chunk size/overlap) in `worker_config.py`.
 
-Embeddings Jobs Worker (current)
-- Core Jobs worker handles chunking, embedding, and storage in one pipeline.
-- Entry point: `tldw_Server_API/app/core/Embeddings/services/jobs_worker.py`.
-- Payloads are JSON objects stored in core Jobs rows; see `tldw_Server_API/app/core/Embeddings/jobs_adapter.py` for expected fields.
+Embeddings Redis Worker (current)
+- Redis Streams worker handles chunking, embedding, storage, and content stages.
+- Entry point: `tldw_Server_API/app/core/Embeddings/services/redis_worker.py`.
+- Root Jobs are updated for status/billing; stage execution is Redis-only.
 
-Note: The remaining sections below describe the retired Redis pipeline and are kept for historical context only. Core Jobs behavior is governed by `tldw_Server_API/app/core/Jobs/`.
+Embeddings Jobs Worker (legacy)
+- Legacy Jobs worker handles Jobs-queued stage tasks for compatibility.
+- Entry point: `tldw_Server_API/app/core/Embeddings/services/jobs_worker.py`.
+
+Note: The remaining sections below describe the current Redis Streams pipeline.
 
 ## Scheduling & Priority
 

@@ -58,12 +58,81 @@ def convert_sqlite_placeholders_to_postgres(query: str) -> str:
             j += 1
         return query[j] if j < length else ""
 
+    def _prev_token(idx: int) -> str:
+        j = idx - 1
+        while j >= 0 and query[j].isspace():
+            j -= 1
+        end = j
+        while j >= 0 and (query[j].isalnum() or query[j] == "_"):
+            j -= 1
+        return query[j + 1 : end + 1].upper()
+
+    def _next_token(idx: int) -> str:
+        j = idx + 1
+        while j < length and query[j].isspace():
+            j += 1
+        if j >= length:
+            return ""
+        ch = query[j]
+        if ch in ("'", '"'):
+            return ch
+        start = j
+        while j < length and (query[j].isalnum() or query[j] == "_"):
+            j += 1
+        return query[start:j].upper()
+
     def _is_jsonb_operator(idx: int) -> bool:
         # Preserve Postgres JSONB operators: ?, ?|, ?&
         if idx + 1 < length and query[idx + 1] in ("|", "&", "?"):
             return True
-        prev_ch = _prev_non_space(idx)
         next_ch = _next_non_space(idx)
+        if next_ch == "?":
+            return True
+        prev_token = _prev_token(idx)
+        next_token = _next_token(idx)
+        if prev_token in {
+            "LIMIT",
+            "OFFSET",
+            "WHERE",
+            "AND",
+            "OR",
+            "IN",
+            "VALUES",
+            "SET",
+            "SELECT",
+            "UPDATE",
+            "INSERT",
+            "DELETE",
+            "ORDER",
+            "BY",
+            "GROUP",
+            "HAVING",
+            "RETURNING",
+        }:
+            return False
+        if next_token in {
+            "LIMIT",
+            "OFFSET",
+            "WHERE",
+            "AND",
+            "OR",
+            "IN",
+            "VALUES",
+            "SET",
+            "SELECT",
+            "UPDATE",
+            "INSERT",
+            "DELETE",
+            "ORDER",
+            "BY",
+            "GROUP",
+            "HAVING",
+            "RETURNING",
+        }:
+            return False
+        if next_token in {"'", '"'}:
+            return True
+        prev_ch = _prev_non_space(idx)
         if not prev_ch or not next_ch:
             return False
         prev_is_expr = prev_ch.isalnum() or prev_ch in "_)]}\"'"

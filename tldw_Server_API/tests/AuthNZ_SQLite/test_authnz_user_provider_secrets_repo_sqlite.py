@@ -72,6 +72,8 @@ async def test_user_provider_secrets_repo_sqlite(tmp_path, monkeypatch) -> None:
         key_hint=key_hint,
         metadata={"label": "test"},
         updated_at=now,
+        created_by=user_id,
+        updated_by=user_id,
     )
 
     row = await repo.fetch_secret_for_user(user_id, "openai")
@@ -79,6 +81,8 @@ async def test_user_provider_secrets_repo_sqlite(tmp_path, monkeypatch) -> None:
     assert row["provider"] == "openai"
     assert row["encrypted_blob"] == encrypted_blob
     assert row["key_hint"] == key_hint
+    assert row["created_by"] == user_id
+    assert row["updated_by"] == user_id
 
     items = await repo.list_secrets_for_user(user_id)
     assert len(items) == 1
@@ -93,3 +97,6 @@ async def test_user_provider_secrets_repo_sqlite(tmp_path, monkeypatch) -> None:
     assert deleted
     missing = await repo.fetch_secret_for_user(user_id, "openai")
     assert missing is None
+    revoked_rows = await repo.list_secrets_for_user(user_id, include_revoked=True)
+    assert len(revoked_rows) == 1
+    assert revoked_rows[0]["revoked_at"] is not None

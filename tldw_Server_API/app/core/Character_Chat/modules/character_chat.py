@@ -10,6 +10,7 @@ import base64
 import random
 import re
 import time
+from datetime import datetime, timezone
 from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
@@ -946,6 +947,22 @@ def update_conversation_metadata(
                 update_data,
             )
 
+        if "topic_label" in payload_to_db:
+            raw_label = payload_to_db.get("topic_label")
+            normalized_label = str(raw_label).strip() if raw_label is not None else ""
+            latest_message = db.get_latest_message_for_conversation(conversation_id)
+            latest_message_id = latest_message.get("id") if latest_message else None
+            if normalized_label:
+                payload_to_db["topic_label"] = normalized_label
+                payload_to_db["topic_label_source"] = "manual"
+                payload_to_db["topic_last_tagged_at"] = datetime.now(timezone.utc).isoformat()
+                payload_to_db["topic_last_tagged_message_id"] = latest_message_id
+            else:
+                payload_to_db["topic_label"] = None
+                payload_to_db["topic_label_source"] = None
+                payload_to_db["topic_last_tagged_at"] = None
+                payload_to_db["topic_last_tagged_message_id"] = None
+
         return db.update_conversation(conversation_id, payload_to_db, expected_version)
     except (CharactersRAGDBError, InputError, ConflictError) as exc:
         logger.error(
@@ -1125,6 +1142,16 @@ def post_message_to_conversation(
                 conversation_id,
             )
             _bump_conversation_metadata(db, conversation_id)
+            try:
+                from tldw_Server_API.app.core.Chat.conversation_enrichment import schedule_auto_tagging
+
+                schedule_auto_tagging(db, conversation_id)
+            except Exception as exc:
+                logger.debug(
+                    "Auto-tagging trigger skipped for conversation %s: %s",
+                    conversation_id,
+                    exc,
+                )
         else:
             logger.error(
                 "Failed to post message from '%s' to conversation %s (DB returned no ID without error).",
