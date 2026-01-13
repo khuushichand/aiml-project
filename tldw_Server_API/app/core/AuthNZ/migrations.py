@@ -1064,6 +1064,18 @@ def migration_021_usage_daily_add_bytes_in_total(conn: sqlite3.Connection) -> No
     logger.info("Migration 021: Added bytes_in_total column to usage_daily")
 
 
+def migration_049_add_llm_usage_log_key_ts_index(conn: sqlite3.Connection) -> None:
+    """Add composite index for llm_usage_log key_id + ts (SQLite)."""
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_llm_usage_log_key_ts ON llm_usage_log(key_id, ts)"
+        )
+    except Exception:
+        pass
+    conn.commit()
+    logger.info("Migration 049: Added llm_usage_log key_id + ts index")
+
+
 def migration_022_create_tool_catalogs(conn: sqlite3.Connection) -> None:
     """Create tables for MCP tool catalogs (SQLite)."""
     # tool_catalogs: scoped by (org_id, team_id) with name unique per scope
@@ -2396,6 +2408,11 @@ def get_authnz_migrations() -> List[Migration]:
             "Create org/team config overrides tables",
             migration_048_create_org_team_config_overrides_table,
             rollback_048_drop_org_team_config_overrides,
+        ),
+        Migration(
+            49,
+            "Add llm_usage_log key_id + ts index",
+            migration_049_add_llm_usage_log_key_ts_index,
         ),
     ]
 
