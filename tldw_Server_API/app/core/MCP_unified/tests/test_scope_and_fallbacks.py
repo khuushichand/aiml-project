@@ -49,6 +49,9 @@ class DummyScopeModule(BaseModule):
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         return {"ok": True, "tool": tool_name}
 
+    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]) -> None:
+        return None
+
 
 @pytest.mark.asyncio
 async def test_api_key_scopes_enforce_read_vs_write():
