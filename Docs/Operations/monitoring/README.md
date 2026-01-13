@@ -31,10 +31,10 @@ Notes:
 
 Import the provided dashboards:
 
-- Embeddings Redis Streams (queue/depth panels driven by Redis + API metrics): `Docs/Operations/monitoring/grafana_embeddings_orchestrator.json`
-- Workflows: `Docs/Operations/monitoring/grafana_workflows.json`
-- Service Overview: `Docs/Operations/monitoring/grafana_service_overview.json`
-- Tenant Overview: `Docs/Operations/monitoring/grafana_tenant_overview.json`
+- Embeddings Redis Streams (queue/depth panels driven by Redis + API metrics): `grafana_embeddings_orchestrator.json`
+- Workflows: `grafana_workflows.json`
+- Service Overview: `grafana_service_overview.json`
+- Tenant Overview: `grafana_tenant_overview.json`
   - Panels:
     - SSE Connections, Disconnects, Summary Failures
     - Queue Depth by queue
@@ -105,6 +105,28 @@ Core Jobs metrics exported by the API process (filter by `domain="embeddings"`):
 - `jobs.duration_seconds` (histogram): processing duration
 - `jobs.retries_total` (counter): retries by domain/job_type
 - `jobs.failures_total` (counter): failures by domain/job_type
+
+## Migration from Orchestrator Metrics
+
+If upgrading from a previous version that exposed orchestrator/worker metrics, update your dashboards and alerts to use Jobs metrics.
+
+Deprecated metrics:
+- `orchestrator.*` metrics -> use `jobs.*` metrics filtered by `domain="embeddings"`
+- `worker.*` metrics -> use `jobs.*` metrics filtered by `domain="embeddings"`
+
+Key replacements:
+- Queue age -> `jobs.queue_latency_seconds`
+- Processing count -> `jobs.processing`
+- Queue depth -> `jobs.queued`
+
+Behavior changes to note:
+- Metrics now come from the API process and reflect the Jobs DB state.
+- Latency histograms measure enqueue-to-start (`jobs.queue_latency_seconds`) and processing duration (`jobs.duration_seconds`) per domain/job_type.
+
+Action items:
+1. Update Prometheus alert rules to use the new metric names and labels.
+2. Re-import the Grafana dashboards listed above, since older panels will not resolve the new series.
+3. Verify the embeddings Redis worker is running; it no longer exposes a separate metrics endpoint.
 
 ## Troubleshooting
 
