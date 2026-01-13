@@ -11,7 +11,9 @@ class Doc:
 def test_personalization_boost(tmp_path, monkeypatch):
 
 
-     # Isolate user DB under tmp
+    base_dir = tmp_path / "Databases" / "user_databases"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    # Isolate user DB under tmp
     monkeypatch.chdir(tmp_path)
     store = UserPersonalizationStore("tester")
     # Record implicit click on d2 with impression [d1,d2,d3]
@@ -25,9 +27,11 @@ def test_personalization_boost(tmp_path, monkeypatch):
 def test_personalization_store_sanitizes_user_id(tmp_path, monkeypatch):
 
 
+    base_dir = tmp_path / "Databases" / "user_databases"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.chdir(tmp_path)
     store = UserPersonalizationStore("../evil")
-    base = (tmp_path / "Databases" / "user_databases").resolve()
+    base = base_dir.resolve()
     path = store.path.resolve()
     path.relative_to(base)
     assert "/" not in store.user_id

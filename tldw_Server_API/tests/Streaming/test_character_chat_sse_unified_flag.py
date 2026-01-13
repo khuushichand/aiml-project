@@ -40,6 +40,7 @@ async def test_character_chat_streaming_unified_sse(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="unified_sse_char_chat_")
     os.environ["USER_DB_BASE_DIR"] = tmpdir
     os.environ["STREAMS_UNIFIED"] = "1"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -110,6 +111,7 @@ async def test_character_chat_streaming_unified_sse_slow_async_heartbeat(monkeyp
     # Configure short heartbeat to observe it before first chunk
     os.environ["STREAM_HEARTBEAT_INTERVAL_S"] = "0.02"
     os.environ["STREAM_HEARTBEAT_MODE"] = "data"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -188,6 +190,7 @@ async def test_character_chat_streaming_unified_sse_provider_duplicate_done(monk
     tmpdir = tempfile.mkdtemp(prefix="unified_sse_char_dupdone_")
     os.environ["USER_DB_BASE_DIR"] = tmpdir
     os.environ["STREAMS_UNIFIED"] = "1"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()

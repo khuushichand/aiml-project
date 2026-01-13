@@ -17,8 +17,20 @@ def test_metrics_logger_emits_valid_timestamp(monkeypatch, func, call_args):
     recorded = {}
 
     class StubLogger:
+        def __init__(self, extra=None):
+            self._extra = extra or {}
+
+        def bind(self, **kwargs):
+            new_extra = dict(self._extra)
+            new_extra.update(kwargs)
+            return StubLogger(new_extra)
+
         def info(self, *args, **kwargs):
-            recorded["extra"] = kwargs.get("extra")
+            extra = dict(self._extra)
+            extra_kw = kwargs.get("extra")
+            if extra_kw:
+                extra.update(extra_kw)
+            recorded["extra"] = extra
 
     stub = StubLogger()
     monkeypatch.setattr(metrics_logger, "logger", stub)

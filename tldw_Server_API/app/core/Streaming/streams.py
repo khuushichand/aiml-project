@@ -246,7 +246,13 @@ class SSEStream:
             timeout = min(timeouts) if timeouts else None
 
             try:
-                if timeout is not None:
+                if timeout is not None and timeout <= 0:
+                    # Avoid wait_for(timeout=0) which can time out even with queued data.
+                    try:
+                        line, enq_ts = self._queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        raise asyncio.TimeoutError
+                elif timeout is not None:
                     line, enq_ts = await asyncio.wait_for(self._queue.get(), timeout=timeout)
                 else:
                     line, enq_ts = await self._queue.get()

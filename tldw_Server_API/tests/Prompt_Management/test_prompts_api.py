@@ -24,7 +24,7 @@ from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import (
     close_all_cached_prompts_db_instances,
     get_prompts_db_for_user,
 )
-from tldw_Server_API.app.api.v1.endpoints.prompts import verify_prompts_auth
+from tldw_Server_API.app.api.v1.endpoints.prompts import verify_prompts_auth, verify_prompts_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Prompts_DB import PromptsDatabase, DatabaseError, InputError, ConflictError
@@ -242,6 +242,7 @@ def client(test_user: User, test_api_token: str, tmp_path: Path, monkeypatch):
     original_overrides = fastapi_app.dependency_overrides.copy()
     fastapi_app.dependency_overrides[get_request_user] = override_get_request_user
     fastapi_app.dependency_overrides[verify_prompts_auth] = override_verify_prompts_auth_dependency_for_client_tests
+    fastapi_app.dependency_overrides[verify_prompts_user] = override_verify_prompts_auth_dependency_for_client_tests
 
     test_client_instance = TestClient(fastapi_app)
     test_client_instance.headers = {"Token": test_api_token}

@@ -1241,6 +1241,7 @@ async def persist_primary_av_item(
                     provider=provider_name,
                     model=provider_model or str(transcription_model_used),
                 )
+                serialized_artifact = json.dumps(artifact, default=str)
 
                 def _upsert_worker() -> None:
                     db = _MediaDBForStt(db_path=db_path, client_id=client_id)
@@ -1248,7 +1249,7 @@ async def persist_primary_av_item(
                         upsert_transcript(
                             db_instance=db,
                             media_id=int(media_id_result),
-                            transcription=artifact["text"],
+                            transcription=serialized_artifact,
                             whisper_model=artifact["metadata"]["model"],
                         )
                     finally:

@@ -75,6 +75,8 @@ def test_audio_speech_uses_legacy_rate_limit_when_rg_disabled(monkeypatch):
 
 
     monkeypatch.setenv("RG_ENABLED", "0")
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
 
     limiter = _StubRateLimiter()
     monkeypatch.setattr(auth_deps, "get_rate_limiter", lambda: limiter)

@@ -9,6 +9,12 @@ from tldw_Server_API.tests._plugins.chat_fixtures import get_auth_headers
 pytestmark = pytest.mark.usefixtures("setup_dependencies")
 
 
+@pytest.fixture(autouse=True)
+def _ensure_openai_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    yield
+
+
 def _make_payload(**overrides):
 
 

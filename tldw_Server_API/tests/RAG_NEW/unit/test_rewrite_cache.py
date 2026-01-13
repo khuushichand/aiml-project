@@ -29,9 +29,10 @@ def test_rewrite_cache_put_get(tmp_path, monkeypatch):
 def test_rewrite_cache_user_id_path_is_sandboxed(tmp_path, monkeypatch):
 
 
+    base_dir = tmp_path / "Databases" / "user_databases"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.chdir(tmp_path)
     rc = RewriteCache(user_id="../evil")
-    base_dir = (tmp_path / "Databases" / "user_databases").resolve()
     cache_path = Path(rc.path).resolve()
     assert _is_relative_to(cache_path, base_dir)
     assert cache_path.name == "rewrite_cache.jsonl"
@@ -40,6 +41,8 @@ def test_rewrite_cache_user_id_path_is_sandboxed(tmp_path, monkeypatch):
 def test_rewrite_cache_user_id_preserves_safe_segment(tmp_path, monkeypatch):
 
 
+    base_dir = tmp_path / "Databases" / "user_databases"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.chdir(tmp_path)
     rc = RewriteCache(user_id="user_123")
     cache_path = Path(rc.path).resolve()
@@ -50,6 +53,8 @@ def test_rewrite_cache_user_id_preserves_safe_segment(tmp_path, monkeypatch):
 def test_rewrite_cache_user_id_with_special_chars(tmp_path, monkeypatch):
 
 
+    base_dir = tmp_path / "Databases" / "user_databases"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.chdir(tmp_path)
     rc = RewriteCache(user_id="user_abc-123")
     cache_path = Path(rc.path).resolve()
@@ -59,6 +64,8 @@ def test_rewrite_cache_user_id_with_special_chars(tmp_path, monkeypatch):
 def test_rewrite_cache_unsafe_user_id_is_hashed(tmp_path, monkeypatch):
 
 
+    base_dir = tmp_path / "Databases" / "user_databases"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.chdir(tmp_path)
     rc = RewriteCache(user_id="../../etc/passwd")
     cache_path = Path(rc.path).resolve()

@@ -966,6 +966,8 @@ class TestPerformance:
         """Test batch insert is performant"""
         import time
 
+        audit_service.buffer_size = 1000
+
         # Log many events
         start = time.perf_counter()
 

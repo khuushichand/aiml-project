@@ -439,19 +439,28 @@ async def test_sse_backpressure_heartbeats_under_load():
             await stream.send_json({"i": i})
         producer_done.set()
 
+    async def closer():
+        await producer_done.wait()
+        try:
+            await asyncio.wait_for(
+                heartbeat_seen.wait(),
+                timeout=stream.heartbeat_interval_s + 0.1,
+            )
+        except TimeoutError:
+            pass
+        await stream.done(force=True)
+
     async def consumer():
         async for ln in stream.iter_sse():
             if ln.startswith(":"):
                 heartbeat_seen.set()
-                # We can break after first heartbeat to keep the test short
-                break
             # If producer is done and queue drains, the next emission should be a heartbeat within interval
             if producer_done.is_set():
                 # Keep looping until heartbeat is encountered
                 continue
 
     # Run both concurrently with a timeout guard
-    await asyncio.wait_for(asyncio.gather(producer(), consumer()), timeout=2.0)
+    await asyncio.wait_for(asyncio.gather(producer(), consumer(), closer()), timeout=2.0)
     assert heartbeat_seen.is_set(), "heartbeat not observed under backpressure after producer finished"
 
 

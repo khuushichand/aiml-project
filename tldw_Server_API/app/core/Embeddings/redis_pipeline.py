@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -38,6 +39,31 @@ def _env_int(key: str, default: int) -> int:
         return int(raw) if raw is not None else int(default)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _sanitize_stream_value(value: Any) -> Optional[Any]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (bytes, str, int, float)):
+        return value
+    if isinstance(value, (dict, list, tuple)):
+        try:
+            return json.dumps(value, ensure_ascii=True)
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
+def _sanitize_stream_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    sanitized: Dict[str, Any] = {}
+    for key, value in (payload or {}).items():
+        clean_value = _sanitize_stream_value(value)
+        if clean_value is None:
+            continue
+        sanitized[str(key)] = clean_value
+    return sanitized
 
 
 def _stage_key(stage: str) -> str:
@@ -106,7 +132,7 @@ def enqueue_stage(
 
     stream = stream_name(stage_norm)
     try:
-        return client.xadd(stream, payload)
+        return client.xadd(stream, _sanitize_stream_payload(payload))
     finally:
         if created_client:
             try:
@@ -155,7 +181,7 @@ def enqueue_chunking_job(
             except Exception as exc:
                 logger.warning(f"Failed to set idempotency key for embeddings root {root_job_uuid}: {exc}")
                 return None
-        return client.xadd(stream, payload)
+        return client.xadd(stream, _sanitize_stream_payload(payload))
     finally:
         if created_client:
             try:
@@ -204,7 +230,7 @@ def enqueue_content_job(
             except Exception as exc:
                 logger.warning(f"Failed to set content idempotency key for embeddings root {root_job_uuid}: {exc}")
                 return None
-        return client.xadd(stream, payload)
+        return client.xadd(stream, _sanitize_stream_payload(payload))
     finally:
         if created_client:
             try:

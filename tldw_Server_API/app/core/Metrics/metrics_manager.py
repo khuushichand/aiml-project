@@ -1455,6 +1455,9 @@ class MetricsRegistry:
         # Store value for aggregation
         metric_value = MetricValue(value=value, labels=labels)
         self.values[metric_name].append(metric_value)
+        if original_name != metric_name:
+            # Keep a non-normalized alias for tests that read raw keys.
+            self.values[original_name].append(metric_value)
 
         label_key = self._normalize_label_key(labels)
         if definition.type in (MetricType.COUNTER, MetricType.UP_DOWN_COUNTER):

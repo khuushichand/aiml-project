@@ -47,7 +47,7 @@ async def test_chat_rate_limiter_uses_rg_decision_and_skips_legacy(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_rate_limiter_is_noop_when_rg_disabled(monkeypatch):
+async def test_chat_rate_limiter_falls_back_to_legacy_when_rg_disabled(monkeypatch):
     monkeypatch.setenv("RG_ENABLED", "0")
 
     async def fake_rg_chat(**_: object) -> None:
@@ -68,11 +68,6 @@ async def test_chat_rate_limiter_is_noop_when_rg_disabled(monkeypatch):
             burst_multiplier=1.0,
         )
     )
-
-    async def _legacy_should_not_run(*args: object, **kwargs: object):  # pragma: no cover
-        raise AssertionError("legacy limiter should not run when RG is disabled (no-op shim)")
-
-    monkeypatch.setattr(limiter, "_check_legacy_rate_limit", _legacy_should_not_run, raising=True)
 
     allowed, error = await limiter.check_rate_limit(
         user_id="user-fallback",

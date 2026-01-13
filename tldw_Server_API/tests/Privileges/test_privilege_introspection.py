@@ -155,6 +155,7 @@ def test_validate_privilege_metadata_on_startup_invokes_strict_mode(monkeypatch:
     catalog = _build_test_catalog()
     sample_registry: Dict[str, List[object]] = {"media.ingest": []}
     calls: Dict[str, object] = {}
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "1")
 
     def fake_load_catalog() -> PrivilegeCatalog:
 

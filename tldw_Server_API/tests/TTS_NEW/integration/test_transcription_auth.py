@@ -192,6 +192,37 @@ def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_
             raising=False,
         )
 
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import stt_provider_adapter as stt_adapter
+
+        def _fake_parakeet_transcribe_batch(
+            self,
+            audio_path,
+            *,
+            model=None,
+            language=None,
+            task="transcribe",
+            word_timestamps=False,
+            prompt=None,
+            base_dir=None,
+        ):
+            return {
+                "text": "parakeet transcript",
+                "language": language or "en",
+                "segments": [
+                    {"start_seconds": 0.0, "end_seconds": 0.1, "Text": "parakeet transcript"}
+                ],
+                "diarization": {"enabled": False, "speakers": None},
+                "usage": {"duration_ms": None, "tokens": None},
+                "metadata": {"provider": "parakeet", "model": model or ""},
+            }
+
+        monkeypatch.setattr(
+            stt_adapter.ParakeetAdapter,
+            "transcribe_batch",
+            _fake_parakeet_transcribe_batch,
+            raising=True,
+        )
+
         # Parakeet Nemo implementation stub
         def _fake_parakeet(audio_data, sample_rate, variant):
             return "parakeet transcript"
@@ -234,16 +265,36 @@ def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, byp
             raising=False,
         )
 
-        # General transcribe_audio stub for qwen2audio provider
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Lib as ATL
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import stt_provider_adapter as stt_adapter
 
-        def _fake_transcribe_audio(audio_data, transcription_provider, sample_rate=16000, speaker_lang=None, whisper_model="distil-large-v3"):
+        def _fake_qwen2audio_transcribe_batch(
+            self,
+            audio_path,
+            *,
+            model=None,
+            language=None,
+            task="transcribe",
+            word_timestamps=False,
+            prompt=None,
+            base_dir=None,
+        ):
+            return {
+                "text": "qwen2audio transcript",
+                "language": language or "en",
+                "segments": [
+                    {"start_seconds": 0.0, "end_seconds": 0.1, "Text": "qwen2audio transcript"}
+                ],
+                "diarization": {"enabled": False, "speakers": None},
+                "usage": {"duration_ms": None, "tokens": None},
+                "metadata": {"provider": "qwen2audio", "model": model or ""},
+            }
 
-            # Ensure we are invoked with the expected provider
-            assert transcription_provider == "qwen2audio"
-            return "qwen2audio transcript"
-
-        monkeypatch.setattr(ATL, "transcribe_audio", _fake_transcribe_audio, raising=True)
+        monkeypatch.setattr(
+            stt_adapter.Qwen2AudioAdapter,
+            "transcribe_batch",
+            _fake_qwen2audio_transcribe_batch,
+            raising=True,
+        )
 
         try:
             wav_bytes = _make_wav_bytes()

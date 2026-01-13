@@ -182,12 +182,19 @@ policies:
     scopes: [user, api_key]
 
   # Media ingestion/processing endpoints.
-  # Applies to `/api/v1/media/*` for uploads, conversions, and analysis.
+  # Applied to ingest/process routes under `/api/v1/media/*` (add, process-*, ingest-web-content, mediawiki).
   # Media processing is CPU/IO heavy, so limits are slightly conservative
-  # (60 rpm, modest burst) to prevent local saturation while still allowing
+  # (600 rpm, modest burst) to prevent local saturation while still allowing
   # concurrent ingestion workflows in development.
   media.default:
-    requests: { rpm: 60, burst: 1.2 }
+    requests: { rpm: 600, burst: 1.2 }
+    scopes: [user, api_key]
+
+  # Media access endpoints (listing, item retrieval, file download).
+  # This is intentionally higher than ingestion limits so browsing doesn't
+  # contend with ingestion quotas.
+  media.access:
+    requests: { rpm: 6000, burst: 1.2 }
     scopes: [user, api_key]
 
   # Chatbooks import/export endpoints (legacy ingress compat → RG).
@@ -256,7 +263,7 @@ route_map:
     connectors: core.default
     ocr: core.default
     vlm: core.default
-    media: media.default
+    media: media.access
     media-embeddings: embeddings.default
     audio: audio.default
     audio-websocket: audio.default
@@ -353,7 +360,12 @@ route_map:
     "/api/v1/prompt-studio*": prompt_studio.default
     "/api/v1/prompts*": prompt_studio.default
     "/api/v1/rag*": rag.default
-    "/api/v1/media*": media.default
+    "/api/v1/media/add": media.default
+    "/api/v1/media/ingest-web-content": media.default
+    "/api/v1/media/process-*": media.default
+    "/api/v1/media/mediawiki/*": media.default
+    "/api/v1/media/*/reprocess": media.default
+    "/api/v1/media*": media.access
     "/api/v1/watchlists/*": watchlists.default
     "/api/v1/watchlists*": watchlists.default
     "/api/v1/subscriptions*": core.default

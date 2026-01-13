@@ -94,6 +94,8 @@ _AUTH_ENV_BASELINE_KEYS = (
     # Route gating and backend knobs used by a handful of integration tests.
     "ROUTES_ENABLE",
     "TLDW_USER_DB_BACKEND",
+    # Privilege metadata validation can be toggled in tests/fixtures.
+    "PRIVILEGE_METADATA_VALIDATE_ON_STARTUP",
 )
 
 _AUTH_ENV_BASELINE = {k: os.environ.get(k) for k in _AUTH_ENV_BASELINE_KEYS}
@@ -198,6 +200,24 @@ def _restore_auth_env_and_singletons():
         from tldw_Server_API.app.core.Jobs.manager import JobManager
 
         JobManager.set_acquire_gate(False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_character_chat_complete_windows():
+    """Ensure legacy /complete throttle cache is rebound per test loop."""
+    try:
+        from tldw_Server_API.app.api.v1.endpoints import character_chat_sessions as _chat_sessions
+
+        _chat_sessions.reset_complete_windows()
+    except Exception:
+        pass
+    yield
+    try:
+        from tldw_Server_API.app.api.v1.endpoints import character_chat_sessions as _chat_sessions
+
+        _chat_sessions.reset_complete_windows()
     except Exception:
         pass
 

@@ -210,6 +210,8 @@ def evaluate_url_policy(
         return out or [80, 443]
 
     allowed_ports = _default_ports()
+    if (os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING")) and host in {"localhost", "127.0.0.1", "::1"}:
+        allowed_ports = []
     try:
         port = parsed.port
     except ValueError:

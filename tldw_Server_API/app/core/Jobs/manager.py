@@ -3712,6 +3712,9 @@ class JobManager:
                                 pass
                         return ok
             else:
+                post_commit_cancel_uuid = None
+                post_commit_cancel_reason = None
+                result = False
                 with conn:
                     if _test_mode:
                         try:
@@ -3730,6 +3733,7 @@ class JobManager:
                             if completion_token and ct and str(ct) == str(completion_token):
                                 return True
                             return False
+                    retry_scheduled = False
                     if retryable:
                         # compute jittered backoff based on current retry_count
                         row = conn.execute("SELECT retry_count FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -3818,10 +3822,12 @@ class JobManager:
                                 ),
                             )
                         if conn.total_changes > 0:
+                            retry_scheduled = True
                             try:
                                 rowq = conn.execute("SELECT status, uuid FROM jobs WHERE id = ?", (job_id,)).fetchone()
                                 if rowq and str(rowq[0]) == "quarantined":
-                                    self._cancel_dependent_jobs(rowq[1], reason="dependency_failed")
+                                    post_commit_cancel_uuid = rowq[1]
+                                    post_commit_cancel_reason = "dependency_failed"
                             except Exception:
                                 pass
                             try:
@@ -3919,140 +3925,152 @@ class JobManager:
                                     logger.info(f"[JM TEST MUT] fail_job retryable scheduled delay={int(delay)} tl_len={_tl_len} total={int(_total)} dist={_dist}")
                                 except Exception:
                                     pass
-                            return True
-                    # terminal failure
-                    failed_from_queued = False
-                    if enforce:
-                        conn.execute(
-                            (
-                                "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = ?, "
-                                "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'processing' AND worker_id = ? AND lease_id = ? AND (completion_token IS NULL OR completion_token = ?)"
-                            ),
-                            (
-                                (error_code or error),
-                                error,
-                                error_code,
-                                error_class,
-                                (json.dumps(error_stack) if error_stack is not None else None),
-                                completion_token,
-                                job_id,
-                                worker_id,
-                                lease_id,
-                                completion_token,
-                            ),
-                        )
-                    else:
-                        # Enforcement disabled: allow failing processing without matching worker/lease,
-                        # and fall back to failing queued jobs (admin-style terminalization) when appropriate.
-                        conn.execute(
-                            (
-                                "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
-                                "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'processing' AND (completion_token IS NULL OR completion_token = ?)"
-                            ),
-                            (
-                                (error_code or error),
-                                error,
-                                error_code,
-                                error_class,
-                                (json.dumps(error_stack) if error_stack is not None else None),
-                                completion_token,
-                                job_id,
-                                completion_token,
-                            ),
-                        )
-                        if conn.total_changes == 0:
-                            # Admin-style finalize: optionally allow failing queued jobs when enforcement is disabled
-                            # Scope via allowlist of domains (default: chatbooks) to avoid global behavior in tests
-                            try:
-                                allow = {
-                                    d.strip().lower()
-                                    for d in os.getenv(
-                                        "JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS",
-                                        "chatbooks,embeddings",
-                                    ).split(",")
-                                    if d.strip()
-                                }
-                                row_dom = conn.execute("SELECT domain FROM jobs WHERE id = ?", (job_id,)).fetchone()
-                                dom_val = str(row_dom[0]).lower() if row_dom and row_dom[0] else ""
-                            except Exception:
-                                allow = {"chatbooks", "embeddings"}
-                                dom_val = ""
-                            if dom_val in allow:
-                                cur2 = conn.execute(
-                                    (
-                                        "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
-                                        "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'queued'"
-                                    ),
-                                    (
-                                        (error_code or error),
-                                        error,
-                                        error_code,
-                                        error_class,
-                                        (json.dumps(error_stack) if error_stack is not None else None),
-                                        completion_token,
-                                        job_id,
-                                    ),
-                                )
-                                failed_from_queued = (cur2.rowcount or 0) > 0
-                    ok = conn.total_changes > 0
-                    try:
-                        if ok and rowl:
-                            d = dict(rowl)
-                            increment_failures(d, reason="terminal")
-                            try:
-                                if error_code:
-                                    from .metrics import increment_failures_by_code
-                                    increment_failures_by_code(d, error_code)
-                            except Exception:
-                                pass
-                            # Counters: processing -> failed (terminal)
-                            try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                                    if not failed_from_queued:
-                                        conn.execute(
-                                            "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
-                                            (d.get("domain"), d.get("queue"), d.get("job_type")),
-                                        )
-                            except Exception:
-                                pass
-                            # Append terminal failure to timeline (no backoff)
-                            try:
-                                row_t2 = conn.execute("SELECT failure_timeline FROM jobs WHERE id = ?", (job_id,)).fetchone()
-                                timeline_json2 = row_t2[0] if row_t2 else None
+                            result = True
+                    if not retry_scheduled:
+                        # terminal failure
+                        failed_from_queued = False
+                        if enforce:
+                            conn.execute(
+                                (
+                                    "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = ?, "
+                                    "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'processing' AND worker_id = ? AND lease_id = ? AND (completion_token IS NULL OR completion_token = ?)"
+                                ),
+                                (
+                                    (error_code or error),
+                                    error,
+                                    error_code,
+                                    error_class,
+                                    (json.dumps(error_stack) if error_stack is not None else None),
+                                    completion_token,
+                                    job_id,
+                                    worker_id,
+                                    lease_id,
+                                    completion_token,
+                                ),
+                            )
+                        else:
+                            # Enforcement disabled: allow failing processing without matching worker/lease,
+                            # and fall back to failing queued jobs (admin-style terminalization) when appropriate.
+                            conn.execute(
+                                (
+                                    "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
+                                    "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'processing' AND (completion_token IS NULL OR completion_token = ?)"
+                                ),
+                                (
+                                    (error_code or error),
+                                    error,
+                                    error_code,
+                                    error_class,
+                                    (json.dumps(error_stack) if error_stack is not None else None),
+                                    completion_token,
+                                    job_id,
+                                    completion_token,
+                                ),
+                            )
+                            if conn.total_changes == 0:
+                                # Admin-style finalize: optionally allow failing queued jobs when enforcement is disabled
+                                # Scope via allowlist of domains (default: chatbooks) to avoid global behavior in tests
                                 try:
-                                    tl2 = json.loads(timeline_json2) if timeline_json2 else []
+                                    allow = {
+                                        d.strip().lower()
+                                        for d in os.getenv(
+                                            "JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS",
+                                            "chatbooks,embeddings",
+                                        ).split(",")
+                                        if d.strip()
+                                    }
+                                    row_dom = conn.execute("SELECT domain FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                                    dom_val = str(row_dom[0]).lower() if row_dom and row_dom[0] else ""
                                 except Exception:
-                                    tl2 = []
-                                tl2.append({"ts": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), "error_code": (error_code or error), "retry_backoff": 0})
-                                tl2 = tl2[-10:]
-                                conn.execute("UPDATE jobs SET failure_timeline = ? WHERE id = ?", (json.dumps(tl2), int(job_id)))
-                            except Exception:
-                                pass
-                            try:
-                                with job_span("job.fail", job=d, attrs={"retryable": False, "error_code": error_code}):
-                                    pass
-                            except Exception:
-                                pass
-                            self._update_gauges(domain=d.get("domain"), queue=d.get("queue"), job_type=d.get("job_type"))
-                            try:
-                                ev = {"id": int(job_id), "domain": d.get("domain"), "queue": d.get("queue"), "job_type": d.get("job_type")}
-                                emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
-                            except Exception:
-                                pass
-                            try:
-                                self._cancel_dependent_jobs(d.get("uuid"), reason="dependency_failed")
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-                    if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1","true","yes","y","on"}:
+                                    allow = {"chatbooks", "embeddings"}
+                                    dom_val = ""
+                                if dom_val in allow:
+                                    cur2 = conn.execute(
+                                        (
+                                            "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
+                                            "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'queued'"
+                                        ),
+                                        (
+                                            (error_code or error),
+                                            error,
+                                            error_code,
+                                            error_class,
+                                            (json.dumps(error_stack) if error_stack is not None else None),
+                                            completion_token,
+                                            job_id,
+                                        ),
+                                    )
+                                    failed_from_queued = (cur2.rowcount or 0) > 0
+                        ok = conn.total_changes > 0
                         try:
-                            _total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-                            _dist = {str(r[0]): int(r[1]) for r in conn.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall()}
-                            logger.info(f"[JM TEST MUT] fail_job terminal ok={bool(ok)} total={int(_total)} dist={_dist}")
+                            if ok and rowl:
+                                d = dict(rowl)
+                                increment_failures(d, reason="terminal")
+                                try:
+                                    if error_code:
+                                        from .metrics import increment_failures_by_code
+                                        increment_failures_by_code(d, error_code)
+                                except Exception:
+                                    pass
+                                # Counters: processing -> failed (terminal)
+                                try:
+                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                                        if not failed_from_queued:
+                                            conn.execute(
+                                                "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
+                                                (d.get("domain"), d.get("queue"), d.get("job_type")),
+                                            )
+                                except Exception:
+                                    pass
+                                # Append terminal failure to timeline (no backoff)
+                                try:
+                                    row_t2 = conn.execute("SELECT failure_timeline FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                                    timeline_json2 = row_t2[0] if row_t2 else None
+                                    try:
+                                        tl2 = json.loads(timeline_json2) if timeline_json2 else []
+                                    except Exception:
+                                        tl2 = []
+                                    tl2.append({"ts": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), "error_code": (error_code or error), "retry_backoff": 0})
+                                    tl2 = tl2[-10:]
+                                    conn.execute("UPDATE jobs SET failure_timeline = ? WHERE id = ?", (json.dumps(tl2), int(job_id)))
+                                except Exception:
+                                    pass
+                                try:
+                                    with job_span("job.fail", job=d, attrs={"retryable": False, "error_code": error_code}):
+                                        pass
+                                except Exception:
+                                    pass
+                                self._update_gauges(domain=d.get("domain"), queue=d.get("queue"), job_type=d.get("job_type"))
+                                try:
+                                    ev = {"id": int(job_id), "domain": d.get("domain"), "queue": d.get("queue"), "job_type": d.get("job_type")}
+                                    emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
+                                except Exception:
+                                    pass
+                                try:
+                                    if d.get("uuid"):
+                                        post_commit_cancel_uuid = d.get("uuid")
+                                        post_commit_cancel_reason = "dependency_failed"
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
-                    return ok
+                        if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1","true","yes","y","on"}:
+                            try:
+                                _total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+                                _dist = {str(r[0]): int(r[1]) for r in conn.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall()}
+                                logger.info(f"[JM TEST MUT] fail_job terminal ok={bool(ok)} total={int(_total)} dist={_dist}")
+                            except Exception:
+                                pass
+                        result = bool(ok)
+            if post_commit_cancel_uuid:
+                try:
+                    self._cancel_dependent_jobs(
+                        post_commit_cancel_uuid,
+                        reason=post_commit_cancel_reason or "dependency_failed",
+                    )
+                except Exception:
+                    pass
+            return bool(result)
         finally:
             conn.close()
 
@@ -4177,6 +4195,9 @@ class JobManager:
                                 pass
                         return ok
             else:
+                post_commit_cancel_uuid = None
+                post_commit_cancel_reason = None
+                result = False
                 with conn:
                     if _test_mode:
                         try:
@@ -4197,7 +4218,8 @@ class JobManager:
                         "UPDATE jobs SET status = 'cancelled', cancelled_at = DATETIME('now'), cancellation_reason = ? WHERE id = ? AND status = 'queued'",
                         (reason, job_id),
                     )
-                    if conn.total_changes > 0:
+                    queued_cancelled = conn.total_changes > 0
+                    if queued_cancelled:
                         try:
                             if row0:
                                 self._update_gauges(domain=row0["domain"], queue=row0["queue"], job_type=row0["job_type"])
@@ -4231,7 +4253,8 @@ class JobManager:
                             pass
                         try:
                             if row0 and row0["uuid"]:
-                                self._cancel_dependent_jobs(row0["uuid"], reason=(reason or "dependency_cancelled"))
+                                post_commit_cancel_uuid = row0["uuid"]
+                                post_commit_cancel_reason = reason or "dependency_cancelled"
                         except Exception:
                             pass
                         if _test_mode:
@@ -4241,47 +4264,58 @@ class JobManager:
                                 logger.info(f"[JM TEST MUT] cancel_job queued->cancelled ok=True total={int(_total)} dist={_dist}")
                             except Exception:
                                 pass
-                        return True
-                    # Terminally cancel processing jobs as well (more responsive semantics)
-                    conn.execute(
-                        "UPDATE jobs SET status = 'cancelled', cancelled_at = DATETIME('now'), cancellation_reason = ?, leased_until = NULL WHERE id = ? AND status = 'processing'",
-                        (reason, job_id),
-                    )
-                    ok = conn.total_changes > 0
-                    try:
-                        if ok and row0:
-                            self._update_gauges(domain=row0["domain"], queue=row0["queue"], job_type=row0["job_type"])
-                            increment_cancelled(dict(row0))
-                    except Exception:
-                        pass
-                    if _test_mode:
+                        result = True
+                    if not queued_cancelled:
+                        # Terminally cancel processing jobs as well (more responsive semantics)
+                        conn.execute(
+                            "UPDATE jobs SET status = 'cancelled', cancelled_at = DATETIME('now'), cancellation_reason = ?, leased_until = NULL WHERE id = ? AND status = 'processing'",
+                            (reason, job_id),
+                        )
+                        ok = conn.total_changes > 0
                         try:
-                            _total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-                            _dist = {str(r[0]): int(r[1]) for r in conn.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall()}
-                            logger.info(f"[JM TEST MUT] cancel_job processing->cancelled ok={bool(ok)} total={int(_total)} dist={_dist}")
+                            if ok and row0:
+                                self._update_gauges(domain=row0["domain"], queue=row0["queue"], job_type=row0["job_type"])
+                                increment_cancelled(dict(row0))
                         except Exception:
                             pass
-                    # Counters: processing -> cancelled
-                    try:
-                        if ok and row0 and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            conn.execute(
-                                "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
-                                (row0["domain"], row0["queue"], row0["job_type"]),
-                            )
-                    except Exception:
-                        pass
-                    try:
-                        if ok and row0:
-                            ev = {"id": int(job_id), "domain": row0["domain"], "queue": row0["queue"], "job_type": row0["job_type"]}
-                            emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
-                    except Exception:
-                        pass
-                    try:
-                        if ok and row0 and row0["uuid"]:
-                            self._cancel_dependent_jobs(row0["uuid"], reason=(reason or "dependency_cancelled"))
-                    except Exception:
-                        pass
-                    return ok
+                        if _test_mode:
+                            try:
+                                _total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+                                _dist = {str(r[0]): int(r[1]) for r in conn.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall()}
+                                logger.info(f"[JM TEST MUT] cancel_job processing->cancelled ok={bool(ok)} total={int(_total)} dist={_dist}")
+                            except Exception:
+                                pass
+                        # Counters: processing -> cancelled
+                        try:
+                            if ok and row0 and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
+                                conn.execute(
+                                    "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
+                                    (row0["domain"], row0["queue"], row0["job_type"]),
+                                )
+                        except Exception:
+                            pass
+                        try:
+                            if ok and row0:
+                                ev = {"id": int(job_id), "domain": row0["domain"], "queue": row0["queue"], "job_type": row0["job_type"]}
+                                emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
+                        except Exception:
+                            pass
+                        try:
+                            if ok and row0 and row0["uuid"]:
+                                post_commit_cancel_uuid = row0["uuid"]
+                                post_commit_cancel_reason = reason or "dependency_cancelled"
+                        except Exception:
+                            pass
+                        result = bool(ok)
+            if post_commit_cancel_uuid:
+                try:
+                    self._cancel_dependent_jobs(
+                        post_commit_cancel_uuid,
+                        reason=post_commit_cancel_reason or "dependency_cancelled",
+                    )
+                except Exception:
+                    pass
+            return bool(result)
         finally:
             conn.close()
 

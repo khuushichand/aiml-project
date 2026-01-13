@@ -3,7 +3,6 @@ Validate character chat streaming under STREAMS_UNIFIED=1 with two providers
 by monkeypatching the provider call to emit deterministic SSE chunks.
 """
 
-import os
 import tempfile
 import shutil
 import json as _json
@@ -20,6 +19,8 @@ async def test_complete_v2_streaming_unified_flag_two_providers(monkeypatch):
     monkeypatch.setenv("STREAMS_UNIFIED", "1")
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
 
     # Fake SSE chunks (as strings) from provider
     streaming_payloads = [
@@ -61,8 +62,9 @@ async def test_complete_v2_streaming_unified_flag_two_providers(monkeypatch):
 
     # Isolate DB/files
     tmpdir = tempfile.mkdtemp(prefix="chacha_stream_unified_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
-    os.environ.setdefault("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
     try:
         from tldw_Server_API.app.main import app
 

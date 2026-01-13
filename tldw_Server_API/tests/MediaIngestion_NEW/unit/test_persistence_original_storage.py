@@ -31,12 +31,19 @@ class _FakeStorage:
         data: bytes,
         mime_type: str,
     ) -> str:
+        payload = data
+        if hasattr(data, "read") and not isinstance(data, (bytes, bytearray)):
+            payload = data.read()
+            if hasattr(data, "seek"):
+                data.seek(0)
+        if isinstance(payload, bytearray):
+            payload = bytes(payload)
         self.calls.append(
             {
                 "user_id": user_id,
                 "media_id": media_id,
                 "filename": filename,
-                "data": data,
+                "data": payload,
                 "mime_type": mime_type,
             }
         )

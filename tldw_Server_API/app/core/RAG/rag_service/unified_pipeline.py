@@ -552,6 +552,54 @@ async def unified_rag_pipeline(
         )
     """
 
+    # Basic input validation (short-circuit before heavier setup)
+    if not isinstance(query, str) or not query.strip():
+        msg = "Invalid query"
+        metadata = {"original_query": query}
+        try:
+            inbound_meta = kwargs.get("metadata")
+            if isinstance(inbound_meta, dict):
+                metadata.update(inbound_meta)
+        except Exception:
+            pass
+        timings = {"total": 0.0}
+        # Consistent contract: return UnifiedRAGResponse for all outcomes
+        try:
+            from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
+            return UnifiedRAGResponse(
+                documents=[],
+                query=(query if isinstance(query, str) else ""),
+                expanded_queries=[],
+                metadata=metadata,
+                timings=timings,
+                citations=[],
+                academic_citations=[],
+                chunk_citations=[],
+                generated_answer=msg,
+                cache_hit=False,
+                errors=[msg],
+                security_report=None,
+                total_time=0.0,
+                claims=None,
+                factuality=None,
+            )
+        except Exception:
+            # Fallback to dataclass if schema import fails (non-API contexts)
+            return UnifiedSearchResult(
+                documents=[],
+                query=query if isinstance(query, str) else "",
+                expanded_queries=[],
+                metadata=metadata,
+                timings=timings,
+                citations=[],
+                feedback_id=None,
+                generated_answer=msg,
+                cache_hit=False,
+                errors=[msg],
+                security_report=None,
+                total_time=0.0,
+            )
+
     # Normalize common alias/compat args
     expand_query = expand_query or kwargs.get("enable_expansion", False)
 
@@ -651,49 +699,6 @@ async def unified_rag_pipeline(
             call_coro = _attempt()
 
         return await _with_timeout(call_coro, timeout_seconds)
-
-    # Basic input validation
-    if not isinstance(query, str) or not query.strip():
-        msg = "Invalid query"
-        result.generated_answer = msg
-        result.errors.append(msg)
-        result.timings["total"] = 0.0
-        # Consistent contract: return UnifiedRAGResponse for all outcomes
-        try:
-            from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
-            return UnifiedRAGResponse(
-                documents=[],
-                query=(query if isinstance(query, str) else ""),
-                expanded_queries=[],
-                metadata=result.metadata,
-                timings=result.timings,
-                citations=[],
-                academic_citations=[],
-                chunk_citations=[],
-                generated_answer=msg,
-                cache_hit=False,
-                errors=result.errors,
-                security_report=None,
-                total_time=0.0,
-                claims=None,
-                factuality=None,
-            )
-        except Exception:
-            # Fallback to dataclass if schema import fails (non-API contexts)
-            return UnifiedSearchResult(
-                documents=[],
-                query=query if isinstance(query, str) else "",
-                expanded_queries=[],
-                metadata=result.metadata,
-                timings=result.timings,
-                citations=[],
-                feedback_id=None,
-                generated_answer=msg,
-                cache_hit=False,
-                errors=result.errors,
-                security_report=None,
-                total_time=0.0,
-            )
 
     # Initialize monitoring if requested
     metrics = None

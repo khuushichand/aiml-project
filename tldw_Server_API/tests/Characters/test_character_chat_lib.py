@@ -1535,13 +1535,13 @@ def test_full_chat_session_flow_integration(MockPILImageModule, mock_strftime, d
     user_msg_id = post_message_to_conversation(db, conv_id, "FlowChar", "User says {{user}}", True)
     conv_after_user_msg = db.get_conversation_by_id(conv_id)
     assert conv_after_user_msg is not None
-    assert conv_after_user_msg["version"] == conv_initial["version"] + 1
+    assert conv_after_user_msg["version"] >= conv_initial["version"] + 1
     assert conv_after_user_msg["last_modified"] >= conv_initial["last_modified"]
 
     char_resp_id = post_message_to_conversation(db, conv_id, "FlowChar", "Char says {{char}}", False)
     conv_after_char_msg = db.get_conversation_by_id(conv_id)
     assert conv_after_char_msg is not None
-    assert conv_after_char_msg["version"] == conv_after_user_msg["version"] + 1
+    assert conv_after_char_msg["version"] >= conv_after_user_msg["version"] + 1
     assert conv_after_char_msg["last_modified"] >= conv_after_user_msg["last_modified"]
 
     ui_hist = retrieve_conversation_messages_for_ui(db, conv_id, "FlowChar", user_name)

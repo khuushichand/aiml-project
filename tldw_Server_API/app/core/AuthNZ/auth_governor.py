@@ -12,6 +12,7 @@ full ResourceGovernor integration is rolled out.
 from __future__ import annotations
 
 import os
+import inspect
 from typing import Any, Dict, Tuple
 
 from loguru import logger
@@ -119,6 +120,11 @@ class AuthGovernor:
                 limiter = get_rate_limiter()
             except Exception:
                 limiter = None
+        if inspect.isawaitable(limiter):
+            try:
+                limiter = await limiter
+            except Exception:
+                limiter = None
 
         if limiter and getattr(limiter, "enabled", False):
             try:
@@ -149,6 +155,11 @@ class AuthGovernor:
                 limiter = get_rate_limiter()
             except Exception:
                 limiter = None
+        if inspect.isawaitable(limiter):
+            try:
+                limiter = await limiter
+            except Exception:
+                limiter = None
 
         if limiter and getattr(limiter, "enabled", False):
             try:
@@ -168,13 +179,36 @@ class AuthGovernor:
         rate_limiter=None,
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        No-op rate limit check (Resource Governor handles ingress limits).
+        Rate limit check delegated to the existing AuthNZ rate limiter.
 
-        Returns a permissive response to preserve compatibility with legacy
-        call sites that still depend on AuthGovernor.
+        Returns a permissive response when the limiter is unavailable.
         """
-        _ = (identifier, endpoint, limit, window_minutes, rate_limiter)
-        return True, {"rate_limit_source": "resource_governor"}
+        limiter = rate_limiter
+        if limiter is None:
+            try:
+                limiter = get_rate_limiter()
+            except Exception:
+                limiter = None
+        if inspect.isawaitable(limiter):
+            try:
+                limiter = await limiter
+            except Exception:
+                limiter = None
+
+        if limiter and getattr(limiter, "enabled", False):
+            try:
+                return await limiter.check_rate_limit(
+                    identifier,
+                    endpoint,
+                    limit=limit,
+                    window_minutes=window_minutes,
+                )
+            except TypeError:
+                return await limiter.check_rate_limit(identifier, endpoint)
+            except Exception as exc:
+                logger.debug(f"AuthGovernor rate limit failed for {identifier}: {exc}")
+
+        return True, {}
 
 
 _AUTH_GOVERNOR_SINGLETON: AuthGovernor | None = None

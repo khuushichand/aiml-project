@@ -66,6 +66,7 @@ async def test_get_chat_context_and_prepare_roles_normalized(monkeypatch):
 async def test_complete_v2_uses_normalized_roles_via_stubbed_provider(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_complete_v2_roles_")
     monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     reset_settings()
     try:
         from tldw_Server_API.app.main import app

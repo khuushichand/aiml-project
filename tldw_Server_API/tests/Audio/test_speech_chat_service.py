@@ -113,6 +113,8 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     # Stub STT to return fixed transcript
     from tldw_Server_API.app.core.Streaming import speech_chat_service
 
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
     async def _fake_transcribe_audio(**_kwargs):
         return "hello from audio"
 
@@ -268,6 +270,8 @@ async def test_run_speech_chat_turn_stt_error_sentinel_raises(monkeypatch):
 async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
     from tldw_Server_API.app.core.Streaming import speech_chat_service
 
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
     # Enable actions for the duration of the test
     monkeypatch.setenv("AUDIO_CHAT_ENABLE_ACTIONS", "1")
     monkeypatch.setenv("AUDIO_CHAT_ALLOWED_ACTIONS", "play_music")
@@ -351,6 +355,8 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_speech_chat_turn_blocks_disallowed_action(monkeypatch):
     from tldw_Server_API.app.core.Streaming import speech_chat_service
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     monkeypatch.setenv("AUDIO_CHAT_ENABLE_ACTIONS", "1")
     monkeypatch.setenv("AUDIO_CHAT_ALLOWED_ACTIONS", "do_this")

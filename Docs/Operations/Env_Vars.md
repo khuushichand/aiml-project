@@ -133,7 +133,7 @@ Notes:
 - `EVALUATIONS_JOBS_QUEUE`: Queue name for evaluations jobs (default `default`). Alias: `EVALS_JOBS_QUEUE`.
 
 ## Embeddings Jobs
-- `EMBEDDINGS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).
+- `EMBEDDINGS_JOBS_BACKEND`: Backend is fixed to "core"; this environment variable exists for compatibility and is ignored.
 - `EMBEDDINGS_JOBS_QUEUE`: Queue for embeddings stage jobs (default `default`).
 - `EMBEDDINGS_ROOT_JOBS_QUEUE`: Queue for embeddings root jobs (default `low` when stage queue is not `low`).
 - `EMBEDDINGS_JOBS_WORKER_ID`: Worker identifier for embeddings jobs (default `embeddings-jobs-<pid>`).
@@ -146,7 +146,7 @@ Notes:
 - `EMBEDDINGS_JOBS_EXPOSE_PROGRESS`: Include `progress_percent`/`total_chunks` in public jobs responses (`true|false`, default `false`).
 
 ## Chatbooks
-- `CHATBOOKS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).
+- `CHATBOOKS_JOBS_BACKEND`: Backend is fixed to "core"; this environment variable exists for compatibility and is ignored.
 - `CHATBOOKS_CORE_WORKER_ENABLED`: Enable shared Chatbooks worker when backend=core (default `true`).
 - `CHATBOOKS_SIGNED_URLS`: Require HMAC-signed download URLs (`true|false`, default `false`).
 - `CHATBOOKS_SIGNING_SECRET`: Secret key used for download URL signing (required when signed URLs are enabled).

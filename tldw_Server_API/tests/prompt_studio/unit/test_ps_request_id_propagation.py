@@ -1,10 +1,10 @@
-import pytest
-from fastapi.testclient import TestClient
-
-from tldw_Server_API.app.main import app
+import uuid
 
 
-def test_ps_optimization_simple_includes_request_id_in_payload(monkeypatch):
+def test_ps_optimization_simple_includes_request_id_in_payload(
+    monkeypatch,
+    prompt_studio_dual_backend_client,
+):
 
 
     captured = {}
@@ -30,10 +30,12 @@ def test_ps_optimization_simple_includes_request_id_in_payload(monkeypatch):
 
     monkeypatch.setattr(ps_jobs.PromptStudioJobsAdapter, "create_job", fake_create_job, raising=True)
 
-    client = TestClient(app)
+    backend_label, client, _db = prompt_studio_dual_backend_client
+    project_name = f"ReqID Project {uuid.uuid4().hex[:6]} ({backend_label})"
+    prompt_name = f"ReqID Prompt {uuid.uuid4().hex[:6]} ({backend_label})"
     project_resp = client.post(
         "/api/v1/prompt-studio/projects/",
-        json={"name": "ReqID Project", "status": "active"},
+        json={"name": project_name, "status": "active"},
         headers={
             "X-API-KEY": "test-api-key-12345",
         },
@@ -45,7 +47,7 @@ def test_ps_optimization_simple_includes_request_id_in_payload(monkeypatch):
         "/api/v1/prompt-studio/prompts/create",
         json={
             "project_id": project_id,
-            "name": "ReqID Prompt",
+            "name": prompt_name,
             "system_prompt": "System",
             "user_prompt": "{{text}}",
         },

@@ -1,3 +1,4 @@
+import importlib
 import json
 import shutil
 from pathlib import Path
@@ -59,6 +60,7 @@ def client_with_user(monkeypatch):
         return User(id=222, username="reader", email=None, is_active=True)
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
     monkeypatch.setenv("ROUTES_ENABLE", "reading")
 
     base_dir = Path.cwd() / "Databases" / "test_reading_import"
@@ -68,7 +70,10 @@ def client_with_user(monkeypatch):
     settings.USER_DB_BASE_DIR = str(base_dir)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
 
-    from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app import main as app_main
+
+    importlib.reload(app_main)
+    fastapi_app = app_main.app
 
     fastapi_app.dependency_overrides[get_request_user] = override_user
     try:

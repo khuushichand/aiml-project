@@ -69,10 +69,12 @@ class RGSimpleMiddleware:
             by_path = dict(route_map.get("by_path") or {})
             compiled = []
             for pat, pol in by_path.items():
-                # Convert simple "/api/v1/chat/*" to regex
+                # Convert glob patterns (supports '*' anywhere, anchored unless trailing '*')
                 pat = str(pat)
-                if pat.endswith("*"):
-                    regex = re.escape(pat[:-1]) + ".*"
+                if "*" in pat:
+                    regex = re.escape(pat).replace("\\*", ".*")
+                    if not pat.endswith("*"):
+                        regex += "$"
                 else:
                     regex = re.escape(pat) + "$"
                 compiled.append((re.compile(regex), str(pol)))
@@ -98,15 +100,17 @@ class RGSimpleMiddleware:
             snap = loader.get_snapshot() if loader else None
             route_map = getattr(snap, "route_map", {}) or {}
             by_path = dict(route_map.get("by_path") or {})
-            # Simple wildcard matching: prefix* → startswith(prefix), else exact
+            # Simple wildcard matching: '*' anywhere, anchored unless trailing '*'
             for pat, pol in by_path.items():
                 pat = str(pat)
-                if pat.endswith("*"):
-                    if path.startswith(pat[:-1]):
+                if "*" in pat:
+                    regex = re.escape(pat).replace("\\*", ".*")
+                    if not pat.endswith("*"):
+                        regex += "$"
+                    if re.match(regex, path):
                         return str(pol)
-                else:
-                    if path == pat:
-                        return str(pol)
+                elif path == pat:
+                    return str(pol)
         except Exception:
             pass
 

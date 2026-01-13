@@ -1,3 +1,4 @@
+import importlib
 import shutil
 from pathlib import Path
 
@@ -14,6 +15,7 @@ pytestmark = pytest.mark.unit
 @pytest.fixture()
 def reading_app(monkeypatch):
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
     monkeypatch.setenv("ROUTES_ENABLE", "reading")
 
     base_dir = Path.cwd() / "Databases" / "test_reading_api"
@@ -23,7 +25,10 @@ def reading_app(monkeypatch):
     settings.USER_DB_BASE_DIR = str(base_dir)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
 
-    from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app import main as app_main
+
+    importlib.reload(app_main)
+    fastapi_app = app_main.app
 
     try:
         yield fastapi_app

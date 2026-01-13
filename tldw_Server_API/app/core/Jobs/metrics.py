@@ -40,13 +40,21 @@ JOBS_METRICS_REGISTERED = False
 def ensure_jobs_metrics_registered() -> None:
     """Register Jobs metrics with the central registry, if available."""
     global JOBS_METRICS_REGISTERED
-    if JOBS_METRICS_REGISTERED:
-        return
     if not get_metrics_registry or not MetricDefinition or not MetricType:
         logger.debug("Metrics registry not available; skipping Jobs metrics registration")
         JOBS_METRICS_REGISTERED = True
         return
     reg = get_metrics_registry()
+    try:
+        normalized_key = (
+            reg.normalize_metric_name("jobs.queue_latency_seconds")
+            if hasattr(reg, "normalize_metric_name")
+            else "jobs_queue_latency_seconds"
+        )
+    except Exception:
+        normalized_key = "jobs_queue_latency_seconds"
+    if JOBS_METRICS_REGISTERED and normalized_key in getattr(reg, "metrics", {}):
+        return
     # Configurable buckets
     duration_buckets = _parse_buckets(
         "JOBS_DURATION_BUCKETS", [0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 900]

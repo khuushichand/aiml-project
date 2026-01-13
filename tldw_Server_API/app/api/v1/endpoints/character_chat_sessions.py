@@ -190,10 +190,15 @@ class _BoundedThrottleCache:
     def __init__(self):
         self._data: Dict[str, deque] = {}
         self._last_access: Dict[str, float] = {}
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def get(self, key: str) -> deque:
         """Concurrency-safe access to throttle window for a given key."""
+        current_loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not current_loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = current_loop
         async with self._lock:
             now = time.time()
             # Cleanup if too many keys
@@ -223,6 +228,12 @@ class _BoundedThrottleCache:
                 self._last_access.pop(k, None)
 
 _complete_windows = _BoundedThrottleCache()
+
+
+def reset_complete_windows() -> None:
+    """Reset legacy /complete throttle cache (useful in tests)."""
+    global _complete_windows
+    _complete_windows = _BoundedThrottleCache()
 
 # ========================================================================
 # Helper Functions

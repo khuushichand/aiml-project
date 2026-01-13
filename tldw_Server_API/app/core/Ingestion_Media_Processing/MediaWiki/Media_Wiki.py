@@ -526,7 +526,7 @@ def _mediawiki_collection_name(wiki_name: str) -> str:
     prefix = (
         media_wiki_import_config.get("chromadb", {}) or {}
     ).get("collection_prefix", "mediawiki_")
-    safe_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(prefix)).strip("_-")
+    safe_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(prefix)).strip()
     safe_wiki = sanitize_wiki_name(wiki_name)
     if safe_prefix:
         return f"{safe_prefix}{safe_wiki}"

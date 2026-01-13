@@ -3,6 +3,7 @@
 
 import os
 import tempfile
+import sqlite3
 from pathlib import Path
 import uuid
 from unittest.mock import patch
@@ -33,6 +34,23 @@ from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBack
 # Environment variables already set before app import above.
 
 # Postgres setup is unified via tests._plugins.postgres.
+
+@pytest.fixture(scope="session", autouse=True)
+def prompt_studio_jobs_test_env(tmp_path_factory: pytest.TempPathFactory):
+    jobs_dir = tmp_path_factory.mktemp("prompt_studio_jobs")
+    jobs_db_path = jobs_dir / "jobs.sqlite"
+    os.environ["JOBS_DB_PATH"] = str(jobs_db_path)
+    os.environ["JOBS_QUOTA_MAX_QUEUED_PROMPT_STUDIO"] = "0"
+    os.environ["JOBS_QUOTA_MAX_INFLIGHT_PROMPT_STUDIO"] = "0"
+    os.environ["JOBS_QUOTA_SUBMITS_PER_MIN_PROMPT_STUDIO"] = "0"
+    yield
+    for key in (
+        "JOBS_DB_PATH",
+        "JOBS_QUOTA_MAX_QUEUED_PROMPT_STUDIO",
+        "JOBS_QUOTA_MAX_INFLIGHT_PROMPT_STUDIO",
+        "JOBS_QUOTA_SUBMITS_PER_MIN_PROMPT_STUDIO",
+    ):
+        os.environ.pop(key, None)
 
 @pytest.fixture(autouse=True)
 def enable_test_mode(monkeypatch):
@@ -227,7 +245,25 @@ def prompt_studio_dual_backend_db(
         db_instance = request.getfixturevalue("prompt_studio_pg_shared_db")
 
     try:
-        _reset_prompt_studio_tables(db_instance)
+        try:
+            _reset_prompt_studio_tables(db_instance)
+        except sqlite3.DatabaseError:
+            if label != "sqlite":
+                raise
+            try:
+                db_instance.close_connection()
+            except Exception:
+                pass
+            try:
+                db_instance.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(str(prompt_studio_sqlite_db_path))
+            except Exception:
+                pass
+            db_instance = PromptStudioDatabase(str(prompt_studio_sqlite_db_path), f"dual-{label}")
+            _reset_prompt_studio_tables(db_instance)
         yield label, db_instance
     finally:
         try:

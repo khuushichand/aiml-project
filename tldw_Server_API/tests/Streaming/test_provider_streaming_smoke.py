@@ -100,6 +100,7 @@ async def test_openai_stream_smoke(monkeypatch):
 
     it = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openai_api": {"api_base_url": "https://api.openai.com/v1"}},
@@ -130,6 +131,7 @@ async def test_openai_stream_no_retry_after_first_byte(monkeypatch):
 
     it = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "x"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openai_api": {"api_base_url": "https://api.openai.com/v1"}},
@@ -160,6 +162,7 @@ async def test_groq_stream_smoke(monkeypatch):
 
     it = await chat_with_groq_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"groq_api": {"api_base_url": "https://api.groq.com/openai/v1"}},
@@ -189,6 +192,7 @@ async def test_groq_stream_no_retry_after_first_byte(monkeypatch):
 
     it = await chat_with_groq_async(
         input_data=[{"role": "user", "content": "x"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"groq_api": {"api_base_url": "https://api.groq.com/openai/v1"}},
@@ -217,6 +221,7 @@ async def test_openrouter_stream_smoke(monkeypatch):
 
     it = await chat_with_openrouter_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openrouter_api": {"api_base_url": "https://openrouter.ai/api/v1"}},
@@ -246,6 +251,7 @@ async def test_openrouter_stream_no_retry_after_first_byte(monkeypatch):
 
     it = await chat_with_openrouter_async(
         input_data=[{"role": "user", "content": "x"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openrouter_api": {"api_base_url": "https://openrouter.ai/api/v1"}},
@@ -274,6 +280,7 @@ async def test_anthropic_stream_smoke(monkeypatch):
 
     it = await chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"anthropic_api": {"api_base_url": "https://api.anthropic.com/v1"}},
@@ -298,6 +305,7 @@ async def test_anthropic_stream_no_retry_after_first_byte(monkeypatch):
 
     it = await chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "x"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"anthropic_api": {"api_base_url": "https://api.anthropic.com/v1"}},
@@ -342,6 +350,7 @@ async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn
     chat_fn = getattr(llm_api, fn_name)
     it = await chat_fn(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={config_key: {"api_base_url": base_url}},
@@ -361,6 +370,7 @@ async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn
 
     it2 = await chat_fn(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={config_key: {"api_base_url": base_url}},
@@ -395,6 +405,7 @@ async def test_combined_anthropic_smoke_and_cancel(monkeypatch):
 
     it = await llm_api.chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"anthropic_api": {"api_base_url": "https://api.anthropic.com/v1"}},
@@ -406,6 +417,7 @@ async def test_combined_anthropic_smoke_and_cancel(monkeypatch):
     calls["n"] = 0
     it2 = await llm_api.chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"anthropic_api": {"api_base_url": "https://api.anthropic.com/v1"}},
@@ -443,6 +455,7 @@ async def test_multi_chunk_done_ordering_under_load(monkeypatch):
 
     it = await llm_api.chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openai_api": {"api_base_url": "https://api.openai.com/v1"}},

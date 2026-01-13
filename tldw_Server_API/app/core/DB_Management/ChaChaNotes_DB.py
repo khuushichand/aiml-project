@@ -1845,9 +1845,9 @@ UPDATE db_schema_version
 PRAGMA foreign_keys = ON;
 
 /* Conversations: topic tagging metadata */
-ALTER TABLE conversations ADD COLUMN topic_label_source TEXT CHECK(topic_label_source IN ('manual','auto'));
-ALTER TABLE conversations ADD COLUMN topic_last_tagged_at DATETIME;
-ALTER TABLE conversations ADD COLUMN topic_last_tagged_message_id TEXT;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS topic_label_source TEXT CHECK(topic_label_source IN ('manual','auto'));
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS topic_last_tagged_at DATETIME;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS topic_last_tagged_message_id TEXT;
 
 /* Cluster metadata */
 CREATE TABLE IF NOT EXISTS conversation_clusters(
@@ -1863,8 +1863,8 @@ CREATE TABLE IF NOT EXISTS conversation_clusters(
 CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref);
 
 /* Flashcards: backlinks to conversations/messages */
-ALTER TABLE flashcards ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL;
-ALTER TABLE flashcards ADD COLUMN message_id TEXT REFERENCES messages(id) ON DELETE SET NULL;
+ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL;
+ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS message_id TEXT REFERENCES messages(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_flashcards_conversation ON flashcards(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_flashcards_message ON flashcards(message_id);
 
@@ -2790,7 +2790,65 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Migrates schema from V13 to V14 (chat topic metadata + clusters + flashcard backlinks)."""
         logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V13 to V14 for DB: {self.db_path_str}...")
         try:
-            conn.executescript(self._MIGRATION_SQL_V13_TO_V14)
+            conn.execute("PRAGMA foreign_keys = ON")
+
+            def _column_names(table_name: str) -> set[str]:
+                rows = conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+                names: set[str] = set()
+                for row in rows:
+                    if isinstance(row, dict):
+                        name = row.get("name")
+                    else:
+                        try:
+                            name = row["name"]
+                        except Exception:
+                            name = row[1] if len(row) > 1 else None
+                    if name:
+                        names.add(str(name))
+                return names
+
+            conv_cols = _column_names("conversations")
+            if "topic_label_source" not in conv_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN topic_label_source TEXT CHECK(topic_label_source IN ('manual','auto'))"
+                )
+            if "topic_last_tagged_at" not in conv_cols:
+                conn.execute("ALTER TABLE conversations ADD COLUMN topic_last_tagged_at DATETIME")
+            if "topic_last_tagged_message_id" not in conv_cols:
+                conn.execute("ALTER TABLE conversations ADD COLUMN topic_last_tagged_message_id TEXT")
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conversation_clusters(
+                  cluster_id TEXT PRIMARY KEY,
+                  title TEXT,
+                  centroid TEXT,
+                  size INTEGER NOT NULL DEFAULT 0,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)"
+            )
+
+            flash_cols = _column_names("flashcards")
+            if "conversation_id" not in flash_cols:
+                conn.execute(
+                    "ALTER TABLE flashcards ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL"
+                )
+            if "message_id" not in flash_cols:
+                conn.execute(
+                    "ALTER TABLE flashcards ADD COLUMN message_id TEXT REFERENCES messages(id) ON DELETE SET NULL"
+                )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_conversation ON flashcards(conversation_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_message ON flashcards(message_id)")
+
+            conn.execute(
+                "UPDATE db_schema_version SET version = 14 WHERE schema_name = 'rag_char_chat_schema' AND version < 14"
+            )
             final_version = self._get_db_version(conn)
             if final_version != 14:
                 raise SchemaError(

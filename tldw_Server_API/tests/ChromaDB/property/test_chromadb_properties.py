@@ -19,6 +19,11 @@ import threading
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager, validate_user_id
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
+# Configure Hypothesis to keep resource usage low in CI
+from hypothesis import settings as _hyp_settings
+_hyp_settings.register_profile("ci_min", max_examples=5, stateful_step_count=15, deadline=None)
+_hyp_settings.load_profile("ci_min")
+
 # Shared manager for stateful tests to avoid resource exhaustion
 _state_mgr_lock = threading.Lock()
 _state_mgr_singleton = None
@@ -702,7 +707,7 @@ class TestErrorHandlingProperties:
             st.builds(lambda s: f"{s}\x00", st.text()),
         )
     )
-    @settings(max_examples=5)
+    @settings(max_examples=5, deadline=None)
     def test_invalid_user_id_rejected(self, invalid_user_id):
         """Invalid user IDs should be rejected."""
         with pytest.raises(ValueError):
@@ -728,7 +733,7 @@ class TestErrorHandlingProperties:
         collection=collection_name,
         bad_ids=st.lists(st.text(min_size=1), min_size=2, max_size=5)
     )
-    @settings(max_examples=5, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(max_examples=5, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_duplicate_ids_handled(self, collection, bad_ids):
         """Duplicate IDs should be handled appropriately."""
         # Make some IDs duplicate
@@ -759,7 +764,3 @@ class TestErrorHandlingProperties:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-m", "property"])
-# Configure Hypothesis to keep resource usage low in CI
-from hypothesis import settings as _hyp_settings
-_hyp_settings.register_profile("ci_min", max_examples=5, stateful_step_count=15, deadline=None)
-_hyp_settings.load_profile("ci_min")

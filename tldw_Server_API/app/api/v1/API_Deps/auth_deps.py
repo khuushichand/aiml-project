@@ -1295,7 +1295,7 @@ def _rg_enabled_for_request(request: Request) -> bool:
     return bool(state is not None and getattr(state, "rg_policy_id", None))
 
 
-async def check_rate_limit(request: Request) -> None:
+async def check_rate_limit(request: Request, rate_limiter=None) -> None:
     """
     RG-first rate limit dependency with legacy fallback.
 
@@ -1307,16 +1307,31 @@ async def check_rate_limit(request: Request) -> None:
     if _rg_enabled_for_request(request):
         return
 
-    # In test mode, bypass rate limiting entirely for deterministic tests.
-    if _is_test_mode():
-        return
-
     settings = get_settings()
     if not getattr(settings, "RATE_LIMIT_ENABLED", True):
         return
 
+    principal = None
     try:
-        rate_limiter = get_rate_limiter()
+        ctx = getattr(request.state, "auth", None)
+        if isinstance(ctx, AuthContext):
+            principal = ctx.principal
+    except Exception:
+        principal = None
+
+    if is_single_user_principal(principal):
+        return
+
+    # Claim-first governor hook (primarily for test invariants)
+    await get_auth_governor()
+
+    # In test mode, bypass rate limiting entirely for deterministic tests.
+    if _is_test_mode():
+        return
+
+    try:
+        if rate_limiter is None:
+            rate_limiter = get_rate_limiter()
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -1372,22 +1387,37 @@ async def check_rate_limit(request: Request) -> None:
         )
 
 
-async def check_auth_rate_limit(request: Request) -> None:
+async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
     """RG-first auth rate limit dependency with legacy fallback (IP-scoped)."""
     # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
     if _rg_enabled_for_request(request):
-        return
-
-    # In test mode, bypass rate limiting entirely for deterministic tests.
-    if _is_test_mode():
         return
 
     settings = get_settings()
     if not getattr(settings, "RATE_LIMIT_ENABLED", True):
         return
 
+    principal = None
     try:
-        rate_limiter = get_rate_limiter()
+        ctx = getattr(request.state, "auth", None)
+        if isinstance(ctx, AuthContext):
+            principal = ctx.principal
+    except Exception:
+        principal = None
+
+    if is_single_user_principal(principal):
+        return
+
+    # Claim-first governor hook (primarily for test invariants)
+    await get_auth_governor()
+
+    # In test mode, bypass rate limiting entirely for deterministic tests.
+    if _is_test_mode():
+        return
+
+    try:
+        if rate_limiter is None:
+            rate_limiter = get_rate_limiter()
     except asyncio.CancelledError:
         raise
     except Exception as exc:

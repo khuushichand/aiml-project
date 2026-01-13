@@ -78,13 +78,22 @@ def _worker_acquire_loop(spec: Dict[str, Any], out_ids):
 
 
 @pytest.mark.integration
-def test_parallel_acquire_distinct_jobs_multiprocessing(prompt_studio_dual_backend_db, tmp_path):
+def test_parallel_acquire_distinct_jobs_multiprocessing(
+    prompt_studio_dual_backend_db,
+    tmp_path,
+    pg_database_config,
+):
     label, db = prompt_studio_dual_backend_db
     mp_db = None
+    backend = None
     db_to_use = db
     if label == "sqlite":
         mp_db_path = tmp_path / "prompt_studio_mp.sqlite"
         mp_db = PromptStudioDatabase(str(mp_db_path), client_id="mp-session")
+        db_to_use = mp_db
+    else:
+        backend = DatabaseBackendFactory.create_backend(pg_database_config)
+        mp_db = PromptStudioDatabase(db_path="/tmp/placeholder.sqlite", client_id="mp-session", backend=backend)
         db_to_use = mp_db
 
     try:
@@ -133,5 +142,10 @@ def test_parallel_acquire_distinct_jobs_multiprocessing(prompt_studio_dual_backe
         if mp_db is not None:
             try:
                 mp_db.close()
+            except Exception:
+                pass
+        if backend is not None:
+            try:
+                backend.get_pool().close_all()
             except Exception:
                 pass

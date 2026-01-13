@@ -12890,7 +12890,28 @@ def get_latest_transcription(db_instance: MediaDatabase, media_id: int) -> Optio
         )
         with db_instance.transaction() as conn:
             result = db_instance._fetchone_with_connection(conn, query, (media_id,))
-        return (result or {}).get('transcription')
+        raw = (result or {}).get("transcription")
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            text_val = raw.get("text")
+            if text_val is None:
+                return ""
+            return text_val if isinstance(text_val, str) else str(text_val)
+        if isinstance(raw, str):
+            stripped = raw.lstrip()
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    return raw
+                if isinstance(data, dict):
+                    text_val = data.get("text")
+                    if text_val is None:
+                        return ""
+                    return text_val if isinstance(text_val, str) else str(text_val)
+            return raw
+        return str(raw)
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error get latest transcript {media_id} '{db_instance.db_path_str}': {e}")
         raise DatabaseError(f"Failed get latest transcript {media_id}") from e
