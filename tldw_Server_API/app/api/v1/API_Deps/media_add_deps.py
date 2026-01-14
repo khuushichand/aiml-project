@@ -15,6 +15,9 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     PdfEngine,
     TRANSCRIPTION_MODEL_ENUM,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+    resolve_default_transcription_model,
+)
 
 try:
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -95,9 +98,9 @@ async def get_add_media_form(
         None,
         description="Cookie string if `use_cookies` is True",
     ),
-    transcription_model: str = Form(
-        "whisper-large-v3",
-        description="Transcription model",
+    transcription_model: Optional[str] = Form(
+        None,
+        description="Transcription model (defaults to config when omitted)",
         json_schema_extra={"enum": TRANSCRIPTION_MODEL_ENUM},
     ),
     transcription_language: str = Form(
@@ -225,20 +228,21 @@ async def get_add_media_form(
     Dependency function to parse form data for the /media/add endpoint and
     validate it against the AddMediaForm model.
     """
-    # Validate transcription_model against TranscriptionModel enum
-    if transcription_model:
-        if transcription_model not in TRANSCRIPTION_MODEL_ENUM:
-            raise HTTPException(
-                status_code=HTTP_422_UNPROCESSABLE,
-                detail=[
-                    {
-                        "loc": ["body", "transcription_model"],
-                        "msg": f"Invalid transcription model: {transcription_model}",
-                        "type": "value_error.enum",
-                        "ctx": {"enum_values": TRANSCRIPTION_MODEL_ENUM},
-                    }
-                ],
-            )
+    transcription_model_value = (transcription_model or "").strip()
+    if not transcription_model_value:
+        transcription_model_value = resolve_default_transcription_model("whisper-large-v3")
+    elif transcription_model_value not in TRANSCRIPTION_MODEL_ENUM:
+        raise HTTPException(
+            status_code=HTTP_422_UNPROCESSABLE,
+            detail=[
+                {
+                    "loc": ["body", "transcription_model"],
+                    "msg": f"Invalid transcription model: {transcription_model_value}",
+                    "type": "value_error.enum",
+                    "ctx": {"enum_values": TRANSCRIPTION_MODEL_ENUM},
+                }
+            ],
+        )
 
     try:
         # Coerce JSON string inputs for urls into a list for robustness
@@ -310,7 +314,7 @@ async def get_add_media_form(
             api_name=api_name,
             use_cookies=use_cookies,
             cookies=cookies,
-            transcription_model=transcription_model,
+            transcription_model=transcription_model_value,
             transcription_language=transcription_language,
             diarize=diarize,
             timestamp_option=timestamp_option,

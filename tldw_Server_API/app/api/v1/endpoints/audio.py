@@ -806,7 +806,10 @@ async def create_speech(
 async def create_transcription(
     request: Request,
     file: UploadFile = File(..., description="The audio file to transcribe"),
-    model: str = Form(default="whisper-1", description="Model to use for transcription"),
+    model: Optional[str] = Form(
+        default=None,
+        description="Model to use for transcription (defaults to config when omitted)",
+    ),
     language: Optional[str] = Form(default=None, description="Language of the audio in ISO-639-1 format"),
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
@@ -838,7 +841,7 @@ async def create_transcription(
     Supports multiple transcription models including Whisper, Parakeet, and Canary.
 
     Models:
-    - whisper-1: Uses faster-whisper (default)
+    - whisper-1: Uses faster-whisper (default when config uses Whisper)
     - parakeet: NVIDIA Parakeet model (efficient)
     - canary: NVIDIA Canary model (multilingual)
     - qwen2audio: Qwen2 Audio model
@@ -947,6 +950,14 @@ async def create_transcription(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB",
         )
+
+    # Resolve default model from config when omitted.
+    if not (model or "").strip():
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            resolve_default_transcription_model,
+        )
+
+        model = resolve_default_transcription_model("whisper-1")
 
     # Before any heavy work, enforce concurrent jobs cap per user
     ok_job, msg_job = await can_start_job(current_user.id)
@@ -1177,11 +1188,12 @@ async def create_transcription(
             else:
                 # Non-Whisper providers: delegate to adapter which wraps the
                 # existing Parakeet/Canary/Qwen2Audio/external implementations.
+                model_for_provider = model or provider_model_name
                 try:
                     adapter = stt_registry.get_adapter(provider)
                     artifact = adapter.transcribe_batch(
                         canonical_path,
-                        model=provider_model_name or model,
+                        model=model_for_provider,
                         language=language,
                         task=task_normalized,
                         word_timestamps=("word" in granularity_tokens),
@@ -1193,13 +1205,13 @@ async def create_transcription(
                     transcribed_text = artifact.get("text", "")
                 except Exception as e:
                     logger.error(
-                        f"Transcription failed for provider={provider}, model={provider_model_name or model}: {e}"
+                        f"Transcription failed for provider={provider}, model={model_for_provider}: {e}"
                     )
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail=(
                             f"Transcription failed for provider '{provider}' "
-                            f"and model '{provider_model_name or model}'"
+                            f"and model '{model_for_provider}'"
                         ),
                     ) from e
         finally:
@@ -1449,7 +1461,10 @@ async def create_transcription(
 async def create_translation(
     request: Request,
     file: UploadFile = File(..., description="The audio file to translate"),
-    model: str = Form(default="whisper-1", description="Model to use for translation"),
+    model: Optional[str] = Form(
+        default=None,
+        description="Model to use for translation (defaults to config when omitted)",
+    ),
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
@@ -1467,6 +1482,13 @@ async def create_translation(
     Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
           `Docs/API-related/Audio_Transcription_API.md`
     """
+    if not (model or "").strip():
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            resolve_default_transcription_model,
+        )
+
+        model = resolve_default_transcription_model("whisper-1")
+
     try:
         usage_log.log_event(
             "audio.transcriptions",
@@ -1723,8 +1745,11 @@ async def get_tts_health(tts_service: TTSServiceV2 = Depends(get_tts_service)):
 @router.get("/transcriptions/health", summary="Check STT transcription model health")
 async def get_stt_health(
     model: Optional[str] = Query(
-        default="whisper-1",
-        description="Transcription model to check (OpenAI-style id or internal STT model name).",
+        default=None,
+        description=(
+            "Transcription model to check (OpenAI-style id or internal STT model name). "
+            "Defaults to the configured STT provider when omitted."
+        ),
     ),
     warm: bool = Query(
         default=False,
@@ -1745,7 +1770,13 @@ async def get_stt_health(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as stt_lib
 
-    raw_model = model or "whisper-1"
+    raw_model = (model or "").strip()
+    if not raw_model:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            resolve_default_transcription_model,
+        )
+
+        raw_model = resolve_default_transcription_model("whisper-1")
     # Determine provider using the same parser as the main STT pipeline.
     provider_raw, _, _ = stt_lib.parse_transcription_model(raw_model)
 

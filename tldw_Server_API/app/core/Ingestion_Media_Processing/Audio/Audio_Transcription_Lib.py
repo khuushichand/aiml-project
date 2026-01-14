@@ -1487,14 +1487,14 @@ def run_stt_batch_via_registry(
             segments=segments,
             language=selected_source_lang,
             provider=provider,
-            model=provider_model or transcription_model,
+            model=transcription_model or provider_model,
             duration_seconds=duration_seconds,
         )
 
     # Non-Whisper providers: use adapter transcribe_batch directly.
     artifact = adapter.transcribe_batch(
         audio_file_path,
-        model=provider_model or transcription_model,
+        model=transcription_model or provider_model,
         language=selected_source_lang,
         task="transcribe",
         word_timestamps=False,
@@ -1535,9 +1535,8 @@ def run_stt_job_via_registry(
     )
 
     registry = get_stt_provider_registry()
-    # When no model is provided, fall back to the OpenAI-style default
-    # alias so that Jobs align with the REST audio endpoint's behavior.
-    requested_model = (model or "whisper-1").strip()
+    # When no model is provided, resolve the config default via the registry.
+    requested_model = (model or "").strip()
     provider, provider_model, _ = registry.resolve_provider_for_model(requested_model)
     adapter = registry.get_adapter(provider)
 
@@ -1545,7 +1544,7 @@ def run_stt_job_via_registry(
     # that 'whisper-1' and similar identifiers resolve consistently across
     # REST, ingestion, and Jobs.
     if provider == "faster-whisper":
-        whisper_model_name = _map_openai_audio_model_to_whisper_for_jobs(requested_model)
+        whisper_model_name = _map_openai_audio_model_to_whisper_for_jobs(requested_model or "whisper-1")
         selected_lang = language or None
         artifact = adapter.transcribe_batch(
             wav_path,
@@ -1562,7 +1561,7 @@ def run_stt_job_via_registry(
     # resolved provider-specific model identifier.
     artifact = adapter.transcribe_batch(
         wav_path,
-        model=provider_model or requested_model,
+        model=requested_model or provider_model,
         language=language or None,
         task="transcribe",
         word_timestamps=False,
@@ -2146,8 +2145,15 @@ def parse_transcription_model(model_name: str) -> tuple:
         elif model_lower.endswith("-standard") or "nemo-parakeet" in model_lower:
             return ("parakeet", "parakeet", "standard")
         else:
-            # Default to standard if no variant specified
-            return ("parakeet", "parakeet", "standard")
+            # Use config default when no variant is specified.
+            try:
+                stt_cfg = get_stt_config()
+            except Exception:
+                stt_cfg = {}
+            variant = str(stt_cfg.get("nemo_model_variant", "standard")).strip().lower()
+            if variant not in {"standard", "onnx", "mlx", "cuda"}:
+                variant = "standard"
+            return ("parakeet", "parakeet", variant)
 
     # Check for Canary models
     elif "canary" in model_lower:

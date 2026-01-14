@@ -27,7 +27,16 @@ def test_transcriptions_health_basic_status(client: TestClient):
     r = client.get("/api/v1/audio/transcriptions/health")
     assert r.status_code == 200
     data = r.json()
-    assert data.get("provider") == "whisper"
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import (
+        Audio_Transcription_Lib as stt_lib,
+    )
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+        resolve_default_transcription_model,
+    )
+
+    default_model = resolve_default_transcription_model("whisper-1")
+    provider_raw, _, _ = stt_lib.parse_transcription_model(default_model)
+    assert data.get("provider") == provider_raw
     assert "model" in data
     assert "available" in data
 

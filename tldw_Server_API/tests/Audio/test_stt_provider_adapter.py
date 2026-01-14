@@ -98,6 +98,49 @@ def test_resolve_provider_for_model_uses_parser(monkeypatch):
 
 
 @pytest.mark.unit
+def test_resolve_provider_for_model_allows_external_prefix():
+    spa = _import_module()
+
+    registry = spa.SttProviderRegistry()
+    provider, model, variant = registry.resolve_provider_for_model("external:custom")
+    assert provider == "external"
+    assert model == "external:custom"
+    assert variant is None
+
+
+@pytest.mark.unit
+def test_resolve_provider_for_model_uses_config_default(monkeypatch):
+    spa = _import_module()
+
+    def fake_get_stt_config():
+        return {
+            "default_transcriber": "parakeet",
+            "nemo_model_variant": "mlx",
+        }
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+
+    registry = spa.SttProviderRegistry()
+    provider, model, variant = registry.resolve_provider_for_model(None)
+    assert provider == "parakeet"
+    assert model == "parakeet-mlx"
+    assert variant == "mlx"
+
+
+@pytest.mark.unit
+def test_resolve_default_transcription_model_uses_whisper_fallback(monkeypatch):
+    spa = _import_module()
+
+    def fake_get_stt_config():
+        return {"default_transcriber": "faster-whisper"}
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+
+    default_model = spa.resolve_default_transcription_model("whisper-1")
+    assert default_model == "whisper-1"
+
+
+@pytest.mark.unit
 def test_capabilities_exposed_for_known_providers():
     spa = _import_module()
 

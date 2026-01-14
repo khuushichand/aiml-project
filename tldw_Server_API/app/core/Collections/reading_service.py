@@ -21,6 +21,9 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
     _resolve_media_type_from_content_type,
     _resolve_media_type_from_suffix,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+    resolve_default_transcription_model,
+)
 from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
 from tldw_Server_API.app.core.http_client import afetch
 
@@ -221,6 +224,7 @@ class ReadingService:
             urls=[url],
             title=title_override,
             perform_analysis=False,
+            transcription_model=resolve_default_transcription_model("whisper-large-v3"),
         )
         chunk_options = prepare_chunking_options_dict(form_data)
         db_path = str(DatabasePaths.get_media_db_path(self.user_id))
