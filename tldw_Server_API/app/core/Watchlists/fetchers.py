@@ -23,18 +23,55 @@ from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urljoin
 
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from loguru import logger
 from lxml import html
 from lxml.etree import XPath, XPathError
 from lxml.html import HtmlElement
+from threading import Lock
 
 from tldw_Server_API.app.core.Security.egress import is_url_allowed_for_tenant, is_url_allowed
 
 _TEST_MODE_VALUES = {"1", "true", "yes"}
+_SELECTOR_CACHE_MAX = 512
+_XPATH_SELECTOR_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_CSS_SELECTOR_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_SELECTOR_CACHE_LOCK = Lock()
 
 
 def _in_test_mode() -> bool:
     return os.getenv("TEST_MODE", "").lower() in _TEST_MODE_VALUES
+
+
+def get_selector_cache_stats() -> Dict[str, int]:
+    with _SELECTOR_CACHE_LOCK:
+        return {
+            "selector_xpath_cache_size": len(_XPATH_SELECTOR_CACHE),
+            "selector_css_cache_size": len(_CSS_SELECTOR_CACHE),
+        }
+
+
+def clear_selector_caches() -> None:
+    with _SELECTOR_CACHE_LOCK:
+        _XPATH_SELECTOR_CACHE.clear()
+        _CSS_SELECTOR_CACHE.clear()
+
+
+def _selector_cache_get(cache: "OrderedDict[str, Any]", key: str) -> Optional[Any]:
+    with _SELECTOR_CACHE_LOCK:
+        value = cache.get(key)
+        if value is None:
+            return None
+        cache.move_to_end(key)
+        return value
+
+
+def _selector_cache_put(cache: "OrderedDict[str, Any]", key: str, value: Any) -> None:
+    with _SELECTOR_CACHE_LOCK:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > _SELECTOR_CACHE_MAX:
+            cache.popitem(last=False)
 
 
 async def _close_response(resp: Any) -> None:
@@ -71,13 +108,24 @@ def _select_nodes(node: HtmlElement, selector: str) -> List[Any]:
             logger.debug(f"CSS selector support unavailable for '{css_expr}': {exc}")
             return []
         try:
-            sel = CSSSelector(css_expr)
-            return list(sel(node))
+            compiled = _selector_cache_get(_CSS_SELECTOR_CACHE, css_expr)
+            if compiled is None:
+                compiled = CSSSelector(css_expr)
+                _selector_cache_put(_CSS_SELECTOR_CACHE, css_expr, compiled)
+            return list(compiled(node))
         except Exception as exc:
             logger.debug(f"CSS selector evaluation failed for '{css_expr}': {exc}")
             return []
+    compiled_xpath = _selector_cache_get(_XPATH_SELECTOR_CACHE, expr)
+    if compiled_xpath is None:
+        try:
+            compiled_xpath = XPath(expr)
+            _selector_cache_put(_XPATH_SELECTOR_CACHE, expr, compiled_xpath)
+        except Exception as exc:
+            logger.debug(f"XPath compilation failed for '{expr}': {exc}")
+            return []
     try:
-        result = node.xpath(expr)
+        result = compiled_xpath(node)
     except XPathError as exc:
         logger.debug(f"XPath evaluation failed for '{expr}': {exc}")
         return []
@@ -645,9 +693,15 @@ def _iter_schema_dsl_selector_specs(rules: Dict[str, Any]) -> List[Dict[str, Any
     return specs
 
 
-def validate_selector_rules(rules: Dict[str, Any], *, html_text: Optional[str] = None) -> Dict[str, Any]:
+def validate_selector_rules(
+    rules: Dict[str, Any],
+    *,
+    html_text: Optional[str] = None,
+    include_counts: bool = False,
+) -> Dict[str, Any]:
     errors: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
+    selector_counts: Dict[str, int] = {}
     compile_specs: List[Dict[str, Any]] = [
         {"key": key, "selector": expr} for key, expr in _iter_rule_selectors(rules or {})
     ]
@@ -693,6 +747,8 @@ def validate_selector_rules(rules: Dict[str, Any], *, html_text: Optional[str] =
                 continue
             matches = _select_nodes(document, stripped)
             count = len(matches)
+            if include_counts:
+                selector_counts[str(spec.get("key"))] = count
             if spec.get("expect_nonzero", True) and count == 0:
                 warnings.append({"key": spec.get("key"), "selector": stripped, "warning": "no_matches"})
             if not spec.get("allow_multiple", False) and count > 1:
@@ -710,7 +766,10 @@ def validate_selector_rules(rules: Dict[str, Any], *, html_text: Optional[str] =
                         }
                     )
 
-    return {"errors": errors, "warnings": warnings}
+    result = {"errors": errors, "warnings": warnings}
+    if include_counts:
+        result["selector_counts"] = selector_counts
+    return result
 
 
 def extract_schema_fields(html_text: str, base_url: str, rules: Dict[str, Any]) -> Dict[str, Any]:

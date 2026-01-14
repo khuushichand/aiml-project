@@ -84,3 +84,52 @@ async def test_unified_pipeline_query_decomposition_adds_metadata_and_docs():
         assert isinstance(subs, list)
         assert subs, "expected at least one decomposed subquery"
         assert isinstance(decomp.get("total_added"), int)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unified_pipeline_query_decomposition_on_empty_base_results():
+    """
+    When base retrieval returns no docs, decomposition should still attempt
+    subquery retrieval and populate results.
+    """
+
+    sub_docs = [
+        Document(
+            id="sub-1",
+            content="Dropout is a regularization technique.",
+            metadata={},
+            source=DataSource.MEDIA_DB,
+            score=0.8,
+        )
+    ]
+
+    with patch(
+        "tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever"
+    ) as mock_retriever:
+        mock_instance = MagicMock()
+        # First call: base query (empty), second call: decomposed subquery
+        mock_instance.retrieve = AsyncMock(side_effect=[[], sub_docs])
+        mock_retriever.return_value = mock_instance
+
+        result = await unified_rag_pipeline(
+            query="Explain residual connections and dropout",
+            sources=["media_db"],
+            top_k=3,
+            enable_query_decomposition=True,
+            max_subqueries=2,
+            subquery_time_budget_sec=1.0,
+            subquery_doc_budget=4,
+            enable_cache=False,
+            enable_reranking=False,
+            enable_generation=False,
+        )
+
+        assert isinstance(result, UnifiedRAGResponse)
+        doc_ids = {
+            (d.get("id") if isinstance(d, dict) else d.id)
+            for d in result.documents
+        }
+        assert "sub-1" in doc_ids
+        decomp = (result.metadata or {}).get("decomposition") or {}
+        assert decomp.get("enabled") is True

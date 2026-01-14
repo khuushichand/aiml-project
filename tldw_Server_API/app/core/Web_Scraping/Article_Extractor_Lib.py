@@ -15,6 +15,7 @@
 # Import necessary libraries
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime
 import hashlib
 import json
@@ -26,7 +27,7 @@ import re
 import ipaddress
 import math
 import tempfile
-from threading import Lock
+from threading import BoundedSemaphore, Lock
 from typing import Any, Dict, List, Union, Optional, Tuple, Callable
 #
 # 3rd-Party Imports
@@ -419,21 +420,94 @@ _CLUSTER_EMBED_DIM = 128
 _CLUSTER_PREFILTER_THRESHOLD = 0.2
 _CLUSTER_SIM_THRESHOLD = 0.4
 _CLUSTER_MIN_BLOCK_CHARS = 40
+_CLUSTER_MIN_WORDS = 8
 _CLUSTER_MAX_BLOCKS = 60
+_CLUSTER_LINKAGE = "average"
+_CLUSTER_TAG_TOP_K = 3
+_DEFAULT_CLUSTER_TAG_KEYWORDS: Dict[str, List[str]] = {
+    "marketing": ["subscribe", "newsletter", "promotion", "marketing"],
+    "commerce": ["price", "pricing", "cost", "$"],
+    "product": ["feature", "release", "roadmap", "product"],
+    "research": ["study", "research", "paper", "dataset"],
+    "security": ["security", "encrypt", "token", "oauth"],
+}
 _CLUSTER_EMBED_CACHE: "OrderedDict[str, List[float]]" = OrderedDict()
 _CLUSTER_CACHE_LOCK = Lock()
+_SCHEMA_RESULT_CACHE_MAX = 128
+_SCHEMA_RESULT_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_SCHEMA_CACHE_LOCK = Lock()
+_LLM_PROVIDER_LIMITS: Dict[str, Tuple[int, BoundedSemaphore]] = {}
+_LLM_PROVIDER_LIMITS_LOCK = Lock()
+_LLM_PROVIDER_LAST_CALL: Dict[str, float] = {}
+_LLM_PROVIDER_LAST_CALL_LOCK = Lock()
 
 
 def get_extraction_cache_stats() -> Dict[str, int]:
     with _CLUSTER_CACHE_LOCK:
-        return {
-            "cluster_embedding_cache_size": len(_CLUSTER_EMBED_CACHE),
-        }
+        cluster_size = len(_CLUSTER_EMBED_CACHE)
+    with _SCHEMA_CACHE_LOCK:
+        schema_size = len(_SCHEMA_RESULT_CACHE)
+    with _LLM_PROVIDER_LIMITS_LOCK:
+        llm_limits = len(_LLM_PROVIDER_LIMITS)
+    with _LLM_PROVIDER_LAST_CALL_LOCK:
+        llm_last = len(_LLM_PROVIDER_LAST_CALL)
+    stats = {
+        "cluster_embedding_cache_size": cluster_size,
+        "schema_result_cache_size": schema_size,
+        "llm_provider_limit_count": llm_limits,
+        "llm_provider_last_call_count": llm_last,
+    }
+    try:
+        from tldw_Server_API.app.core.Watchlists import fetchers as _fetchers
+
+        stats.update(_fetchers.get_selector_cache_stats())
+    except Exception:
+        pass
+    return stats
 
 
 def clear_extraction_caches() -> None:
     with _CLUSTER_CACHE_LOCK:
         _CLUSTER_EMBED_CACHE.clear()
+    with _SCHEMA_CACHE_LOCK:
+        _SCHEMA_RESULT_CACHE.clear()
+    with _LLM_PROVIDER_LIMITS_LOCK:
+        _LLM_PROVIDER_LIMITS.clear()
+    with _LLM_PROVIDER_LAST_CALL_LOCK:
+        _LLM_PROVIDER_LAST_CALL.clear()
+    try:
+        from tldw_Server_API.app.core.Watchlists import fetchers as _fetchers
+
+        _fetchers.clear_selector_caches()
+    except Exception:
+        pass
+
+
+def _schema_cache_key(html_text: str, url: str, schema_rules: Dict[str, Any]) -> str:
+    html_hash = hashlib.sha1(html_text.encode("utf-8", errors="ignore")).hexdigest()
+    try:
+        rules_repr = json.dumps(schema_rules, sort_keys=True, ensure_ascii=True)
+    except Exception:
+        rules_repr = str(schema_rules)
+    raw = f"{url}|{rules_repr}|{html_hash}"
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _schema_cache_get(key: str) -> Optional[Dict[str, Any]]:
+    with _SCHEMA_CACHE_LOCK:
+        value = _SCHEMA_RESULT_CACHE.get(key)
+        if value is None:
+            return None
+        _SCHEMA_RESULT_CACHE.move_to_end(key)
+        return dict(value)
+
+
+def _schema_cache_put(key: str, value: Dict[str, Any]) -> None:
+    with _SCHEMA_CACHE_LOCK:
+        _SCHEMA_RESULT_CACHE[key] = dict(value)
+        _SCHEMA_RESULT_CACHE.move_to_end(key)
+        while len(_SCHEMA_RESULT_CACHE) > _SCHEMA_RESULT_CACHE_MAX:
+            _SCHEMA_RESULT_CACHE.popitem(last=False)
 
 
 def _cluster_cache_get(key: str) -> Optional[List[float]]:
@@ -502,6 +576,34 @@ def _trace_entry(strategy: str, status: str, reason: str, detail: Optional[str] 
     if detail:
         entry["detail"] = detail
     return entry
+
+
+def _record_strategy_metrics(
+    strategy: str,
+    status: str,
+    duration_s: float,
+    result: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        observe_histogram(
+            "extraction_strategy_duration_seconds",
+            duration_s,
+            labels={"strategy": strategy, "status": status},
+        )
+    except Exception:
+        pass
+    if status != "success" or not result:
+        return
+    content = result.get("content")
+    if isinstance(content, str) and content:
+        try:
+            observe_histogram(
+                "extraction_content_length_bytes",
+                len(content.encode("utf-8", errors="ignore")),
+                labels={"strategy": strategy},
+            )
+        except Exception:
+            pass
 
 
 def _attach_trace(
@@ -702,6 +804,10 @@ def _tokenize_cluster_text(text: str) -> List[str]:
     return re.findall(r"\b[\w'-]+\b", text.lower())
 
 
+def _cluster_word_count(text: str) -> int:
+    return len(_tokenize_cluster_text(text))
+
+
 def _normalize_vector(vec: List[float]) -> List[float]:
     if not vec:
         return vec
@@ -744,6 +850,7 @@ def _extract_cluster_blocks(
     html_text: str,
     *,
     min_block_chars: int,
+    min_word_count: int,
     max_blocks: int,
 ) -> List[str]:
     if not html_text:
@@ -755,7 +862,11 @@ def _extract_cluster_blocks(
     if not blocks:
         raw_text = soup.get_text("\n", strip=True)
         blocks = [line.strip() for line in raw_text.splitlines() if line.strip()]
-    filtered = [block for block in blocks if len(block) >= min_block_chars]
+    filtered = [
+        block
+        for block in blocks
+        if len(block) >= min_block_chars and _cluster_word_count(block) >= min_word_count
+    ]
     if not filtered and blocks:
         filtered = [max(blocks, key=len)]
     if len(filtered) > max_blocks:
@@ -775,6 +886,130 @@ def _extract_cluster_title(html_text: str) -> Optional[str]:
         return None
     title = title_tag.get_text(strip=True)
     return title or None
+
+
+def _cluster_assignments_hierarchical(
+    vectors: List[List[float]],
+    *,
+    similarity_threshold: float,
+    linkage: str,
+) -> Optional[List[int]]:
+    if not vectors:
+        return None
+    if len(vectors) == 1:
+        return [0]
+    try:
+        from sklearn.cluster import AgglomerativeClustering  # type: ignore
+    except Exception:
+        return None
+    distance_threshold = max(0.0, 1.0 - similarity_threshold)
+    size = len(vectors)
+    distances = [[0.0 for _ in range(size)] for _ in range(size)]
+    for i in range(size):
+        for j in range(i + 1, size):
+            sim = _cosine_similarity(vectors[i], vectors[j])
+            dist = max(0.0, 1.0 - sim)
+            distances[i][j] = dist
+            distances[j][i] = dist
+    try:
+        clusterer = AgglomerativeClustering(
+            n_clusters=None,
+            metric="precomputed",
+            linkage=linkage,
+            distance_threshold=distance_threshold,
+        )
+    except TypeError:
+        clusterer = AgglomerativeClustering(
+            n_clusters=None,
+            affinity="precomputed",
+            linkage=linkage,
+            distance_threshold=distance_threshold,
+        )
+    labels = clusterer.fit_predict(distances)
+    return [int(label) for label in labels]
+
+
+def _build_clusters_from_assignments(
+    assignments: List[int],
+    items: List[Tuple[int, str, List[float], float]],
+) -> List[Dict[str, Any]]:
+    clusters: Dict[int, Dict[str, Any]] = {}
+    for label, item in zip(assignments, items):
+        idx, block, vec, sim_to_doc = item
+        cluster = clusters.get(label)
+        if cluster is None:
+            cluster = {
+                "members": [],
+                "sum_vec": [0.0 for _ in vec],
+                "centroid": [0.0 for _ in vec],
+                "total_chars": 0,
+            }
+            clusters[label] = cluster
+        cluster["members"].append((idx, block, sim_to_doc))
+        cluster["sum_vec"] = [a + b for a, b in zip(cluster["sum_vec"], vec)]
+        cluster["total_chars"] += len(block)
+    for cluster in clusters.values():
+        cluster["centroid"] = _normalize_vector(cluster["sum_vec"])
+    return list(clusters.values())
+
+
+def _cluster_blocks_greedy(
+    items: List[Tuple[int, str, List[float], float]],
+    *,
+    cluster_threshold: float,
+) -> List[Dict[str, Any]]:
+    clusters: List[Dict[str, Any]] = []
+    for idx, block, vec, sim_to_doc in items:
+        best_idx = None
+        best_sim = -1.0
+        for c_idx, cluster in enumerate(clusters):
+            sim = _cosine_similarity(vec, cluster["centroid"])
+            if sim > best_sim:
+                best_sim = sim
+                best_idx = c_idx
+        if best_idx is None or best_sim < cluster_threshold:
+            clusters.append(
+                {
+                    "members": [(idx, block, sim_to_doc)],
+                    "sum_vec": list(vec),
+                    "centroid": list(vec),
+                    "total_chars": len(block),
+                }
+            )
+            continue
+        cluster = clusters[best_idx]
+        cluster["members"].append((idx, block, sim_to_doc))
+        cluster["sum_vec"] = [a + b for a, b in zip(cluster["sum_vec"], vec)]
+        cluster["centroid"] = _normalize_vector(cluster["sum_vec"])
+        cluster["total_chars"] += len(block)
+    return clusters
+
+
+def _tag_cluster_text(
+    text: str,
+    *,
+    tag_keywords: Dict[str, List[str]],
+    top_k: int,
+) -> Tuple[List[str], Dict[str, int]]:
+    if top_k <= 0 or not text:
+        return [], {}
+    text_lower = text.lower()
+    scores: Dict[str, int] = {}
+    for tag, keywords in tag_keywords.items():
+        if not keywords:
+            continue
+        score = 0
+        for keyword in keywords:
+            if not keyword:
+                continue
+            score += text_lower.count(str(keyword).lower())
+        if score > 0:
+            scores[tag] = score
+    if not scores:
+        return [], {}
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    tags = [tag for tag, _score in ranked[:top_k]]
+    return tags, scores
 
 
 def extract_cluster_entities(
@@ -799,10 +1034,19 @@ def extract_cluster_entities(
 
     settings = dict(cluster_settings or {})
     min_block_chars = int(settings.get("min_block_chars", _CLUSTER_MIN_BLOCK_CHARS))
+    min_word_count = int(settings.get("min_word_count", _CLUSTER_MIN_WORDS))
     max_blocks = int(settings.get("max_blocks", _CLUSTER_MAX_BLOCKS))
     prefilter_threshold = float(settings.get("prefilter_threshold", _CLUSTER_PREFILTER_THRESHOLD))
-    cluster_threshold = float(settings.get("cluster_threshold", _CLUSTER_SIM_THRESHOLD))
+    cluster_threshold = float(
+        settings.get("cluster_threshold") or settings.get("similarity_threshold") or _CLUSTER_SIM_THRESHOLD
+    )
     embed_dims = int(settings.get("embed_dims", _CLUSTER_EMBED_DIM))
+    method = str(settings.get("method") or settings.get("cluster_method") or "greedy").strip().lower()
+    linkage = str(settings.get("linkage") or settings.get("cluster_linkage") or _CLUSTER_LINKAGE).strip().lower()
+    tag_top_k = int(settings.get("tag_top_k", _CLUSTER_TAG_TOP_K))
+    tag_keywords = settings.get("tag_keywords") or _DEFAULT_CLUSTER_TAG_KEYWORDS
+    if not isinstance(tag_keywords, dict):
+        tag_keywords = _DEFAULT_CLUSTER_TAG_KEYWORDS
 
     try:
         increment_counter("extraction_cluster_total", labels={"status": "started"})
@@ -812,6 +1056,7 @@ def extract_cluster_entities(
     blocks = _extract_cluster_blocks(
         html_text,
         min_block_chars=min_block_chars,
+        min_word_count=min_word_count,
         max_blocks=max_blocks,
     )
     if not blocks:
@@ -834,29 +1079,21 @@ def extract_cluster_entities(
         kept = sorted(scored_blocks, key=lambda item: item[3], reverse=True)[: min(2, len(scored_blocks))]
 
     clusters: List[Dict[str, Any]] = []
-    for idx, block, vec, sim_to_doc in kept:
-        best_idx = None
-        best_sim = -1.0
-        for c_idx, cluster in enumerate(clusters):
-            sim = _cosine_similarity(vec, cluster["centroid"])
-            if sim > best_sim:
-                best_sim = sim
-                best_idx = c_idx
-        if best_idx is None or best_sim < cluster_threshold:
-            clusters.append(
-                {
-                    "members": [(idx, block, sim_to_doc)],
-                    "sum_vec": list(vec),
-                    "centroid": list(vec),
-                    "total_chars": len(block),
-                }
-            )
-            continue
-        cluster = clusters[best_idx]
-        cluster["members"].append((idx, block, sim_to_doc))
-        cluster["sum_vec"] = [a + b for a, b in zip(cluster["sum_vec"], vec)]
-        cluster["centroid"] = _normalize_vector(cluster["sum_vec"])
-        cluster["total_chars"] += len(block)
+    cluster_method = method
+    if method == "hierarchical":
+        assignments = _cluster_assignments_hierarchical(
+            [item[2] for item in kept],
+            similarity_threshold=cluster_threshold,
+            linkage=linkage,
+        )
+        if assignments and len(assignments) == len(kept):
+            clusters = _build_clusters_from_assignments(assignments, kept)
+        else:
+            cluster_method = "greedy_fallback"
+            clusters = _cluster_blocks_greedy(kept, cluster_threshold=cluster_threshold)
+    else:
+        cluster_method = "greedy"
+        clusters = _cluster_blocks_greedy(kept, cluster_threshold=cluster_threshold)
 
     if not clusters:
         result["cluster_error"] = "cluster_no_clusters"
@@ -891,12 +1128,139 @@ def extract_cluster_entities(
     result["cluster_prefiltered_count"] = len(kept)
     result["cluster_total_blocks"] = len(blocks)
     result["cluster_cluster_count"] = len(clusters)
+    result["cluster_method"] = cluster_method
+    if method == "hierarchical":
+        result["cluster_linkage"] = linkage
+    result["cluster_similarity_threshold"] = cluster_threshold
+    result["cluster_word_threshold"] = min_word_count
+    tags, tag_scores = _tag_cluster_text(
+        content,
+        tag_keywords=tag_keywords,
+        top_k=tag_top_k,
+    )
+    if tags:
+        result["cluster_tags"] = tags
+        result["cluster_tag_scores"] = tag_scores
     result["extraction_successful"] = True
     try:
         increment_counter("extraction_cluster_total", labels={"status": "success"})
     except Exception:
         pass
     return result
+
+
+def _coerce_positive_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _coerce_non_negative_float(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except Exception:
+        return default
+    return parsed if parsed >= 0.0 else default
+
+
+def _resolve_llm_throttle_settings(settings: Dict[str, Any]) -> Tuple[Optional[int], float, float]:
+    max_concurrency = _coerce_positive_int(
+        settings.get("max_concurrency") if "max_concurrency" in settings else os.getenv("LLM_MAX_CONCURRENCY")
+    )
+    delay_ms = _coerce_non_negative_float(
+        settings.get("delay_ms") if "delay_ms" in settings else os.getenv("LLM_DELAY_MS"),
+        default=0.0,
+    )
+    jitter_ms = _coerce_non_negative_float(
+        settings.get("delay_jitter_ms")
+        if "delay_jitter_ms" in settings
+        else settings.get("delay_jitter")
+        if "delay_jitter" in settings
+        else os.getenv("LLM_DELAY_JITTER_MS"),
+        default=0.0,
+    )
+    return max_concurrency, delay_ms, jitter_ms
+
+
+def _extractor_retry_settings() -> Tuple[int, float, float]:
+    max_retries = _coerce_positive_int(os.getenv("EXTRACTOR_MAX_RETRIES")) or 0
+    base_delay_ms = _coerce_non_negative_float(os.getenv("EXTRACTOR_RETRY_BASE_MS"), default=0.0)
+    jitter_ms = _coerce_non_negative_float(os.getenv("EXTRACTOR_RETRY_JITTER_MS"), default=0.0)
+    return max_retries, base_delay_ms, jitter_ms
+
+
+def _run_with_retries(
+    func: Callable[[], Dict[str, Any]],
+    *,
+    strategy: str,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Exception], int]:
+    max_retries, base_delay_ms, jitter_ms = _extractor_retry_settings()
+    attempts = 0
+    while True:
+        try:
+            return func(), None, attempts
+        except Exception as exc:
+            if attempts >= max_retries:
+                return None, exc, attempts
+            delay_s = (base_delay_ms / 1000.0) * (2 ** attempts)
+            if jitter_ms:
+                delay_s += random.uniform(0.0, jitter_ms / 1000.0)
+            attempts += 1
+            try:
+                increment_counter(
+                    "extraction_retry_total",
+                    labels={"strategy": strategy, "attempt": str(attempts)},
+                )
+            except Exception:
+                pass
+            if delay_s > 0.0:
+                time.sleep(delay_s)
+
+
+def _get_llm_semaphore(provider: str, max_concurrency: int) -> BoundedSemaphore:
+    key = provider or "default"
+    with _LLM_PROVIDER_LIMITS_LOCK:
+        existing = _LLM_PROVIDER_LIMITS.get(key)
+        if existing and existing[0] == max_concurrency:
+            return existing[1]
+        semaphore = BoundedSemaphore(max_concurrency)
+        _LLM_PROVIDER_LIMITS[key] = (max_concurrency, semaphore)
+        return semaphore
+
+
+def _apply_llm_delay(provider: str, delay_ms: float, jitter_ms: float) -> None:
+    if delay_ms <= 0.0:
+        return
+    now = time.time()
+    with _LLM_PROVIDER_LAST_CALL_LOCK:
+        last_call = _LLM_PROVIDER_LAST_CALL.get(provider)
+    if last_call is not None:
+        remaining = (delay_ms / 1000.0) - (now - last_call)
+        if remaining > 0.0:
+            jitter = random.uniform(0.0, jitter_ms / 1000.0) if jitter_ms > 0.0 else 0.0
+            time.sleep(remaining + jitter)
+    with _LLM_PROVIDER_LAST_CALL_LOCK:
+        _LLM_PROVIDER_LAST_CALL[provider] = time.time()
+
+
+@contextmanager
+def _llm_throttle(provider: str, settings: Dict[str, Any]):
+    max_concurrency, delay_ms, jitter_ms = _resolve_llm_throttle_settings(settings)
+    semaphore = _get_llm_semaphore(provider, max_concurrency) if max_concurrency else None
+    if semaphore is not None:
+        semaphore.acquire()
+    try:
+        _apply_llm_delay(provider, delay_ms, jitter_ms)
+        yield
+    finally:
+        if semaphore is not None:
+            semaphore.release()
 
 
 def _extract_text_for_llm(html_text: str) -> str:
@@ -1077,6 +1441,290 @@ def _parse_llm_json(text: str, *, strict: bool) -> Tuple[Optional[Any], Dict[str
     return None, meta
 
 
+def _resolve_llm_provider(settings: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, Any]]]:
+    provider = str(settings.get("provider") or "").strip().lower()
+    app_config = None
+    if not provider:
+        try:
+            from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
+
+            app_config = ensure_app_config(None)
+            provider = str(app_config.get("RAG_DEFAULT_LLM_PROVIDER") or "").strip().lower()
+        except Exception:
+            provider = ""
+    if app_config is None:
+        try:
+            from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
+
+            app_config = ensure_app_config(None)
+        except Exception:
+            app_config = None
+    return provider, app_config
+
+
+def _parse_regex_flags(flags_spec: Any) -> int:
+    if isinstance(flags_spec, int):
+        return flags_spec
+    flags = 0
+    if isinstance(flags_spec, list):
+        flags_spec = "".join(str(item) for item in flags_spec)
+    if isinstance(flags_spec, str):
+        mapping = {"i": re.IGNORECASE, "m": re.MULTILINE, "s": re.DOTALL, "x": re.VERBOSE}
+        for char in flags_spec:
+            flag = mapping.get(char.lower())
+            if flag:
+                flags |= flag
+    return flags
+
+
+def _llm_prompt_for_schema_generation(
+    html_text: str,
+    *,
+    url: str,
+    query: Optional[str],
+    example_json: Optional[str],
+) -> str:
+    snippet = html_text.strip()
+    if len(snippet) > 8000:
+        snippet = f"{snippet[:8000]}\n...[truncated]"
+    parts = [
+        "Generate a schema DSL for extracting structured data from this HTML.",
+        "Return JSON with key `schema` containing fields: name, baseSelector, baseFields, fields.",
+        "Selectors should use XPath or prefix CSS with `css:`. Use `type` and `selector` per field.",
+        f"URL: {url}",
+    ]
+    if query:
+        parts.append(f"User query: {query}")
+    if example_json:
+        parts.append(f"Example JSON output: {example_json}")
+    parts.append(f"HTML:\n{snippet}")
+    return "\n".join(parts)
+
+
+def _llm_prompt_for_regex_generation(
+    html_text: str,
+    *,
+    url: str,
+    label: Optional[str],
+    query: Optional[str],
+    examples: Optional[List[str]],
+) -> str:
+    snippet = html_text.strip()
+    if len(snippet) > 8000:
+        snippet = f"{snippet[:8000]}\n...[truncated]"
+    parts = [
+        "Generate a regex pattern to extract the requested value from this HTML/text.",
+        "Return JSON with keys: pattern (no delimiters), flags (e.g. 'i'), group (optional).",
+        f"URL: {url}",
+    ]
+    if label:
+        parts.append(f"Label: {label}")
+    if query:
+        parts.append(f"Query: {query}")
+    if examples:
+        parts.append(f"Examples: {examples}")
+    parts.append(f"HTML:\n{snippet}")
+    return "\n".join(parts)
+
+
+def generate_schema_rules_from_llm(
+    html_text: str,
+    url: str,
+    *,
+    llm_settings: Optional[Dict[str, Any]] = None,
+    query: Optional[str] = None,
+    example_json: Optional[str] = None,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {"success": False}
+    if not html_text:
+        result["error"] = "schema_llm_empty_html"
+        return result
+
+    settings = dict(llm_settings or {})
+    provider, app_config = _resolve_llm_provider(settings)
+    if not provider:
+        result["error"] = "schema_llm_provider_missing"
+        return result
+
+    system_message = settings.get("system_message")
+    model = settings.get("model")
+    api_key = settings.get("api_key")
+    temperature = settings.get("temperature")
+    max_tokens = settings.get("max_tokens")
+    response_format = settings.get("response_format")
+    strict_json = bool(settings.get("strict_json") or False)
+    if strict_json and response_format is None:
+        response_format = {"type": "json_object"}
+
+    prompt = _llm_prompt_for_schema_generation(
+        html_text,
+        url=url,
+        query=query,
+        example_json=example_json,
+    )
+    messages = [{"role": "user", "content": prompt}]
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+
+        with _llm_throttle(provider, settings):
+            resp = perform_chat_api_call(
+                api_provider=provider,
+                messages=messages,
+                system_message=system_message,
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                app_config=app_config,
+            )
+    except Exception as exc:
+        result["error"] = f"schema_llm_call_failed: {exc}"
+        return result
+
+    usage = _extract_usage_from_response(resp)
+    model_name = str(resp.get("model") if isinstance(resp, dict) else model or "unknown")
+    _record_llm_usage_metrics(usage, provider=provider, model=model_name)
+    result["llm_usage"] = usage
+    result["llm_provider"] = provider
+    result["llm_model"] = model_name
+
+    raw_text = _extract_llm_response_text(resp)
+    obj, meta = _parse_llm_json(raw_text, strict=strict_json)
+    if obj is None:
+        result["error"] = meta.get("error") or "schema_llm_parse_failed"
+        return result
+
+    schema_obj: Optional[Dict[str, Any]] = None
+    if isinstance(obj, dict):
+        if isinstance(obj.get("schema"), dict):
+            schema_obj = obj.get("schema")
+        elif "fields" in obj or "baseFields" in obj:
+            schema_obj = obj
+    if not isinstance(schema_obj, dict):
+        result["error"] = "schema_llm_no_schema"
+        return result
+
+    try:
+        from tldw_Server_API.app.core.Watchlists.fetchers import validate_selector_rules
+
+        validation = validate_selector_rules(schema_obj, html_text=html_text)
+    except Exception as exc:
+        validation = {"errors": [{"key": "validation", "error": str(exc)}], "warnings": []}
+
+    result["schema_rules"] = schema_obj
+    result["schema_validation"] = validation
+    result["success"] = not bool(validation.get("errors"))
+    return result
+
+
+def generate_regex_pattern_from_llm(
+    html_text: str,
+    url: str,
+    *,
+    llm_settings: Optional[Dict[str, Any]] = None,
+    label: Optional[str] = None,
+    query: Optional[str] = None,
+    examples: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {"success": False}
+    if not html_text:
+        result["error"] = "regex_llm_empty_html"
+        return result
+
+    settings = dict(llm_settings or {})
+    provider, app_config = _resolve_llm_provider(settings)
+    if not provider:
+        result["error"] = "regex_llm_provider_missing"
+        return result
+
+    system_message = settings.get("system_message")
+    model = settings.get("model")
+    api_key = settings.get("api_key")
+    temperature = settings.get("temperature")
+    max_tokens = settings.get("max_tokens")
+    response_format = settings.get("response_format")
+    strict_json = bool(settings.get("strict_json") or False)
+    if strict_json and response_format is None:
+        response_format = {"type": "json_object"}
+
+    prompt = _llm_prompt_for_regex_generation(
+        html_text,
+        url=url,
+        label=label,
+        query=query,
+        examples=examples,
+    )
+    messages = [{"role": "user", "content": prompt}]
+
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+
+        with _llm_throttle(provider, settings):
+            resp = perform_chat_api_call(
+                api_provider=provider,
+                messages=messages,
+                system_message=system_message,
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                app_config=app_config,
+            )
+    except Exception as exc:
+        result["error"] = f"regex_llm_call_failed: {exc}"
+        return result
+
+    usage = _extract_usage_from_response(resp)
+    model_name = str(resp.get("model") if isinstance(resp, dict) else model or "unknown")
+    _record_llm_usage_metrics(usage, provider=provider, model=model_name)
+    result["llm_usage"] = usage
+    result["llm_provider"] = provider
+    result["llm_model"] = model_name
+
+    raw_text = _extract_llm_response_text(resp)
+    obj, meta = _parse_llm_json(raw_text, strict=strict_json)
+    if obj is None or not isinstance(obj, dict):
+        result["error"] = meta.get("error") or "regex_llm_parse_failed"
+        return result
+
+    pattern = obj.get("pattern") or obj.get("regex")
+    if not isinstance(pattern, str) or not pattern.strip():
+        result["error"] = "regex_llm_no_pattern"
+        return result
+    pattern = pattern.strip()
+    flags = _parse_regex_flags(obj.get("flags"))
+    if obj.get("ignore_case") is True:
+        flags |= re.IGNORECASE
+    group = obj.get("group")
+    group_idx = int(group) if isinstance(group, int) else None
+
+    try:
+        compiled = re.compile(pattern, flags)
+    except Exception as exc:
+        result["error"] = f"regex_llm_invalid_pattern: {exc}"
+        return result
+
+    match = compiled.search(html_text)
+    if match:
+        try:
+            matched_value = match.group(group_idx) if group_idx is not None else match.group(0)
+        except Exception:
+            matched_value = match.group(0)
+        result["sample_match"] = matched_value
+        result["sample_span"] = [match.start(), match.end()]
+
+    result["pattern"] = pattern
+    if obj.get("flags") is not None:
+        result["flags"] = obj.get("flags")
+    if group_idx is not None:
+        result["group"] = group_idx
+    result["success"] = True
+    return result
+
+
 def _schema_rules_to_field_specs(schema_rules: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not isinstance(schema_rules, dict):
         return []
@@ -1119,6 +1767,37 @@ def _schema_rules_to_field_specs(schema_rules: Optional[Dict[str, Any]]) -> List
         if any(schema_rules.get(key) for key in keys):
             fields.append({"name": name, "type": "text"})
     return fields
+
+
+def _schema_rule_keys(schema_rules: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(schema_rules, dict):
+        return []
+    keys: List[str] = []
+    if any(schema_rules.get(key) for key in ("baseSelector", "base_selector", "baseXpath", "base_xpath")):
+        keys.append("baseSelector")
+    fields = _schema_rules_to_field_specs(schema_rules)
+    if fields:
+        keys.extend([f["name"] for f in fields if isinstance(f.get("name"), str)])
+    else:
+        selector_keys = (
+            "title_xpath",
+            "title_selector",
+            "summary_xpath",
+            "summary_selector",
+            "description_xpath",
+            "content_xpath",
+            "content_selector",
+            "author_xpath",
+            "author_selector",
+            "published_xpath",
+            "date_xpath",
+            "date_selector",
+        )
+        for key in selector_keys:
+            if schema_rules.get(key):
+                keys.append(key)
+    unique = sorted({key for key in keys if key})
+    return unique
 
 
 def _llm_prompt_for_mode(
@@ -1294,17 +1973,18 @@ def extract_llm_entities(
         try:
             from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 
-            resp = perform_chat_api_call(
-                api_provider=provider,
-                messages=messages,
-                system_message=system_message,
-                model=model,
-                api_key=api_key,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format=response_format,
-                app_config=app_config,
-            )
+            with _llm_throttle(provider, settings):
+                resp = perform_chat_api_call(
+                    api_provider=provider,
+                    messages=messages,
+                    system_message=system_message,
+                    model=model,
+                    api_key=api_key,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                    app_config=app_config,
+                )
         except Exception as exc:
             llm_errors.append(f"llm_call_failed: {exc}")
             continue
@@ -1373,8 +2053,10 @@ def extract_article_with_pipeline(
 
     last_result: Optional[Dict[str, Any]] = None
     for strategy in order:
+        start = time.perf_counter()
         if strategy == "jsonld":
             trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
+            _record_strategy_metrics(strategy, "skipped", time.perf_counter() - start)
             continue
         if strategy == "schema":
             if isinstance(schema_rules, dict) and schema_rules:
@@ -1385,10 +2067,19 @@ def extract_article_with_pipeline(
                     )
                 except Exception as exc:
                     trace.append(_trace_entry(strategy, "failed", "schema_import_error", str(exc)))
+                    _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
                     continue
-                validation = validate_selector_rules(schema_rules, html_text=html)
+                cache_key = _schema_cache_key(html, url, schema_rules)
+                cached = _schema_cache_get(cache_key)
+                if cached and cached.get("extraction_successful"):
+                    cached["schema_cache_hit"] = True
+                    trace.append(_trace_entry(strategy, "success", "schema_cached"))
+                    _record_strategy_metrics(strategy, "success", time.perf_counter() - start, cached)
+                    return _attach_trace(cached, trace, strategy, order)
+                validation = validate_selector_rules(schema_rules, html_text=html, include_counts=True)
                 errors = validation.get("errors") if isinstance(validation, dict) else None
                 warnings = validation.get("warnings") if isinstance(validation, dict) else None
+                selector_counts = validation.get("selector_counts") if isinstance(validation, dict) else None
                 warning_detail = None
                 if isinstance(warnings, list) and warnings:
                     warning_detail = f"{len(warnings)} selector warning(s)"
@@ -1401,47 +2092,78 @@ def extract_article_with_pipeline(
                             f"{len(errors)} invalid selector(s)",
                         )
                     )
+                    _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
                     continue
-                result = extract_schema_fields(html, url, schema_rules)
+                result, exc, _attempts = _run_with_retries(
+                    lambda: extract_schema_fields(html, url, schema_rules),
+                    strategy=strategy,
+                )
+                if exc or result is None:
+                    trace.append(_trace_entry(strategy, "failed", "schema_error", str(exc) if exc else None))
+                    _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
+                    continue
                 if warning_detail:
                     result["schema_selector_warnings"] = warnings
+                if isinstance(selector_counts, dict):
+                    normalized_counts: Dict[str, int] = {}
+                    for key, count in selector_counts.items():
+                        if not isinstance(key, str):
+                            continue
+                        if key.startswith("fields.") or key.startswith("baseFields."):
+                            norm_key = key.split(".", 1)[1]
+                        else:
+                            norm_key = key
+                        normalized_counts[norm_key] = int(count)
+                    result["schema_selector_counts"] = normalized_counts
+                result["schema_rule_keys"] = _schema_rule_keys(schema_rules)
                 if result.get("extraction_successful"):
+                    _schema_cache_put(cache_key, result)
                     trace.append(_trace_entry(strategy, "success", "schema_extracted", warning_detail))
+                    _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
                     return _attach_trace(result, trace, strategy, order)
                 trace.append(_trace_entry(strategy, "failed", "schema_no_content", warning_detail))
+                _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
                 last_result = result
                 continue
             if handler is None:
                 trace.append(_trace_entry(strategy, "skipped", "no_schema_rules_or_handler"))
+                _record_strategy_metrics(strategy, "skipped", time.perf_counter() - start)
                 continue
-            try:
-                result = handler(html, url)
-                if "extraction_trace" in result:
-                    result["handler_trace"] = result.pop("extraction_trace")
-                if result.get("extraction_successful"):
-                    trace.append(_trace_entry(strategy, "success", "handler_extracted"))
-                    return _attach_trace(result, trace, strategy, order)
-                trace.append(_trace_entry(strategy, "failed", "handler_no_content"))
-                last_result = result
-            except Exception as exc:
-                trace.append(_trace_entry(strategy, "failed", "handler_error", str(exc)))
+            result, exc, _attempts = _run_with_retries(lambda: handler(html, url), strategy=strategy)
+            if exc or result is None:
+                trace.append(_trace_entry(strategy, "failed", "handler_error", str(exc) if exc else None))
+                _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
+                continue
+            if "extraction_trace" in result:
+                result["handler_trace"] = result.pop("extraction_trace")
+            if result.get("extraction_successful"):
+                trace.append(_trace_entry(strategy, "success", "handler_extracted"))
+                _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
+                return _attach_trace(result, trace, strategy, order)
+            trace.append(_trace_entry(strategy, "failed", "handler_no_content"))
+            _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
+            last_result = result
             continue
         if strategy == "regex":
             result = extract_regex_entities(html, url)
             last_result = result
             if result.get("extraction_successful"):
                 trace.append(_trace_entry(strategy, "success", "regex_extracted"))
+                _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
                 return _attach_trace(result, trace, strategy, order)
             trace.append(_trace_entry(strategy, "failed", "regex_no_matches"))
+            _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
             continue
         if strategy == "llm":
             result = extract_llm_entities(html, url, llm_settings=llm_settings, schema_rules=schema_rules)
             last_result = result
             if result.get("extraction_successful"):
                 trace.append(_trace_entry(strategy, "success", "llm_extracted"))
+                _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
                 return _attach_trace(result, trace, strategy, order)
             detail = result.get("llm_error")
             trace.append(_trace_entry(strategy, "failed", "llm_no_content", str(detail) if detail else None))
+            _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
             continue
         if strategy == "cluster":
             result = extract_cluster_entities(html, url)
@@ -1449,18 +2171,29 @@ def extract_article_with_pipeline(
             if result.get("extraction_successful"):
                 detail = f"cluster_blocks={result.get('cluster_block_count')}"
                 trace.append(_trace_entry(strategy, "success", "cluster_extracted", detail))
+                _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
                 return _attach_trace(result, trace, strategy, order)
             detail = result.get("cluster_error")
             trace.append(_trace_entry(strategy, "failed", "cluster_no_content", str(detail) if detail else None))
+            _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
             continue
         if strategy == "trafilatura":
             extractor = fallback_extractor or _extract_with_trafilatura
-            result = extractor(html, url)
+            result, exc, _attempts = _run_with_retries(
+                lambda: extractor(html, url),
+                strategy=strategy,
+            )
+            if exc or result is None:
+                trace.append(_trace_entry(strategy, "failed", "extractor_error", str(exc) if exc else None))
+                _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
+                continue
             last_result = result
             if result.get("extraction_successful"):
                 trace.append(_trace_entry(strategy, "success", "extracted"))
+                _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
                 return _attach_trace(result, trace, strategy, order)
             trace.append(_trace_entry(strategy, "failed", "no_content"))
+            _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
 
     if last_result is None:
         last_result = {

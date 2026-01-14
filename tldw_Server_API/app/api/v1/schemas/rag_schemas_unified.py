@@ -198,6 +198,13 @@ class UnifiedRAGRequest(BaseModel):
         description="Enable spell checking",
         example=False
     )
+    max_query_variations: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum number of query expansion variations to retrieve",
+        example=3,
+    )
 
     # ========== CACHING ==========
     enable_cache: bool = Field(
@@ -875,6 +882,39 @@ class UnifiedRAGRequest(BaseModel):
         example=10,
     )
 
+    # ========== QUERY DECOMPOSITION & MULTI-HOP ==========
+    enable_query_decomposition: bool = Field(
+        default=False,
+        description="Enable guided decomposition into sub-queries for complex questions",
+        example=False,
+    )
+    max_subqueries: int = Field(
+        default=4,
+        ge=1,
+        le=10,
+        description="Maximum number of sub-queries to generate (including the primary query)",
+        example=4,
+    )
+    subquery_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Soft time budget for decomposition and per-subquery retrieval",
+        example=4.0,
+    )
+    subquery_doc_budget: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Maximum docs per sub-query sent to synthesis",
+        example=8,
+    )
+    subquery_max_concurrency: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum concurrent subquery retrievals",
+        example=3,
+    )
+
     # ========== FEEDBACK ==========
     collect_feedback: bool = Field(
         default=False,
@@ -1268,6 +1308,7 @@ class UnifiedBatchRequest(BaseModel):
     expand_query: bool = Field(default=False)
     expansion_strategies: Optional[List[str]] = Field(default=None)
     spell_check: bool = Field(default=False)
+    max_query_variations: int = Field(default=3, ge=0, le=10)
 
     # Caching
     enable_cache: bool = Field(default=True)
@@ -1359,6 +1400,13 @@ class UnifiedBatchRequest(BaseModel):
     adaptive_rerun_bypass_cache: bool = Field(default=False)
     adaptive_rerun_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
     adaptive_rerun_doc_budget: Optional[int] = Field(default=None, ge=1)
+
+    # Query Decomposition & Multi-hop
+    enable_query_decomposition: bool = Field(default=False)
+    max_subqueries: int = Field(default=4, ge=1, le=10)
+    subquery_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
+    subquery_doc_budget: Optional[int] = Field(default=None, ge=1)
+    subquery_max_concurrency: int = Field(default=3, ge=1, le=10)
 
     # Feedback
     collect_feedback: bool = Field(default=False)
