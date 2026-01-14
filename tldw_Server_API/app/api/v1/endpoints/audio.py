@@ -412,6 +412,8 @@ def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
         return "elevenlabs"
     if m.startswith("index_tts") or m.startswith("indextts"):
         return "index_tts"
+    if m.startswith("supertonic2") or m.startswith("supertonic-2") or m.startswith("tts-supertonic2"):
+        return "supertonic2"
     if m.startswith("supertonic") or m.startswith("tts-supertonic"):
         return "supertonic"
     return None

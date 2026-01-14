@@ -343,6 +343,12 @@ def _redirect_external_loggers() -> None:
                 lgr.setLevel(0)
     except Exception as exc:
         _safe_debug(f"Failed to sweep external loggers for redirection: {exc}")
+    try:
+        level_name = os.getenv("TLDW_AIOSQLITE_LOG_LEVEL", "INFO").upper()
+        level = getattr(logging, level_name, logging.INFO)
+        logging.getLogger("aiosqlite").setLevel(level)
+    except Exception as exc:
+        _safe_debug(f"Failed to set aiosqlite log level: {exc}")
 
 
 def _install_stderr_redirect() -> None:

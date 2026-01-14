@@ -2,7 +2,7 @@
 
 ## Context
 The backend already includes UnifiedFeedbackSystem for storing explicit and implicit feedback in:
-- Analytics.db (server-side QA metrics)
+- Databases/Analytics.db (server-side QA metrics)
 - ChaChaNotes DB (user-scoped feedback linked to conversations)
 
 This design bridges the gap by exposing explicit feedback in the API, expanding implicit event capture, and wiring the modern chat UI.

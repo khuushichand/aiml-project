@@ -229,6 +229,12 @@ class TestProviderLimits:
         assert default_limits["max_text_length"] == 5000
         assert "en" in default_limits["languages"]
 
+        # Supertonic2 limits (multilingual)
+        supertonic2_limits = ProviderLimits.get_limits("supertonic2")
+        assert supertonic2_limits["max_text_length"] == 15000
+        assert "ko" in supertonic2_limits["languages"]
+        assert "wav" in supertonic2_limits["valid_formats"]
+
     def test_provider_specific_validation(self):
         """Test that provider limits are enforced"""
         # OpenAI text limit
@@ -280,6 +286,31 @@ class TestValidateTTSRequest:
         with pytest.raises(TTSValidationError) as exc_info:
             validate_tts_request(request_bad_speed)
 
+        assert "speed" in str(exc_info.value).lower()
+
+    def test_validate_supertonic2_limits(self):
+        """Test provider-specific limits for Supertonic2"""
+        # Unsupported language
+        request_bad_lang = TTSRequest(
+            text="Test",
+            voice="supertonic2_m1",
+            format=AudioFormat.MP3,
+            language="de",
+        )
+        with pytest.raises(TTSValidationError) as exc_info:
+            validate_tts_request(request_bad_lang, provider="supertonic2")
+        assert "language" in str(exc_info.value).lower()
+
+        # Speed outside allowed range
+        request_bad_speed = TTSRequest(
+            text="Test",
+            voice="supertonic2_m1",
+            format=AudioFormat.MP3,
+            language="en",
+            speed=0.8,
+        )
+        with pytest.raises(TTSValidationError) as exc_info:
+            validate_tts_request(request_bad_speed, provider="supertonic2")
         assert "speed" in str(exc_info.value).lower()
 
     def test_validate_with_voice_reference(self):

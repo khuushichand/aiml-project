@@ -35,6 +35,9 @@ from tldw_Server_API.app.core.DB_Management.content_backend import get_content_b
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
 
+DEFAULT_ANALYTICS_DB_PATH = "Databases/Analytics.db"
+
+
 class BackendCursorAdapter:
     """Adapter exposing QueryResult via a cursor-like interface."""
 
@@ -351,7 +354,7 @@ class AnalyticsDatabase:
 
     def __init__(
         self,
-        db_path: str = "Analytics.db",
+        db_path: str = DEFAULT_ANALYTICS_DB_PATH,
         *,
         backend: Optional[DatabaseBackend] = None,
         config: Optional[ConfigParser] = None,
@@ -908,7 +911,7 @@ _analytics_lock = threading.Lock()
 
 
 def get_analytics_db(
-    db_path: str = "Analytics.db",
+    db_path: str = DEFAULT_ANALYTICS_DB_PATH,
     *,
     backend: Optional[DatabaseBackend] = None,
     config: Optional[ConfigParser] = None,

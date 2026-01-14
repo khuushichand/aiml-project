@@ -9,7 +9,7 @@ workflow jobs.
 ## Prerequisites
 
 - `<USER_DB_BASE_DIR>` is defined in `tldw_Server_API.app.core.config` (set via the `USER_DB_BASE_DIR` environment variable or `Config_Files/config.txt`); when unset it defaults to `Databases/user_databases/` under the project root.
-- Back up all SQLite databases for each user (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, and `<USER_DB_BASE_DIR>/<user_id>/workflows/workflows.db` if workflows are stored per-user), plus `Analytics.db`. If your deployment uses a shared workflows SQLite file (for example `workflows_path=Databases/workflows.db` in `Config_Files/config.txt`), back up `Databases/workflows.db` once outside the per-user list.
+- Back up all SQLite databases for each user (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, and `<USER_DB_BASE_DIR>/<user_id>/workflows/workflows.db` if workflows are stored per-user), plus `Databases/Analytics.db`. If your deployment uses a shared workflows SQLite file (for example `workflows_path=Databases/workflows.db` in `Config_Files/config.txt`), back up `Databases/workflows.db` once outside the per-user list.
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
@@ -43,7 +43,7 @@ same pass.
 python -m tldw_Server_API.app.core.DB_Management.migration_tools \
       --content-sqlite <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db \
       --chacha-sqlite <USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db \
-      --analytics-sqlite Analytics.db \
+      --analytics-sqlite Databases/Analytics.db \
       --workflows-sqlite Databases/workflows.db \
       --pg-host "$PGHOST" \
       --pg-port "$PGPORT" \
@@ -64,7 +64,7 @@ while IFS= read -r -d '' USER_DIR; do
   python -m tldw_Server_API.app.core.DB_Management.migration_tools \
         --content-sqlite "$USER_DIR/Media_DB_v2.db" \
         --chacha-sqlite "$USER_DIR/ChaChaNotes.db" \
-        --analytics-sqlite Analytics.db \
+        --analytics-sqlite Databases/Analytics.db \
         --workflows-sqlite Databases/workflows.db \
         --user-id "$USER_ID" \
         --pg-host "$PGHOST" \

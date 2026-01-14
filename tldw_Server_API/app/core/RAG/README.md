@@ -1358,7 +1358,7 @@ result = await unified_rag_pipeline(
 ```
 
 ### Privacy-Preserving Analytics
-The Analytics.db system ensures user privacy:
+The Databases/Analytics.db system ensures user privacy:
 - Query content is SHA256 hashed (16-char prefix)
 - No raw query text stored
 - User IDs are hashed
@@ -1436,7 +1436,7 @@ Integrated dual-database feedback system for both server QA and user experience:
 ```python
 result = await unified_rag_pipeline(
     query="Research question",
-    enable_analytics=True,  # Records to Analytics.db
+    enable_analytics=True,  # Records to Databases/Analytics.db
     enable_feedback_collection=True
 )
 

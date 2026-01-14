@@ -244,6 +244,69 @@ def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_
             app.dependency_overrides.pop(get_request_user, None)
 
 
+def test_transcriptions_default_model_uses_config(monkeypatch, bypass_api_limits):
+
+
+    """Omitting model should use config.txt defaults for the STT provider."""
+    ctx = bypass_api_limits(app)
+    with ctx, TestClient(app) as client:
+        async def _override_user():
+            return User(id=1, username="tester", email="t@example.com", is_active=True)
+
+        app.dependency_overrides[get_request_user] = _override_user
+
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import stt_provider_adapter as stt_adapter
+
+        def _fake_get_stt_config():
+            return {"default_transcriber": "parakeet", "nemo_model_variant": "mlx"}
+
+        monkeypatch.setattr(stt_adapter, "get_stt_config", _fake_get_stt_config, raising=True)
+        stt_adapter.reset_stt_provider_registry()
+
+        captured: dict = {}
+
+        def _fake_parakeet_transcribe_batch(
+            self,
+            audio_path,
+            *,
+            model=None,
+            language=None,
+            task="transcribe",
+            word_timestamps=False,
+            prompt=None,
+            base_dir=None,
+        ):
+            captured["model"] = model
+            return {
+                "text": "config default transcript",
+                "language": language or "en",
+                "segments": [
+                    {"start_seconds": 0.0, "end_seconds": 0.1, "Text": "config default transcript"}
+                ],
+                "diarization": {"enabled": False, "speakers": None},
+                "usage": {"duration_ms": None, "tokens": None},
+                "metadata": {"provider": "parakeet", "model": model or ""},
+            }
+
+        monkeypatch.setattr(
+            stt_adapter.ParakeetAdapter,
+            "transcribe_batch",
+            _fake_parakeet_transcribe_batch,
+            raising=True,
+        )
+
+        try:
+            wav_bytes = _make_wav_bytes()
+            files = {"file": ("test.wav", wav_bytes, "audio/wav")}
+            data = {"response_format": "json"}
+            resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
+            assert resp.status_code == 200
+            assert resp.json().get("text") == "config default transcript"
+            assert captured.get("model") == "parakeet-mlx"
+        finally:
+            app.dependency_overrides.pop(get_request_user, None)
+
+
 def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, bypass_api_limits):
 
 

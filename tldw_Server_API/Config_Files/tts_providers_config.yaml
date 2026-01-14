@@ -6,6 +6,7 @@ provider_priority:
   - openai      # Reliable, high quality
   - kokoro      # Local, fast
   - supertonic  # Local Supertonic ONNX (requires assets)
+  - supertonic2 # Local Supertonic2 ONNX (requires assets)
   - neutts      # Local, instant voice cloning (requires setup)
   - chatterbox  # Emotion control
   - dia         # Dialogue specialist
@@ -132,6 +133,22 @@ providers:
       voice_files:
         supertonic_m1: "M1.json"
         supertonic_f1: "F1.json"
+      default_total_step: 5
+      default_speed: 1.05
+      n_test: 1
+
+  # Supertonic2 ONNX Configuration (local; user-supplied models)
+  supertonic2:
+    enabled: true              # Disabled by default; enable after installing assets
+    model_path: "models/supertonic2/onnx"        # ONNX directory
+    sample_rate: 24000
+    device: "cpu"                # Placeholder for future GPU support
+    extra_params:
+      voice_styles_dir: "models/supertonic2/voice_styles"
+      default_voice: "supertonic2_m1"
+      voice_files:
+        supertonic2_m1: "M1.json"
+        supertonic2_f1: "F1.json"
       default_total_step: 5
       default_speed: 1.05
       n_test: 1

@@ -1,7 +1,7 @@
 # analytics_system.py
 """
 Analytics and feedback system for RAG with dual storage:
-1. Analytics.db - Server-side QA and anonymized metrics
+1. Databases/Analytics.db - Server-side QA and anonymized metrics
 2. ChaChaNotes_DB - User-specific feedback linked to conversations
 
 This module replaces the old feedback_system.py with proper separation
@@ -26,7 +26,7 @@ import numpy as np
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
-from .analytics_db import get_analytics_db, AnalyticsDatabase
+from .analytics_db import DEFAULT_ANALYTICS_DB_PATH, get_analytics_db, AnalyticsDatabase
 
 
 class FeedbackType(Enum):
@@ -107,7 +107,7 @@ class AnalyticsStore:
     Uses the new AnalyticsDatabase for storage.
     """
 
-    def __init__(self, db_path: str = "Analytics.db"):
+    def __init__(self, db_path: str = DEFAULT_ANALYTICS_DB_PATH):
         """
         Initialize analytics store.
 
@@ -556,13 +556,13 @@ class UserFeedbackStore:
 class UnifiedFeedbackSystem:
     """
     Unified feedback system that manages both:
-    1. Analytics.db for server-side QA
+    1. Databases/Analytics.db for server-side QA
     2. ChaChaNotes_DB for user-specific feedback
     """
 
     def __init__(
         self,
-        analytics_db_path: str = "Analytics.db",
+        analytics_db_path: str = DEFAULT_ANALYTICS_DB_PATH,
         chacha_db = None,
         enable_analytics: bool = True
     ):
@@ -902,7 +902,7 @@ _feedback_system: Optional[UnifiedFeedbackSystem] = None
 
 
 def get_feedback_system(
-    analytics_db_path: str = "Analytics.db",
+    analytics_db_path: str = DEFAULT_ANALYTICS_DB_PATH,
     chacha_db = None,
     enable_analytics: bool = True
 ) -> UnifiedFeedbackSystem:

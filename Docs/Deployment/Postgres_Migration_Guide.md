@@ -9,7 +9,7 @@ workflow jobs.
 
 ## Prerequisites
 
-- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, `Analytics.db`). If you have multiple users, repeat for each `<user_id>`.
+- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, `Databases/Analytics.db`). If you have multiple users, repeat for each `<user_id>`.
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
@@ -63,7 +63,7 @@ for user_path in "${USER_DB_BASE_DIR}"/*; do
 
   migration_args=(
     --content-sqlite "${media_db}"
-    --analytics-sqlite Analytics.db
+    --analytics-sqlite Databases/Analytics.db
     --workflows-sqlite Databases/workflows.db
     --pg-host "$PGHOST"
     --pg-port "$PGPORT"
