@@ -53,6 +53,9 @@ from tldw_Server_API.app.api.v1.endpoints.media import debug as debug_endpoint  
 from tldw_Server_API.app.api.v1.endpoints.media import (
     ingest_web_content as ingest_web_content_endpoint,  # noqa: E402
 )
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    ingest_jobs as ingest_jobs_endpoint,  # noqa: E402
+)
 from tldw_Server_API.app.api.v1.endpoints.media import item as item_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import listing as listing_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import versions as versions_endpoint  # noqa: E402
@@ -101,6 +104,7 @@ for _router in (
     add_endpoint.router,
     debug_endpoint.router,
     ingest_web_content_endpoint.router,
+    ingest_jobs_endpoint.router,
     process_code_endpoint.router,
     process_documents_endpoint.router,
     process_pdfs_endpoint.router,

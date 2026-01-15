@@ -395,6 +395,24 @@ _MAX_REGEX_MATCHES_PER_LABEL = {
     "number": 50,
 }
 _PII_LABELS = {"email", "phone", "credit_card"}
+_JSONLD_PRIMARY_TYPES = {
+    "newsarticle",
+    "article",
+    "blogposting",
+    "report",
+    "techarticle",
+    "medicalscholarlyarticle",
+    "analysisnewsarticle",
+    "opinionnewsarticle",
+    "reviewnewsarticle",
+    "scholarlyarticle",
+}
+_JSONLD_SECONDARY_TYPES = {
+    "webpage",
+    "webcontent",
+    "creativework",
+    "blog",
+}
 _REGEX_CATALOG: List[Tuple[str, re.Pattern[str]]] = [
     ("email", re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")),
     ("phone", re.compile(r"\b(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")),
@@ -451,11 +469,14 @@ def get_extraction_cache_stats() -> Dict[str, int]:
         llm_limits = len(_LLM_PROVIDER_LIMITS)
     with _LLM_PROVIDER_LAST_CALL_LOCK:
         llm_last = len(_LLM_PROVIDER_LAST_CALL)
+    with _STRATEGY_LIMITS_LOCK:
+        strategy_limits = len(_STRATEGY_LIMITS)
     stats = {
         "cluster_embedding_cache_size": cluster_size,
         "schema_result_cache_size": schema_size,
         "llm_provider_limit_count": llm_limits,
         "llm_provider_last_call_count": llm_last,
+        "strategy_limit_count": strategy_limits,
     }
     try:
         from tldw_Server_API.app.core.Watchlists import fetchers as _fetchers
@@ -475,6 +496,8 @@ def clear_extraction_caches() -> None:
         _LLM_PROVIDER_LIMITS.clear()
     with _LLM_PROVIDER_LAST_CALL_LOCK:
         _LLM_PROVIDER_LAST_CALL.clear()
+    with _STRATEGY_LIMITS_LOCK:
+        _STRATEGY_LIMITS.clear()
     try:
         from tldw_Server_API.app.core.Watchlists import fetchers as _fetchers
 
@@ -675,6 +698,86 @@ def _regex_pii_mask_enabled() -> bool:
     return str(flag).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str) -> Optional[int]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _env_float(name: str) -> Optional[float]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _regex_mask_override(settings: Optional[Dict[str, Any]]) -> Optional[bool]:
+    if not isinstance(settings, dict):
+        return None
+    for key in ("mask_pii", "pii_mask"):
+        if key in settings:
+            return bool(settings.get(key))
+    return None
+
+
+def _extractor_max_workers() -> Optional[int]:
+    value = _env_int("EXTRACTOR_MAX_WORKERS")
+    if value is None or value <= 0:
+        return None
+    return value
+
+
+def _should_clear_caches(stage: str) -> bool:
+    raw = os.getenv("EXTRACTOR_CLEAR_CACHES", "")
+    if not raw:
+        return False
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return stage == "end"
+    if value in {"both", "all"}:
+        return True
+    if value in {"start", "before", "entry"}:
+        return stage == "start"
+    if value in {"end", "after", "exit"}:
+        return stage == "end"
+    return False
+
+
+_STRATEGY_LIMITS: Dict[str, Tuple[int, BoundedSemaphore]] = {}
+_STRATEGY_LIMITS_LOCK = Lock()
+
+
+def _get_strategy_semaphore(strategy: str) -> Optional[BoundedSemaphore]:
+    max_workers = _extractor_max_workers()
+    if not max_workers:
+        return None
+    with _STRATEGY_LIMITS_LOCK:
+        current = _STRATEGY_LIMITS.get(strategy)
+        if current is None or current[0] != max_workers:
+            _STRATEGY_LIMITS[strategy] = (max_workers, BoundedSemaphore(max_workers))
+        return _STRATEGY_LIMITS[strategy][1]
+
+
+@contextmanager
+def _strategy_throttle(strategy: str) -> Any:
+    sem = _get_strategy_semaphore(strategy)
+    if sem is None:
+        yield
+        return
+    sem.acquire()
+    try:
+        yield
+    finally:
+        sem.release()
+
+
 def _mask_pii_value(label: str, value: str) -> str:
     if label == "email":
         if "@" not in value:
@@ -797,6 +900,316 @@ def extract_regex_entities(
 
     result["regex_matches"] = matches
     result["extraction_successful"] = bool(matches)
+    return result
+
+
+def _jsonld_type_tokens(value: Any) -> List[str]:
+    tokens: List[str] = []
+    if isinstance(value, list):
+        for item in value:
+            tokens.extend(_jsonld_type_tokens(item))
+        return tokens
+    if isinstance(value, str):
+        for entry in value.split():
+            token = entry.strip()
+            if not token:
+                continue
+            if "/" in token:
+                token = token.rsplit("/", 1)[-1]
+            if ":" in token:
+                token = token.split(":", 1)[-1]
+            token = token.strip().lower()
+            if token:
+                tokens.append(token)
+    return tokens
+
+
+def _jsonld_type_set(node: Dict[str, Any]) -> set[str]:
+    return set(_jsonld_type_tokens(node.get("@type") or node.get("type")))
+
+
+def _jsonld_collect_text(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, (int, float)):
+        return [str(value)]
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            parts.extend(_jsonld_collect_text(item))
+        return parts
+    if isinstance(value, dict):
+        if "@value" in value:
+            return _jsonld_collect_text(value.get("@value"))
+        for key in ("name", "headline", "text", "description", "value"):
+            if key in value:
+                parts = _jsonld_collect_text(value.get(key))
+                if parts:
+                    return parts
+    return []
+
+
+def _jsonld_join_text(value: Any, join_with: str) -> str:
+    parts = [part for part in _jsonld_collect_text(value) if part]
+    if not parts:
+        return ""
+    return join_with.join(parts)
+
+
+def _jsonld_extract_author(node: Dict[str, Any]) -> Optional[str]:
+    for key in ("author", "creator", "publisher"):
+        if key not in node:
+            continue
+        names = _jsonld_collect_text(node.get(key))
+        if not names:
+            continue
+        unique: List[str] = []
+        seen: set[str] = set()
+        for name in names:
+            if name not in seen:
+                unique.append(name)
+                seen.add(name)
+        if unique:
+            return ", ".join(unique)
+    return None
+
+
+def _jsonld_score_candidate(node: Dict[str, Any]) -> Tuple[int, int]:
+    types = _jsonld_type_set(node)
+    score = 0
+    if types & _JSONLD_PRIMARY_TYPES:
+        score += 8
+    elif types & _JSONLD_SECONDARY_TYPES:
+        score += 4
+    content = _jsonld_join_text(node.get("articleBody"), "\n\n")
+    if content:
+        score += 3
+    text = _jsonld_join_text(node.get("text"), "\n\n")
+    if text:
+        score += 2
+    summary = _jsonld_join_text(node.get("description"), " ")
+    if summary:
+        score += 1
+    title = _jsonld_join_text(node.get("headline") or node.get("name"), " ")
+    if title:
+        score += 1
+    content_len = len(content) if content else len(text)
+    return score, content_len
+
+
+def _jsonld_has_content(result: Dict[str, Any]) -> bool:
+    content = result.get("content")
+    summary = result.get("summary")
+    for value in (content, summary):
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
+def _collect_jsonld_nodes(data: Any) -> List[Dict[str, Any]]:
+    nodes: List[Dict[str, Any]] = []
+    if isinstance(data, list):
+        for item in data:
+            nodes.extend(_collect_jsonld_nodes(item))
+        return nodes
+    if isinstance(data, dict):
+        nodes.append(data)
+        graph = data.get("@graph")
+        if isinstance(graph, list):
+            for item in graph:
+                if isinstance(item, dict):
+                    nodes.append(item)
+        return nodes
+    return nodes
+
+
+def _resolve_jsonld_refs(value: Any, id_map: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    resolved: List[Dict[str, Any]] = []
+    if isinstance(value, list):
+        for item in value:
+            resolved.extend(_resolve_jsonld_refs(item, id_map))
+        return resolved
+    if isinstance(value, dict):
+        ref_id = value.get("@id")
+        if isinstance(ref_id, str) and ref_id in id_map:
+            resolved.append(id_map[ref_id])
+            return resolved
+        resolved.append(value)
+        return resolved
+    if isinstance(value, str) and value in id_map:
+        resolved.append(id_map[value])
+    return resolved
+
+
+def _microdata_prop_value(tag: Any) -> Optional[str]:
+    if not tag:
+        return None
+    if tag.has_attr("content"):
+        content = str(tag.get("content") or "").strip()
+        if content:
+            return content
+    name = getattr(tag, "name", "") or ""
+    if name in {"a", "area", "link"}:
+        href = str(tag.get("href") or "").strip()
+        return href or None
+    if name in {"img", "audio", "video", "source"}:
+        src = str(tag.get("src") or "").strip()
+        return src or None
+    if name == "time":
+        dt_val = str(tag.get("datetime") or "").strip()
+        if dt_val:
+            return dt_val
+    text = tag.get_text(" ", strip=True) if hasattr(tag, "get_text") else ""
+    return text or None
+
+
+def _extract_microdata_items(soup: BeautifulSoup) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    if soup is None:
+        return items
+    for scope in soup.find_all(attrs={"itemscope": True}):
+        props: Dict[str, Any] = {}
+        for prop in scope.find_all(attrs={"itemprop": True}):
+            parent_scope = prop.find_parent(attrs={"itemscope": True})
+            if parent_scope is not None and parent_scope is not scope:
+                continue
+            prop_name = prop.get("itemprop")
+            if not prop_name:
+                continue
+            value = _microdata_prop_value(prop)
+            if not value:
+                continue
+            existing = props.get(prop_name)
+            if existing is None:
+                props[prop_name] = value
+            elif isinstance(existing, list):
+                existing.append(value)
+            else:
+                props[prop_name] = [existing, value]
+        if not props:
+            continue
+        item: Dict[str, Any] = dict(props)
+        item_type = scope.get("itemtype")
+        item_id = scope.get("itemid")
+        if item_type:
+            item["@type"] = item_type
+        if item_id:
+            item["@id"] = item_id
+        items.append(item)
+    return items
+
+
+def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "url": url,
+        "title": "N/A",
+        "author": "N/A",
+        "content": "",
+        "date": "N/A",
+        "extraction_successful": False,
+    }
+    if not html_text:
+        return result
+    soup = BeautifulSoup(html_text, "html.parser")
+    nodes: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.IGNORECASE)})
+    for script in scripts:
+        payload = script.string or script.get_text()
+        if not payload:
+            continue
+        payload = payload.strip()
+        if not payload:
+            continue
+        try:
+            objects = _decode_all_json(payload)
+            if not objects:
+                objects = [json.loads(payload)]
+        except Exception as exc:
+            errors.append(f"jsonld_parse_failed: {exc}")
+            continue
+        for obj in objects:
+            nodes.extend(_collect_jsonld_nodes(obj))
+
+    nodes.extend(_extract_microdata_items(soup))
+
+    if not nodes:
+        if errors:
+            result["jsonld_error"] = "; ".join(errors[:3])
+        return result
+
+    id_map: Dict[str, Dict[str, Any]] = {}
+    for node in nodes:
+        node_id = node.get("@id")
+        if isinstance(node_id, str):
+            id_map[node_id] = node
+
+    expanded_nodes = list(nodes)
+    for node in nodes:
+        for ref_key in ("mainEntity", "mainEntityOfPage"):
+            expanded_nodes.extend(_resolve_jsonld_refs(node.get(ref_key), id_map))
+
+    seen_ids: set[int] = set()
+    unique_nodes: List[Dict[str, Any]] = []
+    for node in expanded_nodes:
+        node_id = id(node)
+        if node_id in seen_ids:
+            continue
+        seen_ids.add(node_id)
+        unique_nodes.append(node)
+
+    best_node: Optional[Dict[str, Any]] = None
+    best_score: Tuple[int, int] = (-1, -1)
+    for node in unique_nodes:
+        score = _jsonld_score_candidate(node)
+        if score > best_score:
+            best_score = score
+            best_node = node
+
+    if not best_node:
+        return result
+
+    result["jsonld_types"] = sorted(_jsonld_type_set(best_node))
+
+    title = _jsonld_join_text(
+        best_node.get("headline") or best_node.get("name") or best_node.get("title"),
+        " ",
+    )
+    if title:
+        result["title"] = title
+
+    author = _jsonld_extract_author(best_node)
+    if author:
+        result["author"] = author
+
+    date_val = (
+        _jsonld_join_text(best_node.get("datePublished"), " ")
+        or _jsonld_join_text(best_node.get("dateCreated"), " ")
+        or _jsonld_join_text(best_node.get("dateModified"), " ")
+    )
+    if date_val:
+        result["date"] = date_val
+
+    summary = (
+        _jsonld_join_text(best_node.get("description"), " ")
+        or _jsonld_join_text(best_node.get("abstract"), " ")
+        or _jsonld_join_text(best_node.get("summary"), " ")
+    )
+    if summary:
+        result["summary"] = summary
+
+    content = _jsonld_join_text(best_node.get("articleBody"), "\n\n") or _jsonld_join_text(
+        best_node.get("text"),
+        "\n\n",
+    )
+    if content:
+        result["content"] = content
+
+    result["extraction_successful"] = _jsonld_has_content(result)
     return result
 
 
@@ -1033,16 +1446,30 @@ def extract_cluster_entities(
         return result
 
     settings = dict(cluster_settings or {})
+    env_similarity = _env_float("SIM_THRESHOLD")
+    env_min_words = _env_int("WORD_COUNT_THRESHOLD")
+    env_linkage = os.getenv("CLUSTER_LINKAGE", "").strip().lower()
     min_block_chars = int(settings.get("min_block_chars", _CLUSTER_MIN_BLOCK_CHARS))
-    min_word_count = int(settings.get("min_word_count", _CLUSTER_MIN_WORDS))
+    min_word_count = int(
+        settings.get("min_word_count")
+        or settings.get("min_words")
+        or settings.get("word_count_threshold")
+        or (env_min_words if env_min_words is not None else _CLUSTER_MIN_WORDS)
+    )
     max_blocks = int(settings.get("max_blocks", _CLUSTER_MAX_BLOCKS))
     prefilter_threshold = float(settings.get("prefilter_threshold", _CLUSTER_PREFILTER_THRESHOLD))
     cluster_threshold = float(
-        settings.get("cluster_threshold") or settings.get("similarity_threshold") or _CLUSTER_SIM_THRESHOLD
+        settings.get("cluster_threshold")
+        or settings.get("similarity_threshold")
+        or (env_similarity if env_similarity is not None else _CLUSTER_SIM_THRESHOLD)
     )
     embed_dims = int(settings.get("embed_dims", _CLUSTER_EMBED_DIM))
     method = str(settings.get("method") or settings.get("cluster_method") or "greedy").strip().lower()
-    linkage = str(settings.get("linkage") or settings.get("cluster_linkage") or _CLUSTER_LINKAGE).strip().lower()
+    linkage = str(
+        settings.get("linkage")
+        or settings.get("cluster_linkage")
+        or (env_linkage if env_linkage else _CLUSTER_LINKAGE)
+    ).strip().lower()
     tag_top_k = int(settings.get("tag_top_k", _CLUSTER_TAG_TOP_K))
     tag_keywords = settings.get("tag_keywords") or _DEFAULT_CLUSTER_TAG_KEYWORDS
     if not isinstance(tag_keywords, dict):
@@ -2045,9 +2472,23 @@ def extract_article_with_pipeline(
     fallback_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
     schema_rules: Optional[Dict[str, Any]] = None,
     llm_settings: Optional[Dict[str, Any]] = None,
+    regex_settings: Optional[Dict[str, Any]] = None,
+    cluster_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     trace: List[Dict[str, Any]] = []
     order, unknown = _normalize_strategy_order(strategy_order)
+    if _should_clear_caches("start"):
+        clear_extraction_caches()
+
+    def _finalize_result(
+        result: Dict[str, Any],
+        *,
+        strategy: Optional[str],
+    ) -> Dict[str, Any]:
+        final = _attach_trace(result, trace, strategy, order)
+        if _should_clear_caches("end"):
+            clear_extraction_caches()
+        return final
     for strategy in unknown:
         trace.append(_trace_entry(strategy, "skipped", "unknown_strategy"))
 
@@ -2055,8 +2496,16 @@ def extract_article_with_pipeline(
     for strategy in order:
         start = time.perf_counter()
         if strategy == "jsonld":
-            trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
-            _record_strategy_metrics(strategy, "skipped", time.perf_counter() - start)
+            with _strategy_throttle(strategy):
+                result = extract_jsonld_entities(html, url)
+            last_result = result
+            if result.get("extraction_successful"):
+                trace.append(_trace_entry(strategy, "success", "jsonld_extracted"))
+                _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
+                return _finalize_result(result, strategy=strategy)
+            detail = result.get("jsonld_error")
+            trace.append(_trace_entry(strategy, "failed", "jsonld_no_content", str(detail) if detail else None))
+            _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
             continue
         if strategy == "schema":
             if isinstance(schema_rules, dict) and schema_rules:
@@ -2075,7 +2524,7 @@ def extract_article_with_pipeline(
                     cached["schema_cache_hit"] = True
                     trace.append(_trace_entry(strategy, "success", "schema_cached"))
                     _record_strategy_metrics(strategy, "success", time.perf_counter() - start, cached)
-                    return _attach_trace(cached, trace, strategy, order)
+                    return _finalize_result(cached, strategy=strategy)
                 validation = validate_selector_rules(schema_rules, html_text=html, include_counts=True)
                 errors = validation.get("errors") if isinstance(validation, dict) else None
                 warnings = validation.get("warnings") if isinstance(validation, dict) else None
@@ -2094,10 +2543,11 @@ def extract_article_with_pipeline(
                     )
                     _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
                     continue
-                result, exc, _attempts = _run_with_retries(
-                    lambda: extract_schema_fields(html, url, schema_rules),
-                    strategy=strategy,
-                )
+                with _strategy_throttle(strategy):
+                    result, exc, _attempts = _run_with_retries(
+                        lambda: extract_schema_fields(html, url, schema_rules),
+                        strategy=strategy,
+                    )
                 if exc or result is None:
                     trace.append(_trace_entry(strategy, "failed", "schema_error", str(exc) if exc else None))
                     _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
@@ -2120,7 +2570,7 @@ def extract_article_with_pipeline(
                     _schema_cache_put(cache_key, result)
                     trace.append(_trace_entry(strategy, "success", "schema_extracted", warning_detail))
                     _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
-                    return _attach_trace(result, trace, strategy, order)
+                    return _finalize_result(result, strategy=strategy)
                 trace.append(_trace_entry(strategy, "failed", "schema_no_content", warning_detail))
                 _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
                 last_result = result
@@ -2129,7 +2579,8 @@ def extract_article_with_pipeline(
                 trace.append(_trace_entry(strategy, "skipped", "no_schema_rules_or_handler"))
                 _record_strategy_metrics(strategy, "skipped", time.perf_counter() - start)
                 continue
-            result, exc, _attempts = _run_with_retries(lambda: handler(html, url), strategy=strategy)
+            with _strategy_throttle(strategy):
+                result, exc, _attempts = _run_with_retries(lambda: handler(html, url), strategy=strategy)
             if exc or result is None:
                 trace.append(_trace_entry(strategy, "failed", "handler_error", str(exc) if exc else None))
                 _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
@@ -2139,50 +2590,55 @@ def extract_article_with_pipeline(
             if result.get("extraction_successful"):
                 trace.append(_trace_entry(strategy, "success", "handler_extracted"))
                 _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
-                return _attach_trace(result, trace, strategy, order)
+                return _finalize_result(result, strategy=strategy)
             trace.append(_trace_entry(strategy, "failed", "handler_no_content"))
             _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
             last_result = result
             continue
         if strategy == "regex":
-            result = extract_regex_entities(html, url)
+            mask_override = _regex_mask_override(regex_settings)
+            with _strategy_throttle(strategy):
+                result = extract_regex_entities(html, url, mask_pii=mask_override)
             last_result = result
             if result.get("extraction_successful"):
                 trace.append(_trace_entry(strategy, "success", "regex_extracted"))
                 _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
-                return _attach_trace(result, trace, strategy, order)
+                return _finalize_result(result, strategy=strategy)
             trace.append(_trace_entry(strategy, "failed", "regex_no_matches"))
             _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
             continue
         if strategy == "llm":
-            result = extract_llm_entities(html, url, llm_settings=llm_settings, schema_rules=schema_rules)
+            with _strategy_throttle(strategy):
+                result = extract_llm_entities(html, url, llm_settings=llm_settings, schema_rules=schema_rules)
             last_result = result
             if result.get("extraction_successful"):
                 trace.append(_trace_entry(strategy, "success", "llm_extracted"))
                 _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
-                return _attach_trace(result, trace, strategy, order)
+                return _finalize_result(result, strategy=strategy)
             detail = result.get("llm_error")
             trace.append(_trace_entry(strategy, "failed", "llm_no_content", str(detail) if detail else None))
             _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
             continue
         if strategy == "cluster":
-            result = extract_cluster_entities(html, url)
+            with _strategy_throttle(strategy):
+                result = extract_cluster_entities(html, url, cluster_settings=cluster_settings)
             last_result = result
             if result.get("extraction_successful"):
                 detail = f"cluster_blocks={result.get('cluster_block_count')}"
                 trace.append(_trace_entry(strategy, "success", "cluster_extracted", detail))
                 _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
-                return _attach_trace(result, trace, strategy, order)
+                return _finalize_result(result, strategy=strategy)
             detail = result.get("cluster_error")
             trace.append(_trace_entry(strategy, "failed", "cluster_no_content", str(detail) if detail else None))
             _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
             continue
         if strategy == "trafilatura":
             extractor = fallback_extractor or _extract_with_trafilatura
-            result, exc, _attempts = _run_with_retries(
-                lambda: extractor(html, url),
-                strategy=strategy,
-            )
+            with _strategy_throttle(strategy):
+                result, exc, _attempts = _run_with_retries(
+                    lambda: extractor(html, url),
+                    strategy=strategy,
+                )
             if exc or result is None:
                 trace.append(_trace_entry(strategy, "failed", "extractor_error", str(exc) if exc else None))
                 _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
@@ -2191,7 +2647,7 @@ def extract_article_with_pipeline(
             if result.get("extraction_successful"):
                 trace.append(_trace_entry(strategy, "success", "extracted"))
                 _record_strategy_metrics(strategy, "success", time.perf_counter() - start, result)
-                return _attach_trace(result, trace, strategy, order)
+                return _finalize_result(result, strategy=strategy)
             trace.append(_trace_entry(strategy, "failed", "no_content"))
             _record_strategy_metrics(strategy, "failed", time.perf_counter() - start, result)
 
@@ -2204,7 +2660,7 @@ def extract_article_with_pipeline(
             "url": url,
             "extraction_successful": False,
         }
-    return _attach_trace(last_result, trace, None, order)
+    return _finalize_result(last_result, strategy=None)
 
 
 def extract_article_data_from_html(
@@ -2214,6 +2670,8 @@ def extract_article_data_from_html(
     handler: Optional[Callable[[str, str], Dict[str, Any]]] = None,
     schema_rules: Optional[Dict[str, Any]] = None,
     llm_settings: Optional[Dict[str, Any]] = None,
+    regex_settings: Optional[Dict[str, Any]] = None,
+    cluster_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Extract article metadata and body from raw HTML."""
     return extract_article_with_pipeline(
@@ -2223,6 +2681,8 @@ def extract_article_data_from_html(
         handler=handler,
         schema_rules=schema_rules,
         llm_settings=llm_settings,
+        regex_settings=regex_settings,
+        cluster_settings=cluster_settings,
     )
 
 
@@ -2294,6 +2754,9 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
     use_handler = bool(handler_path)
     strategy_order = getattr(plan, "strategy_order", None)
     schema_rules = getattr(plan, "schema_rules", None)
+    llm_settings = getattr(plan, "llm_settings", None)
+    regex_settings = getattr(plan, "regex_settings", None)
+    cluster_settings = getattr(plan, "cluster_settings", None)
 
     # Build effective headers from UA profile + extras
     ua_headers = build_browser_headers(plan.ua_profile, accept_lang="en-US,en;q=0.9")
@@ -2395,6 +2858,9 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                     strategy_order=strategy_order,
                     handler=handler_func if use_handler else None,
                     schema_rules=schema_rules,
+                    llm_settings=llm_settings,
+                    regex_settings=regex_settings,
+                    cluster_settings=cluster_settings,
                 )
                 if article_data.get("extraction_successful"):
                     if not use_handler and article_data.get("content"):
@@ -2523,6 +2989,9 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         strategy_order=strategy_order,
         handler=handler_func if use_handler else None,
         schema_rules=schema_rules,
+        llm_settings=llm_settings,
+        regex_settings=regex_settings,
+        cluster_settings=cluster_settings,
     )
     if article_data.get("extraction_successful") and not use_handler:
         if article_data.get("content"):
@@ -3541,7 +4010,7 @@ def sync_recursive_scrape(url_input, max_pages, max_depth, delay=1.0, custom_coo
             recursive_scrape(url_input, max_pages, max_depth, delay=delay, custom_cookies=custom_cookies)
         )
 
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=_extractor_max_workers()) as executor:
         future = executor.submit(run_async_scrape)
         return future.result()
 

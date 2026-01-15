@@ -824,6 +824,8 @@ class EnhancedWebScraper:
         fallback_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
         schema_rules: Optional[Dict[str, Any]] = None,
         llm_settings: Optional[Dict[str, Any]] = None,
+        regex_settings: Optional[Dict[str, Any]] = None,
+        cluster_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
             convert_html_to_markdown,
@@ -838,6 +840,8 @@ class EnhancedWebScraper:
             fallback_extractor=fallback_extractor,
             schema_rules=schema_rules,
             llm_settings=llm_settings,
+            regex_settings=regex_settings,
+            cluster_settings=cluster_settings,
         )
         if postprocess_markdown and data.get("extraction_successful") and data.get("content"):
             data["content"] = convert_html_to_markdown(data["content"])
@@ -1019,6 +1023,8 @@ class EnhancedWebScraper:
             strategy_order = getattr(plan, "strategy_order", None)
             schema_rules = getattr(plan, "schema_rules", None)
             llm_settings = getattr(plan, "llm_settings", None)
+            regex_settings = getattr(plan, "regex_settings", None)
+            cluster_settings = getattr(plan, "cluster_settings", None)
             postprocess_markdown = is_default_handler
 
             merged_cookies = self._merge_cookie_maps(custom_cookies, getattr(plan, "cookies", {}))
@@ -1075,6 +1081,8 @@ class EnhancedWebScraper:
                     postprocess_markdown=postprocess_markdown,
                     schema_rules=schema_rules,
                     llm_settings=llm_settings,
+                    regex_settings=regex_settings,
+                    cluster_settings=cluster_settings,
                 )
             elif effective_method == "playwright":
                 return await self._scrape_with_playwright(
@@ -1088,6 +1096,8 @@ class EnhancedWebScraper:
                     postprocess_markdown=postprocess_markdown,
                     schema_rules=schema_rules,
                     llm_settings=llm_settings,
+                    regex_settings=regex_settings,
+                    cluster_settings=cluster_settings,
                 )
             elif effective_method == "beautifulsoup":
                 return await self._scrape_with_beautifulsoup(
@@ -1103,6 +1113,8 @@ class EnhancedWebScraper:
                     postprocess_markdown=postprocess_markdown,
                     schema_rules=schema_rules,
                     llm_settings=llm_settings,
+                    regex_settings=regex_settings,
+                    cluster_settings=cluster_settings,
                 )
             else:
                 raise ValueError(f"Unknown scraping method: {effective_method}")
@@ -1129,6 +1141,8 @@ class EnhancedWebScraper:
         postprocess_markdown: bool = False,
         schema_rules: Optional[Dict[str, Any]] = None,
         llm_settings: Optional[Dict[str, Any]] = None,
+        regex_settings: Optional[Dict[str, Any]] = None,
+        cluster_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Scrape using trafilatura"""
         headers = self._build_request_headers(user_agent, custom_headers)
@@ -1168,6 +1182,8 @@ class EnhancedWebScraper:
             fallback_extractor=self._extract_trafilatura_json,
             schema_rules=schema_rules,
             llm_settings=llm_settings,
+            regex_settings=regex_settings,
+            cluster_settings=cluster_settings,
         )
         outcome = "success" if data.get("extraction_successful") else "no_extract"
         self._emit_scrape_metrics(
@@ -1226,6 +1242,8 @@ class EnhancedWebScraper:
         postprocess_markdown: bool = False,
         schema_rules: Optional[Dict[str, Any]] = None,
         llm_settings: Optional[Dict[str, Any]] = None,
+        regex_settings: Optional[Dict[str, Any]] = None,
+        cluster_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Scrape using Playwright for JavaScript-heavy sites"""
         # Fallback gracefully if browser isn't initialized
@@ -1240,6 +1258,8 @@ class EnhancedWebScraper:
                 postprocess_markdown=postprocess_markdown,
                 schema_rules=schema_rules,
                 llm_settings=llm_settings,
+                regex_settings=regex_settings,
+                cluster_settings=cluster_settings,
             )
         headers_copy = dict(custom_headers) if custom_headers else {}
         effective_user_agent = user_agent or headers_copy.pop("User-Agent", None) or DEFAULT_USER_AGENT
@@ -1288,6 +1308,8 @@ class EnhancedWebScraper:
                 fallback_extractor=self._extract_trafilatura_json,
                 schema_rules=schema_rules,
                 llm_settings=llm_settings,
+                regex_settings=regex_settings,
+                cluster_settings=cluster_settings,
             )
             if data.get("extraction_successful") or handler is not None:
                 outcome = "success" if data.get("extraction_successful") else "no_extract"
@@ -1380,6 +1402,8 @@ class EnhancedWebScraper:
         postprocess_markdown: bool = False,
         schema_rules: Optional[Dict[str, Any]] = None,
         llm_settings: Optional[Dict[str, Any]] = None,
+        regex_settings: Optional[Dict[str, Any]] = None,
+        cluster_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Scrape using BeautifulSoup for simple HTML parsing"""
         headers = self._build_request_headers(user_agent, custom_headers)
@@ -1419,6 +1443,8 @@ class EnhancedWebScraper:
             fallback_extractor=self._extract_trafilatura_json,
             schema_rules=schema_rules,
             llm_settings=llm_settings,
+            regex_settings=regex_settings,
+            cluster_settings=cluster_settings,
         )
         if data.get("extraction_successful") or handler is not None:
             outcome = "success" if data.get("extraction_successful") else "no_extract"

@@ -19,7 +19,7 @@ import os
 import re
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urljoin
 
 import xml.etree.ElementTree as ET
@@ -94,7 +94,90 @@ def _ensure_sequence(value: Sequence[str] | str | None) -> List[str]:
     return [str(v) for v in value if isinstance(v, str)]
 
 
-def _select_nodes(node: HtmlElement, selector: str) -> List[Any]:
+def _contextualize_xpath(expr: str, node: Any) -> str:
+    if not isinstance(node, HtmlElement):
+        return expr
+    if expr.startswith("."):
+        return expr
+    if expr.startswith("//"):
+        match = re.match(r"^//([a-zA-Z0-9_*:-]+)", expr)
+        if match:
+            token = match.group(1)
+            try:
+                node_tag = node.tag
+            except Exception:
+                node_tag = None
+            if node_tag and token == str(node_tag):
+                return expr
+        return f".{expr}"
+    if expr.startswith("/"):
+        try:
+            root = node.getroottree().getroot()
+        except Exception:
+            root = None
+        if root is not None:
+            root_tag = getattr(root, "tag", None)
+            if isinstance(root_tag, str) and expr.startswith(f"/{root_tag}"):
+                return expr
+        if root is not None and root is not node:
+            return f".{expr}"
+    return expr
+
+
+def _parse_nth_token(token: str, allowed: set[str]) -> Tuple[Optional[str], Optional[int]]:
+    match = re.fullmatch(r"(?P<tag>[a-zA-Z0-9_-]+)(?::nth-child\((?P<index>\d+)\))?", token)
+    if not match:
+        return None, None
+    tag = match.group("tag").lower()
+    if tag not in allowed:
+        return None, None
+    idx = match.group("index")
+    return tag, int(idx) if idx else None
+
+
+def _css_table_nth_xpath(css_expr: str) -> Optional[str]:
+    expr = re.sub(r"\s+", " ", css_expr.strip())
+    if not expr.startswith("table "):
+        return None
+    tokens = expr.split(" ")
+    if not tokens or tokens[0] != "table":
+        return None
+    idx = 1
+    section = None
+    if idx < len(tokens) and tokens[idx] in {"tbody", "thead", "tfoot"}:
+        section = tokens[idx]
+        idx += 1
+    if idx >= len(tokens):
+        return None
+    tr_tag, tr_idx = _parse_nth_token(tokens[idx], {"tr"})
+    if not tr_tag:
+        return None
+    idx += 1
+    cell_tag = None
+    cell_idx = None
+    if idx < len(tokens):
+        cell_tag, cell_idx = _parse_nth_token(tokens[idx], {"td", "th"})
+        if not cell_tag:
+            return None
+        idx += 1
+    if idx != len(tokens):
+        return None
+    parts = [".//table"]
+    if section:
+        parts.append(f"//{section}")
+    tr_expr = f"//{tr_tag}"
+    if tr_idx:
+        tr_expr = f"{tr_expr}[position()={tr_idx}]"
+    parts.append(tr_expr)
+    if cell_tag:
+        cell_expr = f"//{cell_tag}"
+        if cell_idx:
+            cell_expr = f"{cell_expr}[position()={cell_idx}]"
+        parts.append(cell_expr)
+    return "".join(parts)
+
+
+def _select_nodes(node: HtmlElement, selector: str, *, context_sensitive: bool = False) -> List[Any]:
     expr = selector.strip()
     if not expr:
         return []
@@ -102,20 +185,26 @@ def _select_nodes(node: HtmlElement, selector: str) -> List[Any]:
         css_expr = expr[4:].strip()
         if not css_expr:
             return []
-        try:
-            from lxml.cssselect import CSSSelector
-        except Exception as exc:
-            logger.debug(f"CSS selector support unavailable for '{css_expr}': {exc}")
-            return []
-        try:
-            compiled = _selector_cache_get(_CSS_SELECTOR_CACHE, css_expr)
-            if compiled is None:
-                compiled = CSSSelector(css_expr)
-                _selector_cache_put(_CSS_SELECTOR_CACHE, css_expr, compiled)
-            return list(compiled(node))
-        except Exception as exc:
-            logger.debug(f"CSS selector evaluation failed for '{css_expr}': {exc}")
-            return []
+        fast_xpath = _css_table_nth_xpath(css_expr)
+        if fast_xpath:
+            expr = fast_xpath
+        else:
+            try:
+                from lxml.cssselect import CSSSelector
+            except Exception as exc:
+                logger.debug(f"CSS selector support unavailable for '{css_expr}': {exc}")
+                return []
+            try:
+                compiled = _selector_cache_get(_CSS_SELECTOR_CACHE, css_expr)
+                if compiled is None:
+                    compiled = CSSSelector(css_expr)
+                    _selector_cache_put(_CSS_SELECTOR_CACHE, css_expr, compiled)
+                return list(compiled(node))
+            except Exception as exc:
+                logger.debug(f"CSS selector evaluation failed for '{css_expr}': {exc}")
+                return []
+    if context_sensitive:
+        expr = _contextualize_xpath(expr, node)
     compiled_xpath = _selector_cache_get(_XPATH_SELECTOR_CACHE, expr)
     if compiled_xpath is None:
         try:
@@ -180,7 +269,7 @@ def _extract_value(
     join_with: str = " ",
 ) -> Optional[str]:
     for expr in _ensure_sequence(selectors):
-        matches = _select_nodes(node, expr)
+        matches = _select_nodes(node, expr, context_sensitive=True)
         if not matches:
             continue
         if join:
@@ -360,7 +449,7 @@ def _extract_list_items(
     context: Dict[str, Any],
 ) -> Optional[List[Any]]:
     selector = _field_selector(field)
-    nodes = _select_nodes(node, selector) if selector else []
+    nodes = _select_nodes(node, selector, context_sensitive=True) if selector else []
     if not nodes:
         return None
     item_selector = _normalize_selector_expr(
@@ -375,7 +464,7 @@ def _extract_list_items(
     for match in nodes:
         target_nodes = [match]
         if item_selector and isinstance(match, HtmlElement):
-            target_nodes = _select_nodes(match, item_selector)
+            target_nodes = _select_nodes(match, item_selector, context_sensitive=True)
         if not target_nodes:
             continue
         if item_type == "attribute":
@@ -420,14 +509,14 @@ def _extract_fields_from_node(
 
         if field_type == "nested":
             selector = _field_selector(field)
-            matches = _select_nodes(node, selector) if selector else [node]
+            matches = _select_nodes(node, selector, context_sensitive=True) if selector else [node]
             nested_fields = _normalize_field_definitions(field.get("fields") or {})
             value = None
             if matches and nested_fields:
                 value = _extract_fields_from_node(matches[0], nested_fields, base_url=base_url, context=ctx)
         elif field_type == "nested_list":
             selector = _field_selector(field)
-            matches = _select_nodes(node, selector) if selector else []
+            matches = _select_nodes(node, selector, context_sensitive=True) if selector else []
             nested_fields = _normalize_field_definitions(field.get("fields") or {})
             value = None
             if matches and nested_fields:
@@ -444,7 +533,7 @@ def _extract_fields_from_node(
             value = _extract_list_items(node, field, base_url=base_url, context=ctx)
         else:
             selector = _field_selector(field)
-            matches = _select_nodes(node, selector) if selector else []
+            matches = _select_nodes(node, selector, context_sensitive=True) if selector else []
             if not matches:
                 value = None
             elif field_type == "attribute":

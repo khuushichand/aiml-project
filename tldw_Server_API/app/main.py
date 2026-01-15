@@ -1019,6 +1019,12 @@ else:
     except Exception as _tools_import_err:  # noqa: BLE001
         logger.warning(f"Tools endpoints unavailable at import time; deferring: {_tools_import_err}")
         tools_router = None  # type: ignore[assignment]
+    # Agent Client Protocol (ACP) runner endpoint
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.agent_client_protocol import router as acp_router
+    except Exception as _acp_import_err:  # noqa: BLE001
+        logger.warning(f"ACP endpoints unavailable at import time; deferring: {_acp_import_err}")
+        acp_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
     from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
@@ -1868,7 +1874,9 @@ async def lifespan(app: FastAPI):
     chatbooks_cleanup_task = None
     core_jobs_task = None
     audio_jobs_task = None
+    media_ingest_jobs_task = None
     chatbooks_cleanup_stop_event = None
+    media_ingest_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     try:
@@ -1999,6 +2007,22 @@ async def lifespan(app: FastAPI):
             logger.info("Audio Jobs worker disabled by flag (AUDIO_JOBS_WORKER_ENABLED)")
     except Exception as e:
         logger.warning(f"Failed to start Audio Jobs worker: {e}")
+
+    # Media Ingest Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.media_ingest_jobs_worker import run_media_ingest_jobs_worker as _run_media_jobs
+
+        _enabled = _os.getenv("MEDIA_INGEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if _enabled:
+            media_ingest_jobs_stop_event = _asyncio.Event()
+            media_ingest_jobs_task = _asyncio.create_task(_run_media_jobs(media_ingest_jobs_stop_event))
+            logger.info("Media Ingest Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Media Ingest Jobs worker disabled by flag (MEDIA_INGEST_JOBS_WORKER_ENABLED)")
+    except Exception as e:
+        logger.warning(f"Failed to start Media Ingest Jobs worker: {e}")
 
     # Evaluations Embeddings A/B Jobs worker
     try:
@@ -2622,6 +2646,17 @@ async def lifespan(app: FastAPI):
                     audio_jobs_task.cancel()
             else:
                 audio_jobs_task.cancel()
+        if "media_ingest_jobs_task" in locals() and media_ingest_jobs_task:
+            # Prefer graceful stop via explicit stop_event
+            if "media_ingest_jobs_stop_event" in locals() and media_ingest_jobs_stop_event:
+                try:
+                    media_ingest_jobs_stop_event.set()
+                    await _asyncio.wait_for(media_ingest_jobs_task, timeout=5.0)
+                    logger.info("Media Ingest Jobs worker stopped via stop_event")
+                except Exception:
+                    media_ingest_jobs_task.cancel()
+            else:
+                media_ingest_jobs_task.cancel()
         if "evals_abtest_jobs_task" in locals() and evals_abtest_jobs_task:
             if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
                 try:
@@ -4651,6 +4686,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"])
     except Exception as _tools_min_err:
         logger.debug(f"Skipping tools router in minimal test app: {_tools_min_err}")
+    # ACP runner endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.agent_client_protocol import router as acp_router
+
+        app.include_router(acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"])
+    except Exception as _acp_min_err:
+        logger.debug(f"Skipping ACP router in minimal test app: {_acp_min_err}")
     # Include admin router in minimal mode if available (ensure not gated by MCP import)
     try:
         if "admin_router" not in locals():
@@ -4831,6 +4873,8 @@ else:
     # Tools (MCP-backed server tool execution) - include if initial guarded import succeeded
     if "tools_router" in locals() and tools_router is not None:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
+    if "acp_router" in locals() and acp_router is not None:
+        _include_if_enabled("acp", acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     if "character_chat_sessions_router" in locals():

@@ -55,6 +55,15 @@ For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
 - [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details
 
+#### Media Ingestion - `/api/v1/media`
+
+- `POST /api/v1/media/add` - ingest and persist media (synchronous)
+- `POST /api/v1/media/ingest/jobs` - async ingest (one job per item)
+- `GET /api/v1/media/ingest/jobs/{job_id}` - job status
+- `DELETE /api/v1/media/ingest/jobs/{job_id}` - cancel job
+
+See: [Media Ingest Jobs API](Media_Ingest_Jobs_API.md)
+
 #### Reading List - `/api/v1/reading`
 
 Reading List supports URL capture, clean text extraction, tagging, import/export, and actions (summarize/TTS).

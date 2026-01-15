@@ -51,6 +51,8 @@ class ScrapePlan:
     strategy_order: Optional[List[str]] = None
     schema_rules: Optional[Dict[str, Any]] = None
     llm_settings: Optional[Dict[str, Any]] = None
+    regex_settings: Optional[Dict[str, Any]] = None
+    cluster_settings: Optional[Dict[str, Any]] = None
 
 
 def _validate_handler(handler: str, allowlist: List[str]) -> str:
@@ -144,6 +146,10 @@ class ScraperRouter:
             "schema",
             "llm_settings",
             "llm",
+            "regex_settings",
+            "regex",
+            "cluster_settings",
+            "cluster",
         }
         allowed_backends = {"auto", "curl", "httpx", "playwright"}
 
@@ -190,6 +196,10 @@ class ScraperRouter:
                 elif k in {"schema_rules", "schema"}:
                     cleaned[k] = v if isinstance(v, dict) else {}
                 elif k in {"llm_settings", "llm"}:
+                    cleaned[k] = v if isinstance(v, dict) else {}
+                elif k in {"regex_settings", "regex"}:
+                    cleaned[k] = v if isinstance(v, dict) else {}
+                elif k in {"cluster_settings", "cluster"}:
                     cleaned[k] = v if isinstance(v, dict) else {}
                 else:
                     cleaned[k] = v
@@ -259,6 +269,20 @@ class ScraperRouter:
             llm_alt = rule.get("llm")
             if isinstance(llm_alt, dict):
                 plan.llm_settings = llm_alt
+        regex_settings = rule.get("regex_settings")
+        if isinstance(regex_settings, dict):
+            plan.regex_settings = regex_settings
+        else:
+            regex_alt = rule.get("regex")
+            if isinstance(regex_alt, dict):
+                plan.regex_settings = regex_alt
+        cluster_settings = rule.get("cluster_settings")
+        if isinstance(cluster_settings, dict):
+            plan.cluster_settings = cluster_settings
+        else:
+            cluster_alt = rule.get("cluster")
+            if isinstance(cluster_alt, dict):
+                plan.cluster_settings = cluster_alt
         return plan
 
 

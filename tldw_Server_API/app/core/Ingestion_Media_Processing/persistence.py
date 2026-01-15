@@ -1374,6 +1374,7 @@ async def process_batch_media(
     db_path: str,
     client_id: str,
     temp_dir: FilePath,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Core implementation of the audio/video batch processing helper used by `/media/add`.
@@ -1388,6 +1389,14 @@ async def process_batch_media(
     source_hash_by_ref: Dict[str, List[str]] = {}
     source_hash_by_source: Dict[str, str] = {}
     source_hash_column_available: Optional[bool] = None
+
+    def _is_cancelled() -> bool:
+        if cancel_check is None:
+            return False
+        try:
+            return bool(cancel_check())
+        except Exception:
+            return False
 
     logger.debug(
         "Starting pre-check for %d %s items...",
@@ -1659,6 +1668,38 @@ async def process_batch_media(
         logging.info("No items require processing after pre-checks.")
         return combined_results
 
+    if _is_cancelled():
+        for item in items_to_process:
+            ref_info = source_to_ref_map.get(item)
+            if isinstance(ref_info, tuple):
+                err_input_ref = ref_info[0]
+            elif isinstance(ref_info, str):
+                err_input_ref = ref_info
+            else:
+                err_input_ref = item
+            combined_results.append(
+                {
+                    "status": "Cancelled",
+                    "input_ref": err_input_ref,
+                    "processing_source": item,
+                    "media_type": media_type,
+                    "error": "Cancelled by user",
+                    "metadata": {},
+                    "content": None,
+                    "transcript": None,
+                    "segments": None,
+                    "chunks": None,
+                    "analysis": None,
+                    "summary": None,
+                    "analysis_details": None,
+                    "warnings": None,
+                    "db_id": None,
+                    "db_message": "DB operation skipped (cancelled).",
+                    "media_uuid": None,
+                }
+            )
+        return combined_results
+
     processing_output: Optional[Dict[str, Any]] = None
     try:
         if str(media_type) == "video":
@@ -1924,6 +1965,15 @@ async def process_batch_media(
             metadata.setdefault("source_hash", source_hash)
             process_result["metadata"] = metadata
 
+        if _is_cancelled():
+            process_result["status"] = "Cancelled"
+            process_result["error"] = "Cancelled by user"
+            process_result["db_message"] = "DB operation skipped (cancelled)."
+            process_result["db_id"] = None
+            process_result["media_uuid"] = None
+            final_batch_results.append(process_result)
+            continue
+
         claims_context: Optional[Dict[str, Any]] = None
         if process_result.get("status") in ("Success", "Warning"):
             try:
@@ -2009,6 +2059,7 @@ async def process_document_like_item(
     db_path: str,
     client_id: str,
     user_id: Optional[int] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """
     Core helper that handles download/prep, processing, and DB persistence for
@@ -2610,6 +2661,24 @@ async def process_document_like_item(
     final_result.setdefault("status", "Error")
     final_result["input_ref"] = item_input_ref
     final_result["media_type"] = media_type
+
+    if cancel_check is not None:
+        try:
+            if cancel_check():
+                final_result.update(
+                    {
+                        "status": "Cancelled",
+                        "error": "Cancelled by user",
+                        "db_message": "DB operation skipped (cancelled).",
+                        "db_id": None,
+                        "media_uuid": None,
+                    },
+                )
+                if not final_result.get("warnings"):
+                    final_result["warnings"] = None
+                return final_result
+        except Exception:
+            pass
 
     if final_result.get("status") in ["Success", "Warning"]:
         try:

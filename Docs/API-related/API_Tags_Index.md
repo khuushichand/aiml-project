@@ -21,6 +21,7 @@ Notes:
 | `chunking-templates` | API-related/Chunking_Templates_API_Documentation.md |
 | `audio` | API-related/Audio_Transcription_API.md |
 | `audio-jobs` | API-related/Audio_Jobs_API.md |
+| `Media Ingestion Jobs` | API-related/Media_Ingest_Jobs_API.md |
 | `evaluations` | API-related/Evaluations_API_Unified_Reference.md |
 | `reading` | API-related/Reading_List_API.md |
 | `benchmarks` | Coming soon |
