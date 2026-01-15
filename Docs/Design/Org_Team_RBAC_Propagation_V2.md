@@ -27,11 +27,24 @@ Scoped RBAC adds a second layer of permission grants derived from org/team membe
 - `ORG_RBAC_PROPAGATION_ENABLED` (bool, default: false)
   - Enables org/team role-to-permission propagation.
 - `ORG_RBAC_SCOPE_MODE` (str, default: "union")
-  - `union`: union scoped permissions across all org/team memberships (backward-compatible).
-  - `active_only`: only apply scoped permissions for the active org/team.
+  - `union`: union scoped permissions across all org/team memberships (backward-compatible); scoped grants are still filtered by the configured allowlist prefixes.
+  - `active_only`: only apply scoped permissions for the active org/team; still filtered by allowlist prefixes.
   - `require_active`: same as `active_only`, but when no active scope is set, return only global permissions (graceful fallback). Endpoints that require scoped checks can still fail closed by explicitly verifying active scope presence before relying on scoped permissions.
-- `ORG_RBAC_SCOPED_PERMISSION_PREFIXES` (list[str], optional)
-  - Allowlist prefixes for scoped permissions (e.g., `media.`, `chat.`, `rag.`). Helps avoid granting system-level permissions from org/team roles.
+- `ORG_RBAC_SCOPED_PERMISSION_PREFIXES` (list[str], default: ["media.", "chat.", "rag."])
+  - Allowlist prefixes for scoped permissions; applies by default to both org and team role-permission mappings.
+- `ORG_RBAC_ORG_PREFIXES` (list[str], optional)
+  - Optional override allowlist for org role-permission mappings; defaults to `ORG_RBAC_SCOPED_PERMISSION_PREFIXES` when unset.
+- `ORG_RBAC_TEAM_PREFIXES` (list[str], optional)
+  - Optional override allowlist for team role-permission mappings; defaults to `ORG_RBAC_SCOPED_PERMISSION_PREFIXES` when unset.
+- `ORG_RBAC_RUNTIME_FILTERING` (bool, default: false)
+  - When true, apply allowlist filtering at runtime as a safety net (in addition to create/update validation).
+
+### Validation and Filtering
+- Role-permission mappings are validated on create/update (fail-fast). If any permission is invalid or outside the allowlist, return `400` with a clear validation error and do not apply partial updates. Include the offending permission(s) and reason (e.g., not in `permissions` table, prefix not allowed, invalid format).
+- Runtime filtering is optional (`ORG_RBAC_RUNTIME_FILTERING=true`) and should drop any scoped permissions that do not match the allowlist; when disabled, only the create/update validation gate applies.
+- Implementation locations:
+  - Role creation/update handlers: admin RBAC endpoints in `tldw_Server_API/app/api/v1/endpoints/admin.py` (or a dedicated admin RBAC module if split out).
+  - Permission-check flow: scoped resolver in `tldw_Server_API/app/core/AuthNZ/org_rbac.py` applies runtime filtering before merging into `AuthPrincipal.permissions`; `require_permissions` in `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py` relies on the filtered set.
 
 ### Active Org/Team Resolution
 Priority order for active scope:
@@ -94,10 +107,22 @@ Optional (future, deferred for this release): scoped overrides per user within o
   - populate active org/team IDs from claims and/or headers,
   - call the scoped resolver when enabled,
   - attach scoped permissions to `AuthPrincipal` and the user model.
-- Error handling: if the scoped resolver hits a DB timeout, return global-only permissions and set a resolver-failure flag on `AuthPrincipal`; do not fail the request.
-- Admin endpoints to manage role-permission mappings are required for production:
+- Error handling: if the scoped resolver hits a DB timeout, return global-only permissions and set a resolver-failure flag on `AuthPrincipal`; do not fail the request. `AuthPrincipal.resolver_failure` is server-internal only (logged + metrics), not surfaced to clients in responses or headers.
+- Observability: emit `resolver_success_count`, `resolver_failure_count`, and `resolver_latency_ms` metrics for the scoped resolver. Alert on sustained failures (e.g., >5% failure rate over 5m) or sustained high latency (e.g., >1m p95 latency over 5m).
+- Admin endpoints to manage role-permission mappings are required for production (canonical `/api/v1/` prefix):
   - `GET/POST/DELETE /api/v1/admin/rbac/org-roles/{role}/permissions`
   - `GET/POST/DELETE /api/v1/admin/rbac/team-roles/{role}/permissions`
+  - Auth: platform-admin only (401 unauthenticated, 403 unauthorized).
+  - Rate limiting enforced for all admin operations (429 on limit).
+  - Request/response formats:
+    - `GET`: `200 {"role":"<role>","permissions":["perm.a","perm.b"]}`
+    - `POST`: body `{"permissions":["perm.a","perm.b"]}`; `200 {"role":"<role>","permissions":[...],"added":["perm.a"]}`
+    - `DELETE`: body `{"permissions":["perm.a","perm.b"]}`; `200 {"role":"<role>","permissions":[...],"removed":["perm.a"]}`
+  - Error responses:
+    - `400` validation failures, `404` unknown role, `409` conflicts (duplicate add/remove missing), `422` schema errors, `500` unexpected errors.
+  - Validation rules:
+    - `role` path param must be non-empty, lower-case, and match an allowed org/team role name (configurable allowlist); pattern `[a-z0-9_-]{1,64}`.
+    - `permissions` must be a non-empty list, de-duplicated, and each entry must exist in `permissions` table, match `ORG_RBAC_SCOPED_PERMISSION_PREFIXES`, be lower-case dotted, and contain no whitespace.
 - Create/update/delete of role-permission mappings must emit audit events.
 - Expose scoped RBAC support via a capabilities endpoint or existing metadata so clients can detect when scoped RBAC is enabled.
 
@@ -110,6 +135,9 @@ Optional (future, deferred for this release): scoped overrides per user within o
 - Unit tests: scoped permission resolution with union vs active_only.
 - Integration tests: admin endpoints update mappings; scoped permissions applied to `require_permissions`.
 - Regression: single-user mode unaffected; JWT/API-key auth still works with no active scope.
+- Performance tests: load tests measuring cache hit/miss rates; permission resolution latency across varying org/team sizes; DB query latency for role-to-permission lookups used by scoped resolution.
+- Security tests: unauthorized access to admin endpoints; abuse of scope switching via headers; permission prefix bypass attempts; privilege escalation via role-permission mapping manipulation; verify `require_permissions` enforcement under each attack case.
+- Migration tests: seed default role-to-permission mappings then enable scoped propagation to confirm permissions are preserved; rollback from enabled to disabled state to ensure mappings and behaviors revert safely.
 
 ## Open Questions
 - Should scoped permissions include team memberships when active org is set but team is not?

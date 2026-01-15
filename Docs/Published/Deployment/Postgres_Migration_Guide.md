@@ -54,8 +54,9 @@ python -m tldw_Server_API.app.core.DB_Management.migration_tools \
 ```
 
 For multi-user deployments, repeat the command for each user directory. Run these migrations
-sequentially; do not run multiple instances in parallel because the tool truncates target tables
-before copying data. Use `--user-id` to scope deletions and inserts per user. To auto-discover
+sequentially; do not run multiple instances in parallel because the tool deletes rows before copying
+data. Use `--user-id` to scope deletions and inserts per user; when set, the tool issues scoped
+DELETE statements (not TRUNCATE) per user in dependency order. To auto-discover
 user IDs from the filesystem safely:
 
 ```bash

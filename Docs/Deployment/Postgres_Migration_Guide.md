@@ -75,8 +75,8 @@ for user_path in "${USER_DB_BASE_DIR}"/*; do
   if [ -r "${chacha_db}" ]; then
     migration_args+=(--chacha-sqlite "${chacha_db}")
   else
-    echo "Error: missing or unreadable ChaChaNotes.db for user ${user_id} (${chacha_db})." >&2
-    exit 1
+    echo "Warning: missing or unreadable ChaChaNotes.db for user ${user_id} (${chacha_db}). Skipping." >&2
+    continue
   fi
 
   python -m tldw_Server_API.app.core.DB_Management.migration_tools "${migration_args[@]}"

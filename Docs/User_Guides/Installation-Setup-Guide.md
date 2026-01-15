@@ -186,7 +186,62 @@ curl -s http://127.0.0.1:8000/api/v1/embeddings \
 
 More detail on local backends and llama.cpp flags: [Docs/Code_Documentation/Local_LLM.md](../Code_Documentation/Local_LLM.md).
 
-## 6) Start the server
+## 6) Optional: Text-to-Speech (TTS)
+
+TTS providers and priority live in `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`. You can also override some settings in `Config_Files/config.txt` under `[TTS-Settings]`.
+
+Quick paths:
+- Hosted OpenAI TTS: set `OPENAI_API_KEY` and keep the `openai` provider enabled.
+- Local Kokoro ONNX: install the extra, install `espeak-ng`, and download models.
+
+```bash
+# Local Kokoro (deps + model/voices)
+pip install -e ".[TTS_kokoro_onnx]"
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+```
+
+Verify TTS:
+
+```bash
+# OpenAI (hosted)
+curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: YOUR_API_KEY" \
+  -d '{"model":"tts-1","voice":"alloy","input":"Hello from TTS","response_format":"mp3"}' \
+  --output tts.mp3
+
+# Kokoro (local, ONNX)
+curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: YOUR_API_KEY" \
+  -d '{"model":"kokoro","voice":"af_bella","input":"Hello from Kokoro","response_format":"mp3"}' \
+  --output kokoro.mp3
+```
+
+Notes:
+- Local providers do not auto-download unless you set `TTS_AUTO_DOWNLOAD=1`.
+- Use `GET /api/v1/audio/voices/catalog` to list available voices.
+
+More detail: [Docs/User_Guides/TTS_Getting_Started.md](TTS_Getting_Started.md).
+
+## 7) Optional: Speech-to-Text (STT)
+
+For STT setup and testing, use the dedicated guide and API reference:
+- [Docs/Getting-Started-STT_and_TTS.md](../Getting-Started-STT_and_TTS.md)
+- [Docs/API-related/Audio_Transcription_API.md](../API-related/Audio_Transcription_API.md)
+
+Quick STT verification:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
+  -H "X-API-KEY: YOUR_API_KEY" \
+  -F "file=@/path/to/audio.wav" \
+  -F "model=whisper-1" \
+  -F "language=en" \
+  -F "response_format=json"
+```
+
+## 8) Start the server
 
 ```bash
 python -m uvicorn tldw_Server_API.app.main:app --reload
@@ -200,7 +255,7 @@ Tip: You can also use the convenience script from the repo root:
 ./start-webui.sh
 ```
 
-## 7) Verify
+## 9) Verify
 
 - Health: `GET http://127.0.0.1:8000/health` should return `{ "status": "healthy" }`
 - On startup, logs display the auth mode and URLs. In single-user mode the API key may be masked unless explicitly allowed.

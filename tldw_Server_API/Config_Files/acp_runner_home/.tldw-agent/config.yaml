@@ -1,0 +1,3 @@
+agent:
+  command: "codex"
+  args: []
