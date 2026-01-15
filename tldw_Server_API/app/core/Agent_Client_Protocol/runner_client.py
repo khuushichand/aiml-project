@@ -46,7 +46,10 @@ class ACPRunnerClient:
     async def start(self) -> None:
         if not self._client.is_running:
             await self._client.start()
-        await self.initialize()
+        if self.config.startup_timeout_sec > 0:
+            await asyncio.wait_for(self.initialize(), timeout=self.config.startup_timeout_sec)
+        else:
+            await self.initialize()
 
     async def initialize(self) -> Dict[str, Any]:
         response = await self._client.call(

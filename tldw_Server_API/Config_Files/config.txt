@@ -11,6 +11,19 @@ allow_remote_webui_access = false
 # Provide CIDR ranges or individual IPs, comma-separated
 webui_ip_allowlist =
 
+[ACP]
+# Command used to launch the ACP runner (tldw-agent-acp).
+runner_command = go
+# Accepts JSON array or shell-style args.
+runner_args = ["run", "./cmd/tldw-agent-acp"]
+# Working directory for the runner process (e.g. ../tldw-agent).
+runner_cwd = ../tldw-agent
+# Runner environment (comma-separated key=value or JSON).
+# If you point HOME at a local ACP stub config, use an absolute path to avoid Go GOMODCACHE errors.
+runner_env = HOME=/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/acp_runner_home,PYTHONUNBUFFERED=1
+# Startup timeout for runner initialize.
+startup_timeout_ms = 10000
+
 [Audit]
 # Auto-switch audit exports to streaming when max_rows exceeds this threshold to avoid large in-memory buffers.
 export_stream_auto_max_rows = 5000
@@ -1013,7 +1026,7 @@ stable_only = true
 disable =
 
 # Comma-separated list of route keys to force-enable (useful when stable_only = true)
-enable = tools, jobs
+enable = tools, jobs, acp
 
 # Optionally extend the curated experimental set (comma-separated)
 experimental_routes =

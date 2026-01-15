@@ -35,7 +35,7 @@ async def acp_session_new(
         client = await get_runner_client()
         session_id = await client.create_session(payload.cwd, payload.mcp_servers)
     except ACPResponseError as exc:
-        logger.error("ACP session/new failed for user {}: {}", user.user_id, exc)
+        logger.error("ACP session/new failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
     return ACPSessionNewResponse(
@@ -53,7 +53,7 @@ async def acp_session_prompt(
         client = await get_runner_client()
         result = await client.prompt(payload.session_id, payload.prompt)
     except ACPResponseError as exc:
-        logger.error("ACP session/prompt failed for user {}: {}", user.user_id, exc)
+        logger.error("ACP session/prompt failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
     return ACPSessionPromptResponse(
@@ -71,7 +71,7 @@ async def acp_session_cancel(
         client = await get_runner_client()
         await client.cancel(payload.session_id)
     except ACPResponseError as exc:
-        logger.error("ACP session/cancel failed for user {}: {}", user.user_id, exc)
+        logger.error("ACP session/cancel failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     return {"status": "ok"}
 
@@ -85,7 +85,7 @@ async def acp_session_close(
         client = await get_runner_client()
         await client.close_session(payload.session_id)
     except ACPResponseError as exc:
-        logger.error("ACP session/close failed for user {}: {}", user.user_id, exc)
+        logger.error("ACP session/close failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     return {"status": "ok"}
 
