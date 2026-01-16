@@ -26,7 +26,7 @@ Introduce a Jobs-backed media ingestion pipeline that supports user cancellation
 ### Worker Operations
 - Cancellation checkpoints: check before each `update_job_progress` call, after download/staging, before conversion/transcription, before chunk/analyze, and immediately before DB writes and cleanup.
 - Worker configuration: start with a small pool (e.g., 2-4 workers per host) and per-worker concurrency of 1 for CPU/GPU-heavy stages; scale based on queue depth, CPU/GPU availability, and staging disk budget.
-- Cleanup failure handling: cleanup is best-effort; log failures with `batch_id`/`job_id`, mark the cleanup as pending in results/logs, and rely on a janitor task to retry without failing successful ingestion.
+- Cleanup failure handling: cleanup is best-effort; log failures with `batch_id`/`job_id`, mark the cleanup as pending in results/logs, and rely on a background janitor task (see Staging) to retry without failing successful ingestion.
 
 ### Jobs Domain
 - Domain: `media_ingest`
@@ -66,9 +66,9 @@ Design doc overview only. See `Docs/API-related/Media_Ingest_Jobs_API.md` for de
 
 ## Cancellation Semantics
 - `cancel_job(job_id)` marks `status=cancelled` immediately.
-- Worker checks cancellation before heavy steps and before DB writes.
+- Worker checks cancellation at specific checkpoints: before each `update_job_progress` call, after download/staging, before conversion/transcription, before chunk/analyze, and immediately before DB writes and cleanup.
 - If cancelled mid-flight, worker finalizes as cancelled and skips persistence.
-- Best-effort cleanup of staged files on cancel or completion.
+- Staged file cleanup is best-effort: failures are logged with `batch_id`/`job_id`, marked as pending in results/logs, and retried by the background janitor task without blocking job finalization.
 
 ## Staging
 - Uploaded files are saved under a per-request temp directory.

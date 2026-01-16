@@ -32,13 +32,13 @@ Type-specific `value` objects:
 
 - `keyword`
   - `{ "keywords": string[], "match": "any" | "all", "field?": "title" | "summary" | "content" | "author", "fields?": string[] }`
-  - Default: `match="any"`. If neither `field` nor `fields` is provided, all common fields are searched (`title`, `summary`, `content`, `author`).
+  - Default: `match="any"`. If neither `field` nor `fields` is provided, all common fields are searched (`title`, `summary`, `content`, `author`). If both are provided, `fields` takes precedence.
 - `author`
   - `{ "names": string[], "match": "any" | "all" }`
   - Default: `match="any"`
 - `regex`
   - `{ "pattern": string, "flags?": string, "field?": "title" | "summary" | "content" | "author", "fields?": string[] }`
-  - Default: `flags="i"`. If neither `field` nor `fields` is provided, all common fields are searched (`title`, `summary`, `content`, `author`).
+  - Default: `flags="i"`. If neither `field` nor `fields` is provided, all common fields are searched (`title`, `summary`, `content`, `author`). If both are provided, `fields` takes precedence.
 - `date_range`
   - `{ "max_age_days"?: number, "since"?: string(ISO-8601), "until"?: string(ISO-8601) }`
   - At least one of `max_age_days`, `since`, `until` must be present; all provided constraints must pass.
@@ -58,7 +58,7 @@ Unknown `type`/`action` values must be rejected by the API.
 
 Notes:
 - The `flag` action can be surfaced in outputs (e.g., “⚑ flagged by: regex:breaking”).
-- Future iterations may allow `flag` to be terminal via a job setting.
+- Future iterations may allow `flag` to be non-terminal via a job setting, enabling multiple flags per item.
 
 ## Examples
 

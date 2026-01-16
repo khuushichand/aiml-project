@@ -28,7 +28,7 @@ Scoped RBAC adds a second layer of permission grants derived from org/team membe
   - Enables org/team role-to-permission propagation.
 - `ORG_RBAC_SCOPE_MODE` (str, default: "union")
   - `union`: union scoped permissions across all org/team memberships (backward-compatible); scoped grants are still filtered by the configured allowlist prefixes.
-  - `active_only`: only apply scoped permissions for the active org/team; still filtered by allowlist prefixes.
+  - `active_only`: apply scoped permissions only for `active_org_id` and (if set) `active_team_id`; when `active_org_id` is set but `active_team_id` is not, only org-level grants for the active org are included (team-level grants are excluded). Still filtered by allowlist prefixes.
   - `require_active`: same as `active_only`, but when no active scope is set, return only global permissions (graceful fallback). Endpoints that require scoped checks can still fail closed by explicitly verifying active scope presence before relying on scoped permissions.
 - `ORG_RBAC_SCOPED_PERMISSION_PREFIXES` (list[str], default: ["media.", "chat.", "rag."])
   - Allowlist prefixes for scoped permissions; applies by default to both org and team role-permission mappings.
@@ -100,7 +100,7 @@ Optional (future, deferred for this release): scoped overrides per user within o
    - Apply `ORG_RBAC_SCOPED_PERMISSION_PREFIXES` if configured.
 3) Apply scoping mode:
    - `union`: union all scoped permissions for all memberships.
-   - `active_only`: include only permissions for `active_org_id` / `active_team_id`.
+   - `active_only`: include org-level permissions for `active_org_id` and team-level permissions only when `active_team_id` is set (no team grants when only `active_org_id` is set).
    - `require_active`: same as `active_only`, but when no active scope is set, return only global permissions (graceful fallback). Endpoints that require scoped checks can still fail closed by explicitly verifying active scope presence before relying on scoped permissions.
 4) Merge global + scoped permissions into `AuthPrincipal.permissions` (default union: permission granted if present in either set). A configurable merge strategy can be supported if needed (`union`, `intersection`, `scoped-overrides-global`).
 
@@ -150,6 +150,5 @@ Optional (future, deferred for this release): scoped overrides per user within o
 - Migration tests: seed default role-to-permission mappings then enable scoped propagation to confirm permissions are preserved; rollback from enabled to disabled state to ensure mappings and behaviors revert safely.
 
 ## Open Questions
-- Should scoped permissions include team memberships when active org is set but team is not?
 - Which permission prefixes are safe for scoped grants in v2 (default allowlist)?
 - Do we need an explicit header for active org/team in non-JWT flows?

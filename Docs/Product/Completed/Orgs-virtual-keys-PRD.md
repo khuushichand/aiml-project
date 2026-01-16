@@ -125,7 +125,7 @@ On each request to configured LLM endpoints (defaults: `/api/v1/chat/completions
      Compare against configured budgets (tokens and/or USD). If any limit would be exceeded (>=), reject with 402 and clear message.
 
 Notes:
-- We use logging data as source of truth for spend/token usage; aggregation to daily table can be leveraged for monthly sums in future.
+- We use logging data as source of truth for spend/token usage; `llm_usage_daily` support was removed, so monthly sums should be derived directly from `llm_usage_log` with rolling 30-day windows in the future.
 - Budgets are soft state. A request that tips over a limit will be allowed once (the tipping request), and subsequent requests will be blocked. Month limits use a rolling 30-day window.
 - Error codes: 403 for disallowed endpoint/provider/model; 402 for budget exceeded.
  - **Stable contract**: the 402 response payload shape (`error`, `message`, `details`) is stable.
