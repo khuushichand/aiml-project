@@ -12,7 +12,8 @@ Endpoints mirror PRD shape:
 DB access must be implemented via app.core.DB_Management (no raw SQL here).
 """
 
-from typing import Any, List
+import json
+from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Body
 from loguru import logger
 
@@ -23,12 +24,39 @@ from tldw_Server_API.app.api.v1.schemas.reading_highlights_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.core.Collections.utils import (
+    build_highlight_context,
+    find_highlight_span,
+    hash_text_sha256,
+)
 
 
 router = APIRouter(tags=["reading-highlights"])  # no prefix; use absolute paths below
 
 
 pass
+
+
+def _extract_item_text_and_hash(db, item_id: int) -> tuple[Optional[str], Optional[str]]:
+    try:
+        item = db.get_content_item(item_id)
+    except KeyError:
+        return None, None
+
+    metadata = {}
+    if getattr(item, "metadata_json", None):
+        try:
+            metadata = json.loads(item.metadata_json) if item.metadata_json else {}
+        except Exception:
+            metadata = {}
+    text = None
+    if isinstance(metadata, dict):
+        text = metadata.get("text")
+    if not text:
+        text = item.summary or item.notes or None
+
+    content_hash = item.content_hash or hash_text_sha256(text)
+    return text, content_hash
 
 
 @router.post("/reading/items/{item_id}/highlight", response_model=Highlight, summary="Create highlight for an item")
@@ -38,15 +66,34 @@ async def create_highlight(
     current_user: User = Depends(get_request_user),
     db = Depends(get_collections_db_for_user),
 ) -> Highlight:
+    content_text, content_hash = _extract_item_text_and_hash(db, item_id)
+    start_offset = payload.start_offset
+    end_offset = payload.end_offset
+    context_before = None
+    context_after = None
+    if content_text and payload.quote:
+        span = find_highlight_span(
+            content_text,
+            payload.quote,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            anchor_strategy=payload.anchor_strategy,
+        )
+        if span is not None:
+            start_offset, end_offset = span
+            context_before, context_after = build_highlight_context(content_text, start_offset, end_offset)
     try:
         row = db.create_highlight(
             item_id=item_id,
             quote=payload.quote,
-            start_offset=payload.start_offset,
-            end_offset=payload.end_offset,
+            start_offset=start_offset,
+            end_offset=end_offset,
             color=payload.color,
             note=payload.note,
             anchor_strategy=payload.anchor_strategy,
+            content_hash_ref=content_hash,
+            context_before=context_before,
+            context_after=context_after,
         )
     except Exception as e:
         logger.error(f"create_highlight failed: {e}")

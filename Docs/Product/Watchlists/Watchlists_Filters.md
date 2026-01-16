@@ -31,17 +31,17 @@ Each `Filter` has the following shape:
 Type-specific `value` objects:
 
 - `keyword`
-  - `{ "keywords": string[], "match": "any" | "all", "field?": "title" | "summary" | "content" }`
-  - Default: `match="any"`, `field="title"`
+  - `{ "keywords": string[], "match": "any" | "all", "field?": "title" | "summary" | "content" | "author", "fields?": string[] }`
+  - Default: `match="any"`. If neither `field` nor `fields` is provided, all common fields are searched (`title`, `summary`, `content`, `author`).
 - `author`
   - `{ "names": string[], "match": "any" | "all" }`
   - Default: `match="any"`
 - `regex`
-  - `{ "pattern": string, "flags?": string, "field": "title" | "summary" | "content" }`
-  - Default: `flags="i"`, `field="title"`
+  - `{ "pattern": string, "flags?": string, "field?": "title" | "summary" | "content" | "author", "fields?": string[] }`
+  - Default: `flags="i"`. If neither `field` nor `fields` is provided, all common fields are searched (`title`, `summary`, `content`, `author`).
 - `date_range`
   - `{ "max_age_days"?: number, "since"?: string(ISO-8601), "until"?: string(ISO-8601) }`
-  - At least one of `max_age_days`, `since`, `until` must be present
+  - At least one of `max_age_days`, `since`, `until` must be present; all provided constraints must pass.
 - `all`
   - `{}` (matches all items)
 
@@ -53,7 +53,7 @@ Unknown `type`/`action` values must be rejected by the API.
 - An item is evaluated against filters and the first terminal decision wins:
   - `exclude` → item is dropped
   - `include` → item is selected
-  - `flag` → item is selected and flagged (non-terminal unless configured terminal)
+  - `flag` → item is selected and flagged (terminal in current implementation)
 - If no filter matches, items are included by default (subject to global item limits).
 
 Notes:

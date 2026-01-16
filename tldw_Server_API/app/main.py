@@ -357,9 +357,16 @@ def _install_stderr_redirect() -> None:
             return
         if isinstance(sys.stderr, _StderrInterceptor):
             return
-        sys.stderr = _StderrInterceptor(sys.stderr)
+        base = sys.__stderr__ or sys.stderr
+        sys.stderr = _StderrInterceptor(base)
     except Exception as exc:
         _safe_debug(f"Failed to install stderr redirect: {exc}")
+
+
+def _unwrap_stderr(stream):
+    if isinstance(stream, _StderrInterceptor):
+        return stream._stream
+    return stream
 
 # Reset Loguru and configure a single, thread-safe sink
 logger.remove()
@@ -368,7 +375,8 @@ _force_color = _early_os.getenv("FORCE_COLOR", "").lower() in {"1", "true", "yes
     "PY_COLORS", ""
 ).lower() in {"1", "true", "yes", "on"}
 _sink_choice = _early_os.getenv("LOG_STREAM", "stderr").lower()
-_sink = sys.stdout if _sink_choice in {"1", "true", "yes", "on", "stdout"} else sys.stderr
+_stderr = _unwrap_stderr(sys.__stderr__ or sys.stderr)
+_sink = sys.stdout if _sink_choice in {"1", "true", "yes", "on", "stdout"} else _stderr
 _use_color = _force_color or (
     _sink.isatty() and _early_os.getenv("LOG_COLOR", "1").lower() not in {"0", "false", "no", "off"}
 )

@@ -59,7 +59,7 @@ async def test_pipeline_happy_path_test_mode():
         description=None,
         scope_json=json.dumps({"tags": ["news"]}),
         schedule_expr=None,
-        schedule_timezone="UTC+8",
+        schedule_timezone="UTC",
         active=True,
         max_concurrency=None,
         per_host_delay_ms=None,
@@ -89,7 +89,7 @@ async def test_pipeline_happy_path_test_mode():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_sets_next_run_for_utc_offset_timezone():
+async def test_pipeline_sets_next_run_for_utc_timezone():
     user_id = 779
     db = WatchlistsDatabase.for_user(user_id)
 
@@ -108,7 +108,7 @@ async def test_pipeline_sets_next_run_for_utc_offset_timezone():
         description=None,
         scope_json=json.dumps({"sources": [rss.id]}),
         schedule_expr="0 8 * * *",
-        schedule_timezone="UTC+8",
+        schedule_timezone="UTC",
         active=True,
         max_concurrency=None,
         per_host_delay_ms=None,

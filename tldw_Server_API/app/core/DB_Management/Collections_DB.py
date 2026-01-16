@@ -33,6 +33,11 @@ from tldw_Server_API.app.core.DB_Management.content_backend import (
     load_content_db_settings,
     get_content_backend,
 )
+from tldw_Server_API.app.core.Collections.utils import (
+    build_highlight_context,
+    find_highlight_span,
+    hash_text_sha256,
+)
 from .backends.base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError
 from .backends.factory import DatabaseBackendFactory
 from .backends.query_utils import prepare_backend_statement
@@ -481,6 +486,7 @@ class CollectionsDatabase:
             except Exception:
                 pass
         self._fts_available = fts_available
+        self._seed_output_templates_from_watchlists()
 
     # ------------------------
     # Collections Tags helpers
@@ -488,6 +494,78 @@ class CollectionsDatabase:
     @staticmethod
     def _normalize_collection_tag(name: str) -> str:
         return name.strip().lower()
+
+    @staticmethod
+    def _infer_output_template_type(name: str, fmt: str) -> str:
+        if fmt == "html":
+            return "newsletter_html"
+        lowered = name.lower()
+        if "mece" in lowered:
+            return "mece_markdown"
+        if "newsletter" in lowered:
+            return "newsletter_markdown"
+        return "briefing_markdown"
+
+    def _list_output_template_names(self) -> set[str]:
+        try:
+            rows = self.backend.execute(
+                "SELECT name FROM output_templates WHERE user_id = ?",
+                (self.user_id,),
+            ).rows
+        except Exception:
+            return set()
+        names: set[str] = set()
+        for row in rows:
+            if isinstance(row, dict) and row.get("name") is not None:
+                names.add(str(row.get("name")))
+        return names
+
+    def _seed_output_templates_from_watchlists(self) -> None:
+        try:
+            from tldw_Server_API.app.core.Watchlists import template_store
+        except Exception as exc:
+            logger.debug(f"Skipping watchlists template seeding: {exc}")
+            return
+
+        try:
+            records = template_store.list_templates()
+        except Exception as exc:
+            logger.debug(f"Failed to list watchlists templates for seeding: {exc}")
+            return
+
+        if not records:
+            return
+
+        existing_names = self._list_output_template_names()
+        for record in records:
+            if record.name in existing_names:
+                continue
+            try:
+                loaded = template_store.load_template(record.name)
+            except Exception as exc:
+                logger.debug(f"Skipping template {record.name} during seed: {exc}")
+                continue
+            fmt = (loaded.format or "").lower()
+            if fmt not in {"md", "html"}:
+                continue
+            type_ = self._infer_output_template_type(loaded.name, fmt)
+            metadata_json = json.dumps(
+                {"seeded_from": "watchlists_templates", "seeded_at": _utcnow_iso()},
+                ensure_ascii=False,
+            )
+            try:
+                self.create_output_template(
+                    name=loaded.name,
+                    type_=type_,
+                    format_=fmt,
+                    body=loaded.content,
+                    description=loaded.description,
+                    is_default=False,
+                    metadata_json=metadata_json,
+                )
+                existing_names.add(loaded.name)
+            except Exception as exc:
+                logger.debug(f"Failed to seed watchlists template {loaded.name}: {exc}")
 
     @staticmethod
     def _domain_from_url(url: Optional[str]) -> Optional[str]:
@@ -671,6 +749,23 @@ class CollectionsDatabase:
         ).first
         if not row:
             raise KeyError("content_item_not_found")
+        tags_map = self._fetch_tags_for_item_ids([item_id])
+        return self._row_to_content_item(row, tags_map.get(item_id, []))
+
+    def get_content_item_by_media_id(self, media_id: int) -> ContentItemRow:
+        row = self.backend.execute(
+            """
+            SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
+                   title, summary, notes, content_hash, word_count, published_at, status, favorite,
+                   metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
+            FROM content_items
+            WHERE media_id = ? AND user_id = ?
+            """,
+            (media_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("content_item_not_found")
+        item_id = int(row.get("id"))
         tags_map = self._fetch_tags_for_item_ids([item_id])
         return self._row_to_content_item(row, tags_map.get(item_id, []))
 
@@ -1197,6 +1292,17 @@ class CollectionsDatabase:
         row["is_default"] = bool(row.get("is_default", 0))
         return OutputTemplateRow(**row)
 
+    def get_output_template_by_name(self, name: str) -> OutputTemplateRow:
+        q = (
+            "SELECT id, user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json "
+            "FROM output_templates WHERE user_id = ? AND name = ?"
+        )
+        row = self.backend.execute(q, (self.user_id, name)).first
+        if not row:
+            raise KeyError("template_not_found")
+        row["is_default"] = bool(row.get("is_default", 0))
+        return OutputTemplateRow(**row)
+
     def update_output_template(self, template_id: int, patch: Dict[str, Any]) -> OutputTemplateRow:
         if not patch:
             return self.get_output_template(template_id)
@@ -1292,7 +1398,18 @@ class CollectionsDatabase:
             return self.get_highlight(highlight_id)
         fields = []
         params: List[Any] = []
-        for key in ("color", "note", "state"):
+        for key in (
+            "quote",
+            "start_offset",
+            "end_offset",
+            "color",
+            "note",
+            "anchor_strategy",
+            "content_hash_ref",
+            "context_before",
+            "context_after",
+            "state",
+        ):
             if key in patch and patch[key] is not None:
                 fields.append(f"{key} = ?")
                 params.append(patch[key])
@@ -1326,6 +1443,58 @@ class CollectionsDatabase:
         )
         res = self.backend.execute(q, (self.user_id, item_id, new_content_hash))
         return int(res.rowcount or 0)
+
+    def reanchor_highlights_for_item(
+        self,
+        item_id: int,
+        *,
+        content_text: Optional[str],
+        content_hash: Optional[str],
+    ) -> Dict[str, int]:
+        if not content_text:
+            return {"updated": 0, "stale": 0, "skipped": 0}
+        resolved_hash = content_hash or hash_text_sha256(content_text)
+        if not resolved_hash:
+            return {"updated": 0, "stale": 0, "skipped": 0}
+
+        updated = 0
+        stale = 0
+        skipped = 0
+        for highlight in self.list_highlights_by_item(item_id=item_id):
+            if not highlight.quote:
+                skipped += 1
+                continue
+            span = find_highlight_span(
+                content_text,
+                highlight.quote,
+                start_offset=highlight.start_offset,
+                end_offset=highlight.end_offset,
+                context_before=highlight.context_before,
+                context_after=highlight.context_after,
+                anchor_strategy=highlight.anchor_strategy,
+            )
+            if span is None:
+                if highlight.state != "stale":
+                    self.update_highlight(highlight.id, {"state": "stale"})
+                stale += 1
+                continue
+
+            start_offset, end_offset = span
+            context_before, context_after = build_highlight_context(content_text, start_offset, end_offset)
+            self.update_highlight(
+                highlight.id,
+                {
+                    "start_offset": start_offset,
+                    "end_offset": end_offset,
+                    "content_hash_ref": resolved_hash,
+                    "context_before": context_before,
+                    "context_after": context_after,
+                    "state": "active",
+                },
+            )
+            updated += 1
+
+        return {"updated": updated, "stale": stale, "skipped": skipped}
 
     # ------------------------
     # Outputs artifacts API

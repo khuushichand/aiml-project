@@ -5,7 +5,7 @@ This page documents the Watchlists endpoints relevant to sources, jobs, runs, it
 ## Endpoints (selected)
 
 - `POST /api/v1/watchlists/sources` - create a source
-- `GET /api/v1/watchlists/sources` - list sources (filters: `q`, `tag`, `type`, ...)
+- `GET /api/v1/watchlists/sources` - list sources (filters: `q`, `tags`, ...)
 - `GET /api/v1/watchlists/sources/{id}` - get a source
 - `PATCH /api/v1/watchlists/sources/{id}` - update a source
 - `DELETE /api/v1/watchlists/sources/{id}` - delete a source
@@ -15,7 +15,7 @@ This page documents the Watchlists endpoints relevant to sources, jobs, runs, it
 
 - `GET  /api/v1/watchlists/runs` - list runs globally (filters: `q`, pagination)
 - `GET  /api/v1/watchlists/runs/{id}/details` - run details with optional filter tallies
- - `POST /api/v1/watchlists/jobs/{id}/preview` - preview candidates and filter decisions without ingestion
+- `POST /api/v1/watchlists/jobs/{id}/preview` - preview candidates and filter decisions without ingestion
 
 Jobs and outputs endpoints are available in the server OpenAPI and are covered in the product docs.
 

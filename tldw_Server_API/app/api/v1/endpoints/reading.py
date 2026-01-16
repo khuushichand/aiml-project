@@ -22,9 +22,12 @@ from tldw_Server_API.app.api.v1.schemas.reading_schemas import (
     ReadingTTSRequest,
     ReadingUpdateRequest,
 )
+from tldw_Server_API.app.api.v1.schemas.items_schemas import ItemsBulkRequest, ItemsBulkResponse
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
+from tldw_Server_API.app.api.v1.endpoints.items import bulk_update_items as bulk_update_items_handler
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Collections.reading_service import ReadingService
 from tldw_Server_API.app.core.Collections.reading_importers import (
@@ -258,6 +261,19 @@ async def list_reading_items(
         size=size,
         offset=resolved_offset,
         limit=resolved_limit,
+    )
+
+
+@router.post("/items/bulk", response_model=ItemsBulkResponse, summary="Bulk update reading items (alias)")
+async def bulk_update_reading_items(
+    payload: ItemsBulkRequest,
+    current_user: User = Depends(get_request_user),
+    collections_db = Depends(get_collections_db_for_user),
+) -> ItemsBulkResponse:
+    return await bulk_update_items_handler(
+        payload,
+        current_user=current_user,
+        collections_db=collections_db,
     )
 
 

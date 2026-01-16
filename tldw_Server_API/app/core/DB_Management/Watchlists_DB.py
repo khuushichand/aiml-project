@@ -1586,6 +1586,7 @@ class WatchlistsDatabase:
         metadata: Optional[Dict[str, Any]] = None,
         chatbook_path: Optional[str] = None,
         storage_path: Optional[str] = None,
+        media_item_id: Optional[int] = None,
     ) -> OutputRow:
         assignments: List[str] = []
         params: List[Any] = []
@@ -1598,6 +1599,9 @@ class WatchlistsDatabase:
         if storage_path is not None:
             assignments.append("storage_path = ?")
             params.append(storage_path)
+        if media_item_id is not None:
+            assignments.append("media_item_id = ?")
+            params.append(media_item_id)
         if not assignments:
             return self.get_output(output_id)
         params.append(output_id)
@@ -1606,6 +1610,13 @@ class WatchlistsDatabase:
             tuple(params),
         )
         return self.get_output(output_id)
+
+    def delete_output(self, output_id: int) -> bool:
+        res = self.backend.execute(
+            "DELETE FROM watchlist_outputs WHERE id = ?",
+            (output_id,),
+        )
+        return res.rowcount > 0
 
     def update_run(
         self,

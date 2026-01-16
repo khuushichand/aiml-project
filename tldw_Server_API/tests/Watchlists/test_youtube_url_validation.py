@@ -19,6 +19,15 @@ def client_with_user(monkeypatch):
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    # Ensure a clean per-user DB for user 777 under the configured base dir
+    try:
+        user_db_dir = base_dir / "777"
+        user_db_path = user_db_dir / "Media_DB_v2.db"
+        for path in (user_db_path, user_db_path.with_suffix(".db-wal"), user_db_path.with_suffix(".db-shm")):
+            if path.exists():
+                path.unlink()
+    except Exception:
+        pass
 
     mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")

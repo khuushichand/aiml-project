@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.schemas.items_schemas import Item, ItemsListResponse
+from tldw_Server_API.app.api.v1.schemas.items_schemas import (
+    Item,
+    ItemsListResponse,
+    ItemsBulkRequest,
+    ItemsBulkResponse,
+    ItemsBulkResult,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
@@ -24,6 +30,16 @@ def _domain_from_url(url: str | None) -> str:
         return urlparse(url).hostname or ""
     except Exception:
         return ""
+
+
+def _resolve_read_at_for_status(collections_db, item_id: int, status: str) -> tuple[Optional[str], bool]:
+    current = collections_db.get_content_item(item_id)
+    status_lower = status.lower()
+    if status_lower == "read" and not current.read_at:
+        return datetime.now(timezone.utc).isoformat(), False
+    if status_lower != "read" and current.read_at:
+        return None, True
+    return None, False
 
 
 @router.get("", response_model=ItemsListResponse, summary="Unified items list across origins")
@@ -117,54 +133,63 @@ async def list_items(
     # Build items and apply optional domain filter in-process
     items: List[Item] = []
     for r in rows:
-        url = r.get("url")
-        dom = _domain_from_url(url)
-        if domain and dom and dom != domain:
-            continue
-        # Fetch tags per item
-        try:
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import fetch_keywords_for_media, get_document_version
-            tag_list = fetch_keywords_for_media(media_id=int(r.get("id")), db_instance=db)
-        except Exception:
-            tag_list = []
-
-        # Derive summary/published_at best-effort
-        summary = None
-        published_at = None
-        try:
-            latest = get_document_version(db, media_id=int(r.get("id")), version_number=None, include_content=False)  # type: ignore[name-defined]
-            if isinstance(latest, dict):
-                summary = latest.get("analysis_content") or None
-                sm = latest.get("safe_metadata")
-                if isinstance(sm, str):
-                    import json as _json
-                    try:
-                        sm = _json.loads(sm)
-                    except Exception:
-                        sm = None
-                if isinstance(sm, dict):
-                    published_at = sm.get("published_at") or sm.get("date")
-        except Exception:
-            pass
-        if not summary:
-            content = r.get("content") or ""
-            if isinstance(content, str) and content:
-                summary = (content[:500] + "...") if len(content) > 500 else content
-
-        items.append(
-            Item(
-                id=int(r.get("id")),
-                title=r.get("title") or "Untitled",
-                url=url,
-                domain=dom,
-                summary=summary or None,
-                published_at=published_at,
-                tags=tag_list,
-                type=r.get("type") or None,
-            )
-        )
+        item = _media_row_to_item(r, db=db, domain_filter=domain)
+        if item is not None:
+            items.append(item)
 
     return ItemsListResponse(items=items, total=total, page=page, size=size)
+
+
+@router.get("/{item_id}", response_model=Item, summary="Get unified item by ID")
+async def get_item(
+    item_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_media_db_for_user),
+    collections_db = Depends(get_collections_db_for_user),
+):
+    try:
+        row = collections_db.get_content_item(item_id)
+        return _content_item_to_schema(row)
+    except KeyError:
+        pass
+    except Exception as e:
+        logger.error(f"collections item fetch failed: {e}")
+        raise HTTPException(status_code=500, detail="item_fetch_failed")
+
+    try:
+        row = collections_db.get_content_item_by_media_id(item_id)
+        return _content_item_to_schema(row)
+    except KeyError:
+        pass
+    except Exception as e:
+        logger.error(f"collections item fetch by media_id failed: {e}")
+        raise HTTPException(status_code=500, detail="item_fetch_failed")
+
+    try:
+        rows, _total = db.search_media_db(
+            search_query=None,
+            search_fields=["title", "content"],
+            media_types=None,
+            date_range=None,
+            must_have_keywords=None,
+            must_not_have_keywords=None,
+            sort_by="last_modified_desc",
+            media_ids_filter=[item_id],
+            page=1,
+            results_per_page=1,
+            include_trash=False,
+            include_deleted=False,
+        )
+    except Exception as e:
+        logger.error(f"media item fetch failed: {e}")
+        raise HTTPException(status_code=500, detail="item_fetch_failed")
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="item_not_found")
+    item = _media_row_to_item(rows[0], db=db, domain_filter=None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="item_not_found")
+    return item
 
 
 def _content_item_to_schema(row: ContentItemRow) -> Item:
@@ -182,6 +207,7 @@ def _content_item_to_schema(row: ContentItemRow) -> Item:
     item_id = row.media_id if row.media_id is not None else row.id
     return Item(
         id=int(item_id),
+        content_item_id=int(row.id),
         title=row.title or "Untitled",
         url=row.url,
         domain=domain or "",
@@ -189,4 +215,140 @@ def _content_item_to_schema(row: ContentItemRow) -> Item:
         published_at=row.published_at,
         tags=row.tags,
         type=row.origin,
+    )
+
+
+def _media_row_to_item(row, *, db, domain_filter: Optional[str]) -> Optional[Item]:
+    url = row.get("url")
+    dom = _domain_from_url(url)
+    if domain_filter and dom and dom != domain_filter:
+        return None
+    # Fetch tags per item
+    try:
+        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import fetch_keywords_for_media, get_document_version
+        tag_list = fetch_keywords_for_media(media_id=int(row.get("id")), db_instance=db)
+    except Exception:
+        tag_list = []
+
+    # Derive summary/published_at best-effort
+    summary = None
+    published_at = None
+    try:
+        latest = get_document_version(db, media_id=int(row.get("id")), version_number=None, include_content=False)  # type: ignore[name-defined]
+        if isinstance(latest, dict):
+            summary = latest.get("analysis_content") or None
+            sm = latest.get("safe_metadata")
+            if isinstance(sm, str):
+                import json as _json
+                try:
+                    sm = _json.loads(sm)
+                except Exception:
+                    sm = None
+            if isinstance(sm, dict):
+                published_at = sm.get("published_at") or sm.get("date")
+    except Exception:
+        pass
+    if not summary:
+        content = row.get("content") or ""
+        if isinstance(content, str) and content:
+            summary = (content[:500] + "...") if len(content) > 500 else content
+
+    return Item(
+        id=int(row.get("id")),
+        content_item_id=None,
+        title=row.get("title") or "Untitled",
+        url=url,
+        domain=dom,
+        summary=summary or None,
+        published_at=published_at,
+        tags=tag_list,
+        type=row.get("type") or None,
+    )
+
+
+@router.post("/bulk", response_model=ItemsBulkResponse, summary="Bulk update content items")
+async def bulk_update_items(
+    payload: ItemsBulkRequest,
+    current_user: User = Depends(get_request_user),
+    collections_db = Depends(get_collections_db_for_user),
+) -> ItemsBulkResponse:
+    item_ids = [int(item_id) for item_id in payload.item_ids or []]
+    if not item_ids:
+        raise HTTPException(status_code=422, detail="item_ids_required")
+
+    action = payload.action
+    if action == "set_status" and not payload.status:
+        raise HTTPException(status_code=422, detail="status_required")
+    if action == "set_favorite" and payload.favorite is None:
+        raise HTTPException(status_code=422, detail="favorite_required")
+    if action in {"add_tags", "remove_tags", "replace_tags"} and not payload.tags:
+        raise HTTPException(status_code=422, detail="tags_required")
+
+    seen: set[int] = set()
+    unique_ids: List[int] = []
+    for item_id in item_ids:
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        unique_ids.append(item_id)
+
+    results: List[ItemsBulkResult] = []
+    succeeded = 0
+    failed = 0
+
+    for item_id in unique_ids:
+        try:
+            if action == "set_status":
+                read_at, clear_read_at = _resolve_read_at_for_status(collections_db, item_id, payload.status)
+                collections_db.update_content_item(
+                    item_id,
+                    status=payload.status,
+                    read_at=read_at,
+                    clear_read_at=clear_read_at,
+                )
+            elif action == "set_favorite":
+                collections_db.update_content_item(item_id, favorite=payload.favorite)
+            elif action in {"add_tags", "remove_tags", "replace_tags"}:
+                current = collections_db.get_content_item(item_id)
+                incoming = payload.tags or []
+                incoming_norm = [str(tag).strip().lower() for tag in incoming if str(tag).strip()]
+                if action == "replace_tags":
+                    next_tags = incoming_norm
+                elif action == "add_tags":
+                    next_tags = sorted(set((current.tags or []) + incoming_norm))
+                else:
+                    remove_set = set(incoming_norm)
+                    next_tags = [tag for tag in (current.tags or []) if tag not in remove_set]
+                collections_db.update_content_item(item_id, tags=next_tags)
+            elif action == "delete":
+                if payload.hard:
+                    collections_db.delete_content_item(item_id)
+                else:
+                    read_at, clear_read_at = _resolve_read_at_for_status(collections_db, item_id, "archived")
+                    collections_db.update_content_item(
+                        item_id,
+                        status="archived",
+                        read_at=read_at,
+                        clear_read_at=clear_read_at,
+                    )
+            else:
+                raise HTTPException(status_code=422, detail="unsupported_action")
+            results.append(ItemsBulkResult(item_id=item_id, success=True))
+            succeeded += 1
+        except KeyError:
+            results.append(ItemsBulkResult(item_id=item_id, success=False, error="item_not_found"))
+            failed += 1
+        except HTTPException as exc:
+            results.append(ItemsBulkResult(item_id=item_id, success=False, error=str(exc.detail)))
+            failed += 1
+        except Exception as exc:
+            logger.error(f"bulk_update_items failed for {item_id}: {exc}")
+            results.append(ItemsBulkResult(item_id=item_id, success=False, error="update_failed"))
+            failed += 1
+
+    return ItemsBulkResponse(
+        total=len(unique_ids),
+        succeeded=succeeded,
+        failed=failed,
+        results=results,
     )

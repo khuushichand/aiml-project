@@ -131,6 +131,28 @@ def test_items_endpoint_uses_collections_layer(client_with_user):
     assert r.json()["total"] == 0
 
 
+def test_items_get_by_id(client_with_user):
+
+    client = client_with_user
+    r = client.post(
+        "/api/v1/reading/save",
+        json={
+            "url": "https://example.com/article",
+            "title": "Example Article",
+            "content": "Inline article content used for tests.",
+            "tags": ["demo"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    item_id = r.json()["id"]
+
+    r = client.get(f"/api/v1/items/{item_id}")
+    assert r.status_code == 200, r.text
+    item = r.json()
+    assert item["id"] == item_id
+    assert item["title"] == "Example Article"
+
+
 def test_outputs_preview_with_inline_data_and_generate(client_with_user, tmp_path):
 
     client = client_with_user

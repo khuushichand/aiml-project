@@ -1,6 +1,8 @@
+import json
+import csv
+import io
 import os
 from pathlib import Path
-import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -197,11 +199,24 @@ def test_global_runs_csv_export_with_tallies_column(client_with_user: TestClient
         params={"scope": "global", "page": 1, "size": 10, "include_tallies": True},
     )
     assert r.status_code == 200, r.text
-    lines = [ln for ln in r.text.splitlines() if ln.strip()]
-    header = lines[0]
-    assert header.startswith("id,job_id,status,started_at,finished_at,items_found,items_ingested,filters_include,filters_exclude,filters_flag")
-    assert header.endswith(",filter_tallies_json")
-    # Find our run row and ensure tallies JSON present
-    run_line = next((ln for ln in lines[1:] if ln.split(',')[0] == str(run_id)), None)
-    assert run_line is not None
-    assert '{"kw:alpha": 3' in run_line or '\"kw:alpha\"' in run_line
+    rows = list(csv.reader(io.StringIO(r.text)))
+    header = rows[0]
+    assert header[:10] == [
+        "id",
+        "job_id",
+        "status",
+        "started_at",
+        "finished_at",
+        "items_found",
+        "items_ingested",
+        "filters_include",
+        "filters_exclude",
+        "filters_flag",
+    ]
+    assert header[-1] == "filter_tallies_json"
+    # Find our run row and ensure tallies JSON parseable
+    run_row = next((row for row in rows[1:] if row and row[0] == str(run_id)), None)
+    assert run_row is not None
+    assert len(run_row) == len(header)
+    tallies = json.loads(run_row[-1])
+    assert tallies.get("kw:alpha") == 3

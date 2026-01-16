@@ -19,6 +19,11 @@ def client_user(monkeypatch):
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    sched_db = base_dir / "workflows_scheduler.db"
+    monkeypatch.setenv("WORKFLOWS_SCHEDULER_SQLITE_PATH", str(sched_db))
+    for path in (sched_db, sched_db.with_suffix(".db-wal"), sched_db.with_suffix(".db-shm")):
+        if path.exists():
+            path.unlink()
     # Do not auto-start workflows scheduler in lifespan; we may start it explicitly
     monkeypatch.setenv("WORKFLOWS_SCHEDULER_ENABLED", "false")
 
@@ -40,6 +45,11 @@ def client_admin(monkeypatch):
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    sched_db = base_dir / "workflows_scheduler.db"
+    monkeypatch.setenv("WORKFLOWS_SCHEDULER_SQLITE_PATH", str(sched_db))
+    for path in (sched_db, sched_db.with_suffix(".db-wal"), sched_db.with_suffix(".db-shm")):
+        if path.exists():
+            path.unlink()
     monkeypatch.setenv("WORKFLOWS_SCHEDULER_ENABLED", "false")
 
     mod = import_module("tldw_Server_API.app.main")
@@ -59,7 +69,7 @@ def test_create_job_sets_next_and_schedule_id(client_admin):
         "name": "Daily 8am",
         "scope": {"tags": ["alpha"]},
         "schedule_expr": "0 8 * * *",
-        "timezone": "UTC+8",
+        "timezone": "UTC",
         "active": True,
     }
     r = c.post("/api/v1/watchlists/jobs", json=body)
@@ -86,7 +96,7 @@ def test_update_job_recomputes_next_and_updates_enabled(client_user):
     job = r.json()
     jid = job["id"]
     # Update cron and timezone and active flag
-    r = c.patch(f"/api/v1/watchlists/jobs/{jid}", json={"schedule_expr": "*/15 * * * *", "timezone": "UTC+8", "active": False})
+    r = c.patch(f"/api/v1/watchlists/jobs/{jid}", json={"schedule_expr": "*/15 * * * *", "timezone": "UTC", "active": False})
     assert r.status_code == 200
     upd = r.json()
     assert upd["next_run_at"] is not None

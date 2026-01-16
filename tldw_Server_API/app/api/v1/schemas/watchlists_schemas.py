@@ -138,7 +138,7 @@ class JobCreateRequest(BaseModel):
     description: Optional[str] = None
     scope: Dict[str, Any] = Field(default_factory=dict, description="Selection: {sources:[], groups:[], tags:[]}")
     schedule_expr: Optional[str] = Field(None, description="Cron or interval expression; stored as provided")
-    timezone: Optional[str] = Field(None, description="Timezone for schedule; PRD default UTC+8")
+    timezone: Optional[str] = Field(None, description="Timezone for schedule; PRD default UTC")
     active: bool = True
     max_concurrency: Optional[int] = None
     per_host_delay_ms: Optional[int] = None
@@ -301,7 +301,15 @@ class WatchlistOutputCreateRequest(BaseModel):
     format: Optional[Literal["md", "html"]] = Field(None, description="Rendered output format (overrides template)")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata stored alongside the output")
     template_name: Optional[str] = Field(None, description="Name of a stored template to render with")
-    retention_seconds: Optional[int] = Field(None, ge=60, description="Optional custom retention in seconds (0 = no expiry)")
+    generate_mece: bool = Field(default=False, description="Generate a MECE variant output")
+    mece_template_name: Optional[str] = Field(default=None, description="Override template name for MECE output")
+    generate_tts: bool = Field(default=False, description="Generate a TTS audio variant output")
+    tts_template_name: Optional[str] = Field(default=None, description="Override template name for TTS output")
+    ingest_to_media_db: bool = Field(default=False, description="Ingest outputs into Media DB")
+    tts_model: Optional[str] = Field(default=None, description="TTS model id, e.g., 'kokoro', 'tts-1'")
+    tts_voice: Optional[str] = Field(default=None, description="TTS voice id, e.g., 'af_heart'")
+    tts_speed: Optional[float] = Field(default=None, ge=0.25, le=4.0, description="TTS speed override")
+    retention_seconds: Optional[int] = Field(None, ge=0, description="Optional custom retention in seconds (0 = no expiry)")
     temporary: Optional[bool] = Field(False, description="Whether to use temporary retention defaults")
     deliveries: Optional[WatchlistOutputDeliveries] = Field(
         default=None,

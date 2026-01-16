@@ -83,3 +83,28 @@ This PRD captures the remaining UX work for Content Collections after the core A
 - Do we need background jobs for very large imports, or is the current sync flow acceptable?
 - Should exports include highlights and notes by default or behind a toggle?
 
+## 10. Implementation Plan (Phase 3)
+
+## Stage 1: UX Audit and Contract Alignment
+**Goal**: Confirm current Reading/Watchlists UI coverage against Watchlists-UX-PRD and validate required API contracts.
+**Success Criteria**: Phase 3 backlog is finalized with scoped UI changes, confirmed endpoints, and any required API additions explicitly listed.
+**Tests**: None (documentation and scope validation only).
+**Status**: Not Started
+
+## Stage 2: Import/Export UX (Pocket/Instapaper)
+**Goal**: Implement the import/export UX refinements described in the PRD (drag/drop, validation errors, results summary, export filters).
+**Success Criteria**: Import modal validates file type/size, supports source override + merge tags toggle, and surfaces API error details; export panel preserves list filters and delivers JSONL/ZIP with clear filename hints.
+**Tests**: Frontend component tests for import validation and export filter wiring; manual QA with Pocket JSON and Instapaper CSV fixtures.
+**Status**: Not Started
+
+## Stage 3: Reader Highlights and Notes UX
+**Goal**: Provide selection-based highlight creation, highlight list filtering, stale badges, and stronger notes autosave/dirty indicators.
+**Success Criteria**: Users can select text to create highlights, edit/delete highlights in-place, filter highlights by color/search, and see stale badges; notes show dirty state and do not lose edits on navigation.
+**Tests**: UI tests for highlight CRUD state changes and notes autosave/dirty indicator; manual QA for text selection flows.
+**Status**: Not Started
+
+## Stage 4: Output Template Editor and Bulk Item Actions
+**Goal**: Add a template editor with preview and integrate bulk actions in Items/Reading views.
+**Success Criteria**: Templates list/create/edit/preview flows work end-to-end; job editor can assign default templates; bulk actions support tag add/remove, status update, favorite toggle, delete, and output generation with progress/error summaries.
+**Tests**: UI tests for template preview rendering and bulk action summaries; manual QA for mixed-success scenarios.
+**Status**: Not Started

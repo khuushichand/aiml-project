@@ -15,7 +15,7 @@ Content Collections unify two complementary workflows:
 - **Watchlists**: Source-centric scheduled collection from websites/news sites/RSS with jobs, runs, aggregated outputs, template-driven rendering, versioning, retention/TTL, and delivery (email + Chatbook). *Status: implemented; WebUI admin flows now consume the new APIs; run WebSocket streaming and forum gating shipped.*
 - **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, notes, highlights, import/export. *Status: capture/status/favorite/notes flows and basic WebUI shipped; Pocket/Instapaper import/export API shipped; highlights + import/export UX tracked in Watchlists-UX-PRD.*
 
-Both flows will share a normalized collections layer that references (but does not replace) the existing Media DB. Media DB remains the canonical artifact store; the collections layer will provide dedupe, metadata, and search connectivity across Watchlists and Reading. Outputs can be generated from scheduled runs or filtered item sets, exported as Chatbooks, delivered via email, or linked back into Media DB.
+Both flows will share a normalized collections layer stored inside the per-user Media DB (`Media_DB_v2.db`). Media DB remains the canonical artifact store and the central DB for `content_items`, templates, and highlights, while the collections layer (via `CollectionsDatabase`) provides dedupe, metadata, and search connectivity across Watchlists and Reading. Outputs can be generated from scheduled runs or filtered item sets, exported as Chatbooks, delivered via email, or linked back into Media DB.
 
 ## 2. Goals and Non-Goals
 
@@ -106,7 +106,7 @@ v1
 
 ### 8.4 Scheduling & Runs (Watchlists)
 - Scheduler: APScheduler (AsyncIOScheduler) with SQLAlchemyJobStore for persistence across restarts.
-- Timezone: all schedule expressions are interpreted and stored with timezone `UTC+8`.
+- Timezone: all schedule expressions are interpreted and stored with timezone `UTC`.
 - Jobs: scope (sources/groups/tags), schedule (interval/cron), active flag, per-host delay, max concurrency, retry policy.
 - Runs: status (queued/running/success/partial/failed), stats (new/updated/ignored/errors), logs, started/finished times.
 - Runs: WebSocket streaming for status/log tail (implemented).
@@ -121,7 +121,7 @@ v1
 ### 8.6 Outputs & Delivery
 - Output types: newsletter_markdown, briefing_markdown, mece_markdown, newsletter_html (v1), tts_audio (v1).
 - Inputs: item IDs, saved filter query, or run_id; templating with variables (job, date, items, tags).
-- Templates: managed via API (CRUD) with DB-backed storage and seed defaults; preview supported. Watchlist-specific templates are stored under `Config_Files/templates/watchlists` (override via `WATCHLIST_TEMPLATE_DIR`).
+- Templates: managed via API (CRUD) with DB-backed storage and preview via `/api/v1/outputs/templates`. Watchlists outputs resolve DB templates by name; legacy file-based watchlists templates live under `tldw_Server_API/Config_Files/templates/watchlists` (override via `WATCHLIST_TEMPLATE_DIR`) and are supported as fallback.
 - Delivery: download file; optional Media DB ingest, email (SMTP provider via `NotificationsService`), Chatbook document generation.
 - Retention: global defaults via `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS` / `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`, per-job overrides under `output_prefs.retention`, per-output overrides during generation.
 - Status: **Complete** - API + retention/versioning + email/Chatbook delivery and WebUI controls shipped; MECE/TTS automation and Media DB ingest toggles included.
@@ -177,7 +177,7 @@ Entities
 - scrape_jobs
   - id, user_id, name, description, scope_json (sources|groups|tags), schedule_expr,
     active, max_concurrency, per_host_delay_ms, retry_policy_json,
-    output_prefs_json, schedule_timezone[`UTC+8`], created_at, updated_at, last_run_at, next_run_at
+    output_prefs_json, schedule_timezone[`UTC`], created_at, updated_at, last_run_at, next_run_at
 - scrape_runs
   - id, job_id, status, started_at, finished_at, stats_json, error_msg, log_path
 - outputs
@@ -228,12 +228,67 @@ Watchlists
 Shared Items
 - `GET /items` → unified list (origin, tags, status, domain, date, job_id, run_id)
 - `GET /items/{id}` → item regardless of origin
+- `POST /items/bulk` → bulk update items (status, favorite, tags, delete)
 
 Tags Semantics (API)
 - Endpoints that accept `tags` expect a list of tag names (strings).
 - Server normalizes names (lowercase, trimmed), ensures existence in the per-user `tags` table (creating missing tags), and resolves to `tag_id`s for joins.
 - Responses include tag names by default. For clients that need IDs, add `?include_tag_ids=true` to include `{name, id}` pairs in responses where applicable.
 - Watchlists tag assignment endpoints accept names and follow the same normalization and resolution behavior.
+
+Bulk Items (API)
+- Actions: `set_status`, `set_favorite`, `add_tags`, `remove_tags`, `replace_tags`, `delete`.
+- Soft delete sets `status=archived`; hard delete removes the row.
+- Returns per-item success/error with aggregate counts.
+
+Example: add tags
+```json
+{
+  "item_ids": [101, 102, 103],
+  "action": "add_tags",
+  "tags": ["research", "priority"]
+}
+```
+
+Example: mark read
+```json
+{
+  "item_ids": [101, 102],
+  "action": "set_status",
+  "status": "read"
+}
+```
+
+Example: archive (soft delete)
+```json
+{
+  "item_ids": [101],
+  "action": "delete"
+}
+```
+
+Example: hard delete
+```json
+{
+  "item_ids": [101],
+  "action": "delete",
+  "hard": true
+}
+```
+
+Example response
+```json
+{
+  "total": 3,
+  "succeeded": 2,
+  "failed": 1,
+  "results": [
+    {"item_id": 101, "success": true},
+    {"item_id": 102, "success": false, "error": "item_not_found"},
+    {"item_id": 103, "success": true}
+  ]
+}
+```
 
 Outputs
 - `POST /outputs` → from item ids, saved filter, or run_id; body includes template id/options and TTS toggle
@@ -256,7 +311,7 @@ Modules
   - `outputs.py` (templating, rendering, TTS integration)
 - API: `tldw_Server_API/app/api/v1/endpoints/reading.py`, `watchlists.py`, `items.py`, `outputs.py`
 - Services: `tldw_Server_API/app/services/collection_jobs.py` (background queues, schedulers)
-- WebUI: `tldw_Server_API/WebUI/collections/*` (items list/detail, reading), `.../watchlists/*`
+- WebUI (Next.js): `tldw-frontend/pages/items.tsx`, `tldw-frontend/pages/reading.tsx`, `tldw-frontend/pages/watchlists.tsx`, `tldw-frontend/pages/admin/watchlists-items.tsx`, `tldw-frontend/pages/admin/watchlists-runs.tsx` (legacy `tldw_Server_API/WebUI/*` is deprecated).
 
 Key Flows
 - Fetch with per-host delay; use ETag/Last-Modified; safe timeouts/size limits.
@@ -266,14 +321,14 @@ Key Flows
 - Outputs render markdown/html; optional TTS via `/api/v1/audio/speech`; export/ingest artifacts.
 
 Scheduling
-- APScheduler (AsyncIOScheduler) with SQLAlchemyJobStore persists schedules across restarts; timezone for all schedules is `UTC+8`. Bounded worker pool; global per-host throttles shared across jobs.
+- APScheduler (AsyncIOScheduler) with SQLAlchemyJobStore persists schedules across restarts; timezone for all schedules is `UTC`. Bounded worker pool; global per-host throttles shared across jobs.
 
 ## 13. Configuration
 
 - Defaults in `tldw_Server_API/Config_Files/config.txt` (collections/watchlists section):
   - `WATCHLIST_MAX_CONCURRENCY`, `WATCHLIST_PER_HOST_DELAY_MS`, `WATCHLIST_MAX_ITEMS_PER_SOURCE`, `WATCHLIST_OBEY_ROBOTS=true`
   - `ITEM_FETCH_TIMEOUT_MS`, `ITEM_MAX_DOWNLOAD_MB`
-- Templates are DB-managed via API, with optional seed defaults loaded from `tldw_Server_API/Config_Files/templates/collections/` on first run.
+- Templates are DB-managed via `/api/v1/outputs/templates`. Legacy watchlists templates remain file-based under `tldw_Server_API/Config_Files/templates/watchlists/` for fallback/compatibility.
 - Env var overrides supported.
 
 ## 14. Security & Compliance
@@ -301,12 +356,12 @@ Scheduling
 - Markers: `unit`, `integration`, `external_api` (skipped by default).
 - Coverage target: ≥80% for new modules.
 
-- Scheduler persistence/timezone: time-freezing tests verifying APScheduler with SQLAlchemyJobStore persists jobs across restarts and interprets cron/interval triggers using timezone `UTC+8` (including DST and boundary conditions). Validate `next_run_at` computation and on-restart rehydration.
+- Scheduler persistence/timezone: time-freezing tests verifying APScheduler with SQLAlchemyJobStore persists jobs across restarts and interprets cron/interval triggers using timezone `UTC`. Validate `next_run_at` computation and on-restart rehydration.
 
 ## 18. Implementation Roadmap (Media DB remains separate)
 
 1. **Unified Collections Layer** - *shipped*
-   - `content_items` + tag joins live in Collections DB alongside Media DB.
+   - `content_items` + tag joins live in `Media_DB_v2.db` (central DB) via `CollectionsDatabase`.
    - Watchlist ingestion dual-writes; `/api/v1/items` resolves from collections before falling back to legacy search.
 
 2. **Reading Workflow** - *MVP shipped; highlights UI pending; import/export API shipped*

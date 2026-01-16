@@ -401,6 +401,14 @@ class ReadingService:
                 )
             except Exception as exc:
                 logger.debug(f"Embedding enqueue failed for reading item {item_row.id}: {exc}")
+            try:
+                self.collections.reanchor_highlights_for_item(
+                    item_row.id,
+                    content_text=content,
+                    content_hash=item_row.content_hash,
+                )
+            except Exception as exc:
+                logger.debug(f"Highlight re-anchoring failed for item {item_row.id}: {exc}")
 
         return ReadingSaveResult(
             item=item_row,

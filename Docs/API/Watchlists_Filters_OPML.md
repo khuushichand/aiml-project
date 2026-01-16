@@ -11,13 +11,17 @@ Filters are configured per job as `job_filters` with the following structure:
   - `type` (keyword|author|date_range|regex|all)
   - `action` (include|exclude|flag)
   - `value` (object) - per-type shape:
-    - keyword: `{ keywords: ["ai", "ml"], match: "any|all", fields?: ["title","summary","content","author"] }`
+    - keyword: `{ keywords: ["ai", "ml"], match: "any|all", field?: "title|summary|content|author", fields?: ["title","summary","content","author"] }`
     - author: `{ names: ["john"], match: "any|all" }`
-    - regex: `{ pattern: "(?i)breaking", flags?: "ims", field?: "title|summary|content|author" }`
-    - date_range: `{ max_age_days: 7 }`
+    - regex: `{ pattern: "(?i)breaking", flags?: "ims", field?: "title|summary|content|author", fields?: ["title","summary","content","author"] }`
+    - date_range: `{ max_age_days: 7, since?: "2025-01-01T00:00:00Z", until?: "2025-01-31T23:59:59Z" }`
     - all: `{}`
   - `priority` (int, optional; default 0)
   - `is_active` (bool; default true)
+
+Defaults:
+- Regex flags default to `i` when omitted.
+- When neither `field` nor `fields` is provided, keyword/regex filters search `title`, `summary`, `content`, and `author`.
 
 Actions:
 - `exclude`: record item as `filtered`, do not ingest
@@ -40,7 +44,7 @@ Rate limits (test-aware):
 
 Run details include:
 - `items_found`, `items_ingested`
-- When filters are used: `filters_matched`, `filters_include`, `filters_exclude`, `filters_flag`
+- `filters_matched`, `filters_include`, `filters_exclude`, `filters_flag`
 
 ## Bulk JSON Create (Sources)
 
