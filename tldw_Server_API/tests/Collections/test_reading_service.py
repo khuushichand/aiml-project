@@ -65,6 +65,30 @@ async def test_reading_save_and_list(reading_env):
 
 
 @pytest.mark.asyncio
+async def test_reading_save_merges_tags_on_duplicate(reading_env):
+    service = ReadingService(TEST_USER_ID + 10)
+    first = await service.save_url(
+        url="https://example.org/dupe",
+        tags=["alpha"],
+        status="saved",
+        favorite=False,
+        title_override="Dupe Item",
+        content_override="Dupe content body.",
+    )
+    assert set(first.item.tags) == {"alpha"}
+
+    second = await service.save_url(
+        url="https://example.org/dupe",
+        tags=["beta"],
+        status="saved",
+        favorite=False,
+        title_override="Dupe Item",
+        content_override="Dupe content body.",
+    )
+    assert set(second.item.tags) == {"alpha", "beta"}
+
+
+@pytest.mark.asyncio
 async def test_reading_update_status_and_filters(reading_env):
     service = ReadingService(TEST_USER_ID + 1)
     save_result = await service.save_url(

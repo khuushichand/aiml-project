@@ -57,6 +57,7 @@ def client_with_user(monkeypatch):
 
     # Use full app profile for Collections/outputs endpoints
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
 
     # Force per-user DB dir into project Databases/ for sandbox write allowance
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
@@ -68,8 +69,9 @@ def client_with_user(monkeypatch):
 
     app = None
     try:
-        # Import app after env vars to honor minimal test mode
+        # Reload app after env vars to honor minimal test mode changes
         mod = import_module("tldw_Server_API.app.main")
+        mod = reload(mod)
         app = getattr(mod, "app")
         app.dependency_overrides[get_request_user] = override_user
         with TestClient(app) as client:

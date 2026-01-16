@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from importlib import import_module
+from importlib import import_module, reload
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
@@ -21,6 +21,7 @@ def client_with_user(monkeypatch):
         return User(id=321, username="bulkuser", email=None, is_active=True)
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
     shutil.rmtree(base_dir, ignore_errors=True)
@@ -32,6 +33,7 @@ def client_with_user(monkeypatch):
     app = None
     try:
         mod = import_module("tldw_Server_API.app.main")
+        mod = reload(mod)
         app = getattr(mod, "app")
         app.dependency_overrides[get_request_user] = override_user
         with TestClient(app) as client:

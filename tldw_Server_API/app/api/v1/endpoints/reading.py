@@ -226,6 +226,8 @@ async def list_reading_items(
     favorite: Optional[bool] = Query(None),
     q: Optional[str] = Query(None),
     domain: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None, description="ISO start date inclusive"),
+    date_to: Optional[str] = Query(None, description="ISO end date inclusive"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     offset: Optional[int] = Query(None, ge=0),
@@ -237,6 +239,17 @@ async def list_reading_items(
     current_user: User = Depends(get_request_user),
 ) -> ReadingItemsListResponse:
     service = _service_for_user(current_user)
+    date_from_iso = None
+    date_to_iso = None
+    try:
+        start_dt = datetime.fromisoformat(date_from) if date_from else None
+        end_dt = datetime.fromisoformat(date_to) if date_to else None
+        if start_dt:
+            date_from_iso = start_dt.isoformat()
+        if end_dt:
+            date_to_iso = end_dt.isoformat()
+    except Exception:
+        raise HTTPException(status_code=422, detail="invalid_date_range")
     resolved_limit = limit if limit is not None else size
     resolved_offset = offset if offset is not None else max(0, (page - 1) * size)
     if limit is not None:
@@ -248,6 +261,8 @@ async def list_reading_items(
         favorite=favorite,
         q=q,
         domain=domain,
+        date_from=date_from_iso,
+        date_to=date_to_iso,
         page=page,
         size=size,
         offset=resolved_offset,

@@ -86,10 +86,10 @@ v1
 
 ### 8.1 Unified Content Items
 - Single table for items from any origin (reading/manual/import/watchlist).
-- Fields: url, canonical_url, domain, title, author?, published_at?, clean_html, text, content_hash, word_count, reading_time_seconds, language?, metadata_json.
-- Optional fields for reading features: status (saved/reading/read/archived), favorite, read_at, notes.
-- Relations: source_id?, job_id?, run_id?, media_item_id?; tags many-to-many; highlights (v1).
-- Dedupe: canonical URL and/or content_hash on stripped main content; merge tags on duplicate saves.
+- Fields: url, canonical_url, domain, title, summary, notes, content_hash, word_count, published_at, status, favorite, read_at, metadata_json.
+- Metadata: author, clean_html, text, reading_time_seconds, language, embedding_* fields, media_uuid, and other ingestion context are stored in `metadata_json`.
+- Relations: source_id?, job_id?, run_id?, media_id?; tags many-to-many; highlights (v1).
+- Dedupe: canonical URL and/or content_hash on stripped main content; merge tags on duplicate saves when tags are provided (otherwise preserve existing tags).
 - Status: **Complete** - `CollectionsDatabase` provides `content_items`, tag joins, FTS hooks, and watchlists dual-write; `/api/v1/items` now queries this layer before falling back to legacy Media DB search.
 
 ### 8.2 Ingestion & Parsing
@@ -101,7 +101,7 @@ v1
 - Metadata extraction: title, author (if present), publish date, canonical link; compute domain.
 
 ### 8.3 Organization
-- Tags: normalized strings; suggest recent; many-to-many with items and sources; backed by a `tags` table and join tables that reference `tag_id` (no free-text tag joins).
+- Tags: normalized strings; suggest recent; many-to-many with items and sources; backed by a `collection_tags` table and join tables that reference `tag_id` (no free-text tag joins).
 - Groups: hierarchical or flat; sources ↔ groups; items inherit source context for filtering.
 
 ### 8.4 Scheduling & Runs (Watchlists)
@@ -113,7 +113,7 @@ v1
 - HTTP caching: ETag/Last-Modified; send If-Modified-Since/If-None-Match when supported.
 
 ### 8.5 Search & RAG
-- FTS5 virtual table over title/domain/text; filters by tags/status/origin/domain/date/job/run.
+- FTS5 virtual table over title/summary/metadata (text is stored in metadata_json); filters by tags/status/origin/domain/date/job/run.
 - Embeddings in ChromaDB with namespace per user; expose items via existing RAG endpoints (opt-in by user preference).
 - Re-embedding policy: when an item’s normalized text changes (content_hash diff), upsert vectors for that item and remove the old vector; record `embedding_model`, `embedding_model_version`, and `embedding_ts` in metadata. Background job supports full re-index when the configured embedding model/version changes.
 - Status: **Complete** - FTS5 writes are active for collections, and both reading saves and watchlist ingestion enqueue embeddings via `EMBEDDINGS_REDIS_URL`/`REDIS_URL` backed worker queues (best-effort when Redis unavailable). Regression tests cover queueing and offline behavior.
@@ -156,13 +156,13 @@ Persist in per-user `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db` via DB abstrac
 Entities
 - content_items
   - id, user_id, origin[`reading`|`watchlist`|`import`|`manual`], url, canonical_url, domain, title,
-    author, published_at, clean_html, text, content_hash, word_count, reading_time_seconds, language,
-    status, favorite, notes, metadata_json, created_at, updated_at, read_at,
-    embedding_model (nullable), embedding_model_version (nullable), embedding_ts (nullable),
-    source_id (nullable), job_id (nullable), run_id (nullable), media_item_id (nullable)
-- item_tags (join)
+    summary, notes, content_hash, word_count, published_at, status, favorite, metadata_json,
+    media_id (nullable), source_id (nullable), job_id (nullable), run_id (nullable), read_at,
+    created_at, updated_at
+  - metadata_json includes author, clean_html, text, reading_time_seconds, language, embedding_* fields, media_uuid, and other ingestion context.
+- content_item_tags (join)
   - item_id, tag_id
-- item_highlights (v1)
+- reading_highlights (v1)
   - id, item_id, quote, start_offset, end_offset, color, note, created_at,
     anchor_strategy[`fuzzy_quote`|`exact_offset`], content_hash_ref, context_before (nullable), context_after (nullable), state[`active`|`stale`]
 - sources
@@ -171,8 +171,8 @@ Entities
 - groups, source_groups (join)
   - groups: id, user_id, name, description, parent_group_id (nullable)
   - source_groups: source_id, group_id
-- tags, source_tags (join)
-  - tags: id, user_id, name
+- collection_tags, source_tags (join)
+  - collection_tags: id, user_id, name
   - source_tags: source_id, tag_id
 - scrape_jobs
   - id, user_id, name, description, scope_json (sources|groups|tags), schedule_expr,
@@ -185,9 +185,9 @@ Entities
     storage_path, metadata_json, created_at, media_item_id (nullable), chatbook_path (nullable)
 
 Indexes
-- content_items: canonical_url, content_hash, created_at; FTS5 (title, domain, text)
-- tags: UNIQUE(user_id, name)
-- item_tags: (item_id), (tag_id)
+- content_items: canonical_url, content_hash, created_at; FTS5 (title, summary, metadata)
+- collection_tags: UNIQUE(user_id, name)
+- content_item_tags: (item_id), (tag_id)
 - source_tags: (source_id), (tag_id)
 - sources.url; scrape_runs.job_id; outputs.run_id
 
@@ -207,13 +207,17 @@ Base prefixes
 
 Reading
 - `POST /reading/save` → save URL (title?, tags?, notes?)
-- `GET /reading/items` → list, filters: q, tags, status, favorite, domain, date
+- `GET /reading/items` → list, filters: q, tags, status, favorite, domain, date_from, date_to
 - `GET /reading/items/{id}` → full item
 - `PATCH /reading/items/{id}` → update title/tags/status/favorite/notes
 - `DELETE /reading/items/{id}` → soft delete; `?hard=true`
+- `POST /reading/items/bulk` → alias for `/items/bulk` bulk updates
 - `POST /reading/import` → Pocket/Instapaper; returns summary (imported/updated/skipped/errors)
 - `GET /reading/export` → JSONL/zip
 - `POST /reading/items/{id}/highlight` (v1)
+- `GET /reading/items/{id}/highlights` (v1)
+- `PATCH /reading/highlights/{id}` (v1)
+- `DELETE /reading/highlights/{id}` (v1)
 
 Watchlists
 - `POST /watchlists/sources` | `GET /watchlists/sources` | `GET/PATCH/DELETE /watchlists/sources/{id}`
@@ -232,7 +236,7 @@ Shared Items
 
 Tags Semantics (API)
 - Endpoints that accept `tags` expect a list of tag names (strings).
-- Server normalizes names (lowercase, trimmed), ensures existence in the per-user `tags` table (creating missing tags), and resolves to `tag_id`s for joins.
+- Server normalizes names (lowercase, trimmed), ensures existence in the per-user `collection_tags` table (creating missing tags), and resolves to `tag_id`s for joins.
 - Responses include tag names by default. For clients that need IDs, add `?include_tag_ids=true` to include `{name, id}` pairs in responses where applicable.
 - Watchlists tag assignment endpoints accept names and follow the same normalization and resolution behavior.
 
@@ -299,18 +303,19 @@ Templates (Outputs)
 - `POST /outputs/templates/{id}/preview` → render with sample or provided item ids without persisting
 
 Schemas
-- Pydantic under `tldw_Server_API/app/api/v1/schemas/collections.py` (items), `watchlists.py`, and `reading.py`.
+- Pydantic under `tldw_Server_API/app/api/v1/schemas/items_schemas.py`, `watchlists_schemas.py`, `reading_schemas.py`, `reading_highlights_schemas.py`, `outputs_schemas.py`, and `outputs_templates_schemas.py`.
 
 ## 12. System Design & Components
 
 Modules
 - Core: `tldw_Server_API/app/core/Collections/`
-  - `items.py` (CRUD, search, dedupe, embeddings queue)
-  - `reading/` (capture/import/export, reader helpers)
-  - `watchlists/` (manager, scraper, parser dispatch, scheduler, dedupe)
-  - `outputs.py` (templating, rendering, TTS integration)
-- API: `tldw_Server_API/app/api/v1/endpoints/reading.py`, `watchlists.py`, `items.py`, `outputs.py`
-- Services: `tldw_Server_API/app/services/collection_jobs.py` (background queues, schedulers)
+  - `reading_service.py` (capture/update/list/delete)
+  - `reading_importers.py` (Pocket/Instapaper parsing)
+  - `embedding_queue.py` (enqueue embeddings jobs)
+  - `utils.py` (hashing, truncation helpers)
+- Core (Watchlists): `tldw_Server_API/app/core/Watchlists/` (pipeline, fetchers, scheduler, template store)
+- API: `tldw_Server_API/app/api/v1/endpoints/reading.py`, `reading_highlights.py`, `watchlists.py`, `items.py`, `outputs.py`, `outputs_templates.py`
+- Services: `tldw_Server_API/app/services/outputs_service.py`, `outputs_purge_scheduler.py`
 - WebUI (Next.js): `tldw-frontend/pages/items.tsx`, `tldw-frontend/pages/reading.tsx`, `tldw-frontend/pages/watchlists.tsx`, `tldw-frontend/pages/admin/watchlists-items.tsx`, `tldw-frontend/pages/admin/watchlists-runs.tsx` (legacy `tldw_Server_API/WebUI/*` is deprecated).
 
 Key Flows

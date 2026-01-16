@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import os
 
 from loguru import logger
 
@@ -49,7 +50,7 @@ class TemplateExistsError(FileExistsError):
 
 
 def _resolved_dir() -> Path:
-    configured = settings.get("WATCHLIST_TEMPLATE_DIR")
+    configured = os.getenv("WATCHLIST_TEMPLATE_DIR") or settings.get("WATCHLIST_TEMPLATE_DIR")
     if configured:
         base = Path(configured)
     else:

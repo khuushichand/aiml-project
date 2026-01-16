@@ -54,6 +54,16 @@ Priority order for active scope:
 
 Active scope is stored in `request.state.active_org_id` / `request.state.active_team_id` and propagated to `AuthPrincipal`.
 
+Validation and selection rules:
+- If JWT claims or headers reference an org/team the user is not a member of, ignore the invalid entry by default, log a warning with user ID, claimed scope, and source (JWT/header), and fall back to the next priority source.
+- Strict mode: `ORG_RBAC_STRICT_SCOPE_VALIDATION=true` rejects invalid claimed scope with `403` instead of falling back.
+- Deterministic membership fallback: select the "first org/team" by role priority (`owner > admin > lead > member`), then creation timestamp (earliest first), then lexicographic ID ascending.
+
+Header switching security controls:
+- Audit logging is required for any header-driven change to `request.state.active_org_id` or `request.state.active_team_id`.
+- Enforce configurable rate limiting for header-based scope switching (e.g., 10 switches/min per user).
+- Support an allowlist toggle for endpoints that accept org/team scope headers; other endpoints ignore header-based switching.
+
 ## Data Model
 Add mapping tables for org/team membership roles to permission grants:
 

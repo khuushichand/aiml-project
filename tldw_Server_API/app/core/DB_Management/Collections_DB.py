@@ -813,6 +813,7 @@ class CollectionsDatabase:
         source_id: Optional[int] = None,
         read_at: Optional[str] = None,
         tags: Optional[Iterable[str]] = None,
+        merge_tags: bool = False,
     ) -> ContentItemRow:
         """Insert or update a content item record and attach tags."""
         now = _utcnow_iso()
@@ -952,8 +953,15 @@ class CollectionsDatabase:
             if not item_id:
                 raise DatabaseError("Failed to insert content item")
 
+        tags_for_fts = list(tags or [])
         if tags is not None:
-            tag_ids = self.ensure_collection_tag_ids(tags)
+            tag_list = list(tags)
+            if merge_tags and not created:
+                existing_tags = self._fetch_tags_for_item_ids([int(item_id or 0)]).get(int(item_id or 0), [])
+                if existing_tags:
+                    tag_list = list(dict.fromkeys([*existing_tags, *tag_list]))
+            tags_for_fts = tag_list
+            tag_ids = self.ensure_collection_tag_ids(tag_list)
             self._replace_item_tags(item_id, tag_ids)
 
         try:
@@ -962,7 +970,7 @@ class CollectionsDatabase:
                 title=title,
                 summary=summary,
                 notes=notes,
-                tags=list(tags or []),
+                tags=tags_for_fts,
                 metadata_json=metadata_json,
             )
         except Exception:

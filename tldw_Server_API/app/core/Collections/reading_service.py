@@ -380,6 +380,7 @@ class ReadingService:
             source_id=None,
             read_at=None,
             tags=tags,
+            merge_tags=True,
         )
 
         if item_row.is_new or item_row.content_changed:
@@ -568,6 +569,8 @@ class ReadingService:
         favorite: Optional[bool] = None,
         q: Optional[str] = None,
         domain: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
         page: int = 1,
         size: int = 20,
         offset: Optional[int] = None,
@@ -581,6 +584,8 @@ class ReadingService:
             favorite=favorite,
             q=q,
             domain=domain,
+            date_from=date_from,
+            date_to=date_to,
             page=page,
             size=size,
             offset=offset,

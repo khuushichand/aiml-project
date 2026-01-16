@@ -1,11 +1,13 @@
 import importlib
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.config import settings
 
 
@@ -112,6 +114,48 @@ def test_reading_user_isolation(reading_app):
 
         r = client.get(f"/api/v1/reading/items/{item_id}")
         assert r.status_code == 404, r.text
+
+
+def test_reading_items_date_filters(reading_app):
+    async def override_user():
+        return User(id=446, username="dater", email=None, is_active=True)
+
+    reading_app.dependency_overrides[get_request_user] = override_user
+
+    with TestClient(reading_app) as client:
+        payload = {
+            "url": "https://example.org/one",
+            "title": "Date One",
+            "content": "Date content one",
+        }
+        r = client.post("/api/v1/reading/save", json=payload)
+        assert r.status_code == 200, r.text
+        item_one = r.json()["id"]
+
+        payload["url"] = "https://example.org/two"
+        payload["title"] = "Date Two"
+        payload["content"] = "Date content two"
+        r = client.post("/api/v1/reading/save", json=payload)
+        assert r.status_code == 200, r.text
+        item_two = r.json()["id"]
+
+        cdb = CollectionsDatabase.for_user(user_id=446)
+        t1 = datetime(2024, 1, 1, tzinfo=timezone.utc).isoformat()
+        t2 = datetime(2024, 1, 2, tzinfo=timezone.utc).isoformat()
+        cdb.backend.execute(
+            "UPDATE content_items SET created_at = ? WHERE id = ? AND user_id = ?",
+            (t1, item_one, cdb.user_id),
+        )
+        cdb.backend.execute(
+            "UPDATE content_items SET created_at = ? WHERE id = ? AND user_id = ?",
+            (t2, item_two, cdb.user_id),
+        )
+
+        r = client.get("/api/v1/reading/items", params={"date_from": t2})
+        assert r.status_code == 200, r.text
+        ids = [item["id"] for item in r.json()["items"]]
+        assert item_two in ids
+        assert item_one not in ids
 
 
 def test_reading_summarize_and_tts(reading_app, monkeypatch):
