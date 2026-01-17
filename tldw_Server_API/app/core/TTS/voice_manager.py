@@ -189,8 +189,7 @@ class VoiceFileValidator:
         try:
             full_path = full_path.resolve()
             base_path = base_path.resolve()
-            if not str(full_path).startswith(str(base_path)):
-                raise ValueError("Path traversal attempt detected")
+            full_path.relative_to(base_path)
         except (ValueError, RuntimeError) as e:
             raise VoiceProcessingError(f"Invalid file path: {e}")
 
@@ -320,7 +319,11 @@ class VoiceManager:
 
         # Save original file
         voices_path = self.get_user_voices_path(user_id)
-        upload_path = voices_path / "uploads" / f"{voice_id}_{safe_filename}"
+        uploads_dir = voices_path / "uploads"
+        upload_path = VoiceFileValidator.sanitize_path(
+            uploads_dir,
+            f"{voice_id}_{safe_filename}"
+        )
 
         try:
             async with aiofiles.open(upload_path, 'wb') as f:
@@ -578,7 +581,16 @@ class VoiceManager:
         voices_path = self.get_user_voices_path(user_id)
 
         # Delete processed file
-        processed_file = voices_path / voice_info.file_path
+        try:
+            voices_base = voices_path.resolve()
+            processed_file = (voices_path / voice_info.file_path).resolve()
+            processed_file.relative_to(voices_base)
+        except (ValueError, RuntimeError) as e:
+            logger.error(
+                f"Refusing to delete voice {voice_id} for user {user_id}: invalid path "
+                f"{voice_info.file_path} ({e})"
+            )
+            return False
         if processed_file.exists():
             processed_file.unlink()
 

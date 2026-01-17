@@ -59,9 +59,8 @@ def _gz_bytes(data: str) -> bytes:
 
 @pytest.mark.integration
 def test_mediawiki_process_dump_ephemeral_stream(monkeypatch, tmp_path: Path):
-    # Ensure temp dirs created by endpoint are within CWD so validate_file_path passes
+    # Force temp dirs outside CWD so allowed_dir enforcement is required
     monkeypatch.setenv("TMPDIR", str(tmp_path))
-    monkeypatch.chdir(tmp_path)
 
     app = FastAPI()
     app.include_router(media_router, prefix="/api/v1/media")

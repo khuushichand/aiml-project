@@ -77,13 +77,3 @@ def test_watchlists_postgres_round_trip(request: pytest.FixtureRequest):
         status="new",
     )
     assert item.id > 0
-
-    output = db.create_output(
-        run_id=run.id,
-        job_id=job.id,
-        type="summary",
-        format="markdown",
-        title="Daily Summary",
-        content="Hello",
-    )
-    assert output.id > 0

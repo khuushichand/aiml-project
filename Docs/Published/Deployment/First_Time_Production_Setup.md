@@ -80,7 +80,7 @@ Step A3 - First-time setup (optional wizard)
 - The server exposes a local-only setup flow at `/setup` when enabled.
 - Check status: `curl http://127.0.0.1:8000/api/v1/setup/status`
 - If `enabled` and `needs_setup` are true, open `http://127.0.0.1:8000/setup` on the host.
-- Behind a proxy, do not expose `/setup` publicly. If you must reach it remotely on a trusted network, set `TLDW_SETUP_ALLOW_REMOTE=1` temporarily and remove it afterward.
+- Behind a proxy, do not expose `/setup` publicly. If you must reach it remotely on a trusted network, set `TLDW_SETUP_ALLOW_REMOTE=1` temporarily and remove it afterward, and authenticate as an admin (admin role + `system.configure` permission, or the single-user API key).
 
 Step A4 - Add TLS and reverse proxy
 - Terminate TLS at the proxy; forward to `app:8000`.

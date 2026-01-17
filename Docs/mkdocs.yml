@@ -34,7 +34,7 @@ theme:
 plugins:
   - search
   - git-revision-date-localized:
-      enable_git_follow: false
+      enable_git_follow: true
       fallback_to_build_date: true
       enable_creation_date: true
       type: timeago
@@ -88,6 +88,7 @@ nav:
       - Audio Jobs API: API-related/Audio_Jobs_API.md
       - AuthNZ API Guide: API-related/AuthNZ-API-Guide.md
       - Notes API: API-related/Notes_API_Documentation.md
+      - Reading List API: API-related/Reading_List_API.md
       - Chat API Documentation: API-related/Chat_API_Documentation.md
       - Chat Module Integration: API-related/Chat_Module_Integration_Guide.md
       - Chatbook API: API-related/Chatbook_API_Documentation.md

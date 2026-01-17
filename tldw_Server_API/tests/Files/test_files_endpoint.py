@@ -1,6 +1,7 @@
 import base64
 import json
 import shutil
+import threading
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -78,6 +79,46 @@ def test_create_and_export_markdown_table(client_with_user):
 
     download_again = client_with_user.get(export_url)
     assert download_again.status_code == 409, download_again.text
+
+
+def test_export_one_time_concurrent_downloads(client_with_user):
+    payload = {
+        "file_type": "markdown_table",
+        "title": "Roster",
+        "payload": {"columns": ["Name", "Score"], "rows": [["Ada", 95]]},
+        "export": {"format": "md", "mode": "url", "async_mode": "sync"},
+        "options": BASE_OPTIONS,
+    }
+    response = client_with_user.post("/api/v1/files/create", json=payload)
+    assert response.status_code == 200, response.text
+    export_url = response.json()["artifact"]["export"]["url"]
+    assert export_url
+
+    results = []
+    errors = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(2)
+
+    def _download():
+        try:
+            barrier.wait(timeout=5)
+            resp = client_with_user.get(export_url)
+            with lock:
+                results.append(resp.status_code)
+        except Exception as exc:
+            with lock:
+                errors.append(str(exc))
+
+    threads = [threading.Thread(target=_download) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not errors, f"errors: {errors}"
+    assert len(results) == 2
+    assert results.count(200) == 1
+    assert results.count(409) == 1
 
 
 def test_get_file_artifact(client_with_user):

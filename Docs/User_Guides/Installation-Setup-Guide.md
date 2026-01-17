@@ -184,7 +184,7 @@ curl -s http://127.0.0.1:8000/api/v1/embeddings \
   }'
 ```
 
-More detail on local backends and llama.cpp flags: [Docs/Code_Documentation/Local_LLM.md](../Code_Documentation/Local_LLM.md).
+More detail on local backends and llama.cpp flags: [Setting up a local LLM](Setting_up_a_local_LLM.md).
 
 ## 6) Optional: Text-to-Speech (TTS)
 

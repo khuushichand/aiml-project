@@ -33,6 +33,28 @@ _config_remote_cached: Optional[bool] = None
 _config_remote_cached_at = 0.0
 
 
+async def _require_admin_for_remote(request: Request) -> None:
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
+    from tldw_Server_API.app.core.AuthNZ.principal_model import is_single_user_principal
+
+    principal = await get_auth_principal(request)
+    if principal.is_admin or is_single_user_principal(principal):
+        return
+
+    roles = {str(role).lower() for role in (principal.roles or [])}
+    if "admin" not in roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required for remote setup.",
+        )
+    if SYSTEM_CONFIGURE not in (principal.permissions or []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: missing system.configure",
+        )
+
+
 def reset_remote_access_cache(value: Optional[bool] = None) -> None:
     """Reset the cached remote access flag (test helper/administrative hook)."""
     _set_remote_access_cache(value)
@@ -155,6 +177,7 @@ async def require_local_setup_access(request: Request) -> None:
     if allow_remote_env or allow_remote_config:
         if allow_remote_config and not allow_remote_env:
             logger.info("Remote setup access permitted via config.txt (allow_remote_setup_access=true)")
+        await _require_admin_for_remote(request)
         return
 
     path = (request.url.path or "").lower()

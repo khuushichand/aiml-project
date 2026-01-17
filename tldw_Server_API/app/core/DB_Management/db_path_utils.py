@@ -83,8 +83,12 @@ def _normalize_user_db_base_dir(raw_path: Path) -> Path:
         candidate = raw_path
 
     if not candidate.is_absolute():
-        project_root = Path(get_project_root())
+        project_root = Path(get_project_root()).resolve()
         candidate = (project_root / candidate).resolve()
+        try:
+            candidate.relative_to(project_root)
+        except ValueError as exc:
+            raise InvalidStoragePathError("invalid_path") from exc
     else:
         candidate = candidate.resolve()
     return candidate
@@ -314,7 +318,13 @@ class DatabasePaths:
         _ensure_dir(prompts_dir, label="prompts")
 
         if salt:
-            return prompts_dir / f"user_prompts_v2_{salt}.sqlite"
+            safe_salt = normalize_output_storage_filename(
+                salt,
+                allow_absolute=False,
+                reject_relative_with_separators=True,
+                expand_user=False,
+            )
+            return prompts_dir / f"user_prompts_v2_{safe_salt}.sqlite"
         return prompts_dir / DatabasePaths.PROMPTS_DB_NAME
 
     @staticmethod

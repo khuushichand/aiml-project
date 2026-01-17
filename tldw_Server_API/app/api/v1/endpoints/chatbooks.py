@@ -252,7 +252,10 @@ async def create_chatbook(
                 from datetime import datetime, timedelta, timezone
 
                 job_id = str(uuid.uuid4())
-                file_path = Path(result)
+                file_path = Path(result).resolve()
+                expected_base = Path(service.export_dir).resolve()
+                if os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
+                    raise HTTPException(status_code=500, detail="Export path validation failed")
                 file_size = None
                 try:
                     if file_path.exists() and file_path.is_file():
@@ -1012,10 +1015,6 @@ async def download_chatbook(
 
         file_path = Path(job.output_path).resolve()
 
-        # Verify file exists and is within secure storage
-        if not file_path.exists() or not file_path.is_file():
-            raise HTTPException(status_code=404, detail="Export file no longer exists")
-
         # Additional path containment check - ensure file is in expected user directory
         # The file should be within the user's export directory
         expected_base = Path(service.export_dir).resolve()
@@ -1043,6 +1042,10 @@ async def download_chatbook(
             except Exception as audit_err:
                 logger.warning(f"Failed to log audit event for path traversal: {audit_err}")
             raise HTTPException(status_code=403, detail="Access denied")
+
+        # Verify file exists and is within secure storage
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="Export file no longer exists")
 
         # Get filename from path
         filename = file_path.name

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import threading
+import uuid
 from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 
@@ -485,6 +486,7 @@ async def generate_data_table(
                 rows_offset=0,
                 include_rows=True,
                 include_sources=True,
+                owner_user_id=owner_user_id,
             )
 
         response.status_code = status.HTTP_202_ACCEPTED
@@ -754,7 +756,10 @@ async def export_data_table(
     "/{table_uuid}/content",
     response_model=DataTableDetailResponse,
     summary="Update data table content",
-    dependencies=[Depends(require_permissions(MEDIA_UPDATE))],
+    dependencies=[
+        Depends(require_permissions(MEDIA_UPDATE)),
+        Depends(rbac_rate_limit("data_tables.update_content")),
+    ],
 )
 async def update_data_table_content(
     table_uuid: str,
@@ -769,37 +774,73 @@ async def update_data_table_content(
         raise HTTPException(status_code=404, detail="data_table_not_found")
 
     table_id = int(table_row.get("id"))
-    columns_payload: List[Dict[str, Any]] = []
-    for idx, column in enumerate(req.columns):
-        col = _model_dump(column)
-        columns_payload.append(
-            {
-                "column_id": col.get("column_id"),
-                "name": str(col.get("name") or "").strip(),
-                "type": col.get("type"),
-                "description": col.get("description"),
-                "format": col.get("format"),
-                "position": col.get("position", idx),
-            }
-        )
-
-    rows_payload: List[Dict[str, Any]] = []
-    for idx, row in enumerate(req.rows):
-        if not isinstance(row, dict):
-            raise HTTPException(status_code=400, detail="row_payload_invalid")
-        row_index = row.get("row_index", idx)
-        row_json = row.get("row_json")
-        if row_json is None:
-            row_json = row.get("data", row)
-        rows_payload.append(
-            {
-                "row_id": row.get("row_id"),
-                "row_index": row_index,
-                "row_json": row_json,
-            }
-        )
 
     try:
+        if not req.columns:
+            raise InputError("columns_required")
+
+        columns_payload: List[Dict[str, Any]] = []
+        seen_names = set()
+        seen_ids = set()
+        for idx, col in enumerate(req.columns):
+            name = (col.name or "").strip()
+            if not name:
+                raise InputError("column_name_required")
+            name_key = name.lower()
+            if name_key in seen_names:
+                raise InputError("duplicate_column_name")
+            column_id = (col.column_id or "").strip() or str(uuid.uuid4())
+            if column_id in seen_ids:
+                raise InputError("duplicate_column_id")
+            seen_names.add(name_key)
+            seen_ids.add(column_id)
+            columns_payload.append(
+                {
+                    "column_id": column_id,
+                    "name": name,
+                    "type": col.type,
+                    "description": col.description,
+                    "format": col.format,
+                    "position": idx,
+                }
+            )
+
+        rows_payload: List[Dict[str, Any]] = []
+        for idx, row in enumerate(req.rows or []):
+            if not isinstance(row, dict):
+                raise InputError("row_payload_invalid")
+            row_payload = row.get("row_json") if "row_json" in row else row.get("data", row)
+            if isinstance(row_payload, str):
+                row_payload = _parse_json_value(row_payload)
+            if row_payload is None:
+                row_payload = {}
+            if not isinstance(row_payload, dict):
+                raise InputError("row_payload_invalid")
+            row_json: Dict[str, Any] = {}
+            for column in columns_payload:
+                col_id = column["column_id"]
+                col_name = column["name"]
+                if col_id in row_payload:
+                    value = row_payload.get(col_id)
+                elif col_name in row_payload:
+                    value = row_payload.get(col_name)
+                else:
+                    value = None
+                row_json[col_id] = value
+            row_id = row.get("row_id") if isinstance(row.get("row_id"), str) else None
+            row_index = row.get("row_index", idx)
+            try:
+                row_index = int(row_index) if row_index is not None else idx
+            except (TypeError, ValueError):
+                row_index = idx
+            rows_payload.append(
+                {
+                    "row_id": row_id or str(uuid.uuid4()),
+                    "row_index": row_index,
+                    "row_json": row_json,
+                }
+            )
+
         db.soft_delete_data_table_columns(table_id, owner_user_id=owner_user_id)
         db.soft_delete_data_table_rows(table_id, owner_user_id=owner_user_id)
         if columns_payload:
@@ -810,6 +851,7 @@ async def update_data_table_content(
             table_id,
             status="ready",
             row_count=len(rows_payload),
+            last_error=None,
             owner_user_id=owner_user_id,
         )
     except InputError as exc:
@@ -888,7 +930,7 @@ async def delete_data_table(
 
 @router.post(
     "/{table_uuid}/regenerate",
-    response_model=DataTableGenerateResponse,
+    response_model=Union[DataTableGenerateResponse, DataTableDetailResponse],
     summary="Regenerate a data table from stored sources",
     dependencies=[
         Depends(require_permissions(MEDIA_UPDATE)),
@@ -899,12 +941,14 @@ async def regenerate_data_table(
     table_uuid: str,
     req: DataTableRegenerateRequest,
     response: Response,
+    wait_for_completion: bool = Query(False, description="Wait for job completion"),
+    wait_timeout_seconds: int = Query(300, ge=1, le=1800),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
     request: Request = None,
-) -> DataTableGenerateResponse:
+) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
     rid = ensure_request_id(request) if request is not None else None
     tp = ensure_traceparent(request) if request is not None else ""
 
@@ -961,6 +1005,31 @@ async def regenerate_data_table(
         prompt=prompt_override,
         owner_user_id=owner_user_id,
     )
+
+    if wait_for_completion:
+        job_state = await _wait_for_job_completion(
+            jm, int(job.get("id")), timeout_seconds=wait_timeout_seconds
+        )
+        job_status = str(job_state.get("status") or "").lower()
+        if job_status != "completed":
+            raise HTTPException(
+                status_code=409,
+                detail=job_state.get("error_message") or "data_table_job_failed",
+            )
+        table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
+        if not table_row:
+            raise HTTPException(status_code=404, detail="data_table_not_found")
+        response.status_code = status.HTTP_200_OK
+        rows_limit = min(req.max_rows or 2000, 2000)
+        return _build_table_detail_response(
+            table_row,
+            db,
+            rows_limit=rows_limit,
+            rows_offset=0,
+            include_rows=True,
+            include_sources=True,
+            owner_user_id=owner_user_id,
+        )
 
     response.status_code = status.HTTP_202_ACCEPTED
     counts = db.get_data_table_counts([table_id]).get(table_id, {})

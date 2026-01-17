@@ -31,6 +31,7 @@
 
 - Architecture & Data Flow
   - Pipeline orchestrator: `run_watchlist_job` consumes sources, fetches items (RSS or site rules), evaluates filters, and produces outputs: tldw_Server_API/app/core/Watchlists/pipeline.py:1
+  - Outputs are stored in Collections outputs with origin metadata set to `watchlists`.
   - Fetchers and filters: RSS and site fetchers; filter evaluation utilities: tldw_Server_API/app/core/Watchlists/fetchers.py:1, tldw_Server_API/app/core/Watchlists/filters.py:1
   - Templates: HTML/Markdown templates stored and validated: tldw_Server_API/app/core/Watchlists/template_store.py:1
   - OPML import/export helpers: tldw_Server_API/app/core/Watchlists/opml.py:1

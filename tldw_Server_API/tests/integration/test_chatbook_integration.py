@@ -13,7 +13,6 @@ import pytest
 pytestmark = pytest.mark.unit
 import asyncio
 import json
-import tempfile
 import zipfile
 import shutil
 from pathlib import Path
@@ -43,8 +42,10 @@ def test_db():
 
 
 @pytest.fixture
-def chatbook_service(test_db, dict_service, wb_service):
+def chatbook_service(test_db, dict_service, wb_service, tmp_path, monkeypatch):
     """Create ChatbookService with test database."""
+    monkeypatch.setenv('PYTEST_CURRENT_TEST', 'test')
+    monkeypatch.setenv('USER_DB_BASE_DIR', str(tmp_path))
     service = ChatbookService(user_id="test_user", db=test_db)
     # Inject the world book and dictionary services
     service.world_books = wb_service
@@ -65,10 +66,11 @@ def wb_service(test_db):
 
 
 @pytest.fixture
-def temp_export_dir():
-    """Create temporary directory for exports."""
-    temp_dir = tempfile.mkdtemp()
-    yield Path(temp_dir)
+def temp_export_dir(chatbook_service):
+    """Create temporary directory for imports within the chatbooks temp dir."""
+    temp_dir = chatbook_service.temp_dir / "tests"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    yield temp_dir
     shutil.rmtree(temp_dir, ignore_errors=True)
 
 

@@ -106,6 +106,7 @@ Because `update_config()` now preserves comments, developers should continue to 
 - Environment variables:
   - `TLDW_SETUP_ALLOW_REMOTE=1` - temporarily allows remote access to setup endpoints on trusted networks.
   - `TLDW_SETUP_TRUST_PROXY=1` - when set, honors `X-Forwarded-For` to determine client origin; otherwise the header is ignored.
+- Remote setup access requires authentication as an admin (admin role + `system.configure` permission), or the single-user principal when running in single-user mode.
 - Secret values never leave the server; snapshot marks them with `is_secret: true`, returns an empty `value`, and includes an `is_set` flag.
 
 ## Update Validation

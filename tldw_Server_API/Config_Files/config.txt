@@ -897,6 +897,10 @@ skip_audio_prevalidation = false
 # with sufficient capacity, backups, and appropriate filesystem ACLs.
 # If unset, the server falls back to Databases/user_databases under
 # the project root.
+# Setup-time updates to USER_DB_BASE_DIR are constrained to an allowlist.
+# To permit other roots, set USER_DB_BASE_DIR_ALLOWED_ROOTS or
+# TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS to a comma- or colon-separated list
+# of parent directories.
 USER_DB_BASE_DIR = Databases/user_databases
 
 local_tts_device = cpu

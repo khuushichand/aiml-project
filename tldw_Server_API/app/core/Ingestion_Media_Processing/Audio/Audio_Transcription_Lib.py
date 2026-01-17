@@ -329,6 +329,15 @@ def _resolve_safe_input_path(path: Path, *, base_dir: Optional[Path], label: str
     return safe_path
 
 
+def _resolve_audio_input_path_for_provider(
+    audio_file_path: Union[str, Path],
+    *,
+    base_dir: Optional[Path],
+    label: str = "Audio input path",
+) -> Path:
+    return _resolve_safe_input_path(Path(audio_file_path), base_dir=base_dir, label=label)
+
+
 def _normalize_whisper_model_identifier(
     model_name: str,
     *,
@@ -2351,7 +2360,8 @@ def speech_to_text_parakeet(
     audio_file_path: str,
     variant: str = "standard",
     selected_source_lang: str = 'en',
-    vad_filter: bool = False
+    vad_filter: bool = False,
+    base_dir: Optional[Path] = None,
 ) -> list:
     """
     Transcribe audio using Parakeet with specified variant.
@@ -2361,12 +2371,20 @@ def speech_to_text_parakeet(
         variant: Parakeet variant ('standard', 'onnx', 'mlx', 'cuda')
         selected_source_lang: Language code (not used by Parakeet currently)
         vad_filter: VAD filter flag (not used by Parakeet currently)
+        base_dir: Optional base directory used to validate local input paths.
 
     Returns:
         List of segments in whisper-compatible format
     """
     try:
         logging.info(f"Transcribing with Parakeet variant: {variant}")
+
+        audio_path = _resolve_audio_input_path_for_provider(
+            audio_file_path,
+            base_dir=base_dir,
+            label="Audio input path",
+        )
+        audio_file_path = str(audio_path)
 
         # Get audio duration for segment creation
         try:
@@ -2420,7 +2438,8 @@ def speech_to_text_parakeet(
 def speech_to_text_canary(
     audio_file_path: str,
     selected_source_lang: str = 'en',
-    vad_filter: bool = False
+    vad_filter: bool = False,
+    base_dir: Optional[Path] = None,
 ) -> list:
     """
     Transcribe audio using Canary model.
@@ -2429,6 +2448,7 @@ def speech_to_text_canary(
         audio_file_path: Path to the audio file
         selected_source_lang: Language code
         vad_filter: VAD filter flag (not used by Canary currently)
+        base_dir: Optional base directory used to validate local input paths.
 
     Returns:
         List of segments in whisper-compatible format
@@ -2439,6 +2459,13 @@ def speech_to_text_canary(
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             transcribe_with_canary
         )
+
+        audio_path = _resolve_audio_input_path_for_provider(
+            audio_file_path,
+            base_dir=base_dir,
+            label="Audio input path",
+        )
+        audio_file_path = str(audio_path)
 
         # Load audio data
         import numpy as np
@@ -2461,7 +2488,8 @@ def speech_to_text_canary(
 def speech_to_text_qwen2audio(
     audio_file_path: str,
     selected_source_lang: str = 'en',
-    vad_filter: bool = False
+    vad_filter: bool = False,
+    base_dir: Optional[Path] = None,
 ) -> list:
     """
     Transcribe audio using Qwen2Audio model.
@@ -2470,12 +2498,20 @@ def speech_to_text_qwen2audio(
         audio_file_path: Path to the audio file
         selected_source_lang: Language code (not used by Qwen2Audio currently)
         vad_filter: VAD filter flag (not used by Qwen2Audio currently)
+        base_dir: Optional base directory used to validate local input paths.
 
     Returns:
         List of segments in whisper-compatible format
     """
     try:
         logging.info("Transcribing with Qwen2Audio model via speech_to_text_qwen2audio")
+
+        audio_path = _resolve_audio_input_path_for_provider(
+            audio_file_path,
+            base_dir=base_dir,
+            label="Audio input path",
+        )
+        audio_file_path = str(audio_path)
 
         # Load audio data
         import numpy as np
@@ -2651,6 +2687,7 @@ def speech_to_text(
                 variant=variant,
                 selected_source_lang=selected_source_lang,
                 vad_filter=vad_filter,
+                base_dir=base_dir_resolved,
             )
             if return_language:
                 return segments_parakeet, selected_source_lang
@@ -2670,6 +2707,7 @@ def speech_to_text(
                 audio_file_path=str(file_path),
                 selected_source_lang=selected_source_lang,
                 vad_filter=vad_filter,
+                base_dir=base_dir_resolved,
             )
             if return_language:
                 return segments_canary, selected_source_lang
@@ -2689,6 +2727,7 @@ def speech_to_text(
                 audio_file_path=str(file_path),
                 selected_source_lang=selected_source_lang,
                 vad_filter=vad_filter,
+                base_dir=base_dir_resolved,
             )
             if return_language:
                 return segments_qwen, selected_source_lang
@@ -2946,12 +2985,13 @@ def _find_ffmpeg() -> str:
 
 # os.system(r'.\Bin\ffmpeg.exe -ss 00:00:00 -i "{video_file_path}" -ar 16000 -ac 1 -c:a pcm_s16le "{out_path}"')
 
-def validate_audio_file(file_path: str) -> tuple:
+def validate_audio_file(file_path: str, *, base_dir: Optional[Path] = None) -> tuple:
     """
     Validate audio file using ffprobe.
 
     Args:
         file_path: Path to the audio file to validate
+        base_dir: Optional base directory used to validate local input paths.
 
     Returns:
         Tuple of (is_valid, error_message)
@@ -2967,7 +3007,14 @@ def validate_audio_file(file_path: str) -> tuple:
     """
     try:
         # Check file exists and has minimum size
-        path = Path(file_path)
+        try:
+            path = _resolve_audio_input_path_for_provider(
+                file_path,
+                base_dir=base_dir,
+                label="Audio input path",
+            )
+        except ValueError as exc:
+            return False, str(exc)
         if not path.exists():
             return False, "File does not exist"
 

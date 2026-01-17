@@ -22,6 +22,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 
 ## Storage
 - `USER_DB_BASE_DIR`: Base directory for per-user DBs and assets (defined in `tldw_Server_API.app.core.config`). Defaults to `Databases/user_databases` under the repo root; relative paths resolve from repo root and `~` expands. Override via environment variable or `Config_Files/config.txt` as needed.
+- `USER_DB_BASE_DIR_ALLOWED_ROOTS` / `TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS`: Optional allowlist for setup-time changes to `USER_DB_BASE_DIR`. Comma- or colon-separated list of parent directories permitted for the new base.
 - `USER_DB_BASE`: Deprecated alias for `USER_DB_BASE_DIR` (used only by rewrite cache resolution).
 
 ## Testing & CI Controls
@@ -340,6 +341,12 @@ Quick start (local dev):
 - `POINTS_MODE`: `sglang` or `transformers` (default: auto).
 - `POINTS_SGLANG_URL`: SGLang chat/completions endpoint (e.g., `http://127.0.0.1:8081/v1/chat/completions`).
 - `POINTS_SGLANG_MODEL`: Model name in SGLang server (e.g., `WePoints`).
+
+## Workflows (File Access)
+- `WORKFLOWS_FILE_BASE_DIR`: Base directory for workflow `file://` access. Relative paths resolve from the project root; defaults to the per-user base dir under `USER_DB_BASE_DIR` (with a `Databases/` fallback).
+- `WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS`: `true|false` - allow workflow file access outside the per-user base dir, but only under allowlisted base directories (default `false`).
+- `WORKFLOWS_FILE_ALLOWLIST`: Comma-separated list of allowed base directories for unsafe file access; relative paths resolve from the project root.
+- `WORKFLOWS_FILE_ALLOWLIST_<TENANT>`: Optional per-tenant override (uppercase, `-` replaced by `_`); when set, it replaces the global allowlist for that tenant.
 
 ## Scheduler
 - `SCHEDULER_DATABASE_URL`: Database URL for the core task scheduler. Defaults to `sqlite:///PROJECT_ROOT/Databases/scheduler.db` (test mode uses a per-process temp file). Set this to place the scheduler DB alongside other DBs.

@@ -311,6 +311,46 @@ class ChatbookService:
             logger.warning(f"TODO(chatbooks): {message}")
             self._todo_messages.add(message)
 
+    def _resolve_import_archive_path(self, file_ref: Union[str, Path]) -> Path:
+        """Resolve and validate a chatbook archive path within temp/imports directories."""
+        ref = str(file_ref or "").strip()
+        if not ref:
+            raise ValidationError("Chatbook file path is required", field="file_path")
+
+        base_dirs = [self.temp_dir.resolve(), self.import_dir.resolve()]
+        ref_path = Path(ref)
+        candidates: List[Path] = []
+
+        if ref_path.is_absolute() or (ref_path.drive and ref_path.root):
+            candidates.append(ref_path)
+        else:
+            for base in base_dirs:
+                candidates.append(base / ref_path)
+
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve(strict=False)
+            except Exception:
+                continue
+            for base in base_dirs:
+                try:
+                    resolved.relative_to(base)
+                except Exception:
+                    continue
+                return resolved
+
+        raise SecurityError("Chatbook file path is outside allowed import directories")
+
+    def _build_import_file_token(self, resolved_path: Path) -> str:
+        """Return a tokenized relative path for import job payloads."""
+        base_dirs = [self.temp_dir.resolve(), self.import_dir.resolve()]
+        for base in base_dirs:
+            try:
+                return resolved_path.relative_to(base).as_posix()
+            except Exception:
+                continue
+        return resolved_path.name
+
     def _get_prompts_db(self) -> Optional["PromptsDatabase"]:
         """Lazily initialize and cache the prompts database."""
         if PromptsDatabase is None:
@@ -1400,6 +1440,13 @@ class ChatbookService:
                     + ", ".join(sorted(set(requested)))
                 ), None
 
+        try:
+            resolved_path = self._resolve_import_archive_path(file_path)
+        except Exception as exc:
+            logger.warning(f"Chatbooks import rejected file path: {exc}")
+            return False, "Invalid or potentially malicious archive file", None
+        file_token = self._build_import_file_token(resolved_path)
+
         if async_mode:
             # Create job and run asynchronously
             job_id = None
@@ -1408,7 +1455,8 @@ class ChatbookService:
                     "domain": "chatbooks",
                     "job_type": "import",
                     "user_id": self.user_id,
-                    "path": file_path,
+                    "path": file_token,
+                    "file_token": file_token,
                     "import_media": import_media,
                     "import_embeddings": import_embeddings,
                     "conflict_resolution": str(conflict_resolution.value if hasattr(conflict_resolution, 'value') else conflict_resolution),
@@ -1426,7 +1474,7 @@ class ChatbookService:
                 job_id=job_id,
                 user_id=self.user_id,
                 status=ImportStatus.PENDING,
-                chatbook_path=file_path
+                chatbook_path=str(resolved_path)
             )
 
             # Store job in database
@@ -1441,7 +1489,7 @@ class ChatbookService:
                     payload = {
                         "action": "import",
                         "chatbooks_job_id": job_id,
-                        "file_path": file_path,
+                        "file_token": file_token,
                         "content_selections": {k.value if hasattr(k, 'value') else str(k): v for k, v in (content_selections or {}).items()},
                         "conflict_resolution": conflict_resolution.value if hasattr(conflict_resolution, 'value') else str(conflict_resolution),
                         "prefix_imported": bool(prefix_imported),
@@ -1462,7 +1510,7 @@ class ChatbookService:
                     logger.warning(f"Failed to enqueue import job into core Jobs: {e}")
             else:
                 task = asyncio.create_task(self._import_chatbook_async(
-                    job_id, file_path, content_selections,
+                    job_id, str(resolved_path), content_selections,
                     conflict_resolution, prefix_imported,
                     import_media, import_embeddings
                 ))
@@ -1475,7 +1523,7 @@ class ChatbookService:
             # Return (success, message, warnings)
             return await asyncio.to_thread(
                 self._import_chatbook_sync,
-                file_path, content_selections,
+                str(resolved_path), content_selections,
                 conflict_resolution, prefix_imported,
                 import_media, import_embeddings
             )
@@ -1494,6 +1542,13 @@ class ChatbookService:
         """
         extract_dir: Optional[Path] = None
         try:
+            try:
+                resolved_path = self._resolve_import_archive_path(file_path)
+            except Exception as exc:
+                logger.warning(f"Chatbooks import rejected file path: {exc}")
+                return False, "Invalid or potentially malicious archive file", None
+            file_path = str(resolved_path)
+
             # Validate file first via centralized validator
             from .chatbook_validators import ChatbookValidator
             ok, err = ChatbookValidator.validate_zip_file(file_path)
@@ -1752,7 +1807,7 @@ class ChatbookService:
         finally:
             # Ensure original import archive is removed for async mode
             try:
-                fp = Path(file_path)
+                fp = self._resolve_import_archive_path(file_path)
                 if fp.exists() and fp.is_file():
                     fp.unlink()
             except Exception as _e:
@@ -1770,6 +1825,13 @@ class ChatbookService:
         """
         extract_dir: Optional[Path] = None
         try:
+            try:
+                resolved_path = self._resolve_import_archive_path(file_path)
+            except Exception as exc:
+                logger.warning(f"Chatbooks preview rejected file path: {exc}")
+                return None, "Invalid or potentially malicious archive file"
+            file_path = str(resolved_path)
+
             # Defense-in-depth: validate the archive before extraction
             try:
                 from .chatbook_validators import ChatbookValidator
@@ -1998,13 +2060,13 @@ class ChatbookService:
                     else:
                         ok, msg, _ = await asyncio.to_thread(
                             self._import_chatbook_sync,
-                            payload.get("file_path"), cs,
+                            (payload.get("file_token") or payload.get("file_path")), cs,
                             conflict_res,
                             bool(payload.get("prefix_imported", False)),
                             import_media,
                             import_embeddings,
                         )
-                    import_archive = payload.get("file_path")
+                    import_archive = payload.get("file_token") or payload.get("file_path")
                     ij = self._get_import_job(chatbooks_job_id)
                     if ok:
                         if ij and ij.status != ImportStatus.CANCELLED:
@@ -2033,7 +2095,7 @@ class ChatbookService:
                         )
                     if import_archive:
                         try:
-                            archive_path = Path(import_archive)
+                            archive_path = self._resolve_import_archive_path(import_archive)
                             if archive_path.exists() and archive_path.is_file():
                                 archive_path.unlink()
                         except Exception as exc:
@@ -4113,6 +4175,12 @@ class ChatbookService:
             True if valid
         """
         try:
+            try:
+                resolved_path = self._resolve_import_archive_path(file_path)
+            except Exception as exc:
+                raise ValidationError("Invalid or potentially malicious archive file", field="file_path") from exc
+            file_path = str(resolved_path)
+
             with zipfile.ZipFile(file_path, 'r') as zf:
                 # Check for manifest
                 if 'manifest.json' not in zf.namelist():
@@ -4154,7 +4222,8 @@ class ChatbookService:
             manifest = None
             if is_valid:
                 try:
-                    with zipfile.ZipFile(file_path, 'r') as zf:
+                    resolved_path = self._resolve_import_archive_path(file_path)
+                    with zipfile.ZipFile(resolved_path, 'r') as zf:
                         manifest_data = zf.read('manifest.json')
                         manifest = json.loads(manifest_data)
                 except Exception as mf_err:

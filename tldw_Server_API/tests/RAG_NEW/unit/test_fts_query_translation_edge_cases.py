@@ -59,3 +59,16 @@ def test_fts_query_translation_truncates_long_input():
     long_query = "a" * (MAX_FTS_QUERY_LENGTH + 50)
     out = FTSQueryTranslator.sqlite_to_postgres(long_query)
     assert len(out) == MAX_FTS_QUERY_LENGTH
+
+
+def test_postgres_to_sqlite_truncates_long_input():
+
+
+    from tldw_Server_API.app.core.DB_Management.backends.fts_translator import (
+        FTSQueryTranslator,
+        MAX_FTS_QUERY_LENGTH,
+    )
+
+    long_query = "a" * (MAX_FTS_QUERY_LENGTH + 50)
+    out = FTSQueryTranslator.postgres_to_sqlite(long_query)
+    assert len(out) == MAX_FTS_QUERY_LENGTH

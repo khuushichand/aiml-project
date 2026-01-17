@@ -37,6 +37,13 @@ class WatchlistFiltersPayload(BaseModel):
     )
 
 
+class WatchlistIngestPrefs(BaseModel):
+    persist_to_media_db: bool = Field(
+        default=False,
+        description="When true, also persist ingested items to the Media DB.",
+    )
+
+
 class SourceCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     url: AnyUrl
@@ -144,6 +151,10 @@ class JobCreateRequest(BaseModel):
     per_host_delay_ms: Optional[int] = None
     retry_policy: Optional[Dict[str, Any]] = None
     output_prefs: Optional[Dict[str, Any]] = None
+    ingest_prefs: Optional[WatchlistIngestPrefs] = Field(
+        default=None,
+        description="Optional ingest preferences (e.g., Media DB persistence).",
+    )
     job_filters: Optional[WatchlistFiltersPayload] = Field(
         default=None,
         description="Optional job-level filters payload (bridge from SUBS Import Rules)",
@@ -161,6 +172,10 @@ class JobUpdateRequest(BaseModel):
     per_host_delay_ms: Optional[int] = None
     retry_policy: Optional[Dict[str, Any]] = None
     output_prefs: Optional[Dict[str, Any]] = None
+    ingest_prefs: Optional[WatchlistIngestPrefs] = Field(
+        default=None,
+        description="Optional ingest preferences (replace).",
+    )
     job_filters: Optional[WatchlistFiltersPayload] = Field(
         default=None,
         description="Optional job-level filters payload (replace)",
@@ -179,6 +194,7 @@ class Job(BaseModel):
     per_host_delay_ms: Optional[int] = None
     retry_policy: Optional[Dict[str, Any]] = None
     output_prefs: Optional[Dict[str, Any]] = None
+    ingest_prefs: Optional[WatchlistIngestPrefs] = None
     job_filters: Optional[WatchlistFiltersPayload] = None
     created_at: str
     updated_at: str

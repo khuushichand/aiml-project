@@ -16,7 +16,8 @@ from app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import (
     validate_file_path,
     sanitize_wiki_name,
     get_safe_checkpoint_path,
-    get_safe_log_path
+    get_safe_log_path,
+    import_mediawiki_dump,
 )
 
 
@@ -41,6 +42,79 @@ class TestPathTraversalProtection:
         # This should fail with access denied or file not exist
         with pytest.raises(ValueError):
             validate_file_path("/etc/passwd")
+
+    def test_import_rejects_outside_allowed_base(self, tmp_path: Path):
+
+        """Test that import rejects files outside the allowed base directory."""
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "dump.xml"
+        outside_file.write_text("<mediawiki></mediawiki>")
+
+        events = list(
+            import_mediawiki_dump(
+                file_path=str(outside_file),
+                wiki_name="TestWiki",
+                store_to_db=False,
+                store_to_vector_db=False,
+                allowed_dir=allowed_dir,
+            )
+        )
+
+        error_events = [event for event in events if event.get("type") == "error"]
+        assert error_events
+        assert "outside allowed directory" in error_events[0].get("message", "").lower()
+
+    def test_import_accepts_inside_allowed_base(self, tmp_path: Path):
+
+        """Test that import accepts files within the allowed base directory."""
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        inside_file = allowed_dir / "dump.xml"
+        inside_file.write_text(
+            """
+<mediawiki xmlns="http://www.mediawiki.org/xml/export-0.10/" version="0.10" xml:lang="en">
+  <siteinfo>
+    <sitename>TestWiki</sitename>
+    <dbname>testwiki</dbname>
+    <base>http://example.org/wiki/Main_Page</base>
+    <generator>MediaWiki 1.42</generator>
+    <case>first-letter</case>
+  </siteinfo>
+  <page>
+    <title>Allowed Page</title>
+    <ns>0</ns>
+    <id>1</id>
+    <revision>
+      <id>11</id>
+      <timestamp>2024-10-08T12:34:56Z</timestamp>
+      <contributor><username>Tester</username><id>100</id></contributor>
+      <comment>init</comment>
+      <model>wikitext</model>
+      <format>text/x-wiki</format>
+      <text xml:space="preserve">Allowed content.</text>
+      <sha1>dummy</sha1>
+    </revision>
+  </page>
+</mediawiki>
+            """.strip()
+        )
+
+        events = list(
+            import_mediawiki_dump(
+                file_path=str(inside_file),
+                wiki_name="TestWiki",
+                store_to_db=False,
+                store_to_vector_db=False,
+                allowed_dir=allowed_dir,
+            )
+        )
+
+        error_events = [event for event in events if event.get("type") == "error"]
+        assert not error_events
+        assert any(event.get("type") == "summary" for event in events)
 
     def test_wiki_name_null_byte(self):
 

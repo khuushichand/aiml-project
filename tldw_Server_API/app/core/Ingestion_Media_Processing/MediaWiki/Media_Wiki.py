@@ -318,15 +318,14 @@ def _open_dump_file_text(safe_path: Path):
     return open(safe_path, mode='rt', encoding='utf-8', errors='ignore')
 
 
-def parse_mediawiki_dump(file_path: str, namespaces: List[int] = None, skip_redirects: bool = False) -> Iterator[
-    Dict[str, Any]]:
+def parse_mediawiki_dump(
+    file_path: Union[str, Path],
+    namespaces: List[int] = None,
+    skip_redirects: bool = False,
+    allowed_dir: Optional[Path] = None,
+) -> Iterator[Dict[str, Any]]:
     # Validate file path
-    # Restrict access to the directory containing the file (e.g., API temp dir)
-    try:
-        allowed_dir = Path(file_path).resolve().parent
-    except Exception:
-        allowed_dir = None
-    safe_path = validate_file_path(file_path, allowed_dir=allowed_dir)
+    safe_path = validate_file_path(str(file_path), allowed_dir=allowed_dir)
     # Use context manager for file operations to prevent resource leaks
     with _open_dump_file_text(safe_path) as f:
         dump = mwxml.Dump.from_file(f)
@@ -846,17 +845,15 @@ def import_mediawiki_dump(
         store_to_db: bool = True,
         store_to_vector_db: bool = True,
         api_name_vector_db: Optional[str] = None,
-        api_key_vector_db: Optional[str] = None
+        api_key_vector_db: Optional[str] = None,
+        allowed_dir: Optional[Path] = None,
 ) -> Iterator[Dict[str, Any]]:
     try:
         # Sanitize wiki_name and validate file_path
         safe_wiki_name = sanitize_wiki_name(wiki_name)
-        # Restrict validation to the directory containing the uploaded file
-        try:
-            _allowed_dir = Path(file_path).resolve().parent
-        except Exception:
-            _allowed_dir = None
-        safe_file_path = validate_file_path(file_path, allowed_dir=_allowed_dir)
+        # Restrict validation to the provided base directory if available
+        resolved_allowed_dir = Path(allowed_dir).resolve() if allowed_dir is not None else None
+        safe_file_path = validate_file_path(str(file_path), allowed_dir=resolved_allowed_dir)
 
         logging.info(
             f"Importing MediaWiki dump: {safe_file_path} for wiki: {safe_wiki_name}. StoreDB: {store_to_db}, StoreVector: {store_to_vector_db}")
@@ -869,13 +866,18 @@ def import_mediawiki_dump(
         if store_to_db:  # Checkpoints only make sense if we are saving progress to DB
             last_processed_id = load_checkpoint(str(checkpoint_file))
 
-        total_pages = count_pages(file_path, namespaces, skip_redirects)
+        total_pages = count_pages(safe_file_path, namespaces, skip_redirects, allowed_dir=resolved_allowed_dir)
         processed_pages_count = 0
 
         yield {"type": "progress_total", "total_pages": total_pages,
                "message": f"Found {total_pages} pages to process for '{wiki_name}'."}
 
-        for item_dict in parse_mediawiki_dump(file_path, namespaces, skip_redirects):
+        for item_dict in parse_mediawiki_dump(
+            safe_file_path,
+            namespaces,
+            skip_redirects,
+            allowed_dir=resolved_allowed_dir,
+        ):
             current_page_id = item_dict.get('page_id', 0)
             current_title = item_dict.get('title', 'Unknown Title')
 
@@ -947,15 +949,16 @@ def import_mediawiki_dump(
         yield {"type": "error", "message": f"Error during import: {str(e)}"}
 
 
-def count_pages(file_path: str, namespaces: List[int] = None, skip_redirects: bool = False) -> int:
+def count_pages(
+    file_path: Union[str, Path],
+    namespaces: List[int] = None,
+    skip_redirects: bool = False,
+    allowed_dir: Optional[Path] = None,
+) -> int:
     count = 0
     try:
         # Validate file path
-        try:
-            allowed_dir = Path(file_path).resolve().parent
-        except Exception:
-            allowed_dir = None
-        safe_path = validate_file_path(file_path, allowed_dir=allowed_dir)
+        safe_path = validate_file_path(str(file_path), allowed_dir=allowed_dir)
         # Use context manager for file operations to prevent resource leaks
         with _open_dump_file_text(safe_path) as f:
             dump = mwxml.Dump.from_file(f)

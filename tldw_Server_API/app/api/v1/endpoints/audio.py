@@ -125,6 +125,50 @@ def _get_chat_history_max_messages() -> int:
 CHAT_HISTORY_MAX_MESSAGES: int = _get_chat_history_max_messages()
 
 
+def _debug_error_details_enabled() -> bool:
+    return str(os.getenv("DEBUG_ERROR_DETAILS", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _maybe_debug_details(exc: Optional[Exception]) -> Optional[str]:
+    if exc is None or not _debug_error_details_enabled():
+        return None
+    try:
+        return str(exc)
+    except Exception:
+        return "Unprintable error"
+
+
+def _http_error_detail(message: str, request_id: Optional[str], exc: Optional[Exception] = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"message": message}
+    if request_id:
+        payload["request_id"] = request_id
+    details = _maybe_debug_details(exc)
+    if details:
+        payload["details"] = details
+    return payload
+
+
+def _ws_error_payload(
+    message: str,
+    *,
+    request_id: Optional[str] = None,
+    exc: Optional[Exception] = None,
+    error_type: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"type": "error", "message": message}
+    if error_type:
+        payload["error_type"] = error_type
+    if request_id:
+        payload["request_id"] = request_id
+    details = _maybe_debug_details(exc)
+    if details:
+        payload["details"] = details
+    if extra:
+        payload.update(extra)
+    return payload
+
+
 async def _stream_tts_to_websocket(
     *,
     websocket: WebSocket,
@@ -532,6 +576,8 @@ async def create_speech(
     # Authentication is enforced by dependency injection via get_request_user
     # current_user is available for audit/logging if needed
 
+    request_id = ensure_request_id(request)
+
     # Input validation using the new validation system
     provider_hint: Optional[str] = None
     try:
@@ -553,8 +599,11 @@ async def create_speech(
         request_data.input = sanitized_text
 
     except TTSValidationError as e:
-        logger.warning(f"TTS validation error: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.warning(f"TTS validation error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("TTS validation failed", request_id, exc=e),
+        )
 
     # Resolve BYOK credentials for TTS providers (OpenAI/ElevenLabs)
     user_id_int: Optional[int] = None
@@ -604,11 +653,6 @@ async def create_speech(
                         "message": f"TTS provider '{tts_provider_hint}' requires an API key.",
                     },
                 )
-    # Correlate via request id (header or generated)
-    try:
-        request_id = request.headers.get("x-request-id") or request.headers.get("X-Request-Id") or str(uuid4())
-    except Exception:
-        request_id = str(uuid4())
     logger.info(
         f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}, request_id={request_id}"
     )
@@ -661,35 +705,42 @@ async def create_speech(
 
     def _raise_for_tts_error(exc: Exception) -> None:
         if isinstance(exc, TTSValidationError):
-            logger.warning(f"TTS validation error: {exc}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-        if isinstance(exc, TTSProviderNotConfiguredError):
-            logger.error(f"TTS provider not configured: {exc}")
+            logger.warning(f"TTS validation error: {exc}", exc_info=True)
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"TTS service unavailable: {str(exc)}"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_http_error_detail("TTS validation failed", request_id, exc=exc),
+            )
+        if isinstance(exc, TTSProviderNotConfiguredError):
+            logger.error(f"TTS provider not configured: {exc}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_http_error_detail("TTS service unavailable", request_id, exc=exc),
             )
         if isinstance(exc, TTSAuthenticationError):
-            logger.error(f"TTS authentication error: {exc}")
+            logger.error(f"TTS authentication error: {exc}", exc_info=True)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="TTS provider authentication failed")
         if isinstance(exc, TTSRateLimitError):
-            logger.warning(f"TTS rate limit exceeded: {exc}")
+            logger.warning(f"TTS rate limit exceeded: {exc}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="TTS provider rate limit exceeded. Please try again later.",
             )
         if isinstance(exc, TTSQuotaExceededError):
-            logger.warning(f"TTS quota exceeded: {exc}")
+            logger.warning(f"TTS quota exceeded: {exc}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="TTS quota exceeded. Please review your plan or quota.",
             )
         if isinstance(exc, TTSError):
-            logger.error(f"TTS error: {exc}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"TTS error: {str(exc)}")
+            logger.error(f"TTS error: {exc}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=_http_error_detail("TTS generation failed", request_id, exc=exc),
+            )
         logger.error(f"Unexpected error during audio generation: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred during audio generation",
+            detail=_http_error_detail("An unexpected error occurred during audio generation", request_id, exc=exc),
         )
 
     try:
@@ -863,6 +914,8 @@ async def create_transcription(
 
     # Authentication is enforced by dependency injection via get_request_user
 
+    rid = ensure_request_id(request)
+
     # Validate file presence
     if not file:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio file provided")
@@ -921,12 +974,6 @@ async def create_transcription(
             return None
 
     # Resolve per-tier file size limit
-    rid = None
-    try:
-        if request is not None and hasattr(request, "state") and getattr(request.state, "request_id", None):
-            rid = str(request.state.request_id)
-    except Exception:
-        rid = None
     try:
         limits = await get_limits_for_user(current_user.id)
     except EXPECTED_DB_EXC as e:
@@ -1123,7 +1170,7 @@ async def create_transcription(
             except ValueError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=str(exc),
+                    detail=_http_error_detail("Invalid transcription model identifier", rid, exc=exc),
                 ) from exc
         # Wrap the heavy work to ensure we always release the job slot
         try:
@@ -1431,7 +1478,10 @@ async def create_transcription(
         raise
     except Exception as e:
         logger.error(f"Error during transcription: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Transcription failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_http_error_detail("Transcription failed", rid, exc=e),
+        )
     finally:
         if canonical_path and canonical_path != temp_audio_path and os.path.exists(canonical_path):
             try:
@@ -1668,7 +1718,7 @@ async def segment_transcript(
 
 
 @router.get("/health")
-async def get_tts_health(tts_service: TTSServiceV2 = Depends(get_tts_service)):
+async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(get_tts_service)):
     """
     Get health status of TTS providers.
 
@@ -1740,12 +1790,15 @@ async def get_tts_health(tts_service: TTSServiceV2 = Depends(get_tts_service)):
 
         return health
     except Exception as e:
-        logger.error(f"Error getting TTS health: {e}")
-        return {"status": "error", "error": str(e), "timestamp": datetime.utcnow().isoformat()}
+        logger.error(f"Error getting TTS health: {e}", exc_info=True)
+        request_id = ensure_request_id(request)
+        payload = _http_error_detail("TTS health check failed", request_id, exc=e)
+        return {"status": "error", **payload, "timestamp": datetime.utcnow().isoformat()}
 
 
 @router.get("/transcriptions/health", summary="Check STT transcription model health")
 async def get_stt_health(
+    request: Request,
     model: Optional[str] = Query(
         default=None,
         description=(
@@ -1772,6 +1825,7 @@ async def get_stt_health(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as stt_lib
 
+    request_id = ensure_request_id(request)
     raw_model = (model or "").strip()
     if not raw_model:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
@@ -1791,7 +1845,7 @@ async def get_stt_health(
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(exc),
+                detail=_http_error_detail("Invalid transcription model identifier", request_id, exc=exc),
             ) from exc
     else:
         resolved_model = raw_model
@@ -1840,7 +1894,7 @@ async def get_stt_health(
 
 
 @router.get("/providers")
-async def list_tts_providers(tts_service: TTSServiceV2 = Depends(get_tts_service)):
+async def list_tts_providers(request: Request, tts_service: TTSServiceV2 = Depends(get_tts_service)):
     """
     List all available TTS providers and their capabilities.
     """
@@ -1852,14 +1906,17 @@ async def list_tts_providers(tts_service: TTSServiceV2 = Depends(get_tts_service
 
         return {"providers": capabilities, "voices": voices, "timestamp": datetime.utcnow().isoformat()}
     except Exception as e:
-        logger.error(f"Error listing TTS providers: {e}")
+        logger.error(f"Error listing TTS providers: {e}", exc_info=True)
+        request_id = ensure_request_id(request)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list providers: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_http_error_detail("Failed to list providers", request_id, exc=e),
         )
 
 
 @router.get("/voices/catalog", summary="List available TTS voices across providers")
 async def list_tts_voices(
+    request: Request,
     provider: Optional[str] = Query(None, description="Optional provider filter, e.g., 'elevenlabs' or 'openai'"),
     tts_service: TTSServiceV2 = Depends(get_tts_service),
 ):
@@ -1883,12 +1940,20 @@ async def list_tts_voices(
             raise HTTPException(status_code=404, detail=f"Provider '{provider}' not found or unavailable")
         return all_voices
     except Exception as e:
-        logger.error(f"Error listing TTS voices: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list voices: {str(e)}")
+        logger.error(f"Error listing TTS voices: {e}", exc_info=True)
+        request_id = ensure_request_id(request)
+        raise HTTPException(
+            status_code=500,
+            detail=_http_error_detail("Failed to list voices", request_id, exc=e),
+        )
 
 
 @router.post("/reset-metrics")
-async def reset_tts_metrics(provider: Optional[str] = None, tts_service: TTSServiceV2 = Depends(get_tts_service)):
+async def reset_tts_metrics(
+    request: Request,
+    provider: Optional[str] = None,
+    tts_service: TTSServiceV2 = Depends(get_tts_service),
+):
     """
     Reset TTS metrics.
 
@@ -1909,9 +1974,11 @@ async def reset_tts_metrics(provider: Optional[str] = None, tts_service: TTSServ
         else:
             return {"message": "Metrics not available"}
     except Exception as e:
-        logger.error(f"Error resetting metrics: {e}")
+        logger.error(f"Error resetting metrics: {e}", exc_info=True)
+        request_id = ensure_request_id(request)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to reset metrics: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_http_error_detail("Failed to reset metrics", request_id, exc=e),
         )
 
 
@@ -2814,7 +2881,12 @@ async def websocket_audio_chat_stream(
         except Exception as exc:
             if _outer_stream:
                 await _outer_stream.send_json(
-                    {"type": "error", "message": "config frame required", "details": str(exc)}
+                    _ws_error_payload(
+                        "config frame required",
+                        request_id=request_id,
+                        exc=exc,
+                        error_type="bad_request",
+                    )
                 )
             await websocket.close(code=4400)
             return
@@ -2880,15 +2952,20 @@ async def websocket_audio_chat_stream(
             transcriber = UnifiedStreamingTranscriber(config)
             transcriber.initialize()
         except Exception as exc:
+            logger.error(f"Streaming transcriber init failed: {exc}", exc_info=True)
             if _outer_stream:
+                data_payload = {
+                    "model": config.model,
+                    "variant": getattr(config, "model_variant", None),
+                    "request_id": request_id,
+                }
+                details = _maybe_debug_details(exc)
+                if details:
+                    data_payload["details"] = details
                 await _outer_stream.error(
                     "model_unavailable",
                     "Failed to initialize streaming transcriber",
-                    data={
-                        "message": str(exc),
-                        "model": config.model,
-                        "variant": getattr(config, "model_variant", None),
-                    },
+                    data=data_payload,
                 )
             return
 
@@ -2967,12 +3044,16 @@ async def websocket_audio_chat_stream(
                 return await speech_chat_service._execute_action(action_name, transcript_text, user_obj)
             except Exception as exc:
                 logger.warning(f"Streaming action execution failed: action={action_name}, error={exc}")
-                return {
+                payload = {
                     "action": action_name,
                     "status": "error",
-                    "message": str(exc),
+                    "message": "Action execution failed",
                     "user_id": getattr(user_obj, "id", None),
                 }
+                details = _maybe_debug_details(exc)
+                if details:
+                    payload["details"] = details
+                return payload
 
         processing_turn = False
 
@@ -3071,14 +3152,15 @@ async def websocket_audio_chat_stream(
                     else:
                         llm_stream = stream_candidate
             except Exception as exc:
+                logger.error(f"LLM stream failed: {exc}", exc_info=True)
                 if _outer_stream:
                     await _outer_stream.send_json(
-                        {
-                            "type": "error",
-                            "error_type": "llm_error",
-                            "message": "LLM call failed",
-                            "details": str(exc),
-                        }
+                        _ws_error_payload(
+                            "LLM call failed",
+                            request_id=request_id,
+                            exc=exc,
+                            error_type="llm_error",
+                        )
                     )
                 return "", None, None
 
@@ -3208,13 +3290,14 @@ async def websocket_audio_chat_stream(
                 async def _error_handler(exc: Exception) -> None:
                     if _outer_stream:
                         try:
+                            logger.error(f"audio.chat.stream TTS generation failed: {exc}", exc_info=True)
                             await _outer_stream.send_json(
-                                {
-                                    "type": "error",
-                                    "error_type": "tts_error",
-                                    "message": "TTS generation failed",
-                                    "details": str(exc),
-                                }
+                                _ws_error_payload(
+                                    "TTS generation failed",
+                                    request_id=request_id,
+                                    exc=exc,
+                                    error_type="tts_error",
+                                )
                             )
                         except Exception as send_exc:
                             logger.debug(
@@ -3421,11 +3504,16 @@ async def websocket_audio_chat_stream(
         except WebSocketDisconnect:
             logger.info("Audio chat WS disconnected")
         except Exception as exc:
-            logger.error(f"Audio chat WS error: {exc}")
+            logger.error(f"Audio chat WS error: {exc}", exc_info=True)
             try:
                 if _outer_stream:
                     await _outer_stream.send_json(
-                        {"type": "error", "error_type": "internal_error", "message": str(exc)}
+                        _ws_error_payload(
+                            "Internal error",
+                            request_id=request_id,
+                            exc=exc,
+                            error_type="internal_error",
+                        )
                     )
             except Exception as send_exc:  # noqa: BLE001
                 logger.debug(f"audio.chat.stream failed to send internal_error frame: {send_exc}")
@@ -3554,7 +3642,15 @@ async def websocket_tts(
         except Exception as exc:
             if _outer_stream:
                 try:
-                    await _outer_stream.error("bad_request", "Prompt frame required", data={"message": str(exc)})
+                    data_payload = {"request_id": request_id}
+                    details = _maybe_debug_details(exc)
+                    if details:
+                        data_payload["details"] = details
+                    await _outer_stream.error(
+                        "bad_request",
+                        "Prompt frame required",
+                        data=data_payload if data_payload else None,
+                    )
                 except Exception as send_exc:
                     logger.debug(f"TTS WS error frame send failed: {send_exc}")
             await websocket.close(code=4400)
@@ -3606,6 +3702,20 @@ async def websocket_tts(
         reg = get_metrics_registry()
         tts_service = await get_tts_service()
 
+        async def _ws_tts_error_handler(exc: Exception) -> None:
+            if not _outer_stream:
+                return
+            logger.error(f"audio.stream.tts TTS generation failed: {exc}", exc_info=True)
+            data_payload = {"request_id": request_id}
+            details = _maybe_debug_details(exc)
+            if details:
+                data_payload["details"] = details
+            await _outer_stream.error(
+                "internal_error",
+                "TTS generation failed",
+                data=data_payload if data_payload else None,
+            )
+
         # Delegate to the shared streaming helper; it manages its own
         # producer/consumer tasks and error handling.
         await _stream_tts_to_websocket(
@@ -3617,17 +3727,7 @@ async def websocket_tts(
             reg=reg,
             route="audio.stream.tts",
             component_label="audio_tts_ws",
-            error_handler=(
-                (  # type: ignore[union-attr]
-                    lambda exc: _outer_stream.error(
-                        "internal_error",
-                        "TTS generation failed",
-                        data={"message": str(exc)},
-                    )
-                )
-                if _outer_stream
-                else None
-            ),
+            error_handler=_ws_tts_error_handler if _outer_stream else None,
         )
     finally:
         if acquired_stream:
@@ -3898,6 +3998,7 @@ async def upload_voice(
 
     The voice will be processed and optimized for the specified provider.
     """
+    request_id = ensure_request_id(request)
     try:
         from tldw_Server_API.app.core.TTS.voice_manager import (
             get_voice_manager,
@@ -3928,9 +4029,17 @@ async def upload_voice(
             status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice upload is not available in this build"
         )
     except VoiceQuotaExceededError as e:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
+        logger.warning(f"Voice quota exceeded: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=_http_error_detail("Voice quota exceeded", request_id, exc=e),
+        )
     except VoiceProcessingError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.warning(f"Voice processing failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("Voice processing failed", request_id, exc=e),
+        )
     except Exception as e:
         logger.error(f"Voice upload error: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload voice sample")

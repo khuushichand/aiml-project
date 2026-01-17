@@ -6,7 +6,7 @@ executables by patching the internal duration/processing helpers.
 """
 
 import os
-import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.TTS.voice_manager import (
     VoiceManager,
     VoiceUploadRequest,
     VoiceDurationError,
+    VoiceInfo,
     PROVIDER_REQUIREMENTS,
 )
 
@@ -157,3 +158,49 @@ async def test_upload_voice_short_duration_warning_and_strict_mode(tmp_path, mon
             filename="short_again.wav",
             request=request,
         )
+
+
+@pytest.mark.asyncio
+async def test_delete_voice_rejects_path_traversal(tmp_path, monkeypatch):
+    """Delete should refuse to remove files outside the voices directory."""
+    manager = VoiceManager()
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    voices_root = tmp_path / "voices"
+
+    def _fake_user_db_base_dir(*, allow_legacy_alias: bool = False):
+        return tmp_path
+
+    def _fake_user_voices_dir(user_id):
+        voices_root.mkdir(parents=True, exist_ok=True)
+        (voices_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (voices_root / "processed").mkdir(parents=True, exist_ok=True)
+        (voices_root / "temp").mkdir(parents=True, exist_ok=True)
+        return voices_root
+
+    monkeypatch.setattr(DatabasePaths, "get_user_db_base_dir", _fake_user_db_base_dir, raising=True)
+    monkeypatch.setattr(DatabasePaths, "get_user_voices_dir", _fake_user_voices_dir, raising=True)
+
+    outside_file = tmp_path / "outside.wav"
+    outside_file.write_bytes(b"not a voice sample")
+
+    voice_info = VoiceInfo(
+        voice_id="malicious-id",
+        name="malicious",
+        description=None,
+        file_path="../outside.wav",
+        format="wav",
+        duration=1.0,
+        sample_rate=None,
+        size_bytes=outside_file.stat().st_size,
+        provider="vibevoice",
+        created_at=datetime.utcnow(),
+        file_hash="",
+    )
+
+    await manager.registry.register_voice(user_id=7, voice_info=voice_info)
+
+    deleted = await manager.delete_voice(user_id=7, voice_id="malicious-id")
+    assert deleted is False
+    assert outside_file.exists()

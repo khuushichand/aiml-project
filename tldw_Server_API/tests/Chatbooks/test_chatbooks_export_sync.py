@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.api.v1.endpoints import chatbooks as chatbooks_mod
 
 
@@ -109,22 +110,26 @@ def client_override(tmp_path):
     chatbooks_mod.audit_logger = _DummyAudit()
 
     with TestClient(app) as client:
+        client._chatbooks_db = _shared_db
         yield client
 
     app.dependency_overrides.clear()
+
+
+def _make_export_payload(async_mode: bool = False):
+    return {
+        "name": "Test Export",
+        "description": "Test run",
+        "content_selections": {},
+        "async_mode": async_mode,
+    }
 
 
 @pytest.mark.unit
 def test_chatbooks_export_sync_persists_job_and_downloads(client_override: TestClient):
     client = client_override
     # Create a minimal sync export with no content
-    payload = {
-        "name": "Test Export",
-        "description": "Test run",
-        "content_selections": {},
-        "async_mode": False,
-    }
-    r = client.post("/api/v1/chatbooks/export", json=payload)
+    r = client.post("/api/v1/chatbooks/export", json=_make_export_payload(async_mode=False))
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["success"] is True
@@ -145,3 +150,39 @@ def test_chatbooks_export_sync_persists_job_and_downloads(client_override: TestC
     assert r3.status_code == 200, r3.text
     assert r3.headers.get("content-type") == "application/zip"
     assert "attachment; filename=" in r3.headers.get("content-disposition", "")
+
+
+@pytest.mark.unit
+def test_chatbooks_download_blocks_export_path_outside_exports_dir(client_override: TestClient):
+    client = client_override
+    r = client.post("/api/v1/chatbooks/export", json=_make_export_payload(async_mode=False))
+    assert r.status_code == 200, r.text
+    job_id = r.json()["job_id"]
+
+    db = getattr(client, "_chatbooks_db", None)
+    assert db is not None
+    export_dir = DatabasePaths.get_user_chatbooks_exports_dir(1).resolve()
+    outside_path = (export_dir.parent / "outside.zip").resolve()
+    db._export_jobs[job_id]["output_path"] = str(outside_path)
+
+    resp = client.get(f"/api/v1/chatbooks/download/{job_id}")
+    assert resp.status_code == 403, resp.text
+    assert resp.json().get("detail") == "Access denied"
+
+
+@pytest.mark.unit
+def test_chatbooks_export_sync_rejects_result_outside_exports_dir(
+    client_override: TestClient,
+    monkeypatch,
+):
+    client = client_override
+    export_dir = DatabasePaths.get_user_chatbooks_exports_dir(1).resolve()
+    outside_path = (export_dir.parent / "outside.zip").resolve()
+
+    async def _fake_create_chatbook(*_args, **_kwargs):
+        return True, "ok", str(outside_path)
+
+    monkeypatch.setattr(chatbooks_mod.ChatbookService, "create_chatbook", _fake_create_chatbook)
+    resp = client.post("/api/v1/chatbooks/export", json=_make_export_payload(async_mode=False))
+    assert resp.status_code == 500, resp.text
+    assert resp.json().get("detail") == "Export path validation failed"

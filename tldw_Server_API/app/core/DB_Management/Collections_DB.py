@@ -592,7 +592,6 @@ class CollectionsDatabase:
             except Exception:
                 pass
         self._fts_available = fts_available
-        self._seed_output_templates_from_watchlists()
 
     # ------------------------
     # Collections Tags helpers
@@ -625,53 +624,6 @@ class CollectionsDatabase:
             if isinstance(row, dict) and row.get("name") is not None:
                 names.add(str(row.get("name")))
         return names
-
-    def _seed_output_templates_from_watchlists(self) -> None:
-        try:
-            from tldw_Server_API.app.core.Watchlists import template_store
-        except Exception as exc:
-            logger.debug(f"Skipping watchlists template seeding: {exc}")
-            return
-
-        try:
-            records = template_store.list_templates()
-        except Exception as exc:
-            logger.debug(f"Failed to list watchlists templates for seeding: {exc}")
-            return
-
-        if not records:
-            return
-
-        existing_names = self._list_output_template_names()
-        for record in records:
-            if record.name in existing_names:
-                continue
-            try:
-                loaded = template_store.load_template(record.name)
-            except Exception as exc:
-                logger.debug(f"Skipping template {record.name} during seed: {exc}")
-                continue
-            fmt = (loaded.format or "").lower()
-            if fmt not in {"md", "html"}:
-                continue
-            type_ = self._infer_output_template_type(loaded.name, fmt)
-            metadata_json = json.dumps(
-                {"seeded_from": "watchlists_templates", "seeded_at": _utcnow_iso()},
-                ensure_ascii=False,
-            )
-            try:
-                self.create_output_template(
-                    name=loaded.name,
-                    type_=type_,
-                    format_=fmt,
-                    body=loaded.content,
-                    description=loaded.description,
-                    is_default=False,
-                    metadata_json=metadata_json,
-                )
-                existing_names.add(loaded.name)
-            except Exception as exc:
-                logger.debug(f"Failed to seed watchlists template {loaded.name}: {exc}")
 
     @staticmethod
     def _domain_from_url(url: Optional[str]) -> Optional[str]:
@@ -1884,6 +1836,30 @@ class CollectionsDatabase:
     def update_output_media_item_id(self, output_id: int, media_item_id: Optional[int]) -> "CollectionsDatabase.OutputArtifactRow":
         q = "UPDATE outputs SET media_item_id = ? WHERE id = ? AND user_id = ?"
         res = self.backend.execute(q, (media_item_id, output_id, self.user_id))
+        if res.rowcount <= 0:
+            raise KeyError("output_not_found")
+        return self.get_output_artifact(output_id)
+
+    def update_output_artifact_metadata(
+        self,
+        output_id: int,
+        *,
+        metadata_json: Optional[str] = None,
+        chatbook_path: Optional[str] = None,
+    ) -> "CollectionsDatabase.OutputArtifactRow":
+        fields: list[str] = []
+        params: list[Any] = []
+        if metadata_json is not None:
+            fields.append("metadata_json = ?")
+            params.append(metadata_json)
+        if chatbook_path is not None:
+            fields.append("chatbook_path = ?")
+            params.append(chatbook_path)
+        if not fields:
+            return self.get_output_artifact(output_id)
+        params.extend([output_id, self.user_id])
+        q = f"UPDATE outputs SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND deleted = 0"
+        res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("output_not_found")
         return self.get_output_artifact(output_id)

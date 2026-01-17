@@ -140,9 +140,11 @@ All tables live in each user’s primary SQLite Media DB (`<USER_DB_BASE_DIR>/<u
 | `scrape_run_items` | Run → ingested media | `run_id`, `media_id`, `source_id` |
 | `source_seen_items` | RSS dedupe cache | `source_id`, `item_key`, `etag`, `last_modified`, `first_seen_at`, `last_seen_at` |
 | `scraped_items` | Structured run items | `id`, `run_id`, `job_id`, `source_id`, `media_id`, `media_uuid`, `url`, `title`, `summary`, `published_at`, `tags_json`, `status`, `reviewed`, `created_at` |
-| `watchlist_outputs` | Generated outputs | `id`, `run_id`, `job_id`, `type`, `format`, `title`, `content`, `storage_path`, `metadata_json`, `media_item_id`, `chatbook_path`, `version`, `expires_at`, `created_at` |
+| `outputs` (Collections) | Generated outputs | `id`, `user_id`, `run_id`, `job_id`, `type`, `format`, `title`, `storage_path`, `metadata_json`, `media_item_id`, `chatbook_path`, `retention_until`, `deleted` |
 
-Retention: per-user SQLite (default). TTL is enforced via `expires_at` with env defaults (`WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS`, `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`) and per-job overrides. Expired rows are purged on access. Postgres parity is still planned.
+Watchlists ingestion writes to Collections `content_items` by default; `scrape_run_items` is populated only when Media DB persistence is enabled.
+
+Retention: per-user SQLite (default). TTL is enforced via `retention_until` on Collections outputs with env defaults (`WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS`, `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`) and per-job overrides. Expired rows are purged on access. Postgres parity is still planned.
 
 ## 12) APIs (FastAPI, OpenAPI 3.0 - implemented)
 Base: `/api/v1/watchlists/...`

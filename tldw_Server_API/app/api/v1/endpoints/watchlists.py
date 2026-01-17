@@ -23,7 +23,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Upload
 from fastapi.responses import PlainTextResponse, HTMLResponse, Response
 from starlette.responses import FileResponse
 from loguru import logger
-from jinja2.sandbox import SandboxedEnvironment
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     get_request_user,
@@ -38,12 +37,14 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.endpoints.outputs import (
+from tldw_Server_API.app.services.outputs_service import (
     _build_output_filename,
+    _ingest_output_to_media_db,
+    _outputs_dir_for_user,
     _resolve_output_path_for_user,
     _strip_html_for_tts,
     _write_tts_audio_file,
-    _ingest_output_to_media_db,
+    render_output_template,
 )
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 from tldw_Server_API.app.core.Watchlists import template_store
@@ -52,7 +53,6 @@ from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_s
 from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _normalize_job_filters, evaluate_filters as _evaluate_filters
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import TemplateValidationError
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
@@ -143,6 +143,26 @@ def _normalize_filters_payload(raw_json: Optional[str]) -> Optional[Dict[str, An
     except Exception:
         return None
     return None
+
+
+def _normalize_output_prefs(raw_json: Optional[str]) -> Dict[str, Any]:
+    if not raw_json:
+        return {}
+    try:
+        data = json.loads(raw_json)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _merge_output_prefs(
+    base: Optional[Dict[str, Any]],
+    ingest_prefs: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(base or {})
+    if ingest_prefs is not None:
+        merged["ingest"] = ingest_prefs
+    return merged
 
 
 # ---- Helpers ----
@@ -247,11 +267,14 @@ def _row_to_scraped_item(row) -> ScrapedItem:
     )
 
 
-def _row_to_output(row) -> WatchlistOutput:
+def _parse_output_metadata(row) -> Dict[str, Any]:
     metadata: Dict[str, Any] = {}
-    try:
-        metadata = row.metadata()
-    except Exception:
+    if hasattr(row, "metadata"):
+        try:
+            metadata = row.metadata()
+        except Exception:
+            metadata = {}
+    if not metadata:
         raw = getattr(row, "metadata_json", None)
         if raw:
             try:
@@ -260,20 +283,46 @@ def _row_to_output(row) -> WatchlistOutput:
                     metadata = data
             except Exception:
                 metadata = {}
-    version = getattr(row, "version", 1)
-    expires_at = getattr(row, "expires_at", None)
-    if isinstance(metadata, dict):
-        metadata.setdefault("version", version)
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _load_output_content(user_id: int, row) -> Optional[str]:
+    storage_path = getattr(row, "storage_path", None)
+    if not storage_path:
+        return None
+    if str(getattr(row, "format", "")).lower() == "mp3":
+        return None
+    try:
+        path = _resolve_output_path_for_user(user_id, storage_path)
+    except Exception:
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+
+def _row_to_output(row, *, user_id: Optional[int] = None, content_override: Optional[str] = None) -> WatchlistOutput:
+    metadata = _parse_output_metadata(row)
+    version = metadata.get("version")
+    try:
+        version = int(version) if version is not None else 1
+    except Exception:
+        version = 1
+    expires_at = metadata.get("expires_at") if isinstance(metadata, dict) else None
+    content = content_override
+    if content is None and user_id is not None:
+        content = _load_output_content(user_id, row)
     return WatchlistOutput(
         id=row.id,
-        run_id=row.run_id,
-        job_id=row.job_id,
+        run_id=int(row.run_id or 0),
+        job_id=int(row.job_id or 0),
         type=row.type,
         format=row.format,
         title=getattr(row, "title", None),
-        content=getattr(row, "content", None),
+        content=content,
         storage_path=getattr(row, "storage_path", None),
-        metadata=metadata if isinstance(metadata, dict) else {},
+        metadata=metadata,
         media_item_id=getattr(row, "media_item_id", None),
         chatbook_path=getattr(row, "chatbook_path", None),
         version=version,
@@ -440,10 +489,25 @@ def _build_output_context(
 
 
 def _render_template_with_context(template_str: str, context: Dict[str, Any]) -> str:
-    env = SandboxedEnvironment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
-    env.filters["markdown_link"] = lambda text, url: f"[{text}]({url})" if url else text
-    template = env.from_string(template_str)
-    return template.render(**context)
+    return render_output_template(template_str, context)
+
+
+def _next_output_version_for_run(collections_db, run_id: int) -> int:
+    try:
+        rows, total = collections_db.list_output_artifacts(run_id=run_id, limit=1, offset=0)
+    except Exception:
+        return 1
+    if not rows:
+        return 1
+    metadata = _parse_output_metadata(rows[0])
+    version = metadata.get("version")
+    try:
+        return int(version or 0) + 1
+    except Exception:
+        try:
+            return int(total or 0) + 1
+        except Exception:
+            return 1
 
 
 # --------------------
@@ -1366,6 +1430,8 @@ async def create_job(
                 jf_json = json.dumps(payload.job_filters.model_dump())
         except Exception:
             jf_json = None
+        ingest_prefs = payload.ingest_prefs.model_dump(exclude_none=True) if payload.ingest_prefs else None
+        output_prefs = _merge_output_prefs(payload.output_prefs or {}, ingest_prefs)
         row = db.create_job(
             name=payload.name,
             description=payload.description,
@@ -1376,7 +1442,7 @@ async def create_job(
             max_concurrency=payload.max_concurrency,
             per_host_delay_ms=payload.per_host_delay_ms,
             retry_policy_json=json.dumps(payload.retry_policy or {}),
-            output_prefs_json=json.dumps(payload.output_prefs or {}),
+            output_prefs_json=json.dumps(output_prefs),
             job_filters_json=jf_json,
         )
     except Exception as e:
@@ -1442,6 +1508,8 @@ async def create_job(
         except Exception as _e:
             logger.debug(f"Watchlists: schedule DB fallback failed: {_e}")
 
+    output_prefs = _normalize_output_prefs(getattr(row, "output_prefs_json", None))
+    ingest_prefs = output_prefs.get("ingest") if isinstance(output_prefs, dict) else None
     return Job(
         id=row.id,
         name=row.name,
@@ -1453,7 +1521,8 @@ async def create_job(
         max_concurrency=row.max_concurrency,
         per_host_delay_ms=row.per_host_delay_ms,
         retry_policy=(json.loads(row.retry_policy_json or "{}")),
-        output_prefs=(json.loads(row.output_prefs_json or "{}")),
+        output_prefs=output_prefs,
+        ingest_prefs=ingest_prefs,
         job_filters=_normalize_filters_payload(getattr(row, "job_filters_json", None)),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -1659,6 +1728,8 @@ async def list_jobs(
     rows, total = db.list_jobs(q=q, limit=limit, offset=offset)
     items: List[Job] = []
     for r in rows:
+        output_prefs = _normalize_output_prefs(getattr(r, "output_prefs_json", None))
+        ingest_prefs = output_prefs.get("ingest") if isinstance(output_prefs, dict) else None
         items.append(
             Job(
                 id=r.id,
@@ -1671,7 +1742,8 @@ async def list_jobs(
                 max_concurrency=r.max_concurrency,
                 per_host_delay_ms=r.per_host_delay_ms,
                 retry_policy=(json.loads(r.retry_policy_json or "{}")),
-                output_prefs=(json.loads(r.output_prefs_json or "{}")),
+                output_prefs=output_prefs,
+                ingest_prefs=ingest_prefs,
                 job_filters=_normalize_filters_payload(getattr(r, "job_filters_json", None)),
                 created_at=r.created_at,
                 updated_at=r.updated_at,
@@ -1694,6 +1766,8 @@ async def get_job(
     except KeyError:
         raise HTTPException(status_code=404, detail="job_not_found")
     is_admin = bool(getattr(current_user, "is_admin", False))
+    output_prefs = _normalize_output_prefs(getattr(r, "output_prefs_json", None))
+    ingest_prefs = output_prefs.get("ingest") if isinstance(output_prefs, dict) else None
     return Job(
         id=r.id,
         name=r.name,
@@ -1705,7 +1779,8 @@ async def get_job(
         max_concurrency=r.max_concurrency,
         per_host_delay_ms=r.per_host_delay_ms,
         retry_policy=(json.loads(r.retry_policy_json or "{}")),
-        output_prefs=(json.loads(r.output_prefs_json or "{}")),
+        output_prefs=output_prefs,
+        ingest_prefs=ingest_prefs,
         job_filters=(json.loads(r.job_filters_json or "{}") if getattr(r, "job_filters_json", None) else None),
         created_at=r.created_at,
         updated_at=r.updated_at,
@@ -1723,14 +1798,25 @@ async def update_job(
     db = Depends(get_watchlists_db_for_user),
 ):
     patch = payload.model_dump(exclude_unset=True)
+    ingest_prefs = patch.pop("ingest_prefs", None)
+    output_prefs = patch.pop("output_prefs", None) if "output_prefs" in patch else None
     if "scope" in patch:
         patch["scope_json"] = json.dumps(patch.pop("scope") or {})
     if "retry_policy" in patch:
         patch["retry_policy_json"] = json.dumps(patch.pop("retry_policy") or {})
-    if "output_prefs" in patch:
-        patch["output_prefs_json"] = json.dumps(patch.pop("output_prefs") or {})
     if "job_filters" in patch:
         patch["job_filters_json"] = json.dumps(patch.pop("job_filters") or {})
+    if ingest_prefs is not None:
+        if output_prefs is None:
+            try:
+                current = db.get_job(job_id)
+                output_prefs = _normalize_output_prefs(getattr(current, "output_prefs_json", None))
+            except Exception:
+                output_prefs = {}
+        output_prefs = _merge_output_prefs(output_prefs, ingest_prefs)
+        patch["output_prefs_json"] = json.dumps(output_prefs)
+    elif output_prefs is not None:
+        patch["output_prefs_json"] = json.dumps(output_prefs or {})
     try:
         r = db.update_job(job_id, patch)
     except KeyError:
@@ -1806,6 +1892,8 @@ async def update_job(
                         logger.debug(f"Watchlists: schedule DB fallback during update failed: {__e}")
     except Exception as e:
         logger.debug(f"Watchlists: schedule sync skipped: {e}")
+    output_prefs = _normalize_output_prefs(getattr(r, "output_prefs_json", None))
+    ingest_prefs = output_prefs.get("ingest") if isinstance(output_prefs, dict) else None
     return Job(
         id=r.id,
         name=r.name,
@@ -1817,7 +1905,8 @@ async def update_job(
         max_concurrency=r.max_concurrency,
         per_host_delay_ms=r.per_host_delay_ms,
         retry_policy=(json.loads(r.retry_policy_json or "{}")),
-        output_prefs=(json.loads(r.output_prefs_json or "{}")),
+        output_prefs=output_prefs,
+        ingest_prefs=ingest_prefs,
         job_filters=_normalize_filters_payload(getattr(r, "job_filters_json", None)),
         created_at=r.created_at,
         updated_at=r.updated_at,
@@ -2467,7 +2556,7 @@ async def create_output(
     collections_db = Depends(get_collections_db_for_user),
     media_db = Depends(get_media_db_for_user),
 ):
-    db.purge_expired_outputs()
+    collections_db.purge_expired_outputs()
     try:
         run = db.get_run(payload.run_id)
     except KeyError:
@@ -2505,7 +2594,7 @@ async def create_output(
         raise HTTPException(status_code=400, detail="no_items_available")
 
     item_models = [_row_to_scraped_item(it) for it in items]
-    version = db.next_output_version(payload.run_id)
+    version = _next_output_version_for_run(collections_db, payload.run_id)
     job_name = getattr(job, "name", None) or f"Job-{job.id}"
     default_title = f"{job_name}-Output-{version}"
     title = payload.title or default_title
@@ -2514,8 +2603,17 @@ async def create_output(
     template_record = None
     output_template = None
     if template_name:
+        name_is_safe = bool(_TEMPLATE_NAME_RE.fullmatch(template_name))
+        if name_is_safe:
+            try:
+                template_record = template_store.load_template(template_name)
+            except template_store.TemplateNotFoundError:
+                template_record = None
+            except TemplateValidationError:
+                raise HTTPException(status_code=400, detail="invalid_template_name")
         try:
-            output_template = collections_db.get_output_template_by_name(template_name)
+            if template_record is None:
+                output_template = collections_db.get_output_template_by_name(template_name)
         except KeyError:
             output_template = None
         except Exception as exc:
@@ -2523,13 +2621,10 @@ async def create_output(
             raise HTTPException(status_code=500, detail="template_lookup_failed")
         if output_template and output_template.format not in {"md", "html"}:
             raise HTTPException(status_code=400, detail="template_format_not_supported")
-        if not output_template:
-            if not _TEMPLATE_NAME_RE.fullmatch(template_name):
+        if template_record is None and output_template is None:
+            if not name_is_safe:
                 raise HTTPException(status_code=400, detail="invalid_template_name")
-            try:
-                template_record = template_store.load_template(template_name)
-            except template_store.TemplateNotFoundError:
-                raise HTTPException(status_code=404, detail="template_not_found")
+            raise HTTPException(status_code=404, detail="template_not_found")
     template_format = None
     if output_template:
         template_format = output_template.format
@@ -2591,6 +2686,7 @@ async def create_output(
         if template_record.description:
             metadata["template_description"] = template_record.description
     metadata["version"] = version
+    metadata["origin"] = "watchlists"
 
     delivery_override = (
         payload.deliveries.model_dump(exclude_none=True) if payload.deliveries else {}
@@ -2621,7 +2717,7 @@ async def create_output(
         invalid_detail="invalid user_id",
     )
     try:
-        out_dir = DatabasePaths.get_user_outputs_dir(user_id)
+        out_dir = _outputs_dir_for_user(user_id)
         out_dir.mkdir(parents=True, exist_ok=True)
     except Exception as exc:
         logger.error(f"watchlists outputs: failed to create outputs dir: {exc}")
@@ -2630,8 +2726,7 @@ async def create_output(
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     base_metadata = dict(metadata)
     tags = sorted({t for itm in item_models for t in (itm.tags or []) if isinstance(t, str)})
-    created_output_ids: List[int] = []
-    created_paths: List[Any] = []
+    created_outputs: List[Tuple[int, Any]] = []
     template_id = output_template.id if output_template else None
 
     def _variant_metadata(
@@ -2657,13 +2752,13 @@ async def create_output(
         if getattr(tpl, "description", None):
             meta["template_description"] = tpl.description
 
-    async def _persist_output_row(
+    async def _persist_output_artifact(
         *,
         output_type: str,
         output_format: str,
         output_title: str,
         output_content: Optional[str],
-        storage_path: Optional[str],
+        filename_suffix: Optional[str],
         meta: Dict[str, Any],
         tpl,
         variant_of: Optional[int],
@@ -2672,26 +2767,44 @@ async def create_output(
         meta = dict(meta)
         if tpl is not None:
             _apply_template_meta(meta, tpl)
-        row = db.create_output(
-            run_id=payload.run_id,
-            job_id=job_id,
-            type=output_type,
-            format=output_format,
-            title=output_title,
-            content=output_content,
-            storage_path=storage_path,
-            metadata=meta,
-            version=version,
-            expires_at=expires_at,
-        )
-        created_output_ids.append(row.id)
-        if storage_path:
+        filename = _build_output_filename(output_title, filename_suffix, ts, output_format)
+        path = _resolve_output_path_for_user(user_id, filename)
+        if output_format == "mp3":
+            await _write_tts_audio_file(
+                rendered=output_content or "",
+                path=path,
+                tts_model=payload.tts_model,
+                tts_voice=payload.tts_voice,
+                tts_speed=payload.tts_speed,
+                template_row=tpl,
+            )
+        else:
             try:
-                path = _resolve_output_path_for_user(user_id, storage_path)
-                if path not in created_paths:
-                    created_paths.append(path)
+                path.write_text(output_content or "", encoding="utf-8")
+            except Exception as exc:
+                logger.error(f"watchlists outputs: failed to write output file: {exc}")
+                raise HTTPException(status_code=500, detail="write_failed")
+        try:
+            row = collections_db.create_output_artifact(
+                type_=output_type,
+                title=output_title,
+                format_=output_format,
+                storage_path=filename,
+                metadata_json=json.dumps(meta),
+                job_id=job_id,
+                run_id=payload.run_id,
+                media_item_id=None,
+                retention_until=expires_at,
+            )
+        except Exception as exc:
+            logger.error(f"watchlists outputs: failed to insert output row: {exc}")
+            try:
+                if path.exists():
+                    path.unlink()
             except Exception:
                 pass
+            raise HTTPException(status_code=500, detail="db_insert_failed")
+        created_outputs.append((row.id, path))
 
         if payload.ingest_to_media_db:
             media_id = await _ingest_output_to_media_db(
@@ -2701,36 +2814,35 @@ async def create_output(
                 content=output_content or "",
                 output_type=output_type,
                 output_format=output_format,
-                storage_path=storage_path or "",
+                storage_path=filename,
                 template_id=(tpl.id if tpl is not None else template_id_override),
                 run_id=payload.run_id,
                 item_ids=meta.get("item_ids", []),
                 tags=tags,
                 variant_of=variant_of,
             )
-            row = db.update_output_record(row.id, media_item_id=media_id)
+            row = collections_db.update_output_media_item_id(row.id, media_id)
         return row
 
     def _cleanup_outputs() -> None:
-        for path in created_paths:
+        for oid, path in created_outputs:
             try:
                 if path and hasattr(path, "exists") and path.exists():
                     path.unlink()
             except Exception:
                 pass
-        for oid in created_output_ids:
             try:
-                db.delete_output(oid)
+                collections_db.delete_output_artifact(oid, hard=True)
             except Exception:
                 pass
 
     try:
-        row = await _persist_output_row(
+        row = await _persist_output_artifact(
             output_type=payload.type,
             output_format=output_format,
             output_title=title,
             output_content=content,
-            storage_path=None,
+            filename_suffix=None,
             meta=base_metadata,
             tpl=output_template,
             variant_of=None,
@@ -2760,12 +2872,12 @@ async def create_output(
                 variant_kind="mece",
                 variant_of=row.id,
             )
-            await _persist_output_row(
+            await _persist_output_artifact(
                 output_type=mece_tpl.type,
                 output_format=mece_tpl.format,
                 output_title=f"{title} (MECE)",
                 output_content=mece_rendered,
-                storage_path=None,
+                filename_suffix="mece",
                 meta=mece_meta,
                 tpl=mece_tpl,
                 variant_of=row.id,
@@ -2793,30 +2905,18 @@ async def create_output(
                 tts_rendered = _strip_html_for_tts(content) if output_format == "html" else content
             tts_rendered = tts_rendered or ""
 
-            tts_filename = _build_output_filename(title, "audio", ts, "mp3")
-            tts_path = _resolve_output_path_for_user(user_id, tts_filename)
-            await _write_tts_audio_file(
-                rendered=tts_rendered,
-                path=tts_path,
-                tts_model=payload.tts_model,
-                tts_voice=payload.tts_voice,
-                tts_speed=payload.tts_speed,
-                template_row=tts_tpl,
-            )
-            if tts_path not in created_paths:
-                created_paths.append(tts_path)
             tts_meta = _variant_metadata(
                 output_type="tts_audio",
                 output_format="mp3",
                 variant_kind="tts",
                 variant_of=row.id,
             )
-            await _persist_output_row(
+            await _persist_output_artifact(
                 output_type="tts_audio",
                 output_format="mp3",
                 output_title=f"{title} (Audio)",
                 output_content=tts_rendered,
-                storage_path=tts_filename,
+                filename_suffix="audio",
                 meta=tts_meta,
                 tpl=tts_tpl,
                 variant_of=row.id,
@@ -2830,7 +2930,7 @@ async def create_output(
         _cleanup_outputs()
         raise HTTPException(status_code=500, detail="output_create_failed")
 
-    output = _row_to_output(row)
+    output = _row_to_output(row, user_id=user_id, content_override=content)
 
     notifications = NotificationsService(
         user_id=resolve_user_id_for_request(
@@ -2926,12 +3026,12 @@ async def create_output(
         metadata_for_update = {k: v for k, v in metadata.items() if v is not None}
 
     if metadata_for_update is not None or chatbook_path_update:
-        updated_row = db.update_output_record(
+        updated_row = collections_db.update_output_artifact_metadata(
             output.id,
-            metadata=metadata_for_update,
+            metadata_json=json.dumps(metadata_for_update) if metadata_for_update is not None else None,
             chatbook_path=chatbook_path_update,
         )
-        output = _row_to_output(updated_row)
+        output = _row_to_output(updated_row, user_id=user_id)
 
     return output
 
@@ -2943,28 +3043,52 @@ async def list_outputs(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
-    db = Depends(get_watchlists_db_for_user),
+    collections_db = Depends(get_collections_db_for_user),
 ):
     limit = size
     offset = (page - 1) * limit
-    rows, total = db.list_outputs(run_id=run_id, job_id=job_id, limit=limit, offset=offset)
-    return WatchlistOutputsListResponse(items=[_row_to_output(r) for r in rows], total=total)
+    collections_db.purge_expired_outputs()
+    rows, total = collections_db.list_output_artifacts(run_id=run_id, job_id=job_id, limit=limit, offset=offset)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
+    items: List[WatchlistOutput] = []
+    for row in rows:
+        metadata = _parse_output_metadata(row)
+        if metadata.get("origin") != "watchlists":
+            continue
+        items.append(_row_to_output(row, user_id=user_id))
+    if run_id is not None or job_id is not None:
+        return WatchlistOutputsListResponse(items=items, total=total)
+    return WatchlistOutputsListResponse(items=items, total=len(items))
 
 
 @router.get("/outputs/{output_id}", response_model=WatchlistOutput, summary="Get output metadata")
 async def get_output(
     output_id: int = Path(..., ge=1),
     current_user: User = Depends(get_request_user),
-    db = Depends(get_watchlists_db_for_user),
+    collections_db = Depends(get_collections_db_for_user),
 ):
-    db.purge_expired_outputs()
+    collections_db.purge_expired_outputs()
     try:
-        row = db.get_output(output_id)
+        row = collections_db.get_output_artifact(output_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
-    output = _row_to_output(row)
+    metadata = _parse_output_metadata(row)
+    if metadata.get("origin") != "watchlists":
+        raise HTTPException(status_code=404, detail="output_not_found")
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
+    output = _row_to_output(row, user_id=user_id)
     if output.expired:
-        db.purge_expired_outputs()
+        collections_db.purge_expired_outputs()
         raise HTTPException(status_code=404, detail="output_not_found")
     return output
 
@@ -2973,38 +3097,44 @@ async def get_output(
 async def download_output(
     output_id: int = Path(..., ge=1),
     current_user: User = Depends(get_request_user),
-    db = Depends(get_watchlists_db_for_user),
+    collections_db = Depends(get_collections_db_for_user),
 ):
-    db.purge_expired_outputs()
+    collections_db.purge_expired_outputs()
     try:
-        row = db.get_output(output_id)
+        row = collections_db.get_output_artifact(output_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
-    output = _row_to_output(row)
-    if output.expired:
-        db.purge_expired_outputs()
+    metadata = _parse_output_metadata(row)
+    if metadata.get("origin") != "watchlists":
         raise HTTPException(status_code=404, detail="output_not_found")
-    content = output.content or ""
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
+    output = _row_to_output(row, user_id=user_id)
+    if output.expired:
+        collections_db.purge_expired_outputs()
+        raise HTTPException(status_code=404, detail="output_not_found")
     fmt = output.format or "md"
     filename = (output.title or f"watchlist-output-{output_id}").replace("/", "_")
+    storage_name = output.storage_path
+    if not storage_name:
+        raise HTTPException(status_code=404, detail="output_file_missing")
+    try:
+        output_path = _resolve_output_path_for_user(user_id, storage_name)
+    except HTTPException as exc:
+        raise HTTPException(status_code=400, detail=exc.detail)
+    if not output_path.exists():
+        raise HTTPException(status_code=404, detail="output_file_missing")
     if fmt == "mp3":
-        storage_name = output.storage_path
-        if not storage_name:
-            raise HTTPException(status_code=404, detail="output_file_missing")
-        user_id = resolve_user_id_for_request(
-            current_user,
-            as_int=True,
-            error_status=500,
-            invalid_detail="invalid user_id",
-        )
-        try:
-            audio_path = _resolve_output_path_for_user(user_id, storage_name)
-        except HTTPException as exc:
-            raise HTTPException(status_code=400, detail=exc.detail)
-        if not audio_path.exists():
-            raise HTTPException(status_code=404, detail="output_file_missing")
         headers = {"Content-Disposition": f'attachment; filename="{filename}.mp3"'}
-        return FileResponse(path=audio_path, media_type="audio/mpeg", headers=headers)
+        return FileResponse(path=output_path, media_type="audio/mpeg", headers=headers)
+    try:
+        content = output_path.read_text(encoding="utf-8")
+    except Exception:
+        raise HTTPException(status_code=404, detail="output_file_missing")
     if fmt == "html":
         headers = {"Content-Disposition": f'attachment; filename="{filename}.html"'}
         return HTMLResponse(content=content, headers=headers)

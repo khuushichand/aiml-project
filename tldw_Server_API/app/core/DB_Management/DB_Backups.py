@@ -29,6 +29,84 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
     Returns the normalized, real path on success, or None on failure.
     """
     return safe_join(base_dir, name)
+
+
+def _get_backup_base_dir() -> str:
+    return os.environ.get("TLDW_DB_BACKUP_PATH") or get_project_relative_path("tldw_DB_Backups")
+
+
+def _ensure_within_base(base_dir: str, candidate_path: str) -> Optional[str]:
+    base_abs = os.path.abspath(base_dir)
+    candidate_abs = os.path.abspath(candidate_path)
+    try:
+        rel = os.path.relpath(candidate_abs, base_abs)
+    except ValueError:
+        return None
+    return safe_join(base_abs, rel)
+
+
+def _resolve_backup_dir(backup_dir: str) -> Optional[str]:
+    raw = str(backup_dir or "").strip()
+    if not raw:
+        return None
+    base_dir = _get_backup_base_dir()
+    if os.path.isabs(raw):
+        return _ensure_within_base(base_dir, raw)
+    candidate_abs = os.path.abspath(raw)
+    resolved = _ensure_within_base(base_dir, candidate_abs)
+    if resolved:
+        return resolved
+    return safe_join(os.path.abspath(base_dir), raw)
+
+
+def _get_allowed_db_roots() -> list[str]:
+    roots: list[str] = []
+    try:
+        roots.append(str(DatabasePaths.get_user_db_base_dir(allow_legacy_alias=True)))
+    except Exception:
+        pass
+    try:
+        roots.append(get_project_relative_path("Databases"))
+    except Exception:
+        pass
+
+    extra = os.environ.get("TLDW_DB_ALLOWED_BASE_DIRS")
+    if extra:
+        for entry in extra.split(os.pathsep):
+            candidate = entry.strip()
+            if not candidate:
+                continue
+            try:
+                expanded = os.path.expanduser(candidate)
+            except Exception:
+                expanded = candidate
+            if os.path.isabs(expanded):
+                roots.append(os.path.abspath(expanded))
+            else:
+                roots.append(os.path.abspath(get_project_relative_path(expanded)))
+
+    deduped: list[str] = []
+    for root in roots:
+        if root not in deduped:
+            deduped.append(root)
+    return deduped
+
+
+def _resolve_db_path(db_path: str) -> Optional[str]:
+    raw = str(db_path or "").strip()
+    if not raw:
+        return None
+    is_abs = os.path.isabs(raw)
+    candidate_abs = os.path.abspath(raw)
+    for base in _get_allowed_db_roots():
+        resolved = _ensure_within_base(base, candidate_abs)
+        if resolved:
+            return resolved
+        if not is_abs:
+            resolved = safe_join(os.path.abspath(base), raw)
+            if resolved:
+                return resolved
+    return None
 #######################################################################################################################
 #
 # Functions:
@@ -76,7 +154,9 @@ def _validate_backup_name(backup_name: str, allowed_exts: tuple[str, ...]) -> Op
 
 def init_backup_directory(backup_base_dir: str, db_name: str) -> str:
     """Initialize backup directory for a specific database."""
-    backup_dir = os.path.join(backup_base_dir, db_name)
+    backup_dir = _safe_join(backup_base_dir, db_name) or ""
+    if not backup_dir:
+        raise ValueError("Invalid backup directory")
     os.makedirs(backup_dir, exist_ok=True)
     return backup_dir
 
@@ -88,8 +168,18 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
         mem = str(db_path).strip()
         if mem == ":memory:" or mem.startswith("file::memory:"):
             return "Cannot create backup for in-memory database"
-        db_path = os.path.abspath(db_path)
-        backup_dir = os.path.abspath(backup_dir)
+        resolved_db_path = _resolve_db_path(db_path)
+        if not resolved_db_path:
+            error_msg = "Invalid database path"
+            logger.error(f"{error_msg}: {db_path}")
+            return error_msg
+        resolved_backup_dir = _resolve_backup_dir(backup_dir)
+        if not resolved_backup_dir:
+            error_msg = "Invalid backup directory"
+            logger.error(f"{error_msg}: {backup_dir}")
+            return error_msg
+        db_path = resolved_db_path
+        backup_dir = resolved_backup_dir
         if not os.path.exists(db_path):
             error_msg = f"Database not found: {db_path}"
             logger.error(error_msg)
@@ -137,8 +227,18 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
         mem = str(db_path).strip()
         if mem == ":memory:" or mem.startswith("file::memory:"):
             return "Cannot create incremental backup for in-memory database"
-        db_path = os.path.abspath(db_path)
-        backup_dir = os.path.abspath(backup_dir)
+        resolved_db_path = _resolve_db_path(db_path)
+        if not resolved_db_path:
+            error_msg = "Invalid database path"
+            logger.error(f"{error_msg}: {db_path}")
+            return error_msg
+        resolved_backup_dir = _resolve_backup_dir(backup_dir)
+        if not resolved_backup_dir:
+            error_msg = "Invalid backup directory"
+            logger.error(f"{error_msg}: {backup_dir}")
+            return error_msg
+        db_path = resolved_db_path
+        backup_dir = resolved_backup_dir
         if not os.path.exists(db_path):
             error_msg = f"Database not found: {db_path}"
             logger.error(error_msg)
@@ -174,7 +274,12 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
 def list_backups(backup_dir: str) -> str:
     """List all available backups."""
     try:
-        backup_dir = os.path.abspath(backup_dir)
+        resolved_backup_dir = _resolve_backup_dir(backup_dir)
+        if not resolved_backup_dir:
+            error_msg = "Invalid backup directory"
+            logger.error(f"{error_msg}: {backup_dir}")
+            return error_msg
+        backup_dir = resolved_backup_dir
         backups = [f for f in os.listdir(backup_dir)
                    if f.endswith(('.db', '.sqlib'))]
         backups.sort(reverse=True)  # Most recent first
@@ -193,8 +298,18 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
             error_msg = "Invalid backup name"
             logger.error(f"{error_msg}: {backup_name}")
             return error_msg
-        db_path = os.path.abspath(db_path)
-        backup_dir = os.path.abspath(backup_dir)
+        resolved_db_path = _resolve_db_path(db_path)
+        if not resolved_db_path:
+            error_msg = "Invalid database path"
+            logger.error(f"{error_msg}: {db_path}")
+            return error_msg
+        resolved_backup_dir = _resolve_backup_dir(backup_dir)
+        if not resolved_backup_dir:
+            error_msg = "Invalid backup directory"
+            logger.error(f"{error_msg}: {backup_dir}")
+            return error_msg
+        db_path = resolved_db_path
+        backup_dir = resolved_backup_dir
         logger.info(f"Restoring backup: {safe_backup_name}")
         backup_path = _safe_join(backup_dir, safe_backup_name)
         if not backup_path:
@@ -338,9 +453,7 @@ def create_postgres_backup(
     user = config.pg_user or "postgres"
     password = config.pg_password or None
 
-    # Normalize and validate backup directory, anchoring it to the backup base path
-    backup_base = get_project_relative_path("tldw_DB_Backups")
-    backup_dir_real = _safe_join(backup_base, backup_dir)
+    backup_dir_real = _resolve_backup_dir(backup_dir)
     if not backup_dir_real:
         msg = "Invalid backup directory"
         logger.error(msg)
@@ -396,7 +509,7 @@ def _get_postgres_backup_base_dir(config) -> str:
     expected backup root on disk instead of trusting user input paths.
     """
     # Reuse the same project-relative backup root used elsewhere.
-    base_dir = get_project_relative_path("tldw_DB_Backups")
+    base_dir = _get_backup_base_dir()
     db_name = getattr(config, "pg_database", None) or "postgres"
     # Use a sanitized database name to avoid introducing path separators.
     safe_db_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(db_name))

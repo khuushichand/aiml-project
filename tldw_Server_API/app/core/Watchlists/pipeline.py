@@ -10,7 +10,8 @@ Executes a watchlist job for a given user:
   highest-priority matching rule. Filter decisions and tallies are recorded into run stats
   (filters_matched, filters_actions, filter_tallies) and filtered items are recorded into
   `scraped_items` with status="filtered".
-- Persist per-run stats and append ingested media IDs to scrape_run_items
+- Persist per-run stats, upsert Collections content_items, and append media IDs to
+  scrape_run_items only when Media DB persistence is enabled
 
 Include-only gating semantics:
 - A job may set `require_include=true` in its filters payload. When any include rules exist and
@@ -164,9 +165,26 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     is_first_run = True if not getattr(job, "last_run_at", None) else False
     run = db.create_run(job_id=job_id, status="running")
 
-    # Resolve per-user media DB path and instantiate
-    media_db_path = str(DatabasePaths.get_media_db_path(int(user_id)))
-    mdb = create_media_database(client_id=str(user_id), db_path=media_db_path)
+    job_output_prefs: Dict[str, Any] = {}
+    try:
+        if getattr(job, "output_prefs_json", None):
+            job_output_prefs = json.loads(job.output_prefs_json or "{}")
+            if not isinstance(job_output_prefs, dict):
+                job_output_prefs = {}
+    except Exception:
+        job_output_prefs = {}
+    ingest_cfg = job_output_prefs.get("ingest") if isinstance(job_output_prefs, dict) else None
+    persist_to_media_db = False
+    if isinstance(ingest_cfg, dict) and "persist_to_media_db" in ingest_cfg:
+        persist_to_media_db = bool(ingest_cfg.get("persist_to_media_db"))
+    elif isinstance(job_output_prefs, dict) and isinstance(job_output_prefs.get("persist_to_media_db"), bool):
+        persist_to_media_db = bool(job_output_prefs.get("persist_to_media_db"))
+
+    # Resolve per-user media DB path and instantiate when requested
+    mdb = None
+    if persist_to_media_db:
+        media_db_path = str(DatabasePaths.get_media_db_path(int(user_id)))
+        mdb = create_media_database(client_id=str(user_id), db_path=media_db_path)
 
     # Fetch scope and sources
     scope = {}
@@ -333,11 +351,11 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                     rss_limit = int(settings.get("limit", 50)) if isinstance(settings.get("limit", 50), int) else 50
                     # Effective history/backfill options: merge job output_prefs.history over source.settings.history
                     history_cfg = settings.get("history") if isinstance(settings.get("history"), dict) else {}
-                    try:
-                        job_output_prefs = json.loads(job.output_prefs_json or "{}") if getattr(job, "output_prefs_json", None) else {}
-                    except Exception:
-                        job_output_prefs = {}
-                    job_hist = job_output_prefs.get("history") if isinstance(job_output_prefs.get("history"), dict) else {}
+                    job_hist = (
+                        job_output_prefs.get("history")
+                        if isinstance(job_output_prefs, dict) and isinstance(job_output_prefs.get("history"), dict)
+                        else {}
+                    )
                     if job_hist:
                         # shallow-merge, job overrides source
                         merged = dict(history_cfg)
@@ -588,102 +606,68 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             }
                         if not article:
                             continue
-                        ingestion_ok = False
                         ingested_media_id: Optional[int] = None
                         ingested_media_uuid: Optional[str] = None
                         summary_text = article.get("content") or it.get("summary") or ""
-                        try:
-                            media_id, media_uuid, msg = mdb.add_media_with_keywords(
-                                url=article.get("url") or link,
-                                title=article.get("title") or (it.get("title") or "Untitled"),
-                                media_type="article",
-                                content=article.get("content") or (it.get("summary") or ""),
-                                author=article.get("author"),
-                                keywords=(_keywords_for_source(src) + (["flagged"] if flagged else [])),
-                                overwrite=False,
-                            )
-                            if media_id:
-                                ingested_media_id = int(media_id)
-                                ingested_media_uuid = media_uuid
-                                db.append_run_item(run.id, ingested_media_id, source_id=int(src.id))
-                                items_ingested += 1
-                                ingestion_ok = True
-                                try:
-                                    db.mark_seen_item(
-                                        int(src.id),
-                                        item_key,
-                                        etag=None,
-                                        last_modified=(it.get("published") or None),
-                                    )
-                                except Exception:
-                                    pass
-                            elif test_mode:
-                                items_ingested += 1
-                                ingestion_ok = True
-                                try:
-                                    db.mark_seen_item(
-                                        int(src.id),
-                                        item_key,
-                                        etag=None,
-                                        last_modified=(it.get("published") or None),
-                                    )
-                                except Exception:
-                                    pass
-                        except Exception as e:
-                            logger.debug(f"Ingestion failed for {link}: {e}")
-                            if test_mode:
-                                items_ingested += 1
-                                ingestion_ok = True
-                                try:
-                                    db.mark_seen_item(
-                                        int(src.id),
-                                        item_key,
-                                        etag=None,
-                                        last_modified=(it.get("published") or None),
-                                    )
-                                except Exception:
-                                    pass
-
-                        if ingestion_ok:
-                            content_text = article.get("content") or summary_text or ""
-                            tags_for_item = _keywords_for_source(src)
-                            if flagged and "flagged" not in tags_for_item:
-                                tags_for_item = tags_for_item + ["flagged"]
-                            metadata_payload = {
-                                "source_id": int(src.id),
-                                "source_name": getattr(src, "name", None),
-                                "job_id": job_id,
-                                "run_id": run.id,
-                                "media_uuid": ingested_media_uuid,
-                                "tags": tags_for_item,
-                            }
-                            item_row = None
+                        if persist_to_media_db and mdb is not None:
                             try:
-                                item_row = collections_db.upsert_content_item(
-                                    origin="watchlist",
-                                    origin_type=str(src.source_type or ""),
-                                    origin_id=int(src.id),
+                                media_id, media_uuid, msg = mdb.add_media_with_keywords(
                                     url=article.get("url") or link,
-                                    canonical_url=article.get("url") or link,
-                                    domain=None,
                                     title=article.get("title") or (it.get("title") or "Untitled"),
-                                    summary=_truncate(summary_text, 600),
-                                    content_hash=_hash_content(content_text),
-                                    word_count=_word_count(content_text),
-                                    published_at=it.get("published"),
-                                    status="new",
-                                    favorite=False,
-                                    metadata=metadata_payload,
-                                    media_id=ingested_media_id,
-                                    job_id=job_id,
-                                    run_id=run.id,
-                                    source_id=int(src.id),
-                                    read_at=None,
-                                    tags=tags_for_item,
+                                    media_type="article",
+                                    content=article.get("content") or (it.get("summary") or ""),
+                                    author=article.get("author"),
+                                    keywords=(_keywords_for_source(src) + (["flagged"] if flagged else [])),
+                                    overwrite=False,
                                 )
-                            except Exception as exc:
-                                logger.debug(f"Collections upsert failed (rss) for {link}: {exc}")
-                            if item_row and (item_row.is_new or item_row.content_changed):
+                                if media_id:
+                                    ingested_media_id = int(media_id)
+                                    ingested_media_uuid = media_uuid
+                                    db.append_run_item(run.id, ingested_media_id, source_id=int(src.id))
+                            except Exception as e:
+                                logger.debug(f"Media DB ingestion failed for {link}: {e}")
+
+                        content_text = article.get("content") or summary_text or ""
+                        tags_for_item = _keywords_for_source(src)
+                        if flagged and "flagged" not in tags_for_item:
+                            tags_for_item = tags_for_item + ["flagged"]
+                        metadata_payload = {
+                            "source_id": int(src.id),
+                            "source_name": getattr(src, "name", None),
+                            "job_id": job_id,
+                            "run_id": run.id,
+                            "media_uuid": ingested_media_uuid,
+                            "tags": tags_for_item,
+                        }
+                        item_row = None
+                        try:
+                            item_row = collections_db.upsert_content_item(
+                                origin="watchlist",
+                                origin_type=str(src.source_type or ""),
+                                origin_id=int(src.id),
+                                url=article.get("url") or link,
+                                canonical_url=article.get("url") or link,
+                                domain=None,
+                                title=article.get("title") or (it.get("title") or "Untitled"),
+                                summary=_truncate(summary_text, 600),
+                                content_hash=_hash_content(content_text),
+                                word_count=_word_count(content_text),
+                                published_at=it.get("published"),
+                                status="new",
+                                favorite=False,
+                                metadata=metadata_payload,
+                                media_id=ingested_media_id,
+                                job_id=job_id,
+                                run_id=run.id,
+                                source_id=int(src.id),
+                                read_at=None,
+                                tags=tags_for_item,
+                            )
+                        except Exception as exc:
+                            logger.debug(f"Collections upsert failed (rss) for {link}: {exc}")
+                        if item_row:
+                            items_ingested += 1
+                            if item_row.is_new or item_row.content_changed:
                                 try:
                                     await enqueue_embeddings_job_for_item(
                                         user_id=user_id,
@@ -698,6 +682,15 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     )
                                 except Exception as exc:
                                     logger.debug(f"Embedding enqueue failed for watchlist item {item_row.id}: {exc}")
+                            try:
+                                db.mark_seen_item(
+                                    int(src.id),
+                                    item_key,
+                                    etag=None,
+                                    last_modified=(it.get("published") or None),
+                                )
+                            except Exception:
+                                pass
                             _record_scraped(
                                 status="ingested",
                                 url=article.get("url") or link,
@@ -713,8 +706,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 url=article.get("url") or link,
                                 title=article.get("title") or (it.get("title") or "Untitled"),
                                 summary=summary_text,
-                                media_id=None,
-                                media_uuid=None,
+                                media_id=ingested_media_id,
+                                media_uuid=ingested_media_uuid,
                                 published_at=it.get("published"),
                             )
                             continue
@@ -848,7 +841,6 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         if not article.get("title"):
                             article["title"] = prefetch.get("title") if prefetch and prefetch.get("title") else src.name
 
-                        ingestion_ok = False
                         ingested_media_id: Optional[int] = None
                         ingested_media_uuid: Optional[str] = None
                         summary_text = article.get("content") or ""
@@ -904,73 +896,67 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             flagged = (decision == "flag")
                         except Exception:
                             flagged = False
-                        try:
-                            media_id, media_uuid, msg = mdb.add_media_with_keywords(
-                                url=article.get("url") or page_url,
-                                title=article.get("title") or src.name,
-                                media_type="article",
-                                content=article.get("content") or summary_text or "",
-                                author=article.get("author"),
-                                keywords=(_keywords_for_source(src) + (["flagged"] if flagged else [])),
-                                overwrite=False,
-                            )
-                            if media_id:
-                                ingested_media_id = int(media_id)
-                                ingested_media_uuid = media_uuid
-                                db.append_run_item(run.id, ingested_media_id, source_id=int(src.id))
-                                items_ingested += 1
-                                ingestion_ok = True
-                            elif test_mode:
-                                ingestion_ok = True
-                                items_ingested += 1
-                        except Exception as e:
-                            logger.debug(f"Ingestion failed for site {page_url}: {e}")
-                            if test_mode:
-                                ingestion_ok = True
-                                items_ingested += 1
-
-                        if ingestion_ok:
-                            content_text = article.get("content") or summary_text or ""
-                            tags_for_item = _keywords_for_source(src)
-                            if flagged and "flagged" not in tags_for_item:
-                                tags_for_item = tags_for_item + ["flagged"]
-                            metadata_payload = {
-                                "source_id": int(src.id),
-                                "source_name": getattr(src, "name", None),
-                                "job_id": job_id,
-                                "run_id": run.id,
-                                "media_uuid": ingested_media_uuid,
-                                "tags": tags_for_item,
-                            }
-                            if prefetch and (prefetch.get("published") or prefetch.get("published_raw")):
-                                metadata_payload["prefetch_published"] = prefetch.get("published") or prefetch.get("published_raw")
-                            item_row = None
+                        if persist_to_media_db and mdb is not None:
                             try:
-                                item_row = collections_db.upsert_content_item(
-                                    origin="watchlist",
-                                    origin_type=str(src.source_type or ""),
-                                    origin_id=int(src.id),
+                                media_id, media_uuid, msg = mdb.add_media_with_keywords(
                                     url=article.get("url") or page_url,
-                                    canonical_url=article.get("url") or page_url,
-                                    domain=None,
                                     title=article.get("title") or src.name,
-                                    summary=_truncate(summary_text, 600),
-                                    content_hash=_hash_content(content_text),
-                                    word_count=_word_count(content_text),
-                                    published_at=(prefetch.get("published") if prefetch else None),
-                                    status="new",
-                                    favorite=False,
-                                    metadata=metadata_payload,
-                                    media_id=ingested_media_id,
-                                    job_id=job_id,
-                                    run_id=run.id,
-                                    source_id=int(src.id),
-                                    read_at=None,
-                                    tags=tags_for_item,
+                                    media_type="article",
+                                    content=article.get("content") or summary_text or "",
+                                    author=article.get("author"),
+                                    keywords=(_keywords_for_source(src) + (["flagged"] if flagged else [])),
+                                    overwrite=False,
                                 )
-                            except Exception as exc:
-                                logger.debug(f"Collections upsert failed (site) for {page_url}: {exc}")
-                            if item_row and (item_row.is_new or item_row.content_changed):
+                                if media_id:
+                                    ingested_media_id = int(media_id)
+                                    ingested_media_uuid = media_uuid
+                                    db.append_run_item(run.id, ingested_media_id, source_id=int(src.id))
+                            except Exception as e:
+                                logger.debug(f"Media DB ingestion failed for site {page_url}: {e}")
+
+                        content_text = article.get("content") or summary_text or ""
+                        tags_for_item = _keywords_for_source(src)
+                        if flagged and "flagged" not in tags_for_item:
+                            tags_for_item = tags_for_item + ["flagged"]
+                        metadata_payload = {
+                            "source_id": int(src.id),
+                            "source_name": getattr(src, "name", None),
+                            "job_id": job_id,
+                            "run_id": run.id,
+                            "media_uuid": ingested_media_uuid,
+                            "tags": tags_for_item,
+                        }
+                        if prefetch and (prefetch.get("published") or prefetch.get("published_raw")):
+                            metadata_payload["prefetch_published"] = prefetch.get("published") or prefetch.get("published_raw")
+                        item_row = None
+                        try:
+                            item_row = collections_db.upsert_content_item(
+                                origin="watchlist",
+                                origin_type=str(src.source_type or ""),
+                                origin_id=int(src.id),
+                                url=article.get("url") or page_url,
+                                canonical_url=article.get("url") or page_url,
+                                domain=None,
+                                title=article.get("title") or src.name,
+                                summary=_truncate(summary_text, 600),
+                                content_hash=_hash_content(content_text),
+                                word_count=_word_count(content_text),
+                                published_at=(prefetch.get("published") if prefetch else None),
+                                status="new",
+                                favorite=False,
+                                metadata=metadata_payload,
+                                media_id=ingested_media_id,
+                                job_id=job_id,
+                                run_id=run.id,
+                                source_id=int(src.id),
+                                read_at=None,
+                                tags=tags_for_item,
+                            )
+                        except Exception as exc:
+                            logger.debug(f"Collections upsert failed (site) for {page_url}: {exc}")
+                        if item_row:
+                            items_ingested += 1
+                            if item_row.is_new or item_row.content_changed:
                                 try:
                                     await enqueue_embeddings_job_for_item(
                                         user_id=user_id,
@@ -1009,8 +995,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 url=article.get("url") or page_url,
                                 title=article.get("title") or src.name,
                                 summary=summary_text or (prefetch.get("summary") if prefetch else None),
-                                media_id=None,
-                                media_uuid=None,
+                                media_id=ingested_media_id,
+                                media_uuid=ingested_media_uuid,
                                 published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                             )
                     try:

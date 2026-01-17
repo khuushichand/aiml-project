@@ -20,78 +20,26 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.endpoints.outputs_templates import _build_items_context_from_media_ids, _select_media_ids_for_run
-from tldw_Server_API.app.core.Chat.prompt_template_manager import safe_render
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 from starlette.responses import FileResponse
 from tldw_Server_API.app.services.outputs_service import (
-    update_output_artifact_db,
-    find_outputs_to_purge,
+    _build_items_context_from_content_items,
+    _build_output_filename,
+    _ingest_output_to_media_db,
+    _outputs_dir_for_user,
+    _resolve_output_path_for_user,
+    _sanitize_title_for_filename,
+    _strip_html_for_tts,
+    _write_tts_audio_file,
     delete_outputs_by_ids,
+    find_outputs_to_purge,
     normalize_output_storage_path,
+    render_output_template,
+    update_output_artifact_db,
 )
 
 
 router = APIRouter(prefix="/outputs", tags=["outputs"])
-
-
-def _outputs_dir_for_user(user_id: int) -> PathlibPath:
-    return DatabasePaths.get_user_outputs_dir(user_id)
-
-
-def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -> PathlibPath:
-    """
-    Resolve a path for a user's output, ensuring it stays within the user's outputs directory.
-
-    The caller may pass either a string or a Path. Regardless of input, this function:
-      * Disallows absolute paths and home-expansion.
-      * Uses only the final path component (filename) to avoid directory traversal.
-      * Resolves the final path under the per-user outputs directory.
-    """
-    base_dir = _outputs_dir_for_user(user_id)
-    try:
-        base_resolved = base_dir.resolve(strict=False)
-    except Exception as e:
-        logger.error(f"outputs: failed to resolve outputs base dir for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="storage_unavailable") from e
-
-    # Defense-in-depth: treat path_value as untrusted and reduce to a safe filename under base_dir.
-    # Normalize the candidate to a single relative filename component.
-    candidate = path_value if isinstance(path_value, PathlibPath) else PathlibPath(path_value)
-    if candidate.is_absolute():
-        logger.warning(f"outputs: absolute paths are not allowed for outputs: {candidate}")
-        raise HTTPException(status_code=400, detail="invalid_path")
-    if len(candidate.parts) != 1:
-        logger.warning(f"outputs: nested output paths are not allowed: {candidate}")
-        raise HTTPException(status_code=400, detail="invalid_path")
-
-    # Restrict to the final component to prevent directory traversal such as "../".
-    candidate_name = candidate.name
-    if not candidate_name or candidate_name in (".", ".."):
-        logger.warning(f"outputs: empty output path component from {path_value!r}")
-        raise HTTPException(status_code=400, detail="invalid_path")
-
-    # Reject any path separators to ensure this remains a simple filename.
-    if os.sep in candidate_name or (os.altsep and os.altsep in candidate_name):
-        logger.warning(f"outputs: path separator detected in output filename: {candidate_name!r}")
-        raise HTTPException(status_code=400, detail="invalid_path")
-
-    # Enforce a conservative filename pattern (alphanumeric, underscore, dash, dot).
-    if not re.match(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$", candidate_name):
-        logger.warning(f"outputs: invalid characters in output filename: {candidate_name!r}")
-        raise HTTPException(status_code=400, detail="invalid_path")
-
-    safe_candidate = PathlibPath(candidate_name)
-    try:
-        resolved = (base_resolved / safe_candidate).resolve(strict=False)
-    except Exception as e:
-        logger.warning(f"outputs: invalid output path {path_value}: {e}")
-        raise HTTPException(status_code=400, detail="invalid_path") from e
-
-    if not resolved.is_relative_to(base_resolved):
-        logger.warning(f"outputs: output path outside base dir: {resolved}")
-        raise HTTPException(status_code=400, detail="invalid_path")
-    return resolved
 
 
 def _normalize_output_storage_path_for_user(
@@ -121,141 +69,6 @@ def _normalize_output_storage_path_for_user(
             raise HTTPException(status_code=500, detail="db_update_failed") from exc
     return normalized
 
-
-def _output_extension(format_value: str) -> str:
-    fmt = (format_value or "").lower()
-    if fmt == "html":
-        return "html"
-    if fmt == "mp3":
-        return "mp3"
-    return "md"
-
-
-def _build_output_filename(title: str, suffix: str | None, ts: str, format_value: str) -> str:
-    base = _sanitize_title_for_filename(title)
-    if suffix:
-        base = f"{base}_{_sanitize_title_for_filename(suffix)}"
-    ext = _output_extension(format_value)
-    return f"{base}_{ts}.{ext}"
-
-
-def _strip_html_for_tts(text: str) -> str:
-    return re.sub(r"<[^>]+>", "", text or "")
-
-
-def _extract_tts_defaults(template_row) -> tuple[str | None, str | None, float | None]:
-    if not template_row or not getattr(template_row, "metadata_json", None):
-        return None, None, None
-    try:
-        tpl_md = json.loads(template_row.metadata_json) if template_row.metadata_json else None
-    except Exception:
-        tpl_md = None
-    if not isinstance(tpl_md, dict):
-        return None, None, None
-    tpl_model = tpl_md.get("tts_default_model")
-    tpl_voice = tpl_md.get("tts_default_voice")
-    tpl_speed = tpl_md.get("tts_default_speed")
-    try:
-        tpl_speed_val = float(tpl_speed) if tpl_speed is not None else None
-    except Exception:
-        tpl_speed_val = None
-    return (
-        str(tpl_model) if tpl_model is not None else None,
-        str(tpl_voice) if tpl_voice is not None else None,
-        tpl_speed_val,
-    )
-
-
-async def _write_tts_audio_file(
-    *,
-    rendered: str,
-    path: PathlibPath,
-    tts_model: str | None,
-    tts_voice: str | None,
-    tts_speed: float | None,
-    template_row=None,
-) -> None:
-    try:
-        from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
-        from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
-    except Exception as exc:
-        logger.error(f"TTS import failed: {exc}")
-        raise HTTPException(status_code=500, detail="tts_unavailable") from exc
-    tts = await get_tts_service_v2()
-    tpl_model, tpl_voice, tpl_speed = _extract_tts_defaults(template_row)
-    req = OpenAISpeechRequest(
-        model=(tts_model or tpl_model or "kokoro"),
-        input=rendered,
-        voice=(tts_voice or tpl_voice or "af_heart"),
-        response_format="mp3",
-        stream=True,
-    )
-    if tts_speed is not None:
-        req.speed = tts_speed
-    elif tpl_speed is not None:
-        req.speed = tpl_speed
-    total = 0
-    with open(path, "wb") as fh:
-        async for chunk in tts.generate_speech(req):
-            if isinstance(chunk, (bytes, bytearray)):
-                fh.write(chunk)
-                total += len(chunk)
-    if total <= 0:
-        raise RuntimeError("tts_no_audio_generated")
-
-
-async def _ingest_output_to_media_db(
-    *,
-    media_db,
-    output_id: int,
-    title: str,
-    content: str,
-    output_type: str,
-    output_format: str,
-    storage_path: str,
-    template_id: int | None,
-    run_id: int | None,
-    item_ids: list[int],
-    tags: list[str],
-    variant_of: int | None = None,
-) -> int:
-    safe_metadata = {
-        "output_id": output_id,
-        "output_type": output_type,
-        "output_format": output_format,
-        "storage_path": storage_path,
-        "template_id": template_id,
-        "run_id": run_id,
-        "item_ids": item_ids,
-    }
-    if variant_of is not None:
-        safe_metadata["variant_of"] = variant_of
-    ingestion_date = datetime.utcnow().replace(microsecond=0).isoformat()
-    loop = asyncio.get_running_loop()
-    try:
-        media_id, _media_uuid, msg = await loop.run_in_executor(
-            None,
-            lambda: media_db.add_media_with_keywords(
-                url=f"output://{output_id}",
-                title=title,
-                media_type=f"output_{output_type}",
-                content=content,
-                keywords=tags,
-                prompt=None,
-                analysis_content=None,
-                safe_metadata=json.dumps(safe_metadata),
-                transcription_model="output",
-                ingestion_date=ingestion_date,
-                overwrite=False,
-            ),
-        )
-    except Exception as exc:
-        logger.error(f"output media ingest failed for {output_id}: {exc}")
-        raise HTTPException(status_code=500, detail="media_ingest_failed") from exc
-    if not media_id:
-        logger.error(f"output media ingest failed for {output_id}: {msg}")
-        raise HTTPException(status_code=500, detail="media_ingest_failed")
-    return int(media_id)
 
 
 @router.get("", response_model=OutputListResponse, summary="List outputs with filters")
@@ -379,11 +192,18 @@ async def create_output(
         if payload.item_ids:
             items = _build_items_context_from_media_ids(media_db, payload.item_ids or [], 1000)
         elif payload.run_id is not None:
-            mids = _select_media_ids_for_run(media_db, payload.run_id, 1000)
-            if not mids:
-                # When runs tables are not provisioned yet
-                raise HTTPException(status_code=422, detail="run_selection_not_supported")
-            items = _build_items_context_from_media_ids(media_db, mids, 1000)
+            items = []
+            try:
+                rows, _ = cdb.list_content_items(run_id=payload.run_id, page=1, size=1000)
+                items = _build_items_context_from_content_items(rows)
+            except Exception:
+                items = []
+            if not items:
+                mids = _select_media_ids_for_run(media_db, payload.run_id, 1000)
+                if not mids:
+                    # No content_items and no run mapping tables to resolve items.
+                    raise HTTPException(status_code=422, detail="run_selection_not_supported")
+                items = _build_items_context_from_media_ids(media_db, mids, 1000)
         else:
             items = []
         context = {
@@ -395,7 +215,7 @@ async def create_output(
 
     # Render base template
     try:
-        rendered = safe_render(tpl.body, context)
+        rendered = render_output_template(tpl.body, context)
     except Exception as e:
         logger.error(f"render failed: {e}")
         raise HTTPException(status_code=422, detail="render_failed")
@@ -548,7 +368,7 @@ async def create_output(
                 "mece_template_not_found",
             )
             try:
-                mece_rendered = safe_render(mece_tpl.body, context)
+                mece_rendered = render_output_template(mece_tpl.body, context)
             except Exception as exc:
                 raise HTTPException(status_code=422, detail="mece_render_failed") from exc
             await _persist_output(
@@ -576,7 +396,7 @@ async def create_output(
 
             if tts_tpl:
                 try:
-                    tts_rendered = safe_render(tts_tpl.body, context)
+                    tts_rendered = render_output_template(tts_tpl.body, context)
                 except Exception as exc:
                     raise HTTPException(status_code=422, detail="tts_render_failed") from exc
                 tts_template_row = tts_tpl
@@ -794,12 +614,6 @@ async def delete_output(
     if not ok:
         raise HTTPException(status_code=404, detail="output_not_found")
     return {"success": True, "file_deleted": fs_deleted}
-
-
-def _sanitize_title_for_filename(title: str) -> str:
-    s = re.sub(r"[^A-Za-z0-9_.-]+", "_", title.strip())
-    s = re.sub(r"\.+", ".", s).strip(".")
-    return s[:80] or "output"
 
 
 @router.patch("/{output_id}", response_model=OutputArtifact, summary="Rename/change format/update metadata for an output")

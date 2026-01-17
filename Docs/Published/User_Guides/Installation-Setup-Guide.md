@@ -184,7 +184,7 @@ curl -s http://127.0.0.1:8000/api/v1/embeddings \
   }'
 ```
 
-More detail on local backends and llama.cpp flags: [Docs/Code_Documentation/Local_LLM.md](../../Code_Documentation/Local_LLM.md).
+More detail on local backends and llama.cpp flags: [Setting up a local LLM](Setting_up_a_local_LLM.md).
 
 ## 6) Optional: Text-to-Speech (TTS)
 
@@ -227,7 +227,7 @@ More detail: [Docs/Published/User_Guides/TTS_Getting_Started.md](TTS_Getting_Sta
 ## 7) Optional: Speech-to-Text (STT)
 
 For STT setup and testing, use the dedicated guide and API reference:
-- [Docs/Getting-Started-STT_and_TTS.md](../../Getting-Started-STT_and_TTS.md)
+- [Getting-Started-STT_and_TTS.md](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md)
 - [Docs/Published/API-related/Audio_Transcription_API.md](../API-related/Audio_Transcription_API.md)
 
 Quick STT verification:

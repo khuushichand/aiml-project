@@ -88,6 +88,7 @@ async def _process_mediawiki_dump(
                     store_to_vector_db=store_to_vector_db,
                     api_name_vector_db=form_data.get("api_name_vector_db"),
                     api_key_vector_db=form_data.get("api_key_vector_db"),
+                    allowed_dir=temp_dir_path,
                 ):
                     if filter_item_results and result_event.get("type") == "item_result":
                         page_data = result_event.get("data", {})

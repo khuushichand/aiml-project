@@ -85,7 +85,7 @@ Cross-links
 
 ## 5) Data Model (Additions/Adjustments)
 
-Watchlists PRD tables remain the source of truth: `sources`, `groups`, `source_groups`, `tags`, `source_tags`, `scrape_jobs`, `scrape_runs`, `scrape_run_items`, `source_seen_items`, `scraped_items`, `watchlist_outputs`.
+Watchlists PRD tables remain the source of truth: `sources`, `groups`, `source_groups`, `tags`, `source_tags`, `scrape_jobs`, `scrape_runs`, `scrape_run_items`, `source_seen_items`, `scraped_items`, plus Collections `outputs` for generated artifacts.
 
 Additions:
 - Job Filters (stored on `scrape_jobs` as JSON; optional dedicated table later):
@@ -97,6 +97,7 @@ Additions:
 
 Notes:
 - Dedupe cache `source_seen_items` persists GUID/ETag/Last-Modified keys (from SUBS) keyed by `source_id`.
+- Watchlists ingestion writes to Collections `content_items` by default; Media DB run mappings are opt-in.
 - Scheduling fields remain on `scrape_jobs` (`schedule_expr`, `schedule_timezone`, etc.). Default timezone behavior mirrors Watchlists (UTC+8 default at API level; stored as provided).
 
 ## 6) API Surface (Watchlists)

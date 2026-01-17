@@ -14,7 +14,7 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
-from tldw_Server_API.app.api.v1.endpoints.outputs import _resolve_output_path_for_user
+from tldw_Server_API.app.api.v1.endpoints.outputs import _resolve_output_path_for_user, _strip_html_for_tts
 
 
 pytestmark = pytest.mark.unit
@@ -464,3 +464,19 @@ def test_outputs_resolve_path_rejects_traversal(client_with_user):  # noqa: ARG0
         _resolve_output_path_for_user(user_id, "../outside.txt")
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == "invalid_path"
+
+
+def test_strip_html_for_tts_removes_tags():
+    assert _strip_html_for_tts("Hello <b>World</b>") == "Hello World"
+
+
+def test_strip_html_for_tts_keeps_unclosed_tag_literal():
+    assert _strip_html_for_tts("Hello <b") == "Hello <b"
+
+
+def test_strip_html_for_tts_keeps_empty_tag_literal():
+    assert _strip_html_for_tts("a<>b") == "a<>b"
+
+
+def test_strip_html_for_tts_keeps_trailing_unclosed_tag():
+    assert _strip_html_for_tts("a<b>c<d") == "ac<d"

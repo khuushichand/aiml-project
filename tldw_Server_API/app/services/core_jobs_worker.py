@@ -13,7 +13,6 @@ from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
 from tldw_Server_API.app.core.Chatbooks.chatbook_models import ExportStatus, ImportStatus, ContentType, ConflictResolution
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 def _build_chacha_db_for_user(user_id: str) -> CharactersRAGDB:
@@ -213,7 +212,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                     except Exception:
                         logger.debug("metrics increment failed for renew_task_cancel_failed")
             elif action == "import":
-                file_path = payload.get("file_path")
+                file_ref = payload.get("file_token") or payload.get("file_path")
                 _renew_task = None
                 try:
                     ij = svc._get_import_job(chatbooks_job_id)
@@ -252,7 +251,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                     _renew_task = await _start_renewal(int(job["id"]))
                     ok, msg, _ = await asyncio.to_thread(
                         svc._import_chatbook_sync,
-                        file_path, cs,
+                        file_ref, cs,
                         conf,
                         bool(payload.get("prefix_imported", False)),
                         bool(payload.get("import_media", True)),
@@ -294,24 +293,13 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                                 )
                             except Exception:
                                 logger.debug("metrics increment failed for renew_task_cancel_failed")
-                    if file_path:
+                    if file_ref:
                         try:
-                            cleanup_path = Path(file_path)
+                            cleanup_path = svc._resolve_import_archive_path(file_ref)
                             if cleanup_path.exists() and cleanup_path.is_file():
-                                base_dir = DatabasePaths.get_user_chatbooks_temp_dir(owner).resolve()
-                                cleanup_path = cleanup_path.resolve()
-                                try:
-                                    common = os.path.commonpath([str(cleanup_path), str(base_dir)])
-                                except ValueError:
-                                    common = ""
-                                if common != str(base_dir):
-                                    logger.warning(
-                                        f"Core Jobs Worker: skip deleting import archive outside temp dir: {cleanup_path}"
-                                    )
-                                else:
-                                    cleanup_path.unlink()
+                                cleanup_path.unlink()
                         except Exception as cleanup_err:
-                            logger.debug(f"Core Jobs Worker: failed to remove import archive {file_path}: {cleanup_err}")
+                            logger.debug(f"Core Jobs Worker: failed to remove import archive {file_ref}: {cleanup_err}")
             else:
                 jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
         except Exception as e:
