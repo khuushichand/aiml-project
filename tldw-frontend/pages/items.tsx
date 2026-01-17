@@ -92,7 +92,8 @@ export default function ItemsPage() {
     () =>
       selectedItems
         .filter((item) => item.content_item_id && item.id !== item.content_item_id)
-        .map((item) => item.id),
+        .map((item) => item.content_item_id)
+        .filter((id): id is number => typeof id === 'number'),
     [selectedItems]
   );
   const outputSkippedCount = Math.max(0, selectedItems.length - outputItemIds.length);

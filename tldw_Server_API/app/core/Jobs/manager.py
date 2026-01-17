@@ -1678,6 +1678,7 @@ class JobManager:
         job_type: Optional[str] = None,
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
+        before_id: Optional[int] = None,
         limit: int = 100,
         sort_by: str = "created_at",
         sort_order: str = "desc",
@@ -1690,6 +1691,7 @@ class JobManager:
             status: Filter by status (queued|processing|completed|failed|cancelled).
             owner_user_id: Filter by owner id.
             limit: Max rows to return (default 100).
+            before_id: Optional cursor id for stable pagination with created_before.
         """
         conn = self._connect()
         try:
@@ -1711,14 +1713,18 @@ class JobManager:
                 if job_type:
                     query += " AND job_type = %s"
                     params.append(job_type)
+                sort_col = sort_by if sort_by in {"created_at", "priority", "status"} else "created_at"
+                sort_ord = "DESC" if str(sort_order).lower() == "desc" else "ASC"
                 if created_after:
                     query += " AND created_at >= %s"
                     params.append(created_after)
                 if created_before:
-                    query += " AND created_at <= %s"
-                    params.append(created_before)
-                sort_col = sort_by if sort_by in {"created_at", "priority", "status"} else "created_at"
-                sort_ord = "DESC" if str(sort_order).lower() == "desc" else "ASC"
+                    if before_id is not None and sort_col == "created_at" and sort_ord == "DESC":
+                        query += " AND (created_at < %s OR (created_at = %s AND id < %s))"
+                        params.extend([created_before, created_before, int(before_id)])
+                    else:
+                        query += " AND created_at <= %s"
+                        params.append(created_before)
                 # Add deterministic tie-breaker on id
                 if sort_col == "created_at":
                     query += f" ORDER BY {sort_col} {sort_ord}, id {'DESC' if sort_ord=='DESC' else 'ASC'} LIMIT %s"
@@ -1754,14 +1760,24 @@ class JobManager:
                 if job_type:
                     query += " AND job_type = ?"
                     params.append(job_type)
-                if created_after:
-                    query += " AND created_at >= ?"
-                    params.append(created_after.isoformat())
-                if created_before:
-                    query += " AND created_at <= ?"
-                    params.append(created_before.isoformat())
                 sort_col = sort_by if sort_by in {"created_at", "priority", "status"} else "created_at"
                 sort_ord = "DESC" if str(sort_order).lower() == "desc" else "ASC"
+                def _sqlite_dt(dt_val: datetime) -> str:
+                    if dt_val.tzinfo is not None:
+                        dt_val = dt_val.astimezone(_tz.utc).replace(tzinfo=None)
+                    return dt_val.strftime("%Y-%m-%d %H:%M:%S")
+
+                if created_after:
+                    query += " AND created_at >= ?"
+                    params.append(_sqlite_dt(created_after))
+                if created_before:
+                    if before_id is not None and sort_col == "created_at" and sort_ord == "DESC":
+                        created_before_str = _sqlite_dt(created_before)
+                        query += " AND (created_at < ? OR (created_at = ? AND id < ?))"
+                        params.extend([created_before_str, created_before_str, int(before_id)])
+                    else:
+                        query += " AND created_at <= ?"
+                        params.append(_sqlite_dt(created_before))
                 if sort_col == "created_at":
                     query += f" ORDER BY {sort_col} {sort_ord}, id {'DESC' if sort_ord=='DESC' else 'ASC'} LIMIT ?"
                 else:

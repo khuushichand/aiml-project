@@ -131,6 +131,7 @@ Notes:
 - `JOBS_LEASE_MAX_SECONDS`: Cap for acquire/renew lease seconds (default `3600`).
 - `EVALUATIONS_ABTEST_JOBS_WORKER_ENABLED`: Enable the in-process Embeddings A/B Jobs worker (`true|false`, default `false`). Alias: `EVALS_ABTEST_JOBS_WORKER_ENABLED`.
 - `EVALUATIONS_JOBS_QUEUE`: Queue name for evaluations jobs (default `default`). Alias: `EVALS_JOBS_QUEUE`.
+- `FILES_JOBS_WORKER_ENABLED`: Enable the in-process file artifacts jobs worker (`true|false`, default `false`). When false, run `python -m tldw_Server_API.app.core.File_Artifacts.jobs_worker`.
 
 ## Embeddings Jobs
 - `EMBEDDINGS_JOBS_BACKEND`: Backend is fixed to "core"; this environment variable exists for compatibility and is ignored.

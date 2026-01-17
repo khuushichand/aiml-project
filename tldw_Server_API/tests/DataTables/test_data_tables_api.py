@@ -112,9 +112,11 @@ def test_list_update_delete_data_table(tmp_path, monkeypatch):
             {"name": "Value", "type": "number", "position": 1},
         ],
     )
+    columns = seed_db.list_data_table_columns(table_id)
+    column_ids = [col.get("column_id") for col in columns]
     seed_db.insert_data_table_rows(
         table_id,
-        [{"row_index": 0, "data": {"Name": "Alpha", "Value": 10}}],
+        [{"row_index": 0, "row_json": {column_ids[0]: "Alpha", column_ids[1]: 10}}],
     )
     seed_db.close_connection()
 

@@ -1,3 +1,5 @@
+"""Property-based tests for MarkdownTableAdapter validation behavior."""
+
 import pytest
 from hypothesis import given, strategies as st
 
@@ -11,7 +13,8 @@ pytestmark = pytest.mark.unit
     columns=st.lists(st.text(min_size=1, max_size=8), min_size=1, max_size=6),
     rows=st.lists(st.lists(st.text(max_size=12), max_size=6), max_size=10),
 )
-def test_validate_accepts_matching_rows(columns, rows):
+def test_validate_accepts_matching_rows(columns: list[str], rows: list[list[str]]) -> None:
+    """Rows normalized to column count should yield no validation issues."""
     adapter = MarkdownTableAdapter()
     normalized_rows = []
     for row in rows:

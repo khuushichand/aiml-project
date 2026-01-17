@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Optional, List, Dict, Any, Annotated
 import os
+import threading
 
+from cachetools import LRUCache
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, Field
 try:
@@ -30,6 +32,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adap
 
 router = APIRouter()
 
+MAX_CACHED_JOB_MANAGER_INSTANCES = 4
+_job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
+_job_manager_lock = threading.Lock()
+
 _ADMIN_DEPS = [
     Depends(require_roles("admin")),
     Depends(require_permissions(SYSTEM_MAINTENANCE)),
@@ -40,18 +46,28 @@ def get_job_manager() -> JobManager:
     """
     Dependency helper to construct a JobManager using JOBS_DB_URL when set.
 
-    When JOBS_DB_URL is a Postgres DSN, use the Postgres backend; otherwise
-    fall back to JobManager's default backend resolution (typically SQLite).
+    Reuse a cached JobManager per JOBS_DB_URL. When JOBS_DB_URL is a Postgres
+    DSN, use the Postgres backend; otherwise fall back to JobManager's default
+    backend resolution (typically SQLite).
     """
-    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    if not db_url:
-        # Backwards-compatible default: rely on JobManager's internal selection
-        # (typically a local SQLite database) when JOBS_DB_URL is not provided.
-        logger.debug("JOBS_DB_URL not set; using JobManager default backend (likely SQLite).")
-        return JobManager()
+    cache_key = (os.getenv("JOBS_DB_URL", "default") or "default").strip() or "default"
+    with _job_manager_lock:
+        cached = _job_manager_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-    backend = "postgres" if db_url.startswith("postgres") else None
-    return JobManager(backend=backend, db_url=db_url)
+        db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+        if not db_url:
+            # Backwards-compatible default: rely on JobManager's internal selection
+            # (typically a local SQLite database) when JOBS_DB_URL is not provided.
+            logger.debug("JOBS_DB_URL not set; using JobManager default backend (likely SQLite).")
+            job_manager = JobManager()
+        else:
+            backend = "postgres" if db_url.startswith("postgres") else None
+            job_manager = JobManager(backend=backend, db_url=db_url)
+
+        _job_manager_cache[cache_key] = job_manager
+        return job_manager
 
 
 class SubmitAudioJobRequest(BaseModel):

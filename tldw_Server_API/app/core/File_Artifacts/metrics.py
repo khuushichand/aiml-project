@@ -6,6 +6,8 @@ File artifacts metrics registration.
 Importing this module ensures the metrics exist before recording.
 """
 
+from loguru import logger
+
 from tldw_Server_API.app.core.Metrics import MetricDefinition, MetricType, get_metrics_registry
 
 
@@ -30,5 +32,5 @@ def register_file_artifacts_metrics() -> None:
 
 try:
     register_file_artifacts_metrics()
-except Exception:
-    pass
+except Exception as exc:
+    logger.debug(f"File artifacts metrics registration skipped: {exc}")

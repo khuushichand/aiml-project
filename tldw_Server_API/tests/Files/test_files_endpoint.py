@@ -39,7 +39,7 @@ def client_with_user(monkeypatch):
 
         mod = import_module("tldw_Server_API.app.main")
         mod = reload(mod)
-        app = getattr(mod, "app")
+        app = mod.app
         app.dependency_overrides[get_request_user] = override_user
         with TestClient(app) as client:
             yield client
@@ -207,6 +207,22 @@ def test_create_and_export_json_table(client_with_user):
         "export": {"format": "json", "mode": "url", "async_mode": "sync"},
         "options": BASE_OPTIONS,
     }
+    response = client_with_user.post("/api/v1/files/create", json=payload)
+    assert response.status_code in (200, 201), response.text
+    data = response.json()
+    artifact = data["artifact"]
+    assert artifact["export"]["status"] == "ready"
+    assert artifact["export"]["format"] == "json"
+    export_url = artifact["export"]["url"]
+    assert export_url
+
+    download = client_with_user.get(export_url)
+    assert download.status_code == 200, download.text
+    exported = download.json()
+    expected_rows = [
+        dict(zip(payload["payload"]["columns"], payload["payload"]["rows"][0]))
+    ]
+    assert exported == expected_rows
 
 
 def test_create_requires_options(client_with_user):
@@ -269,11 +285,19 @@ def test_inline_export_returns_content_b64(client_with_user, monkeypatch):
     }
     response = client_with_user.post("/api/v1/files/create", json=payload)
     assert response.status_code == 200, response.text
-    export_info = response.json()["artifact"]["export"]
+    artifact = response.json()["artifact"]
+    export_info = artifact["export"]
     assert export_info["content_b64"]
+    assert export_info["status"] == "none"
     assert export_info["url"] is None
     decoded = base64.b64decode(export_info["content_b64"]).decode("utf-8")
     assert "| Name |" in decoded
+    artifact_id = artifact["file_id"]
+    fetch = client_with_user.get(f"/api/v1/files/{artifact_id}")
+    assert fetch.status_code == 200, fetch.text
+    assert fetch.json()["artifact"]["export"]["status"] == "none"
+    export = client_with_user.get(f"/api/v1/files/{artifact_id}/export?format=md")
+    assert export.status_code == 409, export.text
 
 
 def test_inline_export_falls_back_to_url(client_with_user, monkeypatch):

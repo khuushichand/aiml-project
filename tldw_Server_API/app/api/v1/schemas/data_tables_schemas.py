@@ -110,6 +110,8 @@ class DataTableUpdateRequest(BaseModel):
 
 
 class DataTableColumn(BaseModel):
+    """Column metadata returned for a data table."""
+
     column_id: str
     name: str
     type: str
@@ -119,6 +121,8 @@ class DataTableColumn(BaseModel):
 
 
 class DataTableColumnInput(BaseModel):
+    """Column definition used when updating table content."""
+
     column_id: Optional[str] = None
     name: str = Field(..., min_length=1)
     type: ColumnType
@@ -128,6 +132,8 @@ class DataTableColumnInput(BaseModel):
 
 
 class DataTableRow(BaseModel):
+    """Row payload returned for a data table."""
+
     row_id: str
     row_index: int
     data: Any
@@ -135,6 +141,8 @@ class DataTableRow(BaseModel):
 
 
 class DataTableSource(BaseModel):
+    """Source metadata associated with a table."""
+
     source_type: str
     source_id: str
     title: Optional[str] = None
@@ -143,6 +151,8 @@ class DataTableSource(BaseModel):
 
 
 class DataTableSummary(BaseModel):
+    """Summary metadata for a data table."""
+
     uuid: str
     name: str
     description: Optional[str] = None
@@ -161,6 +171,8 @@ class DataTableSummary(BaseModel):
 
 
 class DataTablesListResponse(BaseModel):
+    """Paginated response containing data table summaries."""
+
     tables: List[DataTableSummary]
     items: List[DataTableSummary]
     results: List[DataTableSummary]
@@ -171,6 +183,8 @@ class DataTablesListResponse(BaseModel):
 
 
 class DataTableDetailResponse(BaseModel):
+    """Detailed response for a single data table."""
+
     table: DataTableSummary
     columns: List[DataTableColumn]
     rows: List[DataTableRow]
@@ -180,11 +194,15 @@ class DataTableDetailResponse(BaseModel):
 
 
 class DataTableContentUpdateRequest(BaseModel):
+    """Request payload for updating table columns and rows."""
+
     columns: List[DataTableColumnInput]
     rows: List[Dict[str, Any]]
 
 
 class DataTableGenerateResponse(BaseModel):
+    """Response payload for a table generation job submission."""
+
     job_id: int
     job_uuid: Optional[str] = None
     status: str
@@ -192,10 +210,14 @@ class DataTableGenerateResponse(BaseModel):
 
 
 class DataTableDeleteResponse(BaseModel):
+    """Response payload for table deletion."""
+
     success: bool
 
 
 class DataTableJobStatus(BaseModel):
+    """Status payload for a data table job."""
+
     id: int
     uuid: Optional[str]
     status: str
@@ -214,6 +236,8 @@ class DataTableJobStatus(BaseModel):
 
 
 class DataTableJobCancelResponse(BaseModel):
+    """Response payload for cancelling a data table job."""
+
     success: bool
     job_id: int
     status: str
@@ -221,6 +245,8 @@ class DataTableJobCancelResponse(BaseModel):
 
 
 class DataTableExportResponse(BaseModel):
+    """Response payload for a data table export request."""
+
     table_uuid: str
     file_id: int
     export: FileExportInfo

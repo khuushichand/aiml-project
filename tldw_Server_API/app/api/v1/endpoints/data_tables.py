@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
+import threading
 from typing import Any, Dict, List, Optional, Union
+from uuid import UUID
 
+from cachetools import LRUCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from loguru import logger
 
@@ -51,20 +53,64 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, InputError
-from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
+from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
+from tldw_Server_API.app.core.File_Artifacts.adapter_registry import get_registry
+from tldw_Server_API.app.core.File_Artifacts.adapters.data_table_adapter import DataTableAdapter
+from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import (
+    DEFAULT_MAX_BYTES,
+    FileArtifactsService,
+)
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent
+from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 
 
 router = APIRouter(prefix="/data-tables", tags=["data-tables"])
 
+MAX_CACHED_JOB_MANAGER_INSTANCES = 4
+_job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
+_job_manager_lock = threading.Lock()
+
+_FILE_ARTIFACTS_ERROR_STATUS = {
+    "unsupported_file_type": status.HTTP_400_BAD_REQUEST,
+    "persist_required": status.HTTP_400_BAD_REQUEST,
+    "unsupported_export_format": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "invalid_async_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "export_size_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "row_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "cell_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "export_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+    "export_job_enqueue_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+def _file_artifacts_http_exception(exc: FileArtifactsError) -> HTTPException:
+    detail = exc.detail if exc.detail is not None else exc.code
+    status_code = _FILE_ARTIFACTS_ERROR_STATUS.get(exc.code)
+    if status_code is None:
+        if isinstance(exc, FileArtifactsValidationError):
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+        else:
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    return HTTPException(status_code=status_code, detail=detail)
+
 
 def get_job_manager() -> JobManager:
-    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    if not db_url:
-        return JobManager()
-    backend = "postgres" if db_url.startswith("postgres") else None
-    return JobManager(backend=backend, db_url=db_url)
+    cache_key = (os.getenv("JOBS_DB_URL", "default") or "default").strip() or "default"
+    with _job_manager_lock:
+        cached = _job_manager_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+        if not db_url:
+            job_manager = JobManager()
+        else:
+            backend = "postgres" if db_url.startswith("postgres") else None
+            job_manager = JobManager(backend=backend, db_url=db_url)
+
+        _job_manager_cache[cache_key] = job_manager
+        return job_manager
 
 
 def _parse_json_value(raw: Optional[str]) -> Any:
@@ -90,13 +136,37 @@ def _model_dump(obj: Any) -> Dict[str, Any]:
     return dict(obj)
 
 
-def _resolve_owner_id(principal: AuthPrincipal, current_user: User) -> Optional[int]:
+def _resolve_owner_id(principal: AuthPrincipal, current_user: User) -> Optional[Union[int, str]]:
     if principal.is_admin:
         return None
-    try:
-        return int(current_user.id)
-    except Exception:
-        return None
+    owner_id = getattr(current_user, "id", None)
+    if owner_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="owner_user_id_missing",
+        )
+    if isinstance(owner_id, int):
+        return owner_id
+    if isinstance(owner_id, UUID):
+        return str(owner_id)
+    if isinstance(owner_id, str):
+        owner_id = owner_id.strip()
+        if not owner_id:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="owner_user_id_empty",
+            )
+        try:
+            return int(owner_id)
+        except ValueError:
+            try:
+                return str(UUID(owner_id))
+            except ValueError:
+                return owner_id
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="owner_user_id_invalid",
+    )
 
 
 def _table_summary_from_row(
@@ -168,7 +238,7 @@ def _row_values_from_json(
         return [None] * len(column_ids)
     if isinstance(row_json, dict):
         values = []
-        for col_id, col_name in zip(column_ids, column_names):
+        for col_id, col_name in zip(column_ids, column_names, strict=True):
             if col_id in row_json:
                 values.append(row_json.get(col_id))
             elif col_name in row_json:
@@ -192,12 +262,18 @@ def _collect_export_rows(
     *,
     column_ids: List[str],
     column_names: List[str],
+    owner_user_id: Optional[Union[int, str]] = None,
 ) -> List[List[Any]]:
     rows: List[List[Any]] = []
     offset = 0
     batch_size = 2000
     while True:
-        batch = db.list_data_table_rows(table_id, limit=batch_size, offset=offset)
+        batch = db.list_data_table_rows(
+            table_id,
+            limit=batch_size,
+            offset=offset,
+            owner_user_id=owner_user_id,
+        )
         if not batch:
             break
         for row in batch:
@@ -215,6 +291,42 @@ def _collect_export_rows(
     return rows
 
 
+def _build_export_filename(title: str, export_format: str) -> str:
+    base = sanitize_filename(
+        title or "data_table",
+        max_total_length=80,
+        extension=f".{export_format}",
+    )
+    if not base:
+        base = "data_table"
+    return f"{base}.{export_format}"
+
+
+async def _export_structured(adapter, structured: Dict[str, Any], export_format: str):
+    if export_format == "xlsx":
+        return await asyncio.to_thread(adapter.export, structured, format=export_format)
+    return adapter.export(structured, format=export_format)
+
+
+async def _wait_for_job_completion(
+    jm: JobManager,
+    job_id: int,
+    *,
+    timeout_seconds: int = 300,
+    poll_interval: float = 1.0,
+) -> Dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        job = jm.get_job(int(job_id))
+        if not job:
+            raise HTTPException(status_code=404, detail="job_not_found")
+        status_val = str(job.get("status") or "").lower()
+        if status_val in {"completed", "failed", "cancelled"}:
+            return job
+        await asyncio.sleep(poll_interval)
+    raise HTTPException(status_code=408, detail="data_table_job_timeout")
+
+
 def _build_table_detail_response(
     table_row: Dict[str, Any],
     db: MediaDatabase,
@@ -223,19 +335,31 @@ def _build_table_detail_response(
     rows_offset: int = 0,
     include_rows: bool = True,
     include_sources: bool = True,
+    owner_user_id: Optional[Union[int, str]] = None,
 ) -> DataTableDetailResponse:
     table_id = int(table_row.get("id"))
-    columns = [_column_from_row(row) for row in db.list_data_table_columns(table_id)]
+    columns = [
+        _column_from_row(row)
+        for row in db.list_data_table_columns(table_id, owner_user_id=owner_user_id)
+    ]
     rows: List[DataTableRow] = []
     if include_rows:
         rows = [
             _row_from_row(row)
-            for row in db.list_data_table_rows(table_id, limit=rows_limit, offset=rows_offset)
+            for row in db.list_data_table_rows(
+                table_id,
+                limit=rows_limit,
+                offset=rows_offset,
+                owner_user_id=owner_user_id,
+            )
         ]
     sources: List[DataTableSource] = []
     source_count: Optional[int] = table_row.get("source_count")
     if include_sources:
-        sources = [_source_from_row(row) for row in db.list_data_table_sources(table_id)]
+        sources = [
+            _source_from_row(row)
+            for row in db.list_data_table_sources(table_id, owner_user_id=owner_user_id)
+        ]
         source_count = len(sources)
     return DataTableDetailResponse(
         table=_table_summary_from_row(
@@ -253,7 +377,7 @@ def _build_table_detail_response(
 
 @router.post(
     "/generate",
-    response_model=DataTableGenerateResponse,
+    response_model=Union[DataTableGenerateResponse, DataTableDetailResponse],
     summary="Submit a data table generation job",
     dependencies=[
         Depends(require_permissions(MEDIA_CREATE)),
@@ -263,11 +387,14 @@ def _build_table_detail_response(
 async def generate_data_table(
     req: DataTableGenerateRequest,
     response: Response,
+    wait_for_completion: bool = Query(False, description="Wait for job completion"),
+    wait_timeout_seconds: int = Query(300, ge=1, le=1800),
     current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
     request: Request = None,
-) -> DataTableGenerateResponse:
+) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
     rid = ensure_request_id(request) if request is not None else None
     tp = ensure_traceparent(request) if request is not None else ""
     table_id = None
@@ -337,12 +464,39 @@ async def generate_data_table(
             trace_id=tp or None,
         )
 
+        if wait_for_completion:
+            job_state = await _wait_for_job_completion(jm, int(job.get("id")), timeout_seconds=wait_timeout_seconds)
+            job_status = str(job_state.get("status") or "").lower()
+            if job_status != "completed":
+                raise HTTPException(
+                    status_code=409,
+                    detail=job_state.get("error_message") or "data_table_job_failed",
+                )
+            owner_user_id = _resolve_owner_id(principal, current_user)
+            table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
+            if not table_row:
+                raise HTTPException(status_code=404, detail="data_table_not_found")
+            response.status_code = status.HTTP_200_OK
+            rows_limit = min(req.max_rows or 2000, 2000)
+            return _build_table_detail_response(
+                table_row,
+                db,
+                rows_limit=rows_limit,
+                rows_offset=0,
+                include_rows=True,
+                include_sources=True,
+            )
+
         response.status_code = status.HTTP_202_ACCEPTED
         return DataTableGenerateResponse(
             job_id=int(job.get("id")),
             job_uuid=job.get("uuid"),
             status=str(job.get("status") or "queued"),
-            table=_table_summary_from_row(table_row),
+            table=_table_summary_from_row(
+                table_row,
+                column_count=0,
+                source_count=len(sources_db_payload),
+            ),
         )
     except InputError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -385,12 +539,39 @@ async def list_data_tables(
         offset=offset,
         owner_user_id=owner_user_id,
     )
-    tables = [_table_summary_from_row(row) for row in rows]
+    total = db.count_data_tables(
+        status=status_filter,
+        search=search,
+        owner_user_id=owner_user_id,
+    )
+    table_ids = []
+    for row in rows:
+        try:
+            table_ids.append(int(row.get("id")))
+        except Exception:
+            continue
+    counts_map = db.get_data_table_counts(table_ids)
+    tables = []
+    for row in rows:
+        table_id = None
+        try:
+            table_id = int(row.get("id"))
+        except Exception:
+            table_id = None
+        counts = counts_map.get(table_id or -1, {})
+        tables.append(
+            _table_summary_from_row(
+                row,
+                column_count=counts.get("column_count"),
+                source_count=counts.get("source_count"),
+            )
+        )
     return DataTablesListResponse(
         tables=tables,
         items=tables,
         results=tables,
         count=len(tables),
+        total=total,
         limit=limit,
         offset=offset,
     )
@@ -417,25 +598,14 @@ async def get_data_table(
     if not table_row:
         raise HTTPException(status_code=404, detail="data_table_not_found")
 
-    table_id = int(table_row.get("id"))
-    columns = [_column_from_row(row) for row in db.list_data_table_columns(table_id)]
-    rows = []
-    if include_rows:
-        rows = [
-            _row_from_row(row)
-            for row in db.list_data_table_rows(table_id, limit=rows_limit, offset=rows_offset)
-        ]
-    sources = []
-    if include_sources:
-        sources = [_source_from_row(row) for row in db.list_data_table_sources(table_id)]
-
-    return DataTableDetailResponse(
-        table=_table_summary_from_row(table_row),
-        columns=columns,
-        rows=rows,
-        sources=sources,
+    return _build_table_detail_response(
+        table_row,
+        db,
         rows_limit=rows_limit,
         rows_offset=rows_offset,
+        include_rows=include_rows,
+        include_sources=include_sources,
+        owner_user_id=owner_user_id,
     )
 
 
@@ -455,6 +625,7 @@ async def export_data_table(
     format: DataTableExportFormat = Query(..., description="Export format (csv|json|xlsx)"),
     async_mode: AsyncMode = Query("auto", description="auto defers large exports; async forces 202"),
     mode: ExportMode = Query("url", description="url returns a download link; inline returns base64 content"),
+    download: bool = Query(False, description="Return file content directly"),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
@@ -468,7 +639,7 @@ async def export_data_table(
         raise HTTPException(status_code=409, detail="data_table_not_ready")
 
     table_id = int(table_row.get("id"))
-    column_rows = db.list_data_table_columns(table_id)
+    column_rows = db.list_data_table_columns(table_id, owner_user_id=owner_user_id)
     if not column_rows:
         raise HTTPException(status_code=409, detail="data_table_missing_columns")
 
@@ -483,8 +654,29 @@ async def export_data_table(
         table_id,
         column_ids=column_ids,
         column_names=column_names,
+        owner_user_id=owner_user_id,
     )
     structured = {"columns": column_names, "rows": rows}
+
+    if download:
+        adapter = DataTableAdapter()
+        try:
+            normalized = adapter.normalize(structured)
+            export_result = await _export_structured(adapter, normalized, format)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if export_result.status != "ready" or not export_result.content:
+            raise HTTPException(status_code=500, detail="export_failed")
+        byte_count = len(export_result.content)
+        max_bytes = DEFAULT_MAX_BYTES
+        if byte_count > max_bytes:
+            raise HTTPException(status_code=422, detail="export_size_exceeded")
+        filename = _build_export_filename(str(table_row.get("name") or "data_table"), format)
+        return Response(
+            content=export_result.content,
+            media_type=export_result.content_type or "application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename=\"{filename}\"'},
+        )
 
     options_payload: Dict[str, Any] = {"persist": True}
     if rows:
@@ -501,12 +693,138 @@ async def export_data_table(
     )
     request_id = ensure_request_id(request) if request is not None else None
     service = FileArtifactsService(cdb, user_id=current_user.id)
-    artifact, status_code = await service.create_artifact(file_req, request_id=request_id)
+    should_async = async_mode == "async" or (
+        async_mode == "auto"
+        and service._should_export_async("data_table", structured, options, format)
+    )
+    if should_async:
+        try:
+            artifact, status_code = await service.create_artifact(file_req, request_id=request_id)
+        except FileArtifactsError as exc:
+            raise _file_artifacts_http_exception(exc) from exc
+        response.status_code = status_code
+        return DataTableExportResponse(
+            table_uuid=table_uuid,
+            file_id=artifact.file_id,
+            export=artifact.export,
+        )
+
+    inline_max_bytes = service._resolve_inline_max_bytes()
+    estimated_bytes = service._estimate_export_size("data_table", structured, format)
+    if (
+        mode == "url"
+        and inline_max_bytes > 0
+        and estimated_bytes is not None
+        and estimated_bytes <= inline_max_bytes
+    ):
+        adapter = get_registry().get_adapter("data_table")
+        if adapter is None:
+            raise HTTPException(status_code=500, detail="export_adapter_unavailable")
+        try:
+            normalized = adapter.normalize(structured)
+            export_result = await _export_structured(adapter, normalized, format)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if export_result.status != "ready" or not export_result.content:
+            raise HTTPException(status_code=500, detail="export_failed")
+        byte_count = len(export_result.content)
+        max_bytes = options.max_bytes or DEFAULT_MAX_BYTES
+        if byte_count > max_bytes:
+            raise HTTPException(status_code=422, detail="export_size_exceeded")
+        filename = _build_export_filename(str(table_row.get("name") or "data_table"), format)
+        return Response(
+            content=export_result.content,
+            media_type=export_result.content_type or "application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    try:
+        artifact, status_code = await service.create_artifact(file_req, request_id=request_id)
+    except FileArtifactsError as exc:
+        raise _file_artifacts_http_exception(exc) from exc
     response.status_code = status_code
     return DataTableExportResponse(
         table_uuid=table_uuid,
         file_id=artifact.file_id,
         export=artifact.export,
+    )
+
+
+@router.put(
+    "/{table_uuid}/content",
+    response_model=DataTableDetailResponse,
+    summary="Update data table content",
+    dependencies=[Depends(require_permissions(MEDIA_UPDATE))],
+)
+async def update_data_table_content(
+    table_uuid: str,
+    req: DataTableContentUpdateRequest,
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> DataTableDetailResponse:
+    owner_user_id = _resolve_owner_id(principal, current_user)
+    table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
+    if not table_row:
+        raise HTTPException(status_code=404, detail="data_table_not_found")
+
+    table_id = int(table_row.get("id"))
+    columns_payload: List[Dict[str, Any]] = []
+    for idx, column in enumerate(req.columns):
+        col = _model_dump(column)
+        columns_payload.append(
+            {
+                "column_id": col.get("column_id"),
+                "name": str(col.get("name") or "").strip(),
+                "type": col.get("type"),
+                "description": col.get("description"),
+                "format": col.get("format"),
+                "position": col.get("position", idx),
+            }
+        )
+
+    rows_payload: List[Dict[str, Any]] = []
+    for idx, row in enumerate(req.rows):
+        if not isinstance(row, dict):
+            raise HTTPException(status_code=400, detail="row_payload_invalid")
+        row_index = row.get("row_index", idx)
+        row_json = row.get("row_json")
+        if row_json is None:
+            row_json = row.get("data", row)
+        rows_payload.append(
+            {
+                "row_id": row.get("row_id"),
+                "row_index": row_index,
+                "row_json": row_json,
+            }
+        )
+
+    try:
+        db.soft_delete_data_table_columns(table_id, owner_user_id=owner_user_id)
+        db.soft_delete_data_table_rows(table_id, owner_user_id=owner_user_id)
+        if columns_payload:
+            db.insert_data_table_columns(table_id, columns_payload, owner_user_id=owner_user_id)
+        if rows_payload:
+            db.insert_data_table_rows(table_id, rows_payload, owner_user_id=owner_user_id)
+        db.update_data_table(
+            table_id,
+            status="ready",
+            row_count=len(rows_payload),
+            owner_user_id=owner_user_id,
+        )
+    except InputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    updated_row = db.get_data_table(table_id, owner_user_id=owner_user_id) or table_row
+    rows_limit = max(1, min(len(rows_payload) or 200, 2000))
+    return _build_table_detail_response(
+        updated_row,
+        db,
+        rows_limit=rows_limit,
+        rows_offset=0,
+        include_rows=True,
+        include_sources=True,
+        owner_user_id=owner_user_id,
     )
 
 
@@ -531,10 +849,16 @@ async def update_data_table(
         int(table_row.get("id")),
         name=req.name.strip() if req.name is not None else None,
         description=req.description,
+        owner_user_id=owner_user_id,
     )
     if not updated:
         raise HTTPException(status_code=500, detail="data_table_update_failed")
-    return _table_summary_from_row(updated)
+    counts = db.get_data_table_counts([int(updated.get("id"))]).get(int(updated.get("id")), {})
+    return _table_summary_from_row(
+        updated,
+        column_count=counts.get("column_count"),
+        source_count=counts.get("source_count"),
+    )
 
 
 @router.delete(
@@ -556,7 +880,7 @@ async def delete_data_table(
     table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
     if not table_row:
         raise HTTPException(status_code=404, detail="data_table_not_found")
-    deleted = db.soft_delete_data_table(int(table_row.get("id")))
+    deleted = db.soft_delete_data_table(int(table_row.get("id")), owner_user_id=owner_user_id)
     if not deleted:
         raise HTTPException(status_code=500, detail="data_table_delete_failed")
     return DataTableDeleteResponse(success=True)
@@ -590,7 +914,7 @@ async def regenerate_data_table(
         raise HTTPException(status_code=404, detail="data_table_not_found")
 
     table_id = int(table_row.get("id"))
-    sources_rows = db.list_data_table_sources(table_id)
+    sources_rows = db.list_data_table_sources(table_id, owner_user_id=owner_user_id)
     job_sources = [
         {
             "source_type": row.get("source_type"),
@@ -635,14 +959,20 @@ async def regenerate_data_table(
         status="queued",
         generation_model=req.model or table_row.get("generation_model"),
         prompt=prompt_override,
+        owner_user_id=owner_user_id,
     )
 
     response.status_code = status.HTTP_202_ACCEPTED
+    counts = db.get_data_table_counts([table_id]).get(table_id, {})
     return DataTableGenerateResponse(
         job_id=int(job.get("id")),
         job_uuid=job.get("uuid"),
         status=str(job.get("status") or "queued"),
-        table=_table_summary_from_row(db.get_data_table(table_id) or table_row),
+        table=_table_summary_from_row(
+            db.get_data_table(table_id, owner_user_id=owner_user_id) or table_row,
+            column_count=counts.get("column_count"),
+            source_count=counts.get("source_count"),
+        ),
     )
 
 

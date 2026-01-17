@@ -27,7 +27,8 @@
   <script src="assets/reveal/plugin/notes/notes.js"></script>
   <script>
     const settings = {{settings_json}};
-    settings.plugins = [ RevealNotes ];
+    const existingPlugins = Array.isArray(settings.plugins) ? settings.plugins : [];
+    settings.plugins = [...existingPlugins, RevealNotes];
     Reveal.initialize(settings);
   </script>
 </body>

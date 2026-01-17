@@ -50,7 +50,8 @@
 - Folder Structure:
   - `Collections/reading_service.py`, `embedding_queue.py`, `utils.py`; DB adapter in `DB_Management/Collections_DB.py`
 - Extension Points:
-  - Add new origins to `content_items`; extend outputs formats; add highlight strategies
+  - Add new origins 
+  - to `content_items`; extend outputs formats; add highlight strategies
 - Coding Patterns:
   - DI for DB, loguru for logging; avoid raw SQL in endpoints (use DB adapter)
 - Tests:

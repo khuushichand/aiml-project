@@ -5,7 +5,10 @@ from uuid import uuid4
 import json
 import os
 import shutil
+import threading
+from datetime import datetime
 
+from cachetools import LRUCache
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Request, Query
 from pydantic import BaseModel, Field
 from loguru import logger
@@ -35,13 +38,27 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 
 router = APIRouter()
 
+MAX_CACHED_JOB_MANAGER_INSTANCES = 4
+_job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
+_job_manager_lock = threading.Lock()
+
 
 def get_job_manager() -> JobManager:
-    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    if not db_url:
-        return JobManager()
-    backend = "postgres" if db_url.startswith("postgres") else None
-    return JobManager(backend=backend, db_url=db_url)
+    cache_key = (os.getenv("JOBS_DB_URL", "default") or "default").strip() or "default"
+    with _job_manager_lock:
+        cached = _job_manager_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+        if not db_url:
+            job_manager = JobManager()
+        else:
+            backend = "postgres" if db_url.startswith("postgres") else None
+            job_manager = JobManager(backend=backend, db_url=db_url)
+
+        _job_manager_cache[cache_key] = job_manager
+        return job_manager
 
 
 class MediaIngestJobItem(BaseModel):
@@ -100,7 +117,7 @@ def _cleanup_dir(path_str: str) -> None:
 
 def _normalize_payload(payload: Any) -> Dict[str, Any]:
     if isinstance(payload, dict):
-        return payload
+        return dict(payload)
     if isinstance(payload, str):
         try:
             parsed = json.loads(payload)
@@ -108,6 +125,22 @@ def _normalize_payload(payload: Any) -> Dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _parse_job_created_at(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    return None
 
 
 def _job_to_status(job: Dict[str, Any]) -> MediaIngestJobStatus:
@@ -323,19 +356,43 @@ async def list_media_ingest_jobs(
     jm: JobManager = Depends(get_job_manager),
 ) -> MediaIngestJobListResponse:
     owner_filter = None if principal.is_admin else str(current_user.id)
-    jobs = jm.list_jobs(
-        domain="media_ingest",
-        owner_user_id=owner_filter,
-        limit=limit,
-    )
-
+    page_limit = min(500, max(limit, 100))
     matched: List[MediaIngestJobStatus] = []
-    for job in jobs:
-        payload = _normalize_payload(job.get("payload"))
-        if str(payload.get("batch_id") or "") == batch_id:
-            matched.append(_job_to_status(job))
+    cursor_created_at: Optional[datetime] = None
+    cursor_id: Optional[int] = None
+    last_cursor: Optional[tuple[datetime, int]] = None
+    while len(matched) < limit:
+        jobs = jm.list_jobs(
+            domain="media_ingest",
+            owner_user_id=owner_filter,
+            limit=page_limit,
+            created_before=cursor_created_at,
+            before_id=cursor_id,
+            sort_by="created_at",
+            sort_order="desc",
+        )
+        if not jobs:
+            break
+        for job in jobs:
+            payload = _normalize_payload(job.get("payload"))
+            if str(payload.get("batch_id") or "") == batch_id:
+                matched.append(_job_to_status(job))
+                if len(matched) >= limit:
+                    return MediaIngestJobListResponse(batch_id=batch_id, jobs=matched[:limit])
+        if len(jobs) < page_limit:
+            break
+        last_job = jobs[-1]
+        next_created_at = _parse_job_created_at(last_job.get("created_at"))
+        next_id_raw = last_job.get("id")
+        if next_created_at is None or next_id_raw is None:
+            break
+        next_cursor = (next_created_at, int(next_id_raw))
+        if last_cursor == next_cursor:
+            break
+        last_cursor = next_cursor
+        cursor_created_at, cursor_id = next_cursor
 
-    return MediaIngestJobListResponse(batch_id=batch_id, jobs=matched)
+    return MediaIngestJobListResponse(batch_id=batch_id, jobs=matched[:limit])
 
 
 @router.delete(

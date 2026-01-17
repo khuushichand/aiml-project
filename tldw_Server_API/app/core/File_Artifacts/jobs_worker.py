@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from typing import Any, Dict, Optional
@@ -29,8 +30,9 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import FileCreateOptions, FileExportRequest
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
-from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
+from tldw_Server_API.app.core.Jobs.worker_utils import coerce_int as _coerce_int
+from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env as _jobs_manager
 
 
 FILES_DOMAIN = "files"
@@ -43,21 +45,6 @@ class FileArtifactsJobError(RuntimeError):
         self.retryable = retryable
         if backoff_seconds is not None:
             self.backoff_seconds = backoff_seconds
-
-
-def _jobs_manager() -> JobManager:
-    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    if not db_url:
-        return JobManager()
-    backend = "postgres" if db_url.startswith("postgres") else None
-    return JobManager(backend=backend, db_url=db_url)
-
-
-def _coerce_int(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
 
 
 def _resolve_user_id(job: Dict[str, Any], payload: Dict[str, Any]) -> str:
@@ -78,7 +65,7 @@ async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
     try:
         file_id = int(file_id_raw)
     except (TypeError, ValueError):
-        raise FileArtifactsJobError("invalid file_id", retryable=False)
+        raise FileArtifactsJobError("invalid file_id", retryable=False) from None
 
     export_format = str(payload.get("export_format") or "").strip().lower()
     if not export_format:
@@ -89,7 +76,7 @@ async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
     try:
         row = cdb.get_file_artifact(file_id)
     except KeyError:
-        raise FileArtifactsJobError("file_artifact_not_found", retryable=False)
+        raise FileArtifactsJobError("file_artifact_not_found", retryable=False) from None
 
     if row.export_status == "ready" and row.export_storage_path:
         return {"skipped": True, "status": "ready"}
@@ -97,7 +84,7 @@ async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
     file_type = row.file_type
     if file_type in {"csv_table", "json_table"}:
         file_type = "data_table"
-    adapter = service._registry.get_adapter(file_type)
+    adapter = service.get_adapter(file_type)
     if adapter is None:
         raise FileArtifactsJobError(f"adapter_missing:{file_type}", retryable=False)
 
@@ -155,16 +142,23 @@ async def run_file_artifacts_jobs_worker(stop_event: Optional[asyncio.Event] = N
         renew_threshold_seconds=renew_threshold,
     )
     sdk = WorkerSDK(_jobs_manager(), cfg)
+    _stop_watcher_task: Optional[asyncio.Task[None]] = None
 
     if stop_event is not None:
         async def _watch_stop() -> None:
             await stop_event.wait()
             sdk.stop()
 
-        asyncio.create_task(_watch_stop())
+        _stop_watcher_task = asyncio.create_task(_watch_stop())
 
     logger.info("File Artifacts Jobs worker starting (queue=%s, worker_id=%s)", queue, worker_id)
-    await sdk.run(handler=_handle_export_job)
+    try:
+        await sdk.run(handler=_handle_export_job)
+    finally:
+        if _stop_watcher_task is not None and not _stop_watcher_task.done():
+            _stop_watcher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await _stop_watcher_task
 
 
 if __name__ == "__main__":

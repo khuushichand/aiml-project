@@ -990,6 +990,7 @@ class MediaDatabase:
     );
     CREATE UNIQUE INDEX IF NOT EXISTS ux_data_table_columns_table_column ON data_table_columns(table_id, column_id);
     CREATE INDEX IF NOT EXISTS idx_data_table_columns_table_position ON data_table_columns(table_id, position);
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_data_table_columns_table_position_active ON data_table_columns(table_id, position, deleted);
 
     CREATE TABLE IF NOT EXISTS data_table_rows (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1009,6 +1010,7 @@ class MediaDatabase:
     );
     CREATE UNIQUE INDEX IF NOT EXISTS ux_data_table_rows_table_row ON data_table_rows(table_id, row_id);
     CREATE INDEX IF NOT EXISTS idx_data_table_rows_table_index ON data_table_rows(table_id, row_index);
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_data_table_rows_table_index_active ON data_table_rows(table_id, row_index, deleted);
 
     CREATE TABLE IF NOT EXISTS data_table_sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6981,6 +6983,7 @@ class MediaDatabase:
     # Data Tables helpers
     # -------------------------
     def _resolve_data_tables_owner(self, owner_user_id: Optional[int]) -> Optional[str]:
+        """Resolve the owner user id for data table queries."""
         if owner_user_id is not None:
             return str(owner_user_id)
         try:
@@ -7003,6 +7006,7 @@ class MediaDatabase:
         generation_model: Optional[str] = None,
         table_uuid: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Create a data table metadata record and return the row."""
         if not name:
             raise InputError("name is required")
         if not prompt:
@@ -7064,6 +7068,7 @@ class MediaDatabase:
         include_deleted: bool = False,
         owner_user_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
+        """Fetch a data table by id."""
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
         conditions = ["id = ?"]
         params: List[Any] = [int(table_id)]
@@ -7083,6 +7088,7 @@ class MediaDatabase:
         include_deleted: bool = False,
         owner_user_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
+        """Fetch a data table by uuid."""
         if not table_uuid:
             return None
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
@@ -7107,6 +7113,7 @@ class MediaDatabase:
         include_deleted: bool = False,
         owner_user_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """List data tables with optional filters."""
         try:
             limit = int(limit)
             offset = int(offset)
@@ -7143,10 +7150,81 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
+    def count_data_tables(
+        self,
+        *,
+        status: Optional[str] = None,
+        search: Optional[str] = None,
+        include_deleted: bool = False,
+        owner_user_id: Optional[int] = None,
+    ) -> int:
+        """Count data tables matching optional filters."""
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
+        conditions: List[str] = []
+        params: List[Any] = []
+        if not include_deleted:
+            conditions.append("deleted = 0")
+        if owner_filter is not None:
+            conditions.append("client_id = ?")
+            params.append(owner_filter)
+        if status:
+            conditions.append("status = ?")
+            params.append(str(status))
+        if search:
+            like_op = "ILIKE" if self.backend_type == BackendType.POSTGRESQL else "LIKE"
+            conditions.append(f"(name {like_op} ? OR description {like_op} ?)")
+            pattern = f"%{search}%"
+            params.extend([pattern, pattern])
+
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        sql = f"SELECT COUNT(*) as total FROM data_tables {where_clause}"
+        row = self.execute_query(sql, tuple(params)).fetchone()
+        if not row:
+            return 0
+        try:
+            total = row.get("total") if isinstance(row, dict) else row[0]
+        except Exception:
+            total = row[0] if row else 0
+        return int(total or 0)
+
+    def get_data_table_counts(
+        self,
+        table_ids: List[int],
+    ) -> Dict[int, Dict[str, int]]:
+        """Return column/source counts for the provided table ids."""
+        ids = [int(table_id) for table_id in table_ids if table_id is not None]
+        if not ids:
+            return {}
+        placeholders = ",".join(["?"] * len(ids))
+        columns_sql = (
+            "SELECT table_id, COUNT(*) as count FROM data_table_columns "
+            f"WHERE deleted = 0 AND table_id IN ({placeholders}) GROUP BY table_id"
+        )
+        sources_sql = (
+            "SELECT table_id, COUNT(*) as count FROM data_table_sources "
+            f"WHERE deleted = 0 AND table_id IN ({placeholders}) GROUP BY table_id"
+        )
+        columns_rows = self.execute_query(columns_sql, tuple(ids)).fetchall()
+        sources_rows = self.execute_query(sources_sql, tuple(ids)).fetchall()
+
+        counts: Dict[int, Dict[str, int]] = {
+            table_id: {"column_count": 0, "source_count": 0} for table_id in ids
+        }
+        for row in columns_rows:
+            table_id = int(row.get("table_id") if isinstance(row, dict) else row[0])
+            count = int(row.get("count") if isinstance(row, dict) else row[1])
+            counts.setdefault(table_id, {})["column_count"] = count
+        for row in sources_rows:
+            table_id = int(row.get("table_id") if isinstance(row, dict) else row[0])
+            count = int(row.get("count") if isinstance(row, dict) else row[1])
+            counts.setdefault(table_id, {})["source_count"] = count
+        return counts
+
     def update_data_table(
         self,
         table_id: int,
         *,
+        owner_user_id: Optional[int] = None,
         name: Optional[str] = None,
         description: Optional[str] = None,
         prompt: Optional[str] = None,
@@ -7156,6 +7234,8 @@ class MediaDatabase:
         last_error: Optional[str] = None,
         column_hints: Optional[Union[str, Dict[str, Any], List[Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
+        """Update data table metadata and return the updated row."""
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
         update_parts: List[str] = []
         params: List[Any] = []
 
@@ -7193,7 +7273,7 @@ class MediaDatabase:
             params.append(column_hints_json)
 
         if not update_parts:
-            return self.get_data_table(int(table_id), include_deleted=True)
+            return self.get_data_table(int(table_id), include_deleted=True, owner_user_id=owner_user_id)
 
         now = self._get_current_utc_timestamp_str()
         update_parts.append("updated_at = ?")
@@ -7206,31 +7286,60 @@ class MediaDatabase:
 
         params.append(int(table_id))
         sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"
+        if owner_filter is not None:
+            sql += " AND client_id = ?"
+            params.append(owner_filter)
         self.execute_query(sql, tuple(params), commit=True)
-        return self.get_data_table(int(table_id), include_deleted=True)
+        return self.get_data_table(int(table_id), include_deleted=True, owner_user_id=owner_user_id)
 
-    def soft_delete_data_table(self, table_id: int) -> bool:
+    def soft_delete_data_table(self, table_id: int, owner_user_id: Optional[int] = None) -> bool:
+        """Soft delete a data table and its related rows."""
         now = self._get_current_utc_timestamp_str()
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
         with self.transaction() as conn:
+            params: List[Any] = [now, now, str(self.client_id), int(table_id)]
+            where_clause = "WHERE id = ? AND deleted = 0"
+            if owner_filter is not None:
+                where_clause += " AND client_id = ?"
+                params.append(owner_filter)
             cur = self._execute_with_connection(
                 conn,
-                """
+                f"""
                 UPDATE data_tables
                 SET deleted = 1,
                     updated_at = ?,
                     last_modified = ?,
                     version = version + 1,
                     client_id = ?
-                WHERE id = ? AND deleted = 0
+                {where_clause}
                 """,
-                (now, now, str(self.client_id), int(table_id)),
+                tuple(params),
             )
             updated = int(getattr(cur, "rowcount", 0) or 0)
             if updated:
-                self._soft_delete_data_table_children(conn, int(table_id), now)
+                self._soft_delete_data_table_children(
+                    conn,
+                    int(table_id),
+                    now,
+                    owner_user_id=owner_user_id,
+                )
         return bool(updated)
 
-    def _soft_delete_data_table_children(self, conn, table_id: int, now: str) -> None:
+    def _soft_delete_data_table_children(
+        self,
+        conn,
+        table_id: int,
+        now: str,
+        *,
+        owner_user_id: Optional[int] = None,
+    ) -> None:
+        """Soft delete data table child records within a transaction."""
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
+        where_clause = "WHERE table_id = ? AND deleted = 0"
+        params: List[Any] = [now, str(self.client_id), int(table_id)]
+        if owner_filter is not None:
+            where_clause += " AND client_id = ?"
+            params.append(owner_filter)
         for table in ("data_table_columns", "data_table_rows", "data_table_sources"):
             self._execute_with_connection(
                 conn,
@@ -7240,14 +7349,29 @@ class MediaDatabase:
                     last_modified = ?,
                     version = version + 1,
                     client_id = ?
-                WHERE table_id = ? AND deleted = 0
+                {where_clause}
                 """,
-                (now, str(self.client_id), int(table_id)),
+                tuple(params),
             )
 
-    def insert_data_table_columns(self, table_id: int, columns: List[Dict[str, Any]]) -> int:
+    def insert_data_table_columns(
+        self,
+        table_id: int,
+        columns: List[Dict[str, Any]],
+        *,
+        owner_user_id: Optional[int] = None,
+    ) -> int:
+        """Insert data table columns and return count inserted."""
         if not columns:
             return 0
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
+        if owner_filter is not None:
+            owned = self.execute_query(
+                "SELECT 1 FROM data_tables WHERE id = ? AND client_id = ? LIMIT 1",
+                (int(table_id), owner_filter),
+            ).fetchone()
+            if not owned:
+                return 0
         now = self._get_current_utc_timestamp_str()
         rows: List[tuple] = []
         for idx, column in enumerate(columns):
@@ -7294,11 +7418,17 @@ class MediaDatabase:
         table_id: int,
         *,
         include_deleted: bool = False,
+        owner_user_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """List columns for a data table."""
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
         conditions = ["table_id = ?"]
         params: List[Any] = [int(table_id)]
         if not include_deleted:
             conditions.append("deleted = 0")
+        if owner_filter is not None:
+            conditions.append("client_id = ?")
+            params.append(owner_filter)
         sql = (
             "SELECT * FROM data_table_columns WHERE "
             + " AND ".join(conditions)
@@ -7307,33 +7437,101 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
-    def soft_delete_data_table_columns(self, table_id: int) -> int:
+    def soft_delete_data_table_columns(
+        self,
+        table_id: int,
+        owner_user_id: Optional[int] = None,
+    ) -> int:
+        """Soft delete columns for a data table."""
         now = self._get_current_utc_timestamp_str()
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
+        params: List[Any] = [now, str(self.client_id), int(table_id)]
+        where_clause = "WHERE table_id = ? AND deleted = 0"
+        if owner_filter is not None:
+            where_clause += " AND client_id = ?"
+            params.append(owner_filter)
         cur = self.execute_query(
-            """
+            f"""
             UPDATE data_table_columns
             SET deleted = 1,
                 last_modified = ?,
                 version = version + 1,
                 client_id = ?
-            WHERE table_id = ? AND deleted = 0
+            {where_clause}
             """,
-            (now, str(self.client_id), int(table_id)),
+            tuple(params),
             commit=True,
         )
         return int(getattr(cur, "rowcount", 0) or 0)
 
-    def insert_data_table_rows(self, table_id: int, rows: List[Dict[str, Any]]) -> int:
+    def _normalize_data_table_row_json(
+        self,
+        row_json: Any,
+        *,
+        column_ids: Optional[set[str]] = None,
+        validate_keys: bool = True,
+    ) -> str:
+        """Normalize row_json to a JSON string and validate column keys."""
+        if row_json is None:
+            raise InputError("row_json is required for data table rows")
+        payload = row_json
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise InputError(f"row_json must be valid JSON: {exc}") from exc
+
+        if validate_keys:
+            if column_ids is None:
+                raise InputError("column_ids are required for row_json validation")
+            if not isinstance(payload, dict):
+                raise InputError("row_json must be an object keyed by column_id")
+            normalized: Dict[str, Any] = {str(key): value for key, value in payload.items()}
+            invalid = [key for key in normalized.keys() if key not in column_ids]
+            if invalid:
+                raise InputError(f"row_json contains unknown column_id(s): {', '.join(invalid)}")
+            payload = normalized
+
+        if not isinstance(payload, (dict, list)):
+            raise InputError("row_json must be an object or array")
+        return json.dumps(payload)
+
+    def insert_data_table_rows(
+        self,
+        table_id: int,
+        rows: List[Dict[str, Any]],
+        *,
+        validate_keys: bool = True,
+        owner_user_id: Optional[int] = None,
+    ) -> int:
+        """Insert data table rows and return count inserted."""
         if not rows:
             return 0
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
+        if owner_filter is not None:
+            owned = self.execute_query(
+                "SELECT 1 FROM data_tables WHERE id = ? AND client_id = ? LIMIT 1",
+                (int(table_id), owner_filter),
+            ).fetchone()
+            if not owned:
+                return 0
+        column_ids: Optional[set[str]] = None
+        if validate_keys:
+            columns = self.list_data_table_columns(int(table_id), owner_user_id=owner_user_id)
+            if not columns:
+                raise InputError("data_table_columns_required")
+            column_ids = {str(col.get("column_id") or "") for col in columns}
+            if "" in column_ids:
+                column_ids.discard("")
         now = self._get_current_utc_timestamp_str()
         insert_rows: List[tuple] = []
         for idx, row in enumerate(rows):
             row_json = row.get("row_json", row.get("data"))
-            if row_json is None:
-                raise InputError("row_json is required for data table rows")
-            if not isinstance(row_json, str):
-                row_json = json.dumps(row_json)
+            row_json = self._normalize_data_table_row_json(
+                row_json,
+                column_ids=column_ids,
+                validate_keys=validate_keys,
+            )
             row_id = row.get("row_id") or row.get("id") or self._generate_uuid()
             row_index = row.get("row_index", idx)
             row_hash = row.get("row_hash")
@@ -7369,6 +7567,330 @@ class MediaDatabase:
             )
         return len(insert_rows)
 
+    def replace_data_table_contents(
+        self,
+        table_id: int,
+        *,
+        columns: List[Dict[str, Any]],
+        rows: List[Dict[str, Any]],
+    ) -> Tuple[int, int]:
+        """Replace data table columns and rows, returning counts inserted."""
+        if not columns:
+            raise InputError("columns are required")
+        if not rows:
+            raise InputError("rows are required")
+
+        now = self._get_current_utc_timestamp_str()
+        column_rows: List[tuple] = []
+        for idx, column in enumerate(columns):
+            name = column.get("name")
+            col_type = column.get("type")
+            if not name or not col_type:
+                raise InputError("column name and type are required")
+            column_id = column.get("column_id") or column.get("id") or self._generate_uuid()
+            position = column.get("position", idx)
+            column_rows.append(
+                (
+                    int(table_id),
+                    str(column_id),
+                    str(name),
+                    str(col_type),
+                    column.get("description"),
+                    column.get("format"),
+                    int(position),
+                    now,
+                    now,
+                    1,
+                    str(self.client_id),
+                    0,
+                    column.get("prev_version"),
+                    column.get("merge_parent_uuid"),
+                )
+            )
+        column_ids = {str(row[1]) for row in column_rows}
+
+        row_rows: List[tuple] = []
+        for idx, row in enumerate(rows):
+            row_json = row.get("row_json", row.get("data"))
+            row_json = self._normalize_data_table_row_json(
+                row_json,
+                column_ids=column_ids,
+                validate_keys=True,
+            )
+            row_id = row.get("row_id") or row.get("id") or self._generate_uuid()
+            row_index = row.get("row_index", idx)
+            row_hash = row.get("row_hash")
+            if row_hash is None:
+                row_hash = hashlib.sha256(row_json.encode("utf-8")).hexdigest()
+            row_rows.append(
+                (
+                    int(table_id),
+                    str(row_id),
+                    int(row_index),
+                    row_json,
+                    row_hash,
+                    now,
+                    now,
+                    1,
+                    str(self.client_id),
+                    0,
+                    row.get("prev_version"),
+                    row.get("merge_parent_uuid"),
+                )
+            )
+
+        with self.transaction() as conn:
+            self._execute_with_connection(
+                conn,
+                """
+                UPDATE data_table_columns
+                SET deleted = 1,
+                    last_modified = ?,
+                    version = version + 1,
+                    client_id = ?
+                WHERE table_id = ? AND deleted = 0
+                """,
+                (now, str(self.client_id), int(table_id)),
+            )
+            self._execute_with_connection(
+                conn,
+                """
+                UPDATE data_table_rows
+                SET deleted = 1,
+                    last_modified = ?,
+                    version = version + 1,
+                    client_id = ?
+                WHERE table_id = ? AND deleted = 0
+                """,
+                (now, str(self.client_id), int(table_id)),
+            )
+            self.execute_many(
+                """
+                INSERT INTO data_table_columns (
+                    table_id, column_id, name, type, description, format, position,
+                    created_at, last_modified, version, client_id, deleted, prev_version, merge_parent_uuid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                column_rows,
+                commit=False,
+                connection=conn,
+            )
+            self.execute_many(
+                """
+                INSERT INTO data_table_rows (
+                    table_id, row_id, row_index, row_json, row_hash,
+                    created_at, last_modified, version, client_id, deleted, prev_version, merge_parent_uuid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                row_rows,
+                commit=False,
+                connection=conn,
+            )
+        return len(column_rows), len(row_rows)
+
+    def persist_data_table_generation(
+        self,
+        table_id: int,
+        *,
+        columns: List[Dict[str, Any]],
+        rows: List[Dict[str, Any]],
+        sources: Optional[List[Dict[str, Any]]] = None,
+        status: str = "ready",
+        row_count: Optional[int] = None,
+        generation_model: Optional[str] = None,
+        last_error: Any = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Persist generated table data and update table metadata."""
+        if not columns:
+            raise InputError("columns are required")
+        if not rows:
+            raise InputError("rows are required")
+
+        now = self._get_current_utc_timestamp_str()
+        column_rows: List[tuple] = []
+        for idx, column in enumerate(columns):
+            name = column.get("name")
+            col_type = column.get("type")
+            if not name or not col_type:
+                raise InputError("column name and type are required")
+            column_id = column.get("column_id") or column.get("id") or self._generate_uuid()
+            position = column.get("position", idx)
+            column_rows.append(
+                (
+                    int(table_id),
+                    str(column_id),
+                    str(name),
+                    str(col_type),
+                    column.get("description"),
+                    column.get("format"),
+                    int(position),
+                    now,
+                    now,
+                    1,
+                    str(self.client_id),
+                    0,
+                    column.get("prev_version"),
+                    column.get("merge_parent_uuid"),
+                )
+            )
+        column_ids = {str(row[1]) for row in column_rows}
+
+        row_rows: List[tuple] = []
+        for idx, row in enumerate(rows):
+            row_json = row.get("row_json", row.get("data"))
+            row_json = self._normalize_data_table_row_json(
+                row_json,
+                column_ids=column_ids,
+                validate_keys=True,
+            )
+            row_id = row.get("row_id") or row.get("id") or self._generate_uuid()
+            row_index = row.get("row_index", idx)
+            row_hash = row.get("row_hash")
+            if row_hash is None:
+                row_hash = hashlib.sha256(row_json.encode("utf-8")).hexdigest()
+            row_rows.append(
+                (
+                    int(table_id),
+                    str(row_id),
+                    int(row_index),
+                    row_json,
+                    row_hash,
+                    now,
+                    now,
+                    1,
+                    str(self.client_id),
+                    0,
+                    row.get("prev_version"),
+                    row.get("merge_parent_uuid"),
+                )
+            )
+
+        source_rows: List[tuple] = []
+        if sources is not None:
+            for src in sources:
+                source_type = src.get("source_type")
+                source_id = src.get("source_id")
+                if not source_type or source_id is None:
+                    raise InputError("source_type and source_id are required")
+                snapshot = src.get("snapshot_json")
+                if snapshot is not None and not isinstance(snapshot, str):
+                    snapshot = json.dumps(snapshot)
+                retrieval = src.get("retrieval_params_json")
+                if retrieval is not None and not isinstance(retrieval, str):
+                    retrieval = json.dumps(retrieval)
+                source_rows.append(
+                    (
+                        int(table_id),
+                        str(source_type),
+                        str(source_id),
+                        src.get("title"),
+                        snapshot,
+                        retrieval,
+                        now,
+                        now,
+                        1,
+                        str(self.client_id),
+                        0,
+                        src.get("prev_version"),
+                        src.get("merge_parent_uuid"),
+                    )
+                )
+
+        update_parts = ["status = ?", "row_count = ?", "last_error = ?"]
+        params: List[Any] = [
+            status,
+            int(row_count if row_count is not None else len(rows)),
+            last_error,
+        ]
+        update_parts.append("updated_at = ?")
+        params.append(now)
+        update_parts.append("last_modified = ?")
+        params.append(now)
+        update_parts.append("version = version + 1")
+        update_parts.append("client_id = ?")
+        params.append(str(self.client_id))
+        if generation_model is not None:
+            update_parts.append("generation_model = ?")
+            params.append(generation_model)
+        params.append(int(table_id))
+
+        with self.transaction() as conn:
+            self._execute_with_connection(
+                conn,
+                """
+                UPDATE data_table_columns
+                SET deleted = 1,
+                    last_modified = ?,
+                    version = version + 1,
+                    client_id = ?
+                WHERE table_id = ? AND deleted = 0
+                """,
+                (now, str(self.client_id), int(table_id)),
+            )
+            self._execute_with_connection(
+                conn,
+                """
+                UPDATE data_table_rows
+                SET deleted = 1,
+                    last_modified = ?,
+                    version = version + 1,
+                    client_id = ?
+                WHERE table_id = ? AND deleted = 0
+                """,
+                (now, str(self.client_id), int(table_id)),
+            )
+            if sources is not None:
+                self._execute_with_connection(
+                    conn,
+                    """
+                    UPDATE data_table_sources
+                    SET deleted = 1,
+                        last_modified = ?,
+                        version = version + 1,
+                        client_id = ?
+                    WHERE table_id = ? AND deleted = 0
+                    """,
+                    (now, str(self.client_id), int(table_id)),
+                )
+            self.execute_many(
+                """
+                INSERT INTO data_table_columns (
+                    table_id, column_id, name, type, description, format, position,
+                    created_at, last_modified, version, client_id, deleted, prev_version, merge_parent_uuid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                column_rows,
+                commit=False,
+                connection=conn,
+            )
+            self.execute_many(
+                """
+                INSERT INTO data_table_rows (
+                    table_id, row_id, row_index, row_json, row_hash,
+                    created_at, last_modified, version, client_id, deleted, prev_version, merge_parent_uuid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                row_rows,
+                commit=False,
+                connection=conn,
+            )
+            if source_rows:
+                self.execute_many(
+                    """
+                    INSERT INTO data_table_sources (
+                        table_id, source_type, source_id, title, snapshot_json, retrieval_params_json,
+                        created_at, last_modified, version, client_id, deleted, prev_version, merge_parent_uuid
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    source_rows,
+                    commit=False,
+                    connection=conn,
+                )
+            sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"
+            self._execute_with_connection(conn, sql, tuple(params))
+
+        return self.get_data_table(int(table_id), include_deleted=True)
+
     def list_data_table_rows(
         self,
         table_id: int,
@@ -7376,7 +7898,9 @@ class MediaDatabase:
         limit: int = 200,
         offset: int = 0,
         include_deleted: bool = False,
+        owner_user_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """List rows for a data table."""
         try:
             limit = int(limit)
             offset = int(offset)
@@ -7384,10 +7908,14 @@ class MediaDatabase:
             limit, offset = 200, 0
         limit = max(1, min(2000, limit))
         offset = max(0, offset)
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
         conditions = ["table_id = ?"]
         params: List[Any] = [int(table_id)]
         if not include_deleted:
             conditions.append("deleted = 0")
+        if owner_filter is not None:
+            conditions.append("client_id = ?")
+            params.append(owner_filter)
         sql = (
             "SELECT * FROM data_table_rows WHERE "
             + " AND ".join(conditions)
@@ -7397,25 +7925,51 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
-    def soft_delete_data_table_rows(self, table_id: int) -> int:
+    def soft_delete_data_table_rows(
+        self,
+        table_id: int,
+        owner_user_id: Optional[int] = None,
+    ) -> int:
+        """Soft delete rows for a data table."""
         now = self._get_current_utc_timestamp_str()
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
+        params: List[Any] = [now, str(self.client_id), int(table_id)]
+        where_clause = "WHERE table_id = ? AND deleted = 0"
+        if owner_filter is not None:
+            where_clause += " AND client_id = ?"
+            params.append(owner_filter)
         cur = self.execute_query(
-            """
+            f"""
             UPDATE data_table_rows
             SET deleted = 1,
                 last_modified = ?,
                 version = version + 1,
                 client_id = ?
-            WHERE table_id = ? AND deleted = 0
+            {where_clause}
             """,
-            (now, str(self.client_id), int(table_id)),
+            tuple(params),
             commit=True,
         )
         return int(getattr(cur, "rowcount", 0) or 0)
 
-    def insert_data_table_sources(self, table_id: int, sources: List[Dict[str, Any]]) -> int:
+    def insert_data_table_sources(
+        self,
+        table_id: int,
+        sources: List[Dict[str, Any]],
+        *,
+        owner_user_id: Optional[int] = None,
+    ) -> int:
+        """Insert sources for a data table and return count inserted."""
         if not sources:
             return 0
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
+        if owner_filter is not None:
+            owned = self.execute_query(
+                "SELECT 1 FROM data_tables WHERE id = ? AND client_id = ? LIMIT 1",
+                (int(table_id), owner_filter),
+            ).fetchone()
+            if not owned:
+                return 0
         now = self._get_current_utc_timestamp_str()
         rows: List[tuple] = []
         for src in sources:
@@ -7465,11 +8019,17 @@ class MediaDatabase:
         table_id: int,
         *,
         include_deleted: bool = False,
+        owner_user_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """List sources for a data table."""
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
         conditions = ["table_id = ?"]
         params: List[Any] = [int(table_id)]
         if not include_deleted:
             conditions.append("deleted = 0")
+        if owner_filter is not None:
+            conditions.append("client_id = ?")
+            params.append(owner_filter)
         sql = (
             "SELECT * FROM data_table_sources WHERE "
             + " AND ".join(conditions)
@@ -7478,18 +8038,29 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
-    def soft_delete_data_table_sources(self, table_id: int) -> int:
+    def soft_delete_data_table_sources(
+        self,
+        table_id: int,
+        owner_user_id: Optional[int] = None,
+    ) -> int:
+        """Soft delete sources for a data table."""
         now = self._get_current_utc_timestamp_str()
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
+        params: List[Any] = [now, str(self.client_id), int(table_id)]
+        where_clause = "WHERE table_id = ? AND deleted = 0"
+        if owner_filter is not None:
+            where_clause += " AND client_id = ?"
+            params.append(owner_filter)
         cur = self.execute_query(
-            """
+            f"""
             UPDATE data_table_sources
             SET deleted = 1,
                 last_modified = ?,
                 version = version + 1,
                 client_id = ?
-            WHERE table_id = ? AND deleted = 0
+            {where_clause}
             """,
-            (now, str(self.client_id), int(table_id)),
+            tuple(params),
             commit=True,
         )
         return int(getattr(cur, "rowcount", 0) or 0)

@@ -1,3 +1,5 @@
+"""Unit tests for CollectionsDatabase file artifacts."""
+
 import json
 import shutil
 from pathlib import Path
@@ -12,7 +14,8 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def collections_db(monkeypatch):
+def collections_db(monkeypatch: pytest.MonkeyPatch) -> CollectionsDatabase:
+    """Provide an isolated CollectionsDatabase instance for file-artifact tests."""
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_file_artifacts"
     shutil.rmtree(base_dir, ignore_errors=True)
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -32,7 +35,8 @@ def collections_db(monkeypatch):
                 pass
 
 
-def test_create_and_update_file_artifact(collections_db: CollectionsDatabase):
+def test_create_and_update_file_artifact(collections_db: CollectionsDatabase) -> None:
+    """Creates a file artifact and updates its export metadata."""
     structured = {"columns": ["Name"], "rows": [["Ada"]]}
     validation = {"ok": True, "warnings": []}
     row = collections_db.create_file_artifact(
@@ -56,4 +60,4 @@ def test_create_and_update_file_artifact(collections_db: CollectionsDatabase):
     )
     assert updated.export_status == "ready"
     assert updated.export_format == "md"
-    assert updated.export_storage_path == "file_777.md"
+    assert Path(updated.export_storage_path).name == "file_777.md"

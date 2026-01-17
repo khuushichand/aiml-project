@@ -862,14 +862,17 @@ def process_videos(
     results = []
 
     def _is_cancelled() -> bool:
+        """Return True if cancellation is requested, logging callback errors."""
         if cancel_check is None:
             return False
         try:
             return bool(cancel_check())
-        except Exception:
+        except Exception as exc:
+            logging.warning(f"cancel_check raised an error: {exc}")
             return False
 
     def _cancelled_result(input_ref: str, processing_source: Optional[str] = None) -> Dict[str, Any]:
+        """Build a standard cancelled result payload."""
         return {
             "status": "Cancelled",
             "input_ref": input_ref,
@@ -886,12 +889,7 @@ def process_videos(
             "kept_video_path": None,
         }
 
-    try:
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-            TranscriptionCancelled,
-        )
-    except Exception:
-        TranscriptionCancelled = RuntimeError
+    from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
     all_transcripts_for_confab: Dict[str, str] = {}
     all_summaries_for_confab: Dict[str, str] = {}
 
@@ -1217,19 +1215,16 @@ def process_single_video(
     # Temp dir for download is provided by the caller (`temp_dir`)
 
     def _is_cancelled() -> bool:
+        """Return True if cancellation is requested, logging callback errors."""
         if cancel_check is None:
             return False
         try:
             return bool(cancel_check())
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"cancel_check raised an error: {exc}")
             return False
 
-    try:
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-            TranscriptionCancelled,
-        )
-    except Exception:
-        TranscriptionCancelled = RuntimeError
+        from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
 
     try:
         logger.info(f"Processing single video input: {video_input}") # Log original

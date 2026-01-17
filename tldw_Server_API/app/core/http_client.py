@@ -209,8 +209,17 @@ async def _capture_error_body_hook_async(response: "httpx.Response") -> None:
         pass
 
 
+_HTTP_CLIENT_METRICS_REGISTERED = False
+
+
 def _register_http_client_metrics_once() -> None:
-    reg = get_metrics_registry()
+    global _HTTP_CLIENT_METRICS_REGISTERED
+    if _HTTP_CLIENT_METRICS_REGISTERED:
+        return
+    try:
+        reg = get_metrics_registry()
+    except Exception:
+        return
     # Register http-client-specific metrics if not present
     try:
         reg.register_metric(
@@ -258,26 +267,13 @@ def _register_http_client_metrics_once() -> None:
         )
     except Exception:
         pass
+    _HTTP_CLIENT_METRICS_REGISTERED = True
 
 # Ensure metrics are registered on import
 try:
     _register_http_client_metrics_once()
 except Exception:
     pass
-    try:
-        registry.register_metric(
-            MetricDefinition(
-                name="http_client_egress_denials_total",
-                type=MetricType.COUNTER,
-                description="Total egress policy denials for outbound requests",
-                labels=["reason"],
-            )
-        )
-    except Exception:
-        pass
-
-
-_register_http_client_metrics_once()
 
 
 # --------------------------------------------------------------------------------------

@@ -50,8 +50,8 @@ from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 # exception handling is consistent across modules (enables pytest fallback).
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
     ConversionError as TranscriptionConversionError,
-    TranscriptionCancelled,
 )
+from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
 
 def speech_to_text(*args, **kwargs):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
@@ -574,15 +574,25 @@ def process_audio_files(
         logging.info(message)
         progress_log.append(message)
 
+    def _normalize_input_ref(value: Any) -> str:
+        """Normalize inputs to match the input_ref formatting rules."""
+        text_value = value if isinstance(value, str) else str(value)
+        if text_value.startswith(("http://", "https://")):
+            return text_value
+        return Path(text_value).name
+
     def _is_cancelled() -> bool:
+        """Return True if cancellation is requested, logging callback errors."""
         if cancel_check is None:
             return False
         try:
             return bool(cancel_check())
-        except Exception:
+        except Exception as exc:
+            logging.warning(f"cancel_check raised an error: {exc}", exc_info=True)
             return False
 
     def _cancelled_result(input_ref: str, processing_source: str) -> Dict[str, Any]:
+        """Build a standard cancelled result payload."""
         return {
             "status": "Cancelled",
             "input_ref": input_ref,
@@ -661,8 +671,8 @@ def process_audio_files(
                 update_progress(f"Cancellation detected before processing item {i}: {input_ref}")
                 batch_items_results.append(_cancelled_result(input_ref, input_item))
                 for remaining_input in inputs[i:]:
-                    remaining_ref = remaining_input if isinstance(remaining_input, str) else str(remaining_input)
-                    batch_items_results.append(_cancelled_result(remaining_ref, remaining_ref))
+                    remaining_ref = _normalize_input_ref(remaining_input)
+                    batch_items_results.append(_cancelled_result(remaining_ref, remaining_input))
                 break
 
             current_audio_path = None
@@ -1040,8 +1050,8 @@ def process_audio_files(
                 batch_items_results.append(item_result) # Use the renamed list
             if cancel_remaining:
                 for remaining_input in inputs[i:]:
-                    remaining_ref = remaining_input if isinstance(remaining_input, str) else str(remaining_input)
-                    batch_items_results.append(_cancelled_result(remaining_ref, remaining_ref))
+                    remaining_ref = _normalize_input_ref(remaining_input)
+                    batch_items_results.append(_cancelled_result(remaining_ref, remaining_input))
                 break
 
         # --- End of Loop ---

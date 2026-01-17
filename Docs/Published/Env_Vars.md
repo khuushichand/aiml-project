@@ -74,6 +74,7 @@ Egress & Outbound Policy (global + Workflows)
 - `JOBS_*`: Lease/renew/metrics settings (see repo `Env_Vars.md`).
   - Common toggles include `JOBS_WEBHOOKS_*`, `JOBS_INTEGRITY_SWEEP_*`, `JOBS_METRICS_*`.
 - `MEDIA_INGEST_JOBS_WORKER_ENABLED`: Start the in-process media ingest jobs worker on app startup (`true|false`).
+- `FILES_JOBS_WORKER_ENABLED`: Start the in-process file artifacts jobs worker on app startup (`true|false`, default `false`); otherwise run `python -m tldw_Server_API.app.core.File_Artifacts.jobs_worker`.
 - `EMBEDDINGS_JOBS_QUEUE`: Queue for embeddings stage jobs (default `default`).
 - `EMBEDDINGS_ROOT_JOBS_QUEUE`: Queue for embeddings root jobs (default `low` when stage queue is not `low`).
 - `EMBEDDINGS_JOBS_WORKER_ID`: Worker identifier for embeddings jobs (default `embeddings-jobs-<pid>`).

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import date, datetime, timedelta
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 import re
 
@@ -9,8 +9,9 @@ from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, 
 
 
 class IcalAdapter:
-    file_type = "ical"
-    export_formats = {"ics"}
+    file_type: ClassVar[str] = "ical"
+    export_formats: ClassVar[set[str]] = {"ics"}
+    _UTC_EQUIVALENTS: ClassVar[set[str]] = {"UTC", "ETC/UTC", "ETC/GMT", "GMT", "Z"}
 
     def normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         calendar = payload.get("calendar")
@@ -82,7 +83,7 @@ class IcalAdapter:
             )
             issues.extend(end_issues)
             if start_dt and end_dt:
-                if isinstance(start_dt, date) != isinstance(end_dt, date):
+                if (type(start_dt) is date) != (type(end_dt) is date):
                     issues.append(
                         ValidationIssue(
                             code="event_date_type_mismatch",
@@ -188,8 +189,7 @@ class IcalAdapter:
             dt = dt.replace(tzinfo=tzinfo)
         else:
             if tzid:
-                tz_key = getattr(dt.tzinfo, "key", None)
-                if tz_key != tzid:
+                if not self._tz_matches(dt, tzid):
                     issues.append(
                         ValidationIssue(
                             code="event_timezone_mismatch",
@@ -199,6 +199,52 @@ class IcalAdapter:
                     )
                     return None, issues
         return dt, issues
+
+    def _tz_matches(self, dt: datetime, tzid: str) -> bool:
+        tzinfo = dt.tzinfo
+        if tzinfo is None:
+            return False
+        tz_key = getattr(tzinfo, "key", None)
+        if tz_key == tzid:
+            return True
+        dt_offset = dt.utcoffset()
+        if dt_offset is None:
+            return False
+        offset = self._parse_offset_tzid(tzid)
+        if offset is not None:
+            return dt_offset == offset
+        try:
+            expected_tz = ZoneInfo(tzid)
+        except Exception:
+            return False
+        expected_offset = expected_tz.utcoffset(dt)
+        if expected_offset is None:
+            return False
+        return dt_offset == expected_offset
+
+    @classmethod
+    def _parse_offset_tzid(cls, tzid: str) -> timedelta | None:
+        tzid = tzid.strip()
+        tz_upper = tzid.upper()
+        if tz_upper in cls._UTC_EQUIVALENTS:
+            return timedelta(0)
+        if tz_upper.startswith(("UTC", "GMT")) and len(tz_upper) > 3:
+            offset = cls._parse_utc_offset(tz_upper[3:])
+            if offset is not None:
+                return offset
+        return cls._parse_utc_offset(tz_upper)
+
+    @staticmethod
+    def _parse_utc_offset(raw: str) -> timedelta | None:
+        match = re.match(r"^(?P<sign>[+-])(?P<hours>\d{2})(?::?(?P<minutes>\d{2}))?$", raw)
+        if not match:
+            return None
+        hours = int(match.group("hours"))
+        minutes = int(match.group("minutes") or "0")
+        if hours > 23 or minutes > 59:
+            return None
+        sign = -1 if match.group("sign") == "-" else 1
+        return timedelta(hours=sign * hours, minutes=sign * minutes)
 
     def _build_calendar(self, structured: Dict[str, Any]):
         try:

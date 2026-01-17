@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Any, Dict, List
+from typing import Any, ClassVar, Dict, List
 
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, ValidationIssue
 
 
 class XlsxAdapter:
     file_type = "xlsx"
-    export_formats = {"xlsx"}
+    export_formats: ClassVar[set[str]] = {"xlsx"}
 
     def normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if "sheets" not in payload and "columns" in payload and "rows" in payload:

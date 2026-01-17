@@ -382,7 +382,7 @@ class CollectionsDatabase:
             # Attempt to add metadata_json if missing
             self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
         # Outputs table backfills
         try:
             deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
@@ -392,19 +392,19 @@ class CollectionsDatabase:
                 tuple(),
             )
         except Exception:
-            pass
+            logger.debug("collections backfill: outputs.deleted already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: outputs.retention_until already exists or skipped")
         try:
             self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: outputs unique index already exists or skipped")
         # File artifacts backfills
         try:
             deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
@@ -414,48 +414,48 @@ class CollectionsDatabase:
                 tuple(),
             )
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.deleted already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
         try:
             export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
             self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
         try:
             self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
         except Exception:
-            pass
+            logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
         # Collections layer tables
         fts_available = self.backend.backend_type == BackendType.SQLITE
         if self.backend.backend_type == BackendType.POSTGRESQL:
@@ -722,7 +722,12 @@ class CollectionsDatabase:
     @staticmethod
     def _is_fts_query_error(exc: Exception) -> bool:
         msg = str(exc).lower()
-        return "fts" in msg or "match" in msg or "malformed" in msg or "syntax error" in msg
+        return (
+            "fts" in msg
+            or "fts5" in msg
+            or ("match" in msg and "content_items_fts" in msg)
+            or "malformed match expression" in msg
+        )
 
     def ensure_collection_tag_ids(self, names: Iterable[str]) -> List[int]:
         normed: List[str] = []
@@ -988,43 +993,26 @@ class CollectionsDatabase:
                     return row, int(row.get("id"))
             return None, None
 
-        def _apply_preserve(existing: Dict[str, Any]) -> None:
-            nonlocal origin_type, origin_id, url, canonical_url, domain, title, summary, notes
-            nonlocal content_hash, word_count, published_at, status, media_id, job_id, run_id, source_id, read_at
-            if origin_type is None:
-                origin_type = existing.get("origin_type")
-            if origin_id is None:
-                origin_id = existing.get("origin_id")
-            if url is None:
-                url = existing.get("url")
-            if canonical_url is None:
-                canonical_url = existing.get("canonical_url")
-            if domain is None:
-                domain = existing.get("domain")
-            if title is None:
-                title = existing.get("title")
-            if summary is None:
-                summary = existing.get("summary")
-            if notes is None:
-                notes = existing.get("notes")
-            if content_hash is None:
-                content_hash = existing.get("content_hash")
-            if word_count is None:
-                word_count = existing.get("word_count")
-            if published_at is None:
-                published_at = existing.get("published_at")
-            if status is None:
-                status = existing.get("status")
-            if media_id is None:
-                media_id = existing.get("media_id")
-            if job_id is None:
-                job_id = existing.get("job_id")
-            if run_id is None:
-                run_id = existing.get("run_id")
-            if source_id is None:
-                source_id = existing.get("source_id")
-            if read_at is None:
-                read_at = existing.get("read_at")
+        def _apply_preserve(existing: Dict[str, Any]) -> Dict[str, Any]:
+            return {
+                "origin_type": origin_type if origin_type is not None else existing.get("origin_type"),
+                "origin_id": origin_id if origin_id is not None else existing.get("origin_id"),
+                "url": url if url is not None else existing.get("url"),
+                "canonical_url": canonical_url if canonical_url is not None else existing.get("canonical_url"),
+                "domain": domain if domain is not None else existing.get("domain"),
+                "title": title if title is not None else existing.get("title"),
+                "summary": summary if summary is not None else existing.get("summary"),
+                "notes": notes if notes is not None else existing.get("notes"),
+                "content_hash": content_hash if content_hash is not None else existing.get("content_hash"),
+                "word_count": word_count if word_count is not None else existing.get("word_count"),
+                "published_at": published_at if published_at is not None else existing.get("published_at"),
+                "status": status if status is not None else existing.get("status"),
+                "media_id": media_id if media_id is not None else existing.get("media_id"),
+                "job_id": job_id if job_id is not None else existing.get("job_id"),
+                "run_id": run_id if run_id is not None else existing.get("run_id"),
+                "source_id": source_id if source_id is not None else existing.get("source_id"),
+                "read_at": read_at if read_at is not None else existing.get("read_at"),
+            }
 
         def _build_metadata_json(existing: Optional[Dict[str, Any]]) -> Optional[str]:
             if not metadata:
@@ -1060,7 +1048,24 @@ class CollectionsDatabase:
 
         existing_row, item_id = _lookup_existing()
         if existing_row and preserve_existing_on_null:
-            _apply_preserve(existing_row)
+            preserved = _apply_preserve(existing_row)
+            origin_type = preserved["origin_type"]
+            origin_id = preserved["origin_id"]
+            url = preserved["url"]
+            canonical_url = preserved["canonical_url"]
+            domain = preserved["domain"]
+            title = preserved["title"]
+            summary = preserved["summary"]
+            notes = preserved["notes"]
+            content_hash = preserved["content_hash"]
+            word_count = preserved["word_count"]
+            published_at = preserved["published_at"]
+            status = preserved["status"]
+            media_id = preserved["media_id"]
+            job_id = preserved["job_id"]
+            run_id = preserved["run_id"]
+            source_id = preserved["source_id"]
+            read_at = preserved["read_at"]
 
         canonical, domain_val, favorite_int, status_val = _refresh_derived()
         metadata_json = _build_metadata_json(existing_row)
@@ -1117,7 +1122,24 @@ class CollectionsDatabase:
                 if not existing_row or item_id is None:
                     raise
                 if preserve_existing_on_null:
-                    _apply_preserve(existing_row)
+                    preserved = _apply_preserve(existing_row)
+                    origin_type = preserved["origin_type"]
+                    origin_id = preserved["origin_id"]
+                    url = preserved["url"]
+                    canonical_url = preserved["canonical_url"]
+                    domain = preserved["domain"]
+                    title = preserved["title"]
+                    summary = preserved["summary"]
+                    notes = preserved["notes"]
+                    content_hash = preserved["content_hash"]
+                    word_count = preserved["word_count"]
+                    published_at = preserved["published_at"]
+                    status = preserved["status"]
+                    media_id = preserved["media_id"]
+                    job_id = preserved["job_id"]
+                    run_id = preserved["run_id"]
+                    source_id = preserved["source_id"]
+                    read_at = preserved["read_at"]
                 canonical, domain_val, favorite_int, status_val = _refresh_derived()
                 metadata_json = _build_metadata_json(existing_row)
                 prev_hash = existing_row.get("content_hash")
@@ -2113,6 +2135,24 @@ class CollectionsDatabase:
         if res.rowcount <= 0:
             raise KeyError("file_artifact_not_found")
         return self.get_file_artifact(file_id)
+
+    def consume_file_artifact_export(self, file_id: int, *, consumed_at: str) -> bool:
+        """Mark a ready export as consumed (one-time download guard)."""
+        updated_at = _utcnow_iso()
+        q = (
+            "UPDATE file_artifacts SET export_consumed_at = ?, updated_at = ? "
+            "WHERE id = ? AND user_id = ? AND deleted = 0 "
+            "AND export_status = 'ready' AND export_storage_path IS NOT NULL "
+            "AND export_consumed_at IS NULL"
+        )
+        params = (
+            consumed_at,
+            updated_at,
+            file_id,
+            self.user_id,
+        )
+        res = self.backend.execute(q, params)
+        return res.rowcount > 0
 
     def delete_file_artifact(self, file_id: int, *, hard: bool = False) -> bool:
         if hard:

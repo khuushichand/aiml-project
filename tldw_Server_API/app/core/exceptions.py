@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
-from typing import Optional
+from typing import Any, Optional
 
 
 class VideoProcessingError(Exception):
@@ -30,6 +30,10 @@ class StreamingProtocolError(Exception):
 
 class DownloadError(Exception):
     """Raised when a download fails or post-download validation fails (checksum, size)."""
+
+
+class TranscriptionCancelled(RuntimeError):
+    """Raised when transcription/conversion is cancelled."""
 
 
 class SecurityAlertWebhookError(Exception):
@@ -124,6 +128,19 @@ class InvalidSecretRedactionParametersError(ValueError):
 
     def __init__(self, message: str = "head and tail must be non-negative"):
         super().__init__(message)
+
+
+class FileArtifactsError(Exception):
+    """Base exception for file artifact operations."""
+
+    def __init__(self, code: str, detail: Any | None = None) -> None:
+        super().__init__(code)
+        self.code = code
+        self.detail = detail
+
+
+class FileArtifactsValidationError(FileArtifactsError):
+    """Raised when file artifacts payload validation fails."""
 
 
 class ResourceNotFoundError(Exception):

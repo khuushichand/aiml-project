@@ -866,14 +866,14 @@ else:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         _HAS_FILES = True
-    except Exception as _files_err:
+    except ImportError as _files_err:
         logger.warning(f"Files endpoints unavailable; skipping import: {_files_err}")
         _HAS_FILES = False
     try:
         from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
 
         _HAS_DATA_TABLES = True
-    except Exception as _dt_err:
+    except ImportError as _dt_err:
         logger.warning(f"Data tables endpoints unavailable; skipping import: {_dt_err}")
         _HAS_DATA_TABLES = False
     try:
@@ -1896,9 +1896,11 @@ async def lifespan(app: FastAPI):
     cleanup_task = None
     chatbooks_cleanup_task = None
     core_jobs_task = None
+    files_jobs_task = None
     audio_jobs_task = None
     media_ingest_jobs_task = None
     chatbooks_cleanup_stop_event = None
+    files_jobs_stop_event = None
     media_ingest_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
@@ -2690,6 +2692,17 @@ async def lifespan(app: FastAPI):
                     core_jobs_task.cancel()
             else:
                 core_jobs_task.cancel()
+        if "files_jobs_task" in locals() and files_jobs_task:
+            # Prefer graceful stop via explicit stop_event
+            if "files_jobs_stop_event" in locals() and files_jobs_stop_event:
+                try:
+                    files_jobs_stop_event.set()
+                    await _asyncio.wait_for(files_jobs_task, timeout=5.0)
+                    logger.info("File Artifacts Jobs worker stopped via stop_event")
+                except Exception:
+                    files_jobs_task.cancel()
+            else:
+                files_jobs_task.cancel()
         if "audio_jobs_task" in locals() and audio_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "audio_jobs_stop_event" in locals() and audio_jobs_stop_event:
@@ -4570,13 +4583,13 @@ elif _MINIMAL_TEST_APP:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         app.include_router(files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
-    except Exception as _files_min_err:
+    except ImportError as _files_min_err:
         logger.debug(f"Skipping files router in minimal test app: {_files_min_err}")
     try:
         from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
 
         app.include_router(data_tables_router, prefix=f"{API_V1_PREFIX}", tags=["data-tables"])
-    except Exception as _dt_min_err:
+    except ImportError as _dt_min_err:
         logger.debug(f"Skipping data_tables router in minimal test app: {_dt_min_err}")
     try:
         from tldw_Server_API.app.api.v1.endpoints.reading_highlights import router as reading_highlights_router
@@ -4983,14 +4996,14 @@ else:
         from tldw_Server_API.app.api.v1.endpoints.files import router as _files_router
 
         _include_if_enabled("files", _files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
-    except Exception as _e:
+    except ImportError as _e:
         logger.warning(f"Files endpoint not available: {_e}")
     try:
         # Optional data tables endpoint
         from tldw_Server_API.app.api.v1.endpoints.data_tables import router as _data_tables_router
 
         _include_if_enabled("data-tables", _data_tables_router, prefix=f"{API_V1_PREFIX}", tags=["data-tables"])
-    except Exception as _e:
+    except ImportError as _e:
         logger.warning(f"Data tables endpoint not available: {_e}")
     if "embeddings_router" in locals():
         _include_if_enabled("embeddings", embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])

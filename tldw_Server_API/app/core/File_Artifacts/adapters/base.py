@@ -1,3 +1,5 @@
+"""Base contracts for file artifact adapters."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,6 +8,7 @@ from typing import Any, Dict, Literal, Optional, Protocol
 
 @dataclass(frozen=True)
 class ValidationIssue:
+    """Validation issue produced during structured payload checks."""
     code: str
     message: str
     path: Optional[str] = None
@@ -14,6 +17,7 @@ class ValidationIssue:
 
 @dataclass(frozen=True)
 class ExportResult:
+    """Result of an export operation (inline bytes or deferred job)."""
     status: str
     content_type: Optional[str] = None
     bytes_len: Optional[int] = None
@@ -23,6 +27,7 @@ class ExportResult:
 
 
 class FileAdapter(Protocol):
+    """Protocol every file artifact adapter must implement."""
     file_type: str
     export_formats: set[str]
 

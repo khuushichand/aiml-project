@@ -13,8 +13,10 @@
 ####################
 #
 # Import necessary libraries to run solo for testing
+import asyncio
 import gc
 import glob
+import inspect
 import json
 import multiprocessing
 import os
@@ -63,6 +65,7 @@ from tldw_Server_API.app.core.config import (
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
 
 
 #
@@ -2870,21 +2873,20 @@ class ConversionError(Exception):
     pass
 
 
-class TranscriptionCancelled(RuntimeError):
-    """Raised when transcription/conversion is cancelled."""
-    pass
-
-
 def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> None:
     if cancel_check is None:
         return
     try:
-        if cancel_check():
+        should_cancel = cancel_check()
+        if inspect.isawaitable(should_cancel):
+            should_cancel = asyncio.run(should_cancel)
+        if should_cancel:
             raise TranscriptionCancelled(f"Cancelled during {label}")
     except TranscriptionCancelled:
         raise
-    except Exception:
-        return
+    except Exception as exc:
+        logging.error(f"cancel_check failed during {label}: {exc}", exc_info=True)
+        raise
 
 _FFMPEG_VERSION_CHECKED: bool = False
 _FFMPEG_CMD_FOR_VERSION: Optional[str] = None

@@ -127,16 +127,10 @@ def test_export_data_table_csv(tmp_path, monkeypatch):
             table_uuid = table.get("uuid")
             resp = client.get(f"/api/v1/data-tables/{table_uuid}/export?format=csv&async_mode=sync")
             assert resp.status_code == 200, resp.text
-            payload = resp.json()
-            assert payload["file_id"]
-            export_info = payload["export"]
-            assert export_info["status"] == "ready"
-            assert export_info["url"]
-
-            download = client.get(export_info["url"])
-            assert download.status_code == 200, download.text
-            assert "Name,Score" in download.text
-            assert "Ada,95" in download.text
+            assert resp.headers.get("content-type", "").startswith("text/csv")
+            assert resp.headers.get("content-disposition")
+            assert "Name,Score" in resp.text
+            assert "Ada,95" in resp.text
     finally:
         app.dependency_overrides.clear()
         media_db.close_connection()

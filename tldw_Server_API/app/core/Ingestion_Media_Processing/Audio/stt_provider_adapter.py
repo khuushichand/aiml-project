@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Callable
 
 from tldw_Server_API.app.core.config import get_stt_config
+from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 
 try:
@@ -39,12 +40,9 @@ def _raise_if_cancelled(cancel_check: Optional[Callable[[], bool]]) -> None:
         return
     try:
         should_cancel = bool(cancel_check())
-    except Exception:
-        return
+    except Exception as exc:
+        raise RuntimeError(f"cancel_check failed: {exc}") from exc
     if should_cancel:
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-            TranscriptionCancelled,
-        )
         raise TranscriptionCancelled("Cancelled by user")
 
 

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import InputError, MediaDatabase
 from tldw_Server_API.app.core.DB_Management.scope_context import scoped_context
 
 
@@ -30,11 +30,13 @@ def test_data_tables_crud_lifecycle():
         {"name": "Score", "type": "number", "position": 1},
     ]
     assert db.insert_data_table_columns(table["id"], columns) == 2
+    listed_columns = db.list_data_table_columns(table["id"])
+    column_ids = [c["column_id"] for c in listed_columns]
 
     rows = [
-        {"row_index": 0, "row_json": {"Name": "Alice", "Score": 95}},
-        {"row_index": 1, "row_json": {"Name": "Bob", "Score": 87}},
-        {"row_index": 2, "row_json": {"Name": "Cara", "Score": 91}},
+        {"row_index": 0, "row_json": {column_ids[0]: "Alice", column_ids[1]: 95}},
+        {"row_index": 1, "row_json": {column_ids[0]: "Bob", column_ids[1]: 87}},
+        {"row_index": 2, "row_json": {column_ids[0]: "Cara", column_ids[1]: 91}},
     ]
     assert db.insert_data_table_rows(table["id"], rows) == 3
 
@@ -49,13 +51,12 @@ def test_data_tables_crud_lifecycle():
     ]
     assert db.insert_data_table_sources(table["id"], sources) == 1
 
-    listed_columns = db.list_data_table_columns(table["id"])
     assert [c["name"] for c in listed_columns] == ["Name", "Score"]
 
     listed_rows = db.list_data_table_rows(table["id"], limit=2, offset=1)
     assert len(listed_rows) == 2
     assert listed_rows[0]["row_index"] == 1
-    assert json.loads(listed_rows[0]["row_json"])["Name"] == "Bob"
+    assert json.loads(listed_rows[0]["row_json"])[column_ids[0]] == "Bob"
 
     listed_sources = db.list_data_table_sources(table["id"])
     assert listed_sources[0]["source_type"] == "rag_query"
@@ -106,3 +107,55 @@ def test_data_tables_owner_scope(tmp_path):
     with scoped_context(user_id=999, org_ids=[], team_ids=[], is_admin=True):
         admin_tables = db_owner2.list_data_tables()
         assert {t["uuid"] for t in admin_tables} >= {table1["uuid"], table2["uuid"]}
+
+
+@pytest.mark.unit
+def test_data_table_children_owner_scope(tmp_path):
+    db_path = tmp_path / "Media_DB_v2.db"
+    db_owner1 = MediaDatabase(db_path=str(db_path), client_id="1")
+    table = db_owner1.create_data_table(name="Owner1 Table", prompt="p1")
+    table_id = int(table["id"])
+
+    db_owner1.insert_data_table_columns(
+        table_id,
+        [{"name": "Name", "type": "text", "position": 0}],
+    )
+    column_id = db_owner1.list_data_table_columns(table_id)[0]["column_id"]
+    db_owner1.insert_data_table_rows(
+        table_id,
+        [{"row_index": 0, "row_json": {column_id: "Alice"}}],
+    )
+    db_owner1.insert_data_table_sources(
+        table_id,
+        [{"source_type": "rag_query", "source_id": "q1"}],
+    )
+
+    db_owner2 = MediaDatabase(db_path=str(db_path), client_id="2")
+    assert db_owner2.list_data_table_columns(table_id, owner_user_id=2) == []
+    assert db_owner2.list_data_table_rows(table_id, owner_user_id=2) == []
+    assert db_owner2.list_data_table_sources(table_id, owner_user_id=2) == []
+
+    assert db_owner2.update_data_table(table_id, status="ready", owner_user_id=2) is None
+    assert db_owner2.soft_delete_data_table(table_id, owner_user_id=2) is False
+    assert db_owner1.get_data_table(table_id, owner_user_id=1) is not None
+
+
+@pytest.mark.unit
+def test_data_table_row_json_key_validation():
+    db = MediaDatabase(db_path=":memory:", client_id="owner1")
+    table = db.create_data_table(name="Keyed Table", prompt="p")
+    table_id = int(table["id"])
+    db.insert_data_table_columns(
+        table_id,
+        [
+            {"name": "Name", "type": "text", "position": 0},
+            {"name": "Score", "type": "number", "position": 1},
+        ],
+    )
+    columns = db.list_data_table_columns(table_id)
+    column_ids = [col["column_id"] for col in columns]
+    with pytest.raises(InputError):
+        db.insert_data_table_rows(
+            table_id,
+            [{"row_index": 0, "row_json": {column_ids[0]: "Alice", "unknown": 1}}],
+        )

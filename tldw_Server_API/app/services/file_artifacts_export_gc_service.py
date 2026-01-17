@@ -20,7 +20,11 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import StoragePathValidationError
 
 
+MIN_INTERVAL_SECONDS = 60
+
+
 def _enumerate_user_ids() -> list[int]:
+    """Return sorted user IDs discovered from user DB storage paths."""
     try:
         base = DatabasePaths.get_user_db_base_dir()
     except Exception as exc:
@@ -86,14 +90,16 @@ async def _purge_expired_exports_for_user(user_id: int, now_iso: str) -> tuple[i
 
 
 async def start_file_artifacts_export_gc_scheduler() -> Optional[asyncio.Task]:
+    """Start the file export GC scheduler task or return None if disabled."""
     enabled = os.getenv("FILES_EXPORT_GC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return None
     try:
         interval = int(os.getenv("FILES_EXPORT_GC_INTERVAL_SEC", "3600"))
+        interval = max(interval, MIN_INTERVAL_SECONDS)
     except (TypeError, ValueError) as exc:
         logger.debug(f"files_export_gc: invalid FILES_EXPORT_GC_INTERVAL_SEC; using default: {exc}")
-        interval = 3600
+        interval = max(3600, MIN_INTERVAL_SECONDS)
 
     async def _runner():
         await asyncio.sleep(min(interval, 60))

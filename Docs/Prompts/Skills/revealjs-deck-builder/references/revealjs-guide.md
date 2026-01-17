@@ -51,7 +51,7 @@ Example:
 - Put custom styles in `assets/custom.css` and link it from `index.html`.
 
 ## Bundle Layout (ZIP)
-```
+```text
 presentation.zip
 ├── index.html
 ├── LICENSE.revealjs.txt
@@ -69,7 +69,7 @@ presentation.zip
 ```
 
 Optional plugin assets (if used):
-```
+```text
 assets/reveal/plugin/markdown/marked.js
 assets/reveal/plugin/markdown/markdown.js
 assets/reveal/plugin/highlight/highlight.js

@@ -26,10 +26,12 @@ import asyncio
 import hashlib
 import json
 import os
+import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from cachetools import LRUCache
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
@@ -53,6 +55,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
+from tldw_Server_API.app.core.Jobs.worker_utils import coerce_int as _coerce_int
+from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env as _jobs_manager
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 
 
@@ -86,6 +90,7 @@ _CHAT_BATCH_SIZE = int(os.getenv("DATA_TABLES_CHAT_BATCH_SIZE", "250") or "250")
 _CHAT_MAX_MESSAGES = int(os.getenv("DATA_TABLES_CHAT_MAX_MESSAGES", "1500") or "1500")
 _LLM_MAX_TOKENS = int(os.getenv("DATA_TABLES_LLM_MAX_TOKENS", "2000") or "2000")
 _LLM_TEMPERATURE = float(os.getenv("DATA_TABLES_LLM_TEMPERATURE", "0.2") or "0.2")
+_LLM_TIMEOUT_SECONDS = int(os.getenv("DATA_TABLES_LLM_TIMEOUT", "300") or "300")
 
 _PROMPT_TEMPLATE = """You are a data table generator.
 
@@ -124,6 +129,7 @@ Rules:
 
 
 class DataTablesJobError(RuntimeError):
+    """Error raised for data table job processing failures."""
     def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
         super().__init__(message)
         self.retryable = retryable
@@ -131,23 +137,32 @@ class DataTablesJobError(RuntimeError):
             self.backoff_seconds = backoff_seconds
 
 
-_MEDIA_DB_CACHE: Dict[str, MediaDatabase] = {}
-_CHACHA_DB_CACHE: Dict[str, CharactersRAGDB] = {}
+_MAX_DB_CACHE_SIZE = max(1, int(os.getenv("DATA_TABLES_DB_CACHE_SIZE", "32") or "32"))
+_MEDIA_DB_CACHE: LRUCache = LRUCache(maxsize=_MAX_DB_CACHE_SIZE)
+_CHACHA_DB_CACHE: LRUCache = LRUCache(maxsize=_MAX_DB_CACHE_SIZE)
+_MEDIA_DB_LOCK = threading.Lock()
+_CHACHA_DB_LOCK = threading.Lock()
 
 
-def _jobs_manager() -> JobManager:
-    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    if not db_url:
-        return JobManager()
-    backend = "postgres" if db_url.startswith("postgres") else None
-    return JobManager(backend=backend, db_url=db_url)
-
-
-def _coerce_int(value: Any, default: int) -> int:
+def _close_media_db(user_id: str, db: MediaDatabase) -> None:
     try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
+        db.close_connection()
+    except Exception as exc:
+        logger.warning("data_tables: failed to close media db for user_id {}: {}", user_id, exc)
+
+
+def _close_chacha_db(user_id: str, db: CharactersRAGDB) -> None:
+    try:
+        db.close_connection()
+    except Exception as exc:
+        logger.warning("data_tables: failed to close chacha db for user_id {}: {}", user_id, exc)
+
+
+def _evict_lru_entry(cache: LRUCache, on_evict: Callable[[str, Any], None]) -> None:
+    if len(cache) < cache.maxsize:
+        return
+    evicted_key, evicted_value = cache.popitem()
+    on_evict(evicted_key, evicted_value)
 
 
 def _coerce_float(value: Any, default: float) -> float:
@@ -615,6 +630,8 @@ def _build_prompt(
         sources="",
         max_rows=max_rows,
     )
+    if len(base) > _MAX_PROMPT_CHARS:
+        raise DataTablesJobError("prompt_too_long", retryable=False)
     allowed = max(0, _MAX_PROMPT_CHARS - len(base))
     sources_text = _truncate_text(sources_text, allowed)
     return _PROMPT_TEMPLATE.format(
@@ -626,22 +643,36 @@ def _build_prompt(
 
 
 def _get_media_db(user_id: str) -> MediaDatabase:
-    cached = _MEDIA_DB_CACHE.get(user_id)
-    if cached is not None:
-        return cached
+    with _MEDIA_DB_LOCK:
+        cached = _MEDIA_DB_CACHE.get(user_id)
+        if cached is not None:
+            return cached
     db_path = get_user_media_db_path(user_id)
     db = create_media_database(client_id=str(user_id), db_path=db_path)
-    _MEDIA_DB_CACHE[user_id] = db
+    with _MEDIA_DB_LOCK:
+        cached = _MEDIA_DB_CACHE.get(user_id)
+        if cached is not None:
+            _close_media_db(user_id, db)
+            return cached
+        _evict_lru_entry(_MEDIA_DB_CACHE, _close_media_db)
+        _MEDIA_DB_CACHE[user_id] = db
     return db
 
 
 def _get_chacha_db(user_id: str) -> CharactersRAGDB:
-    cached = _CHACHA_DB_CACHE.get(user_id)
-    if cached is not None:
-        return cached
+    with _CHACHA_DB_LOCK:
+        cached = _CHACHA_DB_CACHE.get(user_id)
+        if cached is not None:
+            return cached
     db_path = get_user_chacha_db_path(user_id)
     db = CharactersRAGDB(db_path=str(db_path), client_id=str(user_id))
-    _CHACHA_DB_CACHE[user_id] = db
+    with _CHACHA_DB_LOCK:
+        cached = _CHACHA_DB_CACHE.get(user_id)
+        if cached is not None:
+            _close_chacha_db(user_id, db)
+            return cached
+        _evict_lru_entry(_CHACHA_DB_CACHE, _close_chacha_db)
+        _CHACHA_DB_CACHE[user_id] = db
     return db
 
 
@@ -668,14 +699,16 @@ def _extract_media_text(db: MediaDatabase, media_id: int) -> str:
     if not text.strip():
         try:
             latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
-        except Exception:
+        except Exception as exc:
+            logger.debug("data_tables: get_document_version failed for media_id=%s: %s", media_id, exc)
             latest = None
         if latest and latest.get("content"):
             text = str(latest.get("content") or "")
         else:
             try:
                 fallback = get_latest_transcription(db, media_id)
-            except Exception:
+            except Exception as exc:
+                logger.debug("data_tables: get_latest_transcription failed for media_id=%s: %s", media_id, exc)
                 fallback = None
             if fallback:
                 text = fallback
@@ -768,6 +801,7 @@ def _is_job_cancelled(jm: JobManager, job_id: int) -> bool:
 
 
 async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle a single data tables job and persist the generated table."""
     payload = _normalize_payload(job.get("payload"))
     user_id = _normalize_user_id(job, payload)
     table_id = _coerce_int(payload.get("table_id"), 0)
@@ -789,7 +823,7 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
         db = _get_media_db(user_id)
         chacha_db = _get_chacha_db(user_id)
-        table_row = db.get_data_table(table_id, include_deleted=True)
+        table_row = db.get_data_table(table_id, include_deleted=True, owner_user_id=user_id)
         if not table_row or int(table_row.get("deleted") or 0):
             raise DataTablesJobError("data_table_not_found", retryable=False)
 
@@ -812,7 +846,7 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(sources, list):
             sources = []
         if not sources:
-            stored = db.list_data_table_sources(table_id)
+            stored = db.list_data_table_sources(table_id, owner_user_id=user_id)
             sources = [
                 {
                     "source_type": row.get("source_type"),
@@ -832,11 +866,12 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
             last_error=None,
             generation_model=model or table_row.get("generation_model"),
             prompt=prompt,
+            owner_user_id=user_id,
         )
         jm.update_job_progress(job_id, progress_percent=5.0, progress_message="resolve_sources")
 
         if _is_job_cancelled(jm, job_id):
-            db.update_data_table(table_id, status="cancelled", last_error=None)
+            db.update_data_table(table_id, status="cancelled", last_error=None, owner_user_id=user_id)
             return {"cancelled": True, "table_id": table_id}
 
         resolved_sources: List[Dict[str, Any]] = []
@@ -914,13 +949,9 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
 
-        if sources_db_payload:
-            db.soft_delete_data_table_sources(table_id)
-            db.insert_data_table_sources(table_id, sources_db_payload)
-
         jm.update_job_progress(job_id, progress_percent=30.0, progress_message="build_prompt")
         if _is_job_cancelled(jm, job_id):
-            db.update_data_table(table_id, status="cancelled", last_error=None)
+            db.update_data_table(table_id, status="cancelled", last_error=None, owner_user_id=user_id)
             return {"cancelled": True, "table_id": table_id}
 
         llm_prompt = _build_prompt(
@@ -932,7 +963,7 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
         jm.update_job_progress(job_id, progress_percent=55.0, progress_message="llm_generate")
         if _is_job_cancelled(jm, job_id):
-            db.update_data_table(table_id, status="cancelled", last_error=None)
+            db.update_data_table(table_id, status="cancelled", last_error=None, owner_user_id=user_id)
             return {"cancelled": True, "table_id": table_id}
 
         provider = (DEFAULT_LLM_PROVIDER or "openai").strip().lower()
@@ -962,7 +993,22 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
             )
 
         start = time.time()
-        raw_response = await asyncio.get_running_loop().run_in_executor(None, _call_llm)
+        loop = asyncio.get_running_loop()
+        llm_future = loop.run_in_executor(None, _call_llm)
+        timeout = _LLM_TIMEOUT_SECONDS if _LLM_TIMEOUT_SECONDS > 0 else None
+        try:
+            if timeout is None:
+                raw_response = await llm_future
+            else:
+                raw_response = await asyncio.wait_for(llm_future, timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            llm_future.cancel()
+            try:
+                await llm_future
+            except Exception:
+                pass
+            jm.update_job_progress(job_id, progress_percent=55.0, progress_message="llm_timeout")
+            raise DataTablesJobError("llm_timeout", retryable=True) from exc
         logger.info("data_tables worker: LLM call completed in %.1fms", (time.time() - start) * 1000.0)
 
         content_text = extract_response_content(raw_response)
@@ -975,7 +1021,7 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
         jm.update_job_progress(job_id, progress_percent=75.0, progress_message="validate")
         if _is_job_cancelled(jm, job_id):
-            db.update_data_table(table_id, status="cancelled", last_error=None)
+            db.update_data_table(table_id, status="cancelled", last_error=None, owner_user_id=user_id)
             return {"cancelled": True, "table_id": table_id}
 
         columns = _normalize_columns(raw_columns, column_hints=column_hints)
@@ -1014,20 +1060,20 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
         jm.update_job_progress(job_id, progress_percent=90.0, progress_message="persist")
         if _is_job_cancelled(jm, job_id):
-            db.update_data_table(table_id, status="cancelled", last_error=None)
+            db.update_data_table(table_id, status="cancelled", last_error=None, owner_user_id=user_id)
             return {"cancelled": True, "table_id": table_id}
 
-        db.soft_delete_data_table_columns(table_id)
-        db.soft_delete_data_table_rows(table_id)
-        db.insert_data_table_columns(table_id, column_records)
-        db.insert_data_table_rows(table_id, row_records)
-        db.update_data_table(
-            table_id,
-            status="ready",
-            row_count=len(row_records),
-            generation_model=model or table_row.get("generation_model"),
-            last_error=None,
-        )
+        with db.transaction():
+            db.persist_data_table_generation(
+                table_id,
+                columns=column_records,
+                rows=row_records,
+                sources=sources_db_payload if sources_db_payload else None,
+                status="ready",
+                row_count=len(row_records),
+                generation_model=model or table_row.get("generation_model"),
+                last_error=None,
+            )
 
         jm.update_job_progress(job_id, progress_percent=100.0, progress_message="finalize")
         return {
@@ -1039,20 +1085,21 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
     except DataTablesJobError as exc:
         if db is not None and table_id > 0:
             try:
-                db.update_data_table(table_id, status="failed", last_error=str(exc))
+                db.update_data_table(table_id, status="failed", last_error=str(exc), owner_user_id=user_id)
             except Exception:
                 pass
         raise
     except Exception as exc:
         if db is not None and table_id > 0:
             try:
-                db.update_data_table(table_id, status="failed", last_error=str(exc))
+                db.update_data_table(table_id, status="failed", last_error=str(exc), owner_user_id=user_id)
             except Exception:
                 pass
         raise DataTablesJobError(str(exc), retryable=False) from exc
 
 
 async def run_data_tables_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+    """Run the data tables jobs worker loop until stopped."""
     worker_id = (os.getenv("DATA_TABLES_JOBS_WORKER_ID") or f"data-tables-jobs-{os.getpid()}").strip()
     queue = (os.getenv("DATA_TABLES_JOBS_QUEUE") or "default").strip() or "default"
     cfg = WorkerConfig(

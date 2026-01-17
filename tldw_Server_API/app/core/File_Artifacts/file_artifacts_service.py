@@ -5,10 +5,10 @@ import base64
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from http import HTTPStatus
 from typing import Any, Dict, Tuple
 
 import aiofiles
-from fastapi import HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
@@ -22,11 +22,12 @@ from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.File_Artifacts.adapter_registry import get_registry
-from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, ValidationIssue
+from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, FileAdapter, ValidationIssue
 from tldw_Server_API.app.core.File_Artifacts.metrics import register_file_artifacts_metrics
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.config import get_config_value
+from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
 
 
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
@@ -58,34 +59,47 @@ def _jobs_manager() -> JobManager:
 class FileArtifactsService:
     def __init__(self, cdb: CollectionsDatabase, *, user_id: int | str) -> None:
         self._cdb = cdb
-        self._user_id = str(user_id)
+        try:
+            uid_int = int(user_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid user_id: must be integer or numeric string") from exc
+        self._user_id_int = uid_int
+        self._user_id = str(uid_int)
         self._registry = get_registry()
         register_file_artifacts_metrics()
+
+    def get_adapter(self, file_type: str) -> FileAdapter | None:
+        """Return the adapter for the requested file type, if available."""
+        return self._registry.get_adapter(file_type)
 
     async def create_artifact(
         self,
         request: FileCreateRequest,
         *,
-        background_tasks=None,
         request_id: str | None = None,
     ) -> Tuple[FileArtifact, int]:
-        adapter = self._registry.get_adapter(request.file_type)
+        """Create a file artifact and optionally enqueue an export."""
+        adapter = self.get_adapter(request.file_type)
         if adapter is None:
             self._emit_metric("create", "failure", file_type=request.file_type, reason="unsupported_file_type")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported_file_type")
+            raise FileArtifactsError("unsupported_file_type")
 
         options = request.options
         if options.persist is not True:
             self._log_validation_failure(request_id, request.file_type, "persist_required")
             self._emit_metric("create", "failure", file_type=request.file_type, reason="validation")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="persist_required")
+            raise FileArtifactsError("persist_required")
 
         try:
             structured = adapter.normalize(request.payload)
+        except FileArtifactsValidationError as exc:
+            self._log_validation_failure(request_id, request.file_type, exc.code)
+            self._emit_metric("create", "failure", file_type=request.file_type, reason="validation")
+            raise
         except ValueError as exc:
             self._log_validation_failure(request_id, request.file_type, str(exc))
             self._emit_metric("create", "failure", file_type=request.file_type, reason="validation")
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            raise FileArtifactsValidationError(str(exc)) from exc
 
         issues = adapter.validate(structured)
         errors, warnings = self._split_issues(issues)
@@ -96,15 +110,15 @@ class FileArtifactsService:
                 {"errors": [issue.code for issue in errors]},
             )
             self._emit_metric("create", "failure", file_type=request.file_type, reason="validation")
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            raise FileArtifactsValidationError(
+                "validation_errors",
                 detail={"errors": [self._issue_to_payload(issue) for issue in errors]},
             )
 
         try:
             self._enforce_limits(request.file_type, structured, options)
-        except HTTPException as exc:
-            self._log_validation_failure(request_id, request.file_type, exc.detail)
+        except FileArtifactsValidationError as exc:
+            self._log_validation_failure(request_id, request.file_type, exc.code)
             self._emit_metric("create", "failure", file_type=request.file_type, reason="validation")
             raise
 
@@ -126,7 +140,7 @@ class FileArtifactsService:
         )
 
         export_info = FileExportInfo(status="none")
-        status_code = status.HTTP_200_OK
+        status_code = HTTPStatus.OK
 
         if request.export is not None:
             try:
@@ -136,11 +150,10 @@ class FileArtifactsService:
                     file_id=row.id,
                     export_req=request.export,
                     options=options,
-                    background_tasks=background_tasks,
                     request_id=request_id,
                 )
-            except HTTPException as exc:
-                self._log_export_failure(request_id, request.file_type, request.export.format, exc.detail)
+            except FileArtifactsError as exc:
+                self._log_export_failure(request_id, request.file_type, request.export.format, exc.detail or exc.code)
                 self._emit_metric("create", "failure", file_type=request.file_type, reason="export")
                 self._emit_metric(
                     "export",
@@ -166,6 +179,7 @@ class FileArtifactsService:
         return artifact, status_code
 
     def get_artifact(self, file_id: int) -> FileArtifact:
+        """Fetch a file artifact by id."""
         row = self._cdb.get_file_artifact(file_id)
         return self._build_artifact_from_row(row)
 
@@ -177,15 +191,14 @@ class FileArtifactsService:
         file_id: int,
         export_req: FileExportRequest,
         options: FileCreateOptions,
-        background_tasks=None,
         request_id: str | None = None,
     ) -> Tuple[FileExportInfo, int]:
         if export_req.format not in adapter.export_formats:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="unsupported_export_format")
+            raise FileArtifactsValidationError("unsupported_export_format")
 
         async_mode = export_req.async_mode
         if async_mode not in {"auto", "sync", "async"}:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid_async_mode")
+            raise FileArtifactsValidationError("invalid_async_mode")
 
         if async_mode == "async" or (
             async_mode == "auto"
@@ -223,8 +236,6 @@ class FileArtifactsService:
                     export_expires_at=None,
                     export_consumed_at=None,
                 )
-            except HTTPException:
-                raise
             except Exception as exc:
                 logger.error(
                     "file_artifacts: failed to enqueue export job file_id=%s request_id=%s error=%s",
@@ -232,18 +243,15 @@ class FileArtifactsService:
                     request_id or "",
                     exc,
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="export_job_enqueue_failed",
-                ) from exc
+                raise FileArtifactsError("export_job_enqueue_failed") from exc
             export_info = FileExportInfo(status="pending", format=export_req.format, job_id=job_id or None)
             self._emit_metric("export", "enqueued", file_type=adapter.file_type, export_format=export_req.format)
-            return export_info, status.HTTP_202_ACCEPTED
+            return export_info, HTTPStatus.ACCEPTED
 
         export_result = await self._export_sync(adapter, structured, export_req.format)
         export_info = await self._finalize_export(file_id, export_req, export_result, options)
         self._emit_metric("export", "success", file_type=adapter.file_type, export_format=export_req.format)
-        return export_info, status.HTTP_200_OK
+        return export_info, HTTPStatus.OK
 
     async def _export_sync(self, adapter, structured: Dict[str, Any], export_format: str) -> ExportResult:
         if export_format == "xlsx":
@@ -258,21 +266,22 @@ class FileArtifactsService:
         options: FileCreateOptions,
     ) -> FileExportInfo:
         if export_result.status != "ready" or not export_result.content:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="export_failed")
+            raise FileArtifactsError("export_failed")
 
         byte_count = len(export_result.content)
         max_bytes = options.max_bytes or DEFAULT_MAX_BYTES
         if byte_count > max_bytes:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="export_size_exceeded")
+            raise FileArtifactsValidationError("export_size_exceeded")
 
         content_type = export_result.content_type or EXPORT_MIME_TYPES.get(export_req.format)
         content_b64 = None
         inline_max_bytes = self._resolve_inline_max_bytes()
-        if export_req.mode == "inline" and inline_max_bytes > 0 and byte_count <= inline_max_bytes:
+        inline_ready = export_req.mode == "inline" and inline_max_bytes > 0 and byte_count <= inline_max_bytes
+        if inline_ready:
             content_b64 = base64.b64encode(export_result.content).decode("ascii")
         url = None
         expires_at = None
-        if export_req.mode == "url" or content_b64 is None:
+        if export_req.mode == "url" or not inline_ready:
             storage_path, _ = await self._write_export_file(file_id, export_req.format, export_result.content)
             ttl_seconds = self._resolve_export_ttl_seconds(options)
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
@@ -289,19 +298,20 @@ class FileArtifactsService:
             )
             url = self._build_export_url(file_id, export_req.format)
         else:
+            consumed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
             self._cdb.update_file_artifact_export(
                 file_id,
-                export_status="ready",
+                export_status="none",
                 export_format=export_req.format,
                 export_storage_path=None,
                 export_bytes=byte_count,
                 export_content_type=content_type,
                 export_job_id=export_result.job_id,
                 export_expires_at=None,
-                export_consumed_at=None,
+                export_consumed_at=consumed_at,
             )
         return FileExportInfo(
-            status="ready",
+            status="ready" if export_req.mode == "url" or not inline_ready else "none",
             format=export_req.format,
             url=url,
             content_type=content_type,
@@ -314,7 +324,7 @@ class FileArtifactsService:
     async def _write_export_file(self, file_id: int, export_format: str, content: bytes) -> Tuple[str, int]:
         filename = f"file_{file_id}.{export_format}"
         storage_path = self._cdb.resolve_temp_output_storage_path(filename)
-        outputs_dir = DatabasePaths.get_user_temp_outputs_dir(int(self._user_id))
+        outputs_dir = DatabasePaths.get_user_temp_outputs_dir(self._user_id_int)
         file_path = outputs_dir / storage_path
         async with aiofiles.open(file_path, "wb") as handle:
             await handle.write(content)
@@ -489,9 +499,9 @@ class FileArtifactsService:
         max_cells = options.max_cells or DEFAULT_MAX_CELLS
         rows, cells = self._extract_table_shape(file_type, structured)
         if rows > max_rows:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="row_limit_exceeded")
+            raise FileArtifactsValidationError("row_limit_exceeded")
         if cells > max_cells:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="cell_limit_exceeded")
+            raise FileArtifactsValidationError("cell_limit_exceeded")
 
     def _should_export_async(
         self,
