@@ -198,6 +198,25 @@ class TokenResponse(BaseModel):
     }
 
 
+class MFAChallengeResponse(BaseModel):
+    """MFA challenge response for login flows."""
+    session_token: str = Field(..., description="Temporary session token for MFA completion")
+    mfa_required: bool = Field(default=True, description="Whether MFA completion is required")
+    expires_in: int = Field(..., description="MFA session expiration in seconds")
+    message: Optional[str] = Field(default=None, description="Optional MFA instructions")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "session_token": "mfa-session-token",
+                "mfa_required": True,
+                "expires_in": 600,
+                "message": "MFA required. Submit your TOTP or backup code.",
+            }
+        }
+    }
+
+
 class UserResponse(BaseModel):
     """User information response"""
     id: int = Field(..., description="User ID")
@@ -216,6 +235,40 @@ class UserResponse(BaseModel):
         "from_attributes": True,
         "json_schema_extra": {
             "example": {
+                "id": 1,
+                "uuid": "123e4567-e89b-12d3-a456-426614174000",
+                "username": "johndoe",
+                "email": "john@example.com",
+                "role": "user",
+                "is_active": True,
+                "is_verified": True,
+                "created_at": "2025-01-14T10:00:00",
+                "last_login": "2025-01-14T12:00:00",
+                "storage_quota_mb": 5120,
+                "storage_used_mb": 1024.5
+            }
+        }
+    }
+
+
+class DeprecatedUserResponse(UserResponse):
+    """User response with deprecation metadata."""
+
+    warning: Optional[str] = Field(
+        None,
+        description="Deprecation warning identifier",
+    )
+    successor: Optional[str] = Field(
+        None,
+        description="Successor endpoint to migrate to",
+    )
+
+    model_config = {
+        "from_attributes": True,
+        "json_schema_extra": {
+            "example": {
+                "warning": "deprecated_endpoint",
+                "successor": "/api/v1/users/me/profile",
                 "id": 1,
                 "uuid": "123e4567-e89b-12d3-a456-426614174000",
                 "username": "johndoe",

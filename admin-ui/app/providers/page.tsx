@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -207,7 +207,7 @@ export default function ProvidersPage() {
       }
 
       if (usersData.status === 'fulfilled') {
-        const users = Array.isArray(usersData.value) ? usersData.value : usersData.value?.users || [];
+        const users = Array.isArray(usersData.value) ? usersData.value : [];
         setByokState((prev) => ({ ...prev, users }));
       }
 
@@ -566,7 +566,7 @@ export default function ProvidersPage() {
   const canSubmitByok = byokValidationError === '';
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8 flex items-center justify-between">
@@ -1206,6 +1206,6 @@ export default function ProvidersPage() {
           </DialogContent>
         </Dialog>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

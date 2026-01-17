@@ -9,7 +9,9 @@ import pytest
 
 
 def test_embeddings_orchestrator_events_unified_sse(redis_client, monkeypatch):
-    # Enable unified streams
+
+
+     # Enable unified streams
     os.environ["STREAMS_UNIFIED"] = "1"
     os.environ["STREAM_HEARTBEAT_MODE"] = "data"
     try:
@@ -31,7 +33,7 @@ def test_embeddings_orchestrator_events_unified_sse(redis_client, monkeypatch):
         admin = User(id=1, username="admin", email="a@x", is_active=True, is_admin=True)
 
         async def _collect_until_data():
-            resp = await orchestrator_events(current_user=admin)
+            resp = await orchestrator_events(_current_user=admin)
             agen = resp.body_iterator
             acc = []
             saw_event = False

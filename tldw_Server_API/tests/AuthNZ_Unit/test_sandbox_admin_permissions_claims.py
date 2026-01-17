@@ -39,12 +39,15 @@ class _FakeStore:
         return []
 
     def count_idempotency(self, **_kwargs) -> int:
+
         return 0
 
     def list_usage(self, **_kwargs):
+
         return []
 
     def count_usage(self, **_kwargs) -> int:
+
         return 0
 
 
@@ -53,9 +56,11 @@ class _FakeOrch:
         self._store = _FakeStore()
 
     def list_runs(self, **_kwargs):
+
         return []
 
     def count_runs(self, **_kwargs) -> int:
+
         return 0
 
     def get_run_owner(self, run_id: str) -> str | None:

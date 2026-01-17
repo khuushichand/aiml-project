@@ -5,6 +5,9 @@ import importlib
 from fastapi.testclient import TestClient
 import pytest
 
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+
 # Reuse Postgres AuthNZ fixtures (isolated_test_environment) as a plugin.
 #
 # Why register explicitly here?
@@ -60,6 +63,21 @@ def test_tools_execute_forbidden_without_permission_multi_user(backend: str, req
 
         app.dependency_overrides[get_request_user] = _override_user
 
+        async def _override_principal() -> AuthPrincipal:
+            return AuthPrincipal(
+                kind="user",
+                user_id=123,
+                subject="user:123",
+                token_type="jwt",
+                roles=[],
+                permissions=[],
+                is_admin=False,
+                org_ids=[],
+                team_ids=[],
+            )
+
+        app.dependency_overrides[auth_deps.get_auth_principal] = _override_principal
+
         try:
             with TestClient(app) as client:
                 resp = client.post(
@@ -71,6 +89,7 @@ def test_tools_execute_forbidden_without_permission_multi_user(backend: str, req
                 assert "Permission" in (body.get("detail") or "") or body.get("detail") == "Forbidden"
         finally:
             app.dependency_overrides.pop(get_request_user, None)
+            app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
     else:  # backend == "postgres"
         # Make sure the tools route is enabled before the fixture constructs the app
@@ -86,6 +105,21 @@ def test_tools_execute_forbidden_without_permission_multi_user(backend: str, req
 
         client.app.dependency_overrides[get_request_user] = _override_user_pg  # type: ignore[attr-defined]
 
+        async def _override_principal_pg() -> AuthPrincipal:
+            return AuthPrincipal(
+                kind="user",
+                user_id=456,
+                subject="user:456",
+                token_type="jwt",
+                roles=[],
+                permissions=[],
+                is_admin=False,
+                org_ids=[],
+                team_ids=[],
+            )
+
+        client.app.dependency_overrides[auth_deps.get_auth_principal] = _override_principal_pg
+
         try:
             resp = client.post(
                 "/api/v1/tools/execute",
@@ -96,3 +130,4 @@ def test_tools_execute_forbidden_without_permission_multi_user(backend: str, req
             assert "Permission" in (body.get("detail") or "") or body.get("detail") == "Forbidden"
         finally:
             client.app.dependency_overrides.pop(get_request_user, None)  # type: ignore[attr-defined]
+            client.app.dependency_overrides.pop(auth_deps.get_auth_principal, None)  # type: ignore[attr-defined]

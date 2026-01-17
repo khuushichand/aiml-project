@@ -18,8 +18,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 from loguru import logger
-from requests import exceptions as requests_exceptions
-
 from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.core.Setup.install_schema import DEFAULT_WHISPER_MODELS, InstallPlan
 from tldw_Server_API.app.core.config import load_and_log_configs
@@ -378,14 +376,29 @@ def _record_latest_status(data: Dict[str, Any]) -> None:
 def _is_httpx_network_error(exc: Exception) -> bool:
     """Return True if the exception is an httpx HTTP/network error.
 
-    We import httpx lazily to avoid hard dependency at module import time
-    (the package is typically installed via huggingface_hub).
+    Uses module/name checks to avoid a hard dependency at module import time.
     """
-    try:
-        import httpx  # type: ignore
-    except Exception:  # noqa: BLE001
+    module = getattr(exc.__class__, "__module__", "") or ""
+    if not module.startswith("httpx"):
         return False
-    return isinstance(exc, httpx.HTTPError)
+    name = exc.__class__.__name__
+    return name.endswith("Error") or name.endswith("Exception")
+
+
+def _is_requests_network_error(exc: Exception) -> bool:
+    """Return True if the exception looks like a requests/huggingface network error."""
+    name = type(exc).__name__
+    module = getattr(exc, "__module__", "") or ""
+    if module.startswith("requests."):
+        return True
+    if name in {"RequestException", "HTTPError", "ConnectionError", "Timeout"} or name.endswith("RequestException"):
+        return True
+    if "HTTPError" in name:
+        return True
+    msg = str(exc).lower()
+    if "timeout" in msg or "connection" in msg or "dns" in msg or "network" in msg:
+        return True
+    return False
 
 
 def get_install_status_snapshot() -> Optional[Dict[str, Any]]:
@@ -727,10 +740,8 @@ def _download_hf_file(repo_id: str, filename: str, destination: Path) -> None:
             force_download=force,
         )
         shutil.copy2(src_fp, destination)
-    except requests_exceptions.RequestException as exc:  # noqa: PERF203
-        raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{filename}.') from exc
     except Exception as exc:  # noqa: BLE001
-        if _is_httpx_network_error(exc):
+        if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
             raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{filename}.') from exc
         raise
 
@@ -770,10 +781,8 @@ def _download_hf_dir(repo_id: str, subdir: str, destination: Path) -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
             # Copy directory tree while tempdir is alive
             shutil.copytree(src, destination, dirs_exist_ok=True)
-    except requests_exceptions.RequestException as exc:  # noqa: PERF203
-        raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{subdir}.') from exc
     except Exception as exc:  # noqa: BLE001
-        if _is_httpx_network_error(exc):
+        if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
             raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{subdir}.') from exc
         raise
 
@@ -795,10 +804,8 @@ def _snapshot_repo(repo_id: str) -> None:
     try:
         # Prefetch into cache; no local_dir required and no symlink flag
         snapshot_download(repo_id=repo_id, force_download=_force_downloads())
-    except requests_exceptions.RequestException as exc:  # noqa: PERF203
-        raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
     except Exception as exc:  # noqa: BLE001
-        if _is_httpx_network_error(exc):
+        if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
             raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
         raise
 

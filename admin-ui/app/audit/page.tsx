@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -212,7 +212,7 @@ function AuditPageContent() {
   };
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8 flex items-center justify-between">
@@ -494,7 +494,7 @@ function AuditPageContent() {
             </Card>
           </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }
 
@@ -502,7 +502,7 @@ function AuditPageContent() {
 export default function AuditPage() {
   return (
     <Suspense fallback={
-      <ProtectedRoute>
+      <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8">
@@ -512,7 +512,7 @@ export default function AuditPage() {
             <TableSkeleton rows={5} columns={5} />
           </div>
         </ResponsiveLayout>
-      </ProtectedRoute>
+      </PermissionGuard>
     }>
       <AuditPageContent />
     </Suspense>

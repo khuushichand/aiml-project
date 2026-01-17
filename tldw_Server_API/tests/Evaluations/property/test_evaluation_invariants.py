@@ -318,6 +318,7 @@ class TestConcurrencyInvariants:
         errors = []
 
         def perform_operation(op_type, data):
+
             try:
                 async def _run():
                     if op_type == 'store':
@@ -356,6 +357,7 @@ class EvaluationManagerStateMachine(RuleBasedStateMachine):
     evaluations = Bundle("evaluations")
 
     def __init__(self):
+
         super().__init__()
         self._tmpdir = tempfile.TemporaryDirectory()
         self._db_path = Path(self._tmpdir.name) / "state_machine_evals.db"
@@ -365,6 +367,7 @@ class EvaluationManagerStateMachine(RuleBasedStateMachine):
         original_get_db_path = EvaluationManager._get_db_path
 
         def _patched_get_db_path(instance, explicit_path=None, **_ignored):
+
             if explicit_path is not None:
                 try:
                     return Path(explicit_path)
@@ -379,6 +382,7 @@ class EvaluationManagerStateMachine(RuleBasedStateMachine):
             EvaluationManager._get_db_path = original_get_db_path
 
     def teardown(self):
+
         self.manager = None
         self._tmpdir.cleanup()
 
@@ -493,6 +497,7 @@ class TestEmbeddingSimilarityInvariants:
         embeddings = [cache.get_embedding_response(t) for t in texts]
 
         def cosine_distance(a, b):
+
             dot_product = sum(x * y for x, y in zip(a, b))
             norm_a = sum(x ** 2 for x in a) ** 0.5
             norm_b = sum(x ** 2 for x in b) ** 0.5

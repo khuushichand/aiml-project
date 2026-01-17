@@ -972,7 +972,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
             if child.tail:
                 tail_text = child.tail.strip()
                 if tail_text:
-                    results.append((f"{current_path}[tail]", tail_text, element))
+                    results.append((f"{current_path}/{child.tag}[tail]", tail_text, child))
 
         return results
 
@@ -992,7 +992,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
             if child.tail:
                 tail_text = child.tail
                 if tail_text and tail_text.strip():
-                    results.append((f"{current_path}[tail]", tail_text, element))
+                    results.append((f"{current_path}/{child.tag}[tail]", tail_text, child))
 
         return results
 
@@ -1093,16 +1093,16 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
         new_root = ET.Element(root_tag, root_attrib)
 
         # Track added elements and path-to-element mapping
-        added_elements = set()
+        orig_to_new: Dict[ET.Element, ET.Element] = {}
         path_to_element: Dict[str, ET.Element] = {root_tag: new_root}
 
         for path, content, elem in elements:
-            if elem in added_elements:
-                continue
+            is_tail = path.endswith("[tail]")
+            base_path = path[:-6] if is_tail else path
 
             # Parse path to reconstruct hierarchy
             # Path format: "root/parent/child" or "root/parent[0]/child[1]"
-            path_parts = path.split('/')
+            path_parts = base_path.split('/')
 
             # Build parent path and ensure all ancestors exist
             current_parent = new_root
@@ -1120,10 +1120,17 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
 
                 current_parent = path_to_element[current_path]
 
-            # Add the actual element as child of its parent
-            new_elem = ET.SubElement(current_parent, elem.tag, elem.attrib)
-            new_elem.text = content
-            added_elements.add(elem)
-            path_to_element[path] = new_elem
+            new_elem = orig_to_new.get(elem)
+            if new_elem is None:
+                # Add the actual element as child of its parent
+                new_elem = ET.SubElement(current_parent, elem.tag, elem.attrib)
+                orig_to_new[elem] = new_elem
+                path_to_element[base_path] = new_elem
+
+            if is_tail:
+                if content:
+                    new_elem.tail = (new_elem.tail or "") + content
+            else:
+                new_elem.text = content
 
         return ET.tostring(new_root, encoding='unicode')

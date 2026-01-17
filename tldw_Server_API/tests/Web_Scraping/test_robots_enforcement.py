@@ -4,6 +4,7 @@ from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import is_allow
 class _Resp:
     def __init__(self, status: int, text: str, url: str):
         self.data = {"status": status, "text": text, "url": url, "headers": {}}
+
     def __getitem__(self, k):
         return self.data[k]
 

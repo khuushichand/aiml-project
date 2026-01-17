@@ -14,6 +14,9 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
@@ -26,7 +29,7 @@ http_client_factory = _hc_create_client
 # Reuse the existing, stable implementation to ensure behavior parity during migration
 # Do not import legacy handler at module import time to keep tests patchable.
 # Resolve the function from the module at call time so monkeypatching
-# tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_openai works.
+# tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_openai works.
 
 
 class OpenAIAdapter(ChatProvider):
@@ -36,9 +39,45 @@ class OpenAIAdapter(ChatProvider):
         return {
             "supports_streaming": True,
             "supports_tools": True,
-            "default_timeout_seconds": 60,
+            "default_timeout_seconds": 90,
             "max_output_tokens_default": 4096,
         }
+
+    def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        cfg = (request or {}).get("app_config") or {}
+        oa = cfg.get("openai_api") or {}
+        numeric_casts = {
+            "temperature": float,
+            "top_p": float,
+            "max_tokens": int,
+            "max_completion_tokens": int,
+            "n": int,
+            "seed": int,
+            "presence_penalty": float,
+            "frequency_penalty": float,
+        }
+        for key in (
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "max_completion_tokens",
+            "n",
+            "seed",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "response_format",
+            "stop",
+        ):
+            if request.get(key) is None and oa.get(key) is not None:
+                value = oa.get(key)
+                caster = numeric_casts.get(key)
+                if caster is not None:
+                    value = _safe_cast(value, caster, None)
+                    if value is None:
+                        continue
+                request[key] = value
+        return request
 
     def _to_handler_args(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Translate OpenAI-like request dict to chat_with_openai kwargs."""
@@ -148,11 +187,19 @@ class OpenAIAdapter(ChatProvider):
             payload["logprobs"] = request.get("logprobs")
         if request.get("top_logprobs") is not None and request.get("logprobs"):
             payload["top_logprobs"] = request.get("top_logprobs")
+        # gpt-5 models use max_completion_tokens and reject top_p
+        model = payload.get("model")
+        if isinstance(model, str) and model.lower().startswith("gpt-5"):
+            if "max_tokens" in payload and "max_completion_tokens" not in payload:
+                payload["max_completion_tokens"] = payload.pop("max_tokens")
+            else:
+                payload.pop("max_tokens", None)
+            payload.pop("top_p", None)
         return payload
 
     def _openai_base_url(self) -> str:
         import os
-        # Match legacy resolution precedence used by LLM_API_Calls._resolve_openai_api_base
+        # Match legacy resolution precedence used by chat_calls._resolve_openai_api_base
         env_api_base = (
             os.getenv("OPENAI_API_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
@@ -163,6 +210,9 @@ class OpenAIAdapter(ChatProvider):
 
     def _resolve_base_url(self, request: Dict[str, Any]) -> str:
         """Resolve API base URL: app_config.openai_api.api_base_url -> env -> default."""
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
         try:
             cfg = (request or {}).get("app_config") or {}
             oa = cfg.get("openai_api") or {}
@@ -196,12 +246,15 @@ class OpenAIAdapter(ChatProvider):
         return headers
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
+        request = self._apply_config_defaults(request)
         if self._use_native_http():
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)
             payload["stream"] = False
             url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
-            headers = self._openai_headers(api_key)
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(self._openai_headers(api_key), request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
@@ -215,12 +268,15 @@ class OpenAIAdapter(ChatProvider):
         raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
+        request = self._apply_config_defaults(request)
         if self._use_native_http():
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)
             payload["stream"] = True
             url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
-            headers = self._openai_headers(api_key)
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(self._openai_headers(api_key), request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
@@ -290,11 +346,13 @@ class OpenAIAdapter(ChatProvider):
             stop_event.set()
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ( ))):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+            log_http_400_body,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -303,12 +361,13 @@ class OpenAIAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             detail = None
             if isinstance(body, dict) and isinstance(body.get("error"), dict):
                 eobj = body["error"]
@@ -317,10 +376,7 @@ class OpenAIAdapter(ChatProvider):
                 code = eobj.get("code")
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):

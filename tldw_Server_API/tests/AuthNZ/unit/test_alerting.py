@@ -48,6 +48,7 @@ class TestDispatcherInitialization:
     """Tests for SecurityAlertDispatcher initialization."""
 
     def test_dispatcher_disabled_by_default(self):
+
         """Dispatcher should respect SECURITY_ALERTS_ENABLED setting."""
         settings = MagicMock()
         settings.SECURITY_ALERTS_ENABLED = False
@@ -73,12 +74,14 @@ class TestDispatcherInitialization:
         assert dispatcher.enabled is False
 
     def test_severity_threshold_configuration(self, mock_settings):
+
         """Severity thresholds should be configurable."""
         mock_settings.SECURITY_ALERT_MIN_SEVERITY = "critical"
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
         assert dispatcher.min_severity == "critical"
 
     def test_backoff_configuration(self, mock_settings):
+
         """Backoff seconds should be configurable."""
         mock_settings.SECURITY_ALERT_BACKOFF_SECONDS = 60
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
@@ -89,6 +92,7 @@ class TestSeverityFiltering:
     """Tests for severity-based alert filtering."""
 
     def test_low_severity_filtered_when_threshold_high(self, mock_settings):
+
         """Low severity alerts should be filtered when threshold is high."""
         mock_settings.SECURITY_ALERT_MIN_SEVERITY = "high"
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
@@ -99,6 +103,7 @@ class TestSeverityFiltering:
         assert dispatcher._meets_threshold("critical") is True
 
     def test_all_severities_pass_when_threshold_low(self, mock_settings):
+
         """All severity levels should pass when threshold is low."""
         mock_settings.SECURITY_ALERT_MIN_SEVERITY = "low"
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
@@ -112,6 +117,7 @@ class TestBackoffMechanism:
     """Tests for backoff/cooldown mechanisms."""
 
     def test_backoff_prevents_dispatch(self, mock_settings):
+
         """Backoff should prevent dispatches when active."""
         mock_settings.SECURITY_ALERT_BACKOFF_SECONDS = 60
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
@@ -125,6 +131,7 @@ class TestBackoffMechanism:
         assert is_backed_off is True
 
     def test_backoff_expires(self, mock_settings):
+
         """Backoff should expire after configured duration."""
         mock_settings.SECURITY_ALERT_BACKOFF_SECONDS = 1
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
@@ -138,6 +145,7 @@ class TestBackoffMechanism:
         assert is_backed_off is False
 
     def test_set_and_clear_backoff(self, mock_settings):
+
         """Backoff should be settable and clearable."""
         mock_settings.SECURITY_ALERT_BACKOFF_SECONDS = 60
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
@@ -160,12 +168,14 @@ class TestDispatcherStatus:
     """Tests for dispatcher status reporting."""
 
     def test_status_reports_enabled(self, dispatcher):
+
         """Status should report enabled state."""
         # The dispatcher object should have enabled attribute
         assert hasattr(dispatcher, "enabled")
         assert dispatcher.enabled is True
 
     def test_dispatcher_has_dispatch_count(self, dispatcher):
+
         """Dispatcher should track dispatch count."""
         assert hasattr(dispatcher, "_dispatch_count")
         assert dispatcher._dispatch_count == 0

@@ -3,11 +3,15 @@ import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
+from loguru import logger
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
 
 @pytest.fixture
@@ -26,12 +30,16 @@ def restore_embedding_settings():
 
 
 def _client():
+
+
     c = TestClient(app)
     c.cookies.set("csrf_token", "test-csrf")
     return c
 
 
 def _csrf_headers():
+
+
     return {"X-CSRF-Token": "test-csrf"}
 
 
@@ -50,7 +58,38 @@ async def _override_regular_user():
     return _DummyUser(1, False)
 
 
+def _principal_override(user_id: int, is_admin: bool):
+    async def _override(request: Request):
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=user_id,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["admin"] if is_admin else ["user"],
+            permissions=["*"] if is_admin else [],
+            is_admin=is_admin,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=request.client.host if getattr(request, "client", None) else None,
+                user_agent=request.headers.get("User-Agent") if getattr(request, "headers", None) else None,
+                request_id=request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None,
+            )
+        except (AttributeError, ValueError) as exc:
+            # Best-effort; setting request.state.auth may fail in some test scenarios.
+            logger.debug(f"Failed to set request.state.auth: {exc}")
+        return principal
+    return _override
+
+
 def test_list_models_exposes_defaults_and_policy(restore_embedding_settings):
+
+
     os.environ["TESTING"] = "true"
     try:
         # Configure defaults and allowlists
@@ -78,43 +117,52 @@ def test_list_models_exposes_defaults_and_policy(restore_embedding_settings):
 
 
 def test_warmup_requires_admin_and_invokes_backend(restore_embedding_settings):
+
+
     os.environ["TESTING"] = "true"
     try:
         # Allow model
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai"]
         settings["ALLOWED_EMBEDDING_MODELS"] = ["text-embedding-3-small"]
 
-        # Non-admin rejected (force multi-user mode by patching single-user check)
+        # Non-admin rejected
         app.dependency_overrides[get_request_user] = _override_regular_user
+        app.dependency_overrides[auth_deps.get_auth_principal] = _principal_override(1, False)
         client = _client()
-        with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.is_single_user_mode', return_value=False):
-            r_forbidden = client.post(
+        r_forbidden = client.post(
+            "/api/v1/embeddings/models/warmup",
+            json={"model": "text-embedding-3-small"},
+            headers=_csrf_headers()
+        )
+        assert r_forbidden.status_code == 403
+
+        app.dependency_overrides.pop(get_request_user, None)
+        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
+
+        # Admin path with backend stub
+        app.dependency_overrides[get_request_user] = _override_admin_user
+        app.dependency_overrides[auth_deps.get_auth_principal] = _principal_override(2, True)
+        client = _client()
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch_async',
+            new=AsyncMock(return_value=[[0.1, 0.2]])
+        ):
+            r = client.post(
                 "/api/v1/embeddings/models/warmup",
                 json={"model": "text-embedding-3-small"},
                 headers=_csrf_headers()
             )
-            assert r_forbidden.status_code == 403
-
-            # Admin path with backend stub
-            app.dependency_overrides[get_request_user] = _override_admin_user
-            client = _client()
-            with patch(
-                'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch_async',
-                new=AsyncMock(return_value=[[0.1, 0.2]])
-            ):
-                r = client.post(
-                    "/api/v1/embeddings/models/warmup",
-                    json={"model": "text-embedding-3-small"},
-                    headers=_csrf_headers()
-                )
-                assert r.status_code == 200
-                assert r.json().get("warmed") is True
+            assert r.status_code == 200
+            assert r.json().get("warmed") is True
     finally:
         os.environ.pop("TESTING", None)
         app.dependency_overrides.pop(get_request_user, None)
+        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
 
 def test_download_requires_admin_and_invokes_backend(restore_embedding_settings):
+
+
     os.environ["TESTING"] = "true"
     try:
         # Allow model
@@ -122,6 +170,7 @@ def test_download_requires_admin_and_invokes_backend(restore_embedding_settings)
         settings["ALLOWED_EMBEDDING_MODELS"] = ["sentence-transformers/all-MiniLM-L6-v2", "text-embedding-3-small"]
 
         app.dependency_overrides[get_request_user] = _override_admin_user
+        app.dependency_overrides[auth_deps.get_auth_principal] = _principal_override(2, True)
         client = _client()
         with patch(
             'tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_batch_async',
@@ -133,9 +182,12 @@ def test_download_requires_admin_and_invokes_backend(restore_embedding_settings)
     finally:
         os.environ.pop("TESTING", None)
         app.dependency_overrides.pop(get_request_user, None)
+        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
 
 def test_warmup_rejects_disallowed_provider_and_model(restore_embedding_settings):
+
+
     os.environ["TESTING"] = "true"
     try:
         # Only allow huggingface, and only specific HF model
@@ -143,6 +195,7 @@ def test_warmup_rejects_disallowed_provider_and_model(restore_embedding_settings
         settings["ALLOWED_EMBEDDING_MODELS"] = ["sentence-transformers/all-MiniLM-L6-v2"]
 
         app.dependency_overrides[get_request_user] = _override_admin_user
+        app.dependency_overrides[auth_deps.get_auth_principal] = _principal_override(2, True)
         client = _client()
 
         # Disallowed provider (openai)
@@ -157,9 +210,12 @@ def test_warmup_rejects_disallowed_provider_and_model(restore_embedding_settings
     finally:
         os.environ.pop("TESTING", None)
         app.dependency_overrides.pop(get_request_user, None)
+        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
 
 def test_download_rejects_disallowed_provider_and_model(restore_embedding_settings):
+
+
     os.environ["TESTING"] = "true"
     try:
         # Only allow openai and a specific openai model
@@ -167,6 +223,7 @@ def test_download_rejects_disallowed_provider_and_model(restore_embedding_settin
         settings["ALLOWED_EMBEDDING_MODELS"] = ["text-embedding-3-large"]
 
         app.dependency_overrides[get_request_user] = _override_admin_user
+        app.dependency_overrides[auth_deps.get_auth_principal] = _principal_override(2, True)
         client = _client()
 
         # Disallowed provider inference (HF)
@@ -181,9 +238,12 @@ def test_download_rejects_disallowed_provider_and_model(restore_embedding_settin
     finally:
         os.environ.pop("TESTING", None)
         app.dependency_overrides.pop(get_request_user, None)
+        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
 
 def test_list_models_reflects_disallowed_models(restore_embedding_settings):
+
+
     os.environ["TESTING"] = "true"
     try:
         # Disallow text-embedding-3-small specifically

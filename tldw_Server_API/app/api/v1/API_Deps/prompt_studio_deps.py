@@ -21,12 +21,11 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import SecurityConfig
 
 ########################################################################################################################
 # Configuration
-
-DEFAULT_PROMPT_STUDIO_DB_SUBDIR = "prompt_studio_dbs"
 
 SERVER_CLIENT_ID = settings.get("SERVER_CLIENT_ID", "prompt_studio_server")
 
@@ -48,22 +47,7 @@ def _get_prompt_studio_db_path_for_user(user_id: str) -> Path:
     Returns:
         Path to the user's Prompt Studio database
     """
-    # Resolve the base directory dynamically to respect test overrides and runtime config changes
-    base_dir_raw = settings.get("USER_DB_BASE_DIR")
-    if not base_dir_raw:
-        logger.critical("USER_DB_BASE_DIR is not configured; using local fallback.")
-        base_dir = Path("./app_data/user_databases_fallback").resolve()
-    else:
-        base_dir = Path(base_dir_raw)
-
-    user_dir_name = str(user_id)
-    user_specific_db_dir = base_dir / user_dir_name / DEFAULT_PROMPT_STUDIO_DB_SUBDIR
-
-    # Ensure directory exists
-    user_specific_db_dir.mkdir(parents=True, exist_ok=True)
-
-    db_file = user_specific_db_dir / "prompt_studio.db"
-    return db_file
+    return DatabasePaths.get_prompt_studio_db_path(user_id)
 
 def _get_or_create_prompt_studio_db(user_id: str, client_id: str) -> PromptStudioDatabase:
     """
@@ -163,6 +147,7 @@ async def get_prompt_studio_user(
         pass
 
     # 1) Test mode: prefer patched hook if available; otherwise use deterministic test user id
+    client_id_value = x_client_id if isinstance(x_client_id, str) else None
     if os.getenv("TEST_MODE", "").lower() == "true":
         try:
             maybe_user = get_current_active_user()  # may be sync or async, or None
@@ -177,7 +162,7 @@ async def get_prompt_studio_user(
 
         user_context = {
             "user_id": uid,
-            "client_id": x_client_id or "test-client",
+            "client_id": client_id_value or "test-client",
             "is_authenticated": True,
             # Tests treat single-user as admin for convenience
             "is_admin": True,
@@ -195,13 +180,20 @@ async def get_prompt_studio_user(
         if isinstance(maybe_user, dict) and maybe_user.get("id") is not None:
             user_context = {
                 "user_id": str(maybe_user.get("id")),
-                "client_id": x_client_id or "web",
+                "client_id": client_id_value or "web",
                 "is_authenticated": True,
                 "is_admin": True,
                 "permissions": ["all"],
                 "rg_policy_id": getattr(request.state, "rg_policy_id", None),
             }
             request.state.user_context = user_context
+            try:
+                from tldw_Server_API.app.core.Prompt_Management.prompt_studio.quota_config import (
+                    apply_prompt_studio_quota_policy,
+                )
+                await apply_prompt_studio_quota_policy(user_context["user_id"])
+            except Exception as exc:
+                logger.debug("Prompt Studio quota policy lookup failed: {}", exc)
             return user_context
     except Exception:
         # Ignore and fall through to standard handling
@@ -316,6 +308,14 @@ async def get_prompt_studio_user(
 
     # Store in request state for downstream use
     request.state.user_context = user_context
+
+    try:
+        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.quota_config import (
+            apply_prompt_studio_quota_policy,
+        )
+        await apply_prompt_studio_quota_policy(user_context["user_id"])
+    except Exception as exc:
+        logger.debug("Prompt Studio quota policy lookup failed: {}", exc)
 
     return user_context
 

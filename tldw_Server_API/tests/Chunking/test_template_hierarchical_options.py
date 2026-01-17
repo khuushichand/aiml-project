@@ -6,6 +6,7 @@ from tldw_Server_API.app.core.Chunking.templates import (
 
 
 def test_template_hierarchical_forwards_method_options():
+
     template = ChunkingTemplate(
         name="hierarchical_options_test",
         base_method="sentences",

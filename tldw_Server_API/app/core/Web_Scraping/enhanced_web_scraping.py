@@ -30,7 +30,6 @@ import random
 import os
 
 from loguru import logger
-import aiohttp
 import aiofiles
 from bs4 import BeautifulSoup
 import trafilatura
@@ -58,6 +57,11 @@ from tldw_Server_API.app.core.Web_Scraping.filters import (
     URLPatternFilter,
     RobotsFilter,
 )
+from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter, DEFAULT_HANDLER
+from tldw_Server_API.app.core.Web_Scraping.ua_profiles import build_browser_headers, profile_to_impersonate
+from tldw_Server_API.app.core.Web_Scraping.handlers import resolve_handler
+from tldw_Server_API.app.core.http_client import afetch
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
 from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_counter,
     log_histogram,
@@ -91,6 +95,12 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 BEST_FIRST_BATCH_SIZE = 10
+
+
+def _default_rules_path() -> str:
+    here = Path(__file__).resolve()
+    project_root = here.parents[3]
+    return str(project_root / "tldw_Server_API" / "Config_Files" / "custom_scrapers.yaml")
 
 
 class JobStatus(Enum):
@@ -305,7 +315,7 @@ async def _maybe_enforce_with_rg_web_scraping() -> Optional[Dict[str, object]]:
 
 
 class CookieManager:
-    """Manages cookies and sessions for scraping"""
+    """Manages cookies for scraping."""
 
     def __init__(self, storage_path: Optional[Path] = None, *, connector_limit: int = 10, per_host_limit: int = 2):
         if storage_path is None:
@@ -314,7 +324,6 @@ class CookieManager:
             storage_path = base / "cookies.json"
         self.storage_path = storage_path
         self._cookies: Dict[str, List[Dict[str, Any]]] = {}
-        self._sessions: Dict[str, aiohttp.ClientSession] = {}
         self._connector_limit = int(connector_limit)
         self._per_host_limit = int(per_host_limit)
         self._load_cookies()
@@ -347,71 +356,9 @@ class CookieManager:
         domain = urlparse(url).netloc
         return self._cookies.get(domain)
 
-    def _build_session_key(
-        self,
-        domain: str,
-        user_agent: str,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> str:
-        """Create a stable key for session reuse based on headers."""
-        if not headers and user_agent == DEFAULT_USER_AGENT:
-            return domain
-
-        payload = {
-            "user_agent": user_agent,
-            "headers": headers or {},
-        }
-        payload_hash = hashlib.sha256(
-            json.dumps(payload, sort_keys=True).encode("utf-8")
-        ).hexdigest()
-        return f"{domain}|{payload_hash}"
-
-    async def get_session(
-        self,
-        url: str,
-        user_agent: Optional[str] = None,
-        custom_headers: Optional[Dict[str, str]] = None,
-    ) -> aiohttp.ClientSession:
-        """Get or create session for URL with optional header overrides."""
-        domain = urlparse(url).netloc
-        header_copy = dict(custom_headers) if custom_headers else {}
-
-        effective_user_agent = user_agent or header_copy.get("User-Agent") or DEFAULT_USER_AGENT
-        # Ensure User-Agent only set via context
-        header_copy.pop("User-Agent", None)
-
-        session_key = self._build_session_key(domain, effective_user_agent, header_copy)
-
-        if session_key not in self._sessions:
-            connector = aiohttp.TCPConnector(limit=self._connector_limit, limit_per_host=self._per_host_limit)
-            timeout = aiohttp.ClientTimeout(total=30)
-            base_headers = {"User-Agent": effective_user_agent}
-            if header_copy:
-                base_headers.update(header_copy)
-
-            self._sessions[session_key] = aiohttp.ClientSession(
-                connector=connector,
-                timeout=timeout,
-                headers=base_headers,
-            )
-
-            # Apply cookies if available
-            cookies = self.get_cookies(url)
-            if cookies:
-                for cookie in cookies:
-                    # Support Playwright-style dicts and plain mappings
-                    if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
-                        self._sessions[session_key].cookie_jar.update_cookies({cookie["name"]: cookie["value"]})
-                    elif isinstance(cookie, dict):
-                        self._sessions[session_key].cookie_jar.update_cookies(cookie)
-
-        return self._sessions[session_key]
-
     async def close_all(self):
-        """Close all sessions"""
-        for session in self._sessions.values():
-            await session.close()
-        self._sessions.clear()
+        """No-op retained for backward compatibility."""
+        return None
 
 
 class ContentDeduplicator:
@@ -716,6 +663,16 @@ class EnhancedWebScraper:
         return cookies_map
 
     @staticmethod
+    def _merge_cookie_maps(
+        custom_cookies: Optional[List[Dict[str, Any]]],
+        plan_cookies: Optional[Dict[str, str]],
+    ) -> List[Dict[str, Any]]:
+        merged = EnhancedWebScraper._normalize_cookie_map(custom_cookies)
+        if plan_cookies:
+            merged.update({str(k): str(v) for k, v in plan_cookies.items()})
+        return [{"name": k, "value": v} for k, v in merged.items()]
+
+    @staticmethod
     def _normalize_playwright_cookies(
         url: str,
         custom_cookies: Optional[List[Dict[str, Any]]],
@@ -746,6 +703,240 @@ class EnhancedWebScraper:
                         }
                     )
         return cookies_list
+
+    @staticmethod
+    def _build_request_headers(
+        user_agent: Optional[str],
+        custom_headers: Optional[Dict[str, str]],
+    ) -> Dict[str, str]:
+        header_copy = dict(custom_headers) if custom_headers else {}
+        effective_user_agent = user_agent or header_copy.pop("User-Agent", None) or DEFAULT_USER_AGENT
+        headers = {"User-Agent": effective_user_agent}
+        if header_copy:
+            headers.update(header_copy)
+        return headers
+
+    @staticmethod
+    def _build_plan_headers(
+        ua_profile: str,
+        plan_headers: Optional[Dict[str, str]],
+        user_agent: Optional[str],
+        custom_headers: Optional[Dict[str, str]],
+    ) -> Dict[str, str]:
+        headers = build_browser_headers(ua_profile, accept_lang="en-US,en;q=0.9")
+        if plan_headers:
+            headers.update({str(k): str(v) for k, v in plan_headers.items()})
+        if custom_headers:
+            headers.update({str(k): str(v) for k, v in custom_headers.items()})
+        if user_agent:
+            headers["User-Agent"] = user_agent
+        return headers
+
+    def _build_cookie_map(
+        self,
+        url: str,
+        custom_cookies: Optional[List[Dict[str, Any]]],
+    ) -> Optional[Dict[str, str]]:
+        cookies: Dict[str, str] = {}
+        stored = self.cookie_manager.get_cookies(url)
+        if stored:
+            cookies.update(self._normalize_cookie_map(stored))
+        custom_map = self._normalize_cookie_map(custom_cookies)
+        if custom_map:
+            cookies.update(custom_map)
+        return cookies or None
+
+    def _resolve_scrape_plan(self, url: str) -> Tuple[Dict[str, Any], str, str]:
+        ws_cfg = self.config or {}
+        rules_path = ws_cfg.get("custom_scrapers_yaml_path", _default_rules_path())
+        rules = ScraperRouter.load_rules_from_yaml(rules_path)
+        ua_mode = str(ws_cfg.get("web_scraper_ua_mode", "fixed") or "fixed")
+        respect_robots_default = ws_cfg.get("web_scraper_respect_robots", True)
+        if isinstance(respect_robots_default, str):
+            respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on"}
+        router = ScraperRouter(rules, ua_mode=ua_mode, default_respect_robots=bool(respect_robots_default))
+        plan = router.resolve(url)
+
+        backend_choice = str(getattr(plan, "backend", "auto") or "auto").lower().strip()
+        if backend_choice not in {"auto", "curl", "httpx", "playwright"}:
+            backend_choice = "auto"
+        if backend_choice == "auto":
+            default_backend = ws_cfg.get("web_scraper_default_backend")
+            if isinstance(default_backend, str):
+                backend_choice = default_backend.lower().strip() or "auto"
+                if backend_choice not in {"auto", "curl", "httpx", "playwright"}:
+                    backend_choice = "auto"
+
+        handler_path = str(getattr(plan, "handler", "") or "")
+        return plan, backend_choice, handler_path
+
+    def _apply_dedup(self, url: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        if not data.get("extraction_successful"):
+            return data
+        content = data.get("content", "") or ""
+        title = data.get("title", "") or ""
+        if self.deduplicator.is_duplicate(url, content):
+            return {
+                "url": url,
+                "error": "Duplicate content",
+                "extraction_successful": False,
+                "is_duplicate": True,
+            }
+        self.deduplicator.add_content(url, content, title)
+        return data
+
+    def _emit_scrape_metrics(
+        self,
+        *,
+        backend: str,
+        outcome: str,
+        elapsed_s: Optional[float] = None,
+        content: Optional[str] = None,
+    ) -> None:
+        try:
+            if elapsed_s is not None:
+                observe_histogram("scrape_fetch_latency_seconds", elapsed_s, labels={"backend": backend})
+        except Exception:
+            pass
+        try:
+            increment_counter("scrape_fetch_total", labels={"backend": backend, "outcome": outcome})
+        except Exception:
+            pass
+        if outcome == "success" and content:
+            try:
+                observe_histogram(
+                    "scrape_content_length_bytes",
+                    len(content.encode("utf-8", errors="ignore")),
+                    labels={"backend": backend},
+                )
+            except Exception:
+                pass
+
+    def _extract_from_html_with_pipeline(
+        self,
+        html: str,
+        url: str,
+        *,
+        strategy_order: Optional[List[str]] = None,
+        handler: Optional[Any] = None,
+        postprocess_markdown: bool = False,
+        method_label: str = "trafilatura",
+        fallback_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+        schema_rules: Optional[Dict[str, Any]] = None,
+        llm_settings: Optional[Dict[str, Any]] = None,
+        regex_settings: Optional[Dict[str, Any]] = None,
+        cluster_settings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
+            convert_html_to_markdown,
+            extract_article_with_pipeline,
+        )
+
+        data = extract_article_with_pipeline(
+            html,
+            url,
+            strategy_order=strategy_order,
+            handler=handler,
+            fallback_extractor=fallback_extractor,
+            schema_rules=schema_rules,
+            llm_settings=llm_settings,
+            regex_settings=regex_settings,
+            cluster_settings=cluster_settings,
+        )
+        if postprocess_markdown and data.get("extraction_successful") and data.get("content"):
+            data["content"] = convert_html_to_markdown(data["content"])
+        data.setdefault("method", method_label)
+        return data
+
+    async def _fetch_html(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        cookies: Optional[Dict[str, str]],
+        backend: str,
+        impersonate: Optional[str],
+        proxies: Optional[Dict[str, str]],
+    ) -> Tuple[str, str, float]:
+        if backend == "curl":
+            try:
+                t0 = time.time()
+                html = await asyncio.to_thread(
+                    self._fetch_html_curl,
+                    url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=15.0,
+                    impersonate=impersonate,
+                    proxies=proxies,
+                )
+                elapsed = max(0.0, time.time() - t0)
+                return html, "curl", elapsed
+            except Exception as exc:
+                logger.debug(f"curl backend failed; falling back to httpx: {exc}")
+        t0 = time.time()
+        resp = None
+        try:
+            resp = await afetch(
+                method="GET",
+                url=url,
+                headers=headers,
+                cookies=cookies,
+                proxies=proxies,
+            )
+        finally:
+            await self._close_response(resp)
+        backend_used = "httpx"
+        try:
+            module_name = getattr(resp, "__class__", type(resp)).__module__ or ""
+            if module_name.startswith("aiohttp"):
+                backend_used = "aiohttp"
+        except Exception:
+            backend_used = "httpx"
+        return resp.text, backend_used, max(0.0, time.time() - t0)
+
+    @staticmethod
+    def _fetch_html_curl(
+        url: str,
+        *,
+        headers: Dict[str, str],
+        cookies: Optional[Dict[str, str]],
+        timeout: float,
+        impersonate: Optional[str],
+        proxies: Optional[Dict[str, str]],
+    ) -> str:
+        try:
+            from curl_cffi.requests import Session as CurlCffiSession
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError("curl_cffi is not installed") from exc
+
+        if proxies:
+            from tldw_Server_API.app.core import http_client as _http_client
+            _http_client._validate_proxies_or_raise(proxies)  # type: ignore[attr-defined]
+
+        req_kwargs: Dict[str, Any] = {
+            "headers": headers,
+            "cookies": cookies,
+            "timeout": timeout,
+        }
+        if proxies:
+            req_kwargs["proxies"] = proxies
+
+        with CurlCffiSession(impersonate=impersonate) as session:
+            resp = session.get(url, **req_kwargs)
+            return resp.text
+
+    @staticmethod
+    async def _close_response(resp: Any) -> None:
+        if resp is None:
+            return
+        close = getattr(resp, "aclose", None)
+        if callable(close):
+            await close()
+            return
+        close = getattr(resp, "close", None)
+        if callable(close):
+            close()
 
     def _set_progress(self, task_id: Optional[str], **updates: Any) -> None:
         if not task_id:
@@ -799,7 +990,7 @@ class EnhancedWebScraper:
     async def scrape_article(
         self,
         url: str,
-        method: str = "trafilatura",
+        method: str = "auto",
         custom_cookies: Optional[List[Dict[str, Any]]] = None,
         user_agent: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
@@ -825,29 +1016,108 @@ class EnhancedWebScraper:
         await self.rate_limiter.acquire()
 
         try:
-            if method == "trafilatura":
+            plan, backend_choice, handler_path = self._resolve_scrape_plan(url)
+            handler_path = str(handler_path or "")
+            is_default_handler = (not handler_path) or handler_path == DEFAULT_HANDLER
+            handler_func = resolve_handler(handler_path) if not is_default_handler else None
+            strategy_order = getattr(plan, "strategy_order", None)
+            schema_rules = getattr(plan, "schema_rules", None)
+            llm_settings = getattr(plan, "llm_settings", None)
+            regex_settings = getattr(plan, "regex_settings", None)
+            cluster_settings = getattr(plan, "cluster_settings", None)
+            postprocess_markdown = is_default_handler
+
+            merged_cookies = self._merge_cookie_maps(custom_cookies, getattr(plan, "cookies", {}))
+            headers = self._build_plan_headers(
+                getattr(plan, "ua_profile", "chrome_120_win"),
+                getattr(plan, "extra_headers", {}),
+                user_agent,
+                custom_headers,
+            )
+            if backend_choice in {"httpx", "auto"}:
+                try:
+                    from tldw_Server_API.app.core import http_client as _http_client
+                    headers = _http_client._sanitize_accept_encoding_for_backend(headers, "httpx")  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+            # robots.txt enforcement (fail open if error)
+            if getattr(plan, "respect_robots", True):
+                try:
+                    from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
+                        is_allowed_by_robots_async,
+                    )
+                    if not await is_allowed_by_robots_async(url, headers.get("User-Agent", DEFAULT_USER_AGENT)):
+                        try:
+                            parsed = urlparse(url)
+                            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+                        except Exception:
+                            increment_counter("scrape_blocked_by_robots_total", labels={})
+                        return {
+                            "url": url,
+                            "error": "Blocked by robots policy",
+                            "extraction_successful": False,
+                        }
+                except Exception:
+                    pass
+
+            effective_method = method
+            if backend_choice == "playwright":
+                effective_method = "playwright"
+            elif effective_method == "auto":
+                effective_method = "trafilatura"
+
+            if effective_method == "trafilatura":
                 return await self._scrape_with_trafilatura(
                     url,
-                    custom_cookies,
-                    user_agent=user_agent,
-                    custom_headers=custom_headers,
+                    merged_cookies,
+                    user_agent=None,
+                    custom_headers=headers,
+                    backend=backend_choice,
+                    impersonate=getattr(plan, "impersonate", profile_to_impersonate(getattr(plan, "ua_profile", ""))),
+                    proxies=getattr(plan, "proxies", None),
+                    handler=handler_func,
+                    strategy_order=strategy_order,
+                    postprocess_markdown=postprocess_markdown,
+                    schema_rules=schema_rules,
+                    llm_settings=llm_settings,
+                    regex_settings=regex_settings,
+                    cluster_settings=cluster_settings,
                 )
-            elif method == "playwright":
+            elif effective_method == "playwright":
                 return await self._scrape_with_playwright(
                     url,
-                    custom_cookies,
-                    user_agent=user_agent,
-                    custom_headers=custom_headers,
+                    merged_cookies,
+                    user_agent=None,
+                    custom_headers=headers,
+                    proxies=getattr(plan, "proxies", None),
+                    handler=handler_func,
+                    strategy_order=strategy_order,
+                    postprocess_markdown=postprocess_markdown,
+                    schema_rules=schema_rules,
+                    llm_settings=llm_settings,
+                    regex_settings=regex_settings,
+                    cluster_settings=cluster_settings,
                 )
-            elif method == "beautifulsoup":
+            elif effective_method == "beautifulsoup":
                 return await self._scrape_with_beautifulsoup(
                     url,
-                    custom_cookies,
-                    user_agent=user_agent,
-                    custom_headers=custom_headers,
+                    merged_cookies,
+                    user_agent=None,
+                    custom_headers=headers,
+                    backend=backend_choice,
+                    impersonate=getattr(plan, "impersonate", profile_to_impersonate(getattr(plan, "ua_profile", ""))),
+                    proxies=getattr(plan, "proxies", None),
+                    handler=handler_func,
+                    strategy_order=strategy_order,
+                    postprocess_markdown=postprocess_markdown,
+                    schema_rules=schema_rules,
+                    llm_settings=llm_settings,
+                    regex_settings=regex_settings,
+                    cluster_settings=cluster_settings,
                 )
             else:
-                raise ValueError(f"Unknown scraping method: {method}")
+                raise ValueError(f"Unknown scraping method: {effective_method}")
 
         except Exception as e:
             logger.error(f"Failed to scrape {url}: {e}")
@@ -863,64 +1133,102 @@ class EnhancedWebScraper:
         custom_cookies: Optional[List[Dict[str, Any]]] = None,
         user_agent: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
+        backend: str = "httpx",
+        impersonate: Optional[str] = None,
+        proxies: Optional[Dict[str, str]] = None,
+        handler: Optional[Any] = None,
+        strategy_order: Optional[List[str]] = None,
+        postprocess_markdown: bool = False,
+        schema_rules: Optional[Dict[str, Any]] = None,
+        llm_settings: Optional[Dict[str, Any]] = None,
+        regex_settings: Optional[Dict[str, Any]] = None,
+        cluster_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Scrape using trafilatura"""
-        session = await self.cookie_manager.get_session(
+        headers = self._build_request_headers(user_agent, custom_headers)
+        cookies = self._build_cookie_map(url, custom_cookies)
+        effective_backend = backend if backend in {"curl", "httpx"} else "httpx"
+        try:
+            from tldw_Server_API.app.core import http_client as _http_client
+            headers = _http_client._sanitize_accept_encoding_for_backend(headers, effective_backend)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        t0 = time.time()
+        try:
+            html, backend_used, elapsed = await self._fetch_html(
+                url,
+                headers=headers,
+                cookies=cookies,
+                backend=effective_backend,
+                impersonate=impersonate,
+                proxies=proxies,
+            )
+        except Exception as exc:
+            elapsed = max(0.0, time.time() - t0)
+            self._emit_scrape_metrics(
+                backend=effective_backend,
+                outcome="error",
+                elapsed_s=elapsed,
+            )
+            return {"url": url, "error": str(exc), "extraction_successful": False}
+
+        data = self._extract_from_html_with_pipeline(
+            html,
             url,
-            user_agent=user_agent,
-            custom_headers=custom_headers,
+            strategy_order=strategy_order,
+            handler=handler,
+            postprocess_markdown=postprocess_markdown,
+            method_label="trafilatura",
+            fallback_extractor=self._extract_trafilatura_json,
+            schema_rules=schema_rules,
+            llm_settings=llm_settings,
+            regex_settings=regex_settings,
+            cluster_settings=cluster_settings,
+        )
+        outcome = "success" if data.get("extraction_successful") else "no_extract"
+        self._emit_scrape_metrics(
+            backend=backend_used,
+            outcome=outcome,
+            elapsed_s=elapsed,
+            content=data.get("content") if outcome == "success" else None,
+        )
+        return self._apply_dedup(url, data)
+
+    def _extract_trafilatura_json(self, html: str, url: str) -> Dict[str, Any]:
+        """Extract using trafilatura JSON output to preserve legacy enhanced behavior."""
+        content = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=True,
+            include_images=False,
+            output_format='json',
         )
 
-        cookie_map = self._normalize_cookie_map(custom_cookies)
-        if cookie_map:
-            session.cookie_jar.update_cookies(cookie_map, response_url=url)
-
-        async with session.get(url) as response:
-            html = await response.text()
-
-            # Extract with trafilatura
-            content = trafilatura.extract(
-                html,
-                include_comments=False,
-                include_tables=True,
-                include_images=False,
-                output_format='json'
-            )
-
-            if content:
+        if content:
+            try:
                 content_dict = json.loads(content)
-
-                # Check for duplicates
-                if self.deduplicator.is_duplicate(url, content_dict.get('text', '')):
-                    return {
-                        "url": url,
-                        "error": "Duplicate content",
-                        "extraction_successful": False,
-                        "is_duplicate": True
-                    }
-
-                # Add to deduplicator
-                self.deduplicator.add_content(
-                    url,
-                    content_dict.get('text', ''),
-                    content_dict.get('title', '')
-                )
-
+            except json.JSONDecodeError as exc:
                 return {
                     "url": url,
-                    "title": content_dict.get('title', 'Untitled'),
-                    "author": content_dict.get('author', 'Unknown'),
-                    "date": content_dict.get('date', ''),
-                    "content": content_dict.get('text', ''),
-                    "extraction_successful": True,
-                    "method": "trafilatura"
+                    "error": f"Invalid trafilatura JSON: {exc}",
+                    "extraction_successful": False,
                 }
 
             return {
                 "url": url,
-                "error": "No content extracted",
-                "extraction_successful": False
+                "title": content_dict.get('title', 'Untitled'),
+                "author": content_dict.get('author', 'Unknown'),
+                "date": content_dict.get('date', ''),
+                "content": content_dict.get('text', ''),
+                "extraction_successful": True,
+                "method": "trafilatura",
             }
+
+        return {
+            "url": url,
+            "error": "No content extracted",
+            "extraction_successful": False,
+        }
 
     async def _scrape_with_playwright(
         self,
@@ -928,6 +1236,14 @@ class EnhancedWebScraper:
         custom_cookies: Optional[List[Dict[str, Any]]] = None,
         user_agent: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
+        proxies: Optional[Dict[str, str]] = None,
+        handler: Optional[Any] = None,
+        strategy_order: Optional[List[str]] = None,
+        postprocess_markdown: bool = False,
+        schema_rules: Optional[Dict[str, Any]] = None,
+        llm_settings: Optional[Dict[str, Any]] = None,
+        regex_settings: Optional[Dict[str, Any]] = None,
+        cluster_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Scrape using Playwright for JavaScript-heavy sites"""
         # Fallback gracefully if browser isn't initialized
@@ -937,11 +1253,32 @@ class EnhancedWebScraper:
                 custom_cookies=custom_cookies,
                 user_agent=user_agent,
                 custom_headers=custom_headers,
+                handler=handler,
+                strategy_order=strategy_order,
+                postprocess_markdown=postprocess_markdown,
+                schema_rules=schema_rules,
+                llm_settings=llm_settings,
+                regex_settings=regex_settings,
+                cluster_settings=cluster_settings,
             )
         headers_copy = dict(custom_headers) if custom_headers else {}
         effective_user_agent = user_agent or headers_copy.pop("User-Agent", None) or DEFAULT_USER_AGENT
 
-        context = await self._browser.new_context(user_agent=effective_user_agent)
+        proxy_cfg = None
+        if proxies:
+            try:
+                from tldw_Server_API.app.core import http_client as _http_client
+                _http_client._validate_proxies_or_raise(proxies)  # type: ignore[attr-defined]
+                proxy_server = _http_client._resolve_proxy_for_url(url, proxies)  # type: ignore[attr-defined]
+                if proxy_server:
+                    proxy_cfg = {"server": proxy_server}
+            except Exception as exc:
+                logger.debug(f"Playwright proxy validation failed: {exc}")
+
+        if proxy_cfg:
+            context = await self._browser.new_context(user_agent=effective_user_agent, proxy=proxy_cfg)
+        else:
+            context = await self._browser.new_context(user_agent=effective_user_agent)
 
         if headers_copy:
             await context.set_extra_http_headers(headers_copy)
@@ -951,6 +1288,7 @@ class EnhancedWebScraper:
             await context.add_cookies(pw_cookies)
 
         page = await context.new_page()
+        t0 = time.time()
 
         try:
             # Navigate with timeout
@@ -959,7 +1297,33 @@ class EnhancedWebScraper:
             # Wait for content to load
             await page.wait_for_load_state("domcontentloaded")
 
-            # Extract content
+            html = await page.content()
+            data = self._extract_from_html_with_pipeline(
+                html,
+                url,
+                strategy_order=strategy_order,
+                handler=handler,
+                postprocess_markdown=postprocess_markdown,
+                method_label="playwright",
+                fallback_extractor=self._extract_trafilatura_json,
+                schema_rules=schema_rules,
+                llm_settings=llm_settings,
+                regex_settings=regex_settings,
+                cluster_settings=cluster_settings,
+            )
+            if data.get("extraction_successful") or handler is not None:
+                outcome = "success" if data.get("extraction_successful") else "no_extract"
+                elapsed = max(0.0, time.time() - t0)
+                self._emit_scrape_metrics(
+                    backend="playwright",
+                    outcome=outcome,
+                    elapsed_s=elapsed,
+                    content=data.get("content") if outcome == "success" else None,
+                )
+                return self._apply_dedup(url, data)
+            pipeline_trace = data.get("extraction_trace") if isinstance(data.get("extraction_trace"), list) else []
+
+            # Extract content (Playwright fallback)
             title = await page.title()
 
             # Try to find main content
@@ -987,19 +1351,7 @@ class EnhancedWebScraper:
                 return meta ? meta.content : "";
             }''')
 
-            # Check for duplicates
-            if self.deduplicator.is_duplicate(url, content):
-                return {
-                    "url": url,
-                    "error": "Duplicate content",
-                    "extraction_successful": False,
-                    "is_duplicate": True
-                }
-
-            # Add to deduplicator
-            self.deduplicator.add_content(url, content, title)
-
-            return {
+            data = {
                 "url": url,
                 "title": title,
                 "author": author,
@@ -1008,6 +1360,29 @@ class EnhancedWebScraper:
                 "extraction_successful": True,
                 "method": "playwright"
             }
+            trace = list(pipeline_trace)
+            trace.append({"strategy": "playwright", "status": "success", "reason": "fallback_extracted"})
+            data["extraction_trace"] = trace
+            data["extraction_strategy"] = "playwright"
+            data.setdefault("extraction_strategy_order", ["playwright"])
+            log_counter("extraction_strategy_total", labels={"strategy": "playwright", "status": "success"})
+            elapsed = max(0.0, time.time() - t0)
+            self._emit_scrape_metrics(
+                backend="playwright",
+                outcome="success",
+                elapsed_s=elapsed,
+                content=content,
+            )
+            return self._apply_dedup(url, data)
+
+        except Exception as exc:
+            elapsed = max(0.0, time.time() - t0)
+            self._emit_scrape_metrics(
+                backend="playwright",
+                outcome="error",
+                elapsed_s=elapsed,
+            )
+            return {"url": url, "error": str(exc), "extraction_successful": False}
 
         finally:
             await page.close()
@@ -1019,77 +1394,126 @@ class EnhancedWebScraper:
         custom_cookies: Optional[List[Dict[str, Any]]] = None,
         user_agent: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
+        backend: str = "httpx",
+        impersonate: Optional[str] = None,
+        proxies: Optional[Dict[str, str]] = None,
+        handler: Optional[Any] = None,
+        strategy_order: Optional[List[str]] = None,
+        postprocess_markdown: bool = False,
+        schema_rules: Optional[Dict[str, Any]] = None,
+        llm_settings: Optional[Dict[str, Any]] = None,
+        regex_settings: Optional[Dict[str, Any]] = None,
+        cluster_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Scrape using BeautifulSoup for simple HTML parsing"""
-        session = await self.cookie_manager.get_session(
+        headers = self._build_request_headers(user_agent, custom_headers)
+        cookies = self._build_cookie_map(url, custom_cookies)
+        effective_backend = backend if backend in {"curl", "httpx"} else "httpx"
+        try:
+            from tldw_Server_API.app.core import http_client as _http_client
+            headers = _http_client._sanitize_accept_encoding_for_backend(headers, effective_backend)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        t0 = time.time()
+        try:
+            html, backend_used, elapsed = await self._fetch_html(
+                url,
+                headers=headers,
+                cookies=cookies,
+                backend=effective_backend,
+                impersonate=impersonate,
+                proxies=proxies,
+            )
+        except Exception as exc:
+            elapsed = max(0.0, time.time() - t0)
+            self._emit_scrape_metrics(
+                backend=effective_backend,
+                outcome="error",
+                elapsed_s=elapsed,
+            )
+            return {"url": url, "error": str(exc), "extraction_successful": False}
+
+        data = self._extract_from_html_with_pipeline(
+            html,
             url,
-            user_agent=user_agent,
-            custom_headers=custom_headers,
+            strategy_order=strategy_order,
+            handler=handler,
+            postprocess_markdown=postprocess_markdown,
+            method_label="beautifulsoup",
+            fallback_extractor=self._extract_trafilatura_json,
+            schema_rules=schema_rules,
+            llm_settings=llm_settings,
+            regex_settings=regex_settings,
+            cluster_settings=cluster_settings,
         )
+        if data.get("extraction_successful") or handler is not None:
+            outcome = "success" if data.get("extraction_successful") else "no_extract"
+            self._emit_scrape_metrics(
+                backend=backend_used,
+                outcome=outcome,
+                elapsed_s=elapsed,
+                content=data.get("content") if outcome == "success" else None,
+            )
+            return self._apply_dedup(url, data)
+        pipeline_trace = data.get("extraction_trace") if isinstance(data.get("extraction_trace"), list) else []
+        soup = BeautifulSoup(html, 'html.parser')
 
-        cookie_map = self._normalize_cookie_map(custom_cookies)
-        if cookie_map:
-            session.cookie_jar.update_cookies(cookie_map, response_url=url)
+        # Extract title
+        title_tag = soup.find('title')
+        title = title_tag.get_text(strip=True) if title_tag else "Untitled"
+        if not title:
+            title = "Untitled"
 
-        async with session.get(url) as response:
-            html = await response.text()
-            soup = BeautifulSoup(html, 'html.parser')
+        # Extract content
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
 
-            # Extract title
-            title_tag = soup.find('title')
-            title = title_tag.get_text(strip=True) if title_tag else "Untitled"
-            if not title:
-                title = "Untitled"
+        # Try to find main content
+        content = ""
+        for tag in ['main', 'article', 'div']:
+            elements = soup.find_all(tag, class_=lambda x: x and any(
+                keyword in x.lower() for keyword in ['content', 'article', 'post', 'entry']
+            ))
+            if elements:
+                content = '\n\n'.join(elem.get_text(strip=True) for elem in elements)
+                break
 
-            # Extract content
-            # Remove script and style elements
-            for script in soup(["script", "style"]):
-                script.decompose()
+        # Fallback to body
+        if not content:
+            content = soup.get_text(strip=True)
 
-            # Try to find main content
-            content = ""
-            for tag in ['main', 'article', 'div']:
-                elements = soup.find_all(tag, class_=lambda x: x and any(
-                    keyword in x.lower() for keyword in ['content', 'article', 'post', 'entry']
-                ))
-                if elements:
-                    content = '\n\n'.join(elem.get_text(strip=True) for elem in elements)
-                    break
+        # Extract metadata
+        author_meta = soup.find('meta', {'name': 'author'})
+        author = author_meta.get('content', 'Unknown') if author_meta else 'Unknown'
 
-            # Fallback to body
-            if not content:
-                content = soup.get_text(strip=True)
+        date_meta = soup.find('meta', {'property': 'article:published_time'})
+        date = date_meta.get('content', '') if date_meta else ''
 
-            # Extract metadata
-            author_meta = soup.find('meta', {'name': 'author'})
-            author = author_meta.get('content', 'Unknown') if author_meta else 'Unknown'
+        data = {
+            "url": url,
+            "title": title,
+            "author": author,
+            "date": date,
+            "content": content,
+            "extraction_successful": True,
+            "method": "beautifulsoup"
+        }
+        trace = list(pipeline_trace)
+        trace.append({"strategy": "beautifulsoup", "status": "success", "reason": "fallback_extracted"})
+        data["extraction_trace"] = trace
+        data["extraction_strategy"] = "beautifulsoup"
+        data.setdefault("extraction_strategy_order", ["beautifulsoup"])
+        log_counter("extraction_strategy_total", labels={"strategy": "beautifulsoup", "status": "success"})
+        self._emit_scrape_metrics(
+            backend=backend_used,
+            outcome="success",
+            elapsed_s=elapsed,
+            content=content,
+        )
+        return self._apply_dedup(url, data)
 
-            date_meta = soup.find('meta', {'property': 'article:published_time'})
-            date = date_meta.get('content', '') if date_meta else ''
-
-            # Check for duplicates
-            if self.deduplicator.is_duplicate(url, content):
-                return {
-                    "url": url,
-                    "error": "Duplicate content",
-                    "extraction_successful": False,
-                    "is_duplicate": True
-                }
-
-            # Add to deduplicator
-            self.deduplicator.add_content(url, content, title)
-
-            return {
-                "url": url,
-                "title": title,
-                "author": author,
-                "date": date,
-                "content": content,
-                "extraction_successful": True,
-                "method": "beautifulsoup"
-            }
-
-    async def scrape_multiple(self, urls: List[str], method: str = "trafilatura",
+    async def scrape_multiple(self, urls: List[str], method: str = "auto",
                             priority: JobPriority = JobPriority.NORMAL,
                             summarize: bool = False,
                             **kwargs) -> List[Dict[str, Any]]:
@@ -1180,18 +1604,18 @@ class EnhancedWebScraper:
                 "current_url": sitemap_url,
                 "started_at": datetime.now().isoformat(),
             }
-        session = await self.cookie_manager.get_session(
-            sitemap_url,
-            user_agent=user_agent,
-            custom_headers=custom_headers,
+        headers = self._build_request_headers(user_agent, custom_headers)
+        cookies = self._build_cookie_map(sitemap_url, custom_cookies)
+        resp = await afetch(
+            method="GET",
+            url=sitemap_url,
+            headers=headers,
+            cookies=cookies,
         )
-
-        cookie_map = self._normalize_cookie_map(custom_cookies)
-        if cookie_map:
-            session.cookie_jar.update_cookies(cookie_map, response_url=sitemap_url)
-
-        async with session.get(sitemap_url) as response:
-            content = await response.text()
+        try:
+            content = resp.text
+        finally:
+            await self._close_response(resp)
 
         # Parse sitemap
         soup = BeautifulSoup(content, 'xml')
@@ -1505,7 +1929,7 @@ class EnhancedWebScraper:
                                     if not allowed:
                                         try:
                                             parsed = urlparse(cand)
-                                            log_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+                                            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                                         except Exception:
                                             pass
                                         try:
@@ -1670,7 +2094,7 @@ class EnhancedWebScraper:
                                     if not allowed:
                                         try:
                                             parsed = urlparse(cand)
-                                            log_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+                                            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                                         except Exception:
                                             pass
                                         try:
@@ -1728,9 +2152,18 @@ class EnhancedWebScraper:
         # Heuristic: if content lacks HTML tags, fetch the page HTML
         if '<a' not in html_text and '<html' not in html_text:
             try:
-                session = await self.cookie_manager.get_session(base_url)
-                async with session.get(base_url) as resp:
-                    html_text = await resp.text()
+                headers = self._build_request_headers(None, None)
+                cookies = self._build_cookie_map(base_url, None)
+                resp = await afetch(
+                    method="GET",
+                    url=base_url,
+                    headers=headers,
+                    cookies=cookies,
+                )
+                try:
+                    html_text = resp.text
+                finally:
+                    await self._close_response(resp)
             except Exception as e:
                 logger.warning(f"Failed to fetch HTML for link extraction: {e}")
                 return []

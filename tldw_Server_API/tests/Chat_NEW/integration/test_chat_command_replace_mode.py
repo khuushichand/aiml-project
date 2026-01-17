@@ -4,7 +4,7 @@ import pytest
 
 @pytest.mark.integration
 def test_chat_command_replace_mode(monkeypatch, test_client, auth_headers):
-    # Enable commands and set injection to replace
+     # Enable commands and set injection to replace
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "replace")
 
@@ -13,6 +13,7 @@ def test_chat_command_replace_mode(monkeypatch, test_client, auth_headers):
     captured = {"messages": None}
 
     def fake_call(**kwargs):
+
         captured["messages"] = kwargs.get("messages_payload")
         return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
 
@@ -41,7 +42,7 @@ def test_chat_command_replace_mode(monkeypatch, test_client, auth_headers):
 
 @pytest.mark.integration
 def test_chat_command_revalidates_after_injection(monkeypatch, test_client, auth_headers):
-    # Enable commands and system injection so a new system message is appended
+     # Enable commands and system injection so a new system message is appended
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
 
@@ -62,6 +63,7 @@ def test_chat_command_revalidates_after_injection(monkeypatch, test_client, auth
     monkeypatch.setattr(command_router, "async_dispatch_command", fake_dispatch)
 
     def fail_call(**_kwargs):
+
         raise AssertionError("Provider call should not occur when post-injection validation fails")
 
     monkeypatch.setattr(chat_endpoint, "perform_chat_api_call", fail_call)

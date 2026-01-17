@@ -74,6 +74,7 @@ async def test_save_uploaded_files_write_failure_cleanup(tmp_media_dir, monkeypa
             return False
 
     def _fake_open(*a, **kw):
+
         return _FailOpen()
 
     monkeypatch.setattr(media_mod.aiofiles, "open", _fake_open, raising=True)

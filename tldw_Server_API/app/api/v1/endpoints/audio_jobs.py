@@ -23,6 +23,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_MAINTENANCE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS, get_user_tier, set_user_tier
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+    resolve_default_transcription_model,
+)
 
 
 router = APIRouter()
@@ -54,7 +57,10 @@ def get_job_manager() -> JobManager:
 class SubmitAudioJobRequest(BaseModel):
     url: Optional[str] = Field(None, description="URL to download audio from")
     local_path: Optional[str] = Field(None, description="Server-local path to an existing audio/video file")
-    model: str = Field("whisper-1", description="Transcription model selector")
+    model: Optional[str] = Field(
+        None,
+        description="Transcription model selector (defaults to config when omitted)",
+    )
     perform_chunking: bool = Field(True, description="Whether to chunk the transcript after STT")
     perform_analysis: bool = Field(False, description="Whether to run LLM analysis after chunking")
     api_name: Optional[str] = Field(None, description="LLM provider key for analysis stage")
@@ -110,8 +116,12 @@ async def submit_audio_job(
     tp = ensure_traceparent(request) if request is not None else ""
 
     try:
+        requested_model = (req.model or "").strip()
+        if not requested_model:
+            requested_model = resolve_default_transcription_model("whisper-1")
+
         payload: Dict[str, Any] = {
-            "model": req.model,
+            "model": requested_model,
             "perform_chunking": bool(req.perform_chunking),
             "perform_analysis": bool(req.perform_analysis),
             "api_name": req.api_name,

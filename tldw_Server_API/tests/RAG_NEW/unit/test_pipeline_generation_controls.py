@@ -19,7 +19,7 @@ class FakeRetriever:
 
 class FakeTwoTierReranker:
     def __init__(self, *args, **kwargs):
-        # Force gating
+             # Force gating
         self.last_metadata = {"gated": True, "top_doc_prob": 0.1}
 
     async def rerank(self, query, documents, original_scores=None):

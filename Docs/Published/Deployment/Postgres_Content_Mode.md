@@ -41,12 +41,14 @@ If you already have content indexed in SQLite, migrate it using the built-in mig
 
 ```bash
 python -m tldw_Server_API.app.core.DB_Management.migration_tools \
-  --content-sqlite Databases/user_databases/<user_id>/Media_DB_v2.db \
+  --content-sqlite <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db \
   --workflows-sqlite Databases/workflows.db \
   --pg-host "$TLDW_PG_HOST" --pg-port "$TLDW_PG_PORT" \
   --pg-database "$TLDW_PG_DATABASE" --pg-user "$TLDW_PG_USER" \
   --pg-password "$TLDW_PG_PASSWORD" --batch-size 500
 ```
+
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 See also: `Deployment/Postgres_Migration_Guide.md`.
 

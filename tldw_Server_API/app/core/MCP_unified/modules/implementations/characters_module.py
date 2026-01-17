@@ -4,6 +4,7 @@ Characters Module for Unified MCP
 Search/get character cards via ChaChaNotes DB FTS.
 """
 
+import asyncio
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
@@ -98,6 +99,27 @@ class CharactersModule(BaseModule):
         limit: int = int(args.get("limit", 10))
         offset: int = int(args.get("offset", 0))
         snippet_len: int = int(args.get("snippet_length", 300))
+        return await asyncio.to_thread(
+            self._search_sync,
+            context,
+            query,
+            limit,
+            offset,
+            snippet_len,
+        )
+
+    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        character_id: int = int(args.get("character_id"))
+        return await asyncio.to_thread(self._get_sync, context, character_id)
+
+    def _search_sync(
+        self,
+        context: Any | None,
+        query: str,
+        limit: int,
+        offset: int,
+        snippet_len: int,
+    ) -> Dict[str, Any]:
         db = self._open_db(context)
         try:
             rows = db.search_character_cards(query, limit=limit + offset)
@@ -126,8 +148,7 @@ class CharactersModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after characters search: {}", exc)
 
-    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
-        character_id: int = int(args.get("character_id"))
+    def _get_sync(self, context: Any | None, character_id: int) -> Dict[str, Any]:
         db = self._open_db(context)
         try:
             r = db.get_character_card_by_id(character_id)

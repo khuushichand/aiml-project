@@ -19,6 +19,7 @@ class TestChromaDBManagerInit:
     """Test ChromaDBManager initialization and setup."""
 
     def test_init_with_valid_user_id(self):
+
         """Test initialization with valid user ID."""
         import tempfile
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
@@ -31,6 +32,7 @@ class TestChromaDBManagerInit:
         assert manager.user_embedding_config.get("USER_DB_BASE_DIR") == base_dir
 
     def test_init_with_invalid_user_id(self):
+
         """Test initialization rejects invalid user IDs."""
         import tempfile
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
@@ -49,6 +51,7 @@ class TestChromaDBManagerInit:
             )
 
     def test_init_creates_user_directory(self):
+
         """Test initialization creates user-specific directory."""
         import tempfile, os
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
@@ -60,6 +63,7 @@ class TestChromaDBManagerInit:
         assert os.path.isdir(str(manager.user_chroma_path))
 
     def test_init_with_custom_base_path(self):
+
         """Test initialization with custom base path."""
         import tempfile, os, pathlib
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
@@ -73,12 +77,61 @@ class TestChromaDBManagerInit:
         resolved_user_path = str(pathlib.Path(str(manager.user_chroma_path)).resolve())
         assert resolved_user_path.startswith(resolved_base)
 
+    def test_init_with_stub_backend_records_cache_key(self):
+
+        """Test stub backend init uses base dir in stub cache key."""
+        import tempfile
+        from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
+
+        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
+        with cdl._TEST_STUB_CLIENTS_LOCK:
+            cdl._TEST_STUB_CLIENTS.clear()
+
+        ChromaDBManager(
+            user_id="stub_user",
+            user_embedding_config={
+                "USER_DB_BASE_DIR": base_dir,
+                "chroma_client_settings": {"backend": "stub"},
+            },
+        )
+
+        expected_key = f"stub_user::{base_dir}"
+        with cdl._TEST_STUB_CLIENTS_LOCK:
+            assert expected_key in cdl._TEST_STUB_CLIENTS
+
+    def test_init_fallback_to_stub_records_cache_key(self):
+
+        """Test stub fallback init uses base dir in stub cache key."""
+        import tempfile
+        from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
+
+        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
+        with cdl._TEST_STUB_CLIENTS_LOCK:
+            cdl._TEST_STUB_CLIENTS.clear()
+
+        with patch(
+            "tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient",
+            side_effect=RuntimeError("boom"),
+        ):
+            ChromaDBManager(
+                user_id="fallback_user",
+                user_embedding_config={
+                    "USER_DB_BASE_DIR": base_dir,
+                    "chroma_client_settings": {"backend": "persistent", "allow_stub_fallback": True},
+                },
+            )
+
+        expected_key = f"fallback_user::{base_dir}"
+        with cdl._TEST_STUB_CLIENTS_LOCK:
+            assert expected_key in cdl._TEST_STUB_CLIENTS
+
 
 @pytest.mark.unit
 class TestCollectionManagement:
     """Test collection management operations."""
 
     def test_get_or_create_collection_new(self, chromadb_manager, mock_chroma_client):
+
         """Test creating a new collection."""
         collection_name = "test_collection"
         metadata = {"description": "Test collection"}
@@ -92,6 +145,7 @@ class TestCollectionManagement:
         assert collection is not None
 
     def test_get_or_create_collection_existing(self, chromadb_manager, mock_chroma_client):
+
         """Test getting an existing collection."""
         collection_name = "existing_collection"
 
@@ -113,6 +167,7 @@ class TestCollectionManagement:
         pass
 
     def test_reset_collection(self, chromadb_manager, mock_chroma_client):
+
         """Test resetting a collection."""
         collection_name = "test_collection"
         mock_collection = MagicMock()
@@ -125,6 +180,7 @@ class TestCollectionManagement:
         mock_chroma_client.create_collection.assert_called_once_with(name=collection_name)
 
     def test_delete_collection(self, chromadb_manager, mock_chroma_client):
+
         """Test deleting a collection."""
         collection_name = "test_collection"
 
@@ -133,6 +189,7 @@ class TestCollectionManagement:
         mock_chroma_client.delete_collection.assert_called_once_with(name=collection_name)
 
     def test_count_items_in_collection(self, chromadb_manager, mock_chroma_client):
+
         """Test counting items in a collection."""
         collection_name = "test_collection"
         mock_collection = MagicMock()
@@ -150,6 +207,7 @@ class TestStorageOperations:
     """Test storage and retrieval operations."""
 
     def test_store_in_chroma_basic(self, chromadb_manager, mock_chroma_client):
+
         """Test basic storage operation."""
         collection_name = "test_collection"
         texts = ["text1", "text2"]
@@ -177,6 +235,7 @@ class TestStorageOperations:
         assert result is not None
 
     def test_store_in_chroma_with_metadata(self, chromadb_manager, mock_chroma_client):
+
         """Test storage with metadata."""
         collection_name = "test_collection"
         texts = ["text1"]
@@ -205,6 +264,7 @@ class TestStorageOperations:
         assert result is not None
 
     def test_store_recreates_on_dimension_mismatch(self, chromadb_manager, mock_chroma_client):
+
         """If existing collection metadata has a different embedding_dimension, it recreates the collection."""
         collection_name = "dim_mismatch"
         texts = ["t1", "t2"]
@@ -232,6 +292,7 @@ class TestStorageOperations:
         assert result is not None
 
     def test_store_in_chroma_mismatched_lengths(self, chromadb_manager):
+
         """Test storage with mismatched input lengths."""
         with pytest.raises(ValueError, match="length mismatch"):
             chromadb_manager.store_in_chroma(
@@ -243,6 +304,7 @@ class TestStorageOperations:
             )
 
     def test_store_in_chroma_empty_inputs(self, chromadb_manager):
+
         """Test storage with empty inputs."""
         with pytest.raises(ValueError, match="empty"):
             chromadb_manager.store_in_chroma(
@@ -254,6 +316,7 @@ class TestStorageOperations:
             )
 
     def test_store_handles_error(self, chromadb_manager, mock_chroma_client):
+
         """Test storage error handling."""
         mock_collection = MagicMock()
         mock_collection.add.side_effect = Exception("Storage failed")
@@ -269,6 +332,7 @@ class TestStorageOperations:
             )
 
     def test_delete_from_collection(self, chromadb_manager, mock_chroma_client):
+
         """Test deleting items from collection."""
         collection_name = "test_collection"
         ids = ["id1", "id2"]
@@ -281,6 +345,7 @@ class TestStorageOperations:
         mock_collection.delete.assert_called_once_with(ids=ids)
 
     def test_delete_from_collection_handles_error(self, chromadb_manager, mock_chroma_client):
+
         """Test delete error handling."""
         mock_collection = MagicMock()
         mock_collection.delete.side_effect = Exception("Delete failed")
@@ -295,6 +360,7 @@ class TestSearchOperations:
     """Test search and query operations."""
 
     def test_vector_search_basic(self, chromadb_manager, mock_chroma_client, mock_embeddings):
+
         """Test basic vector search."""
         query = "test query"
         collection_name = "test_collection"
@@ -323,6 +389,7 @@ class TestSearchOperations:
         mock_collection.query.assert_called_once()
 
     def test_vector_search_with_filter(self, chromadb_manager, mock_chroma_client):
+
         """Test vector search with metadata filter."""
         query = "test query"
         collection_name = "test_collection"
@@ -350,6 +417,7 @@ class TestSearchOperations:
         assert call_args[1].get('where') == filter_dict
 
     def test_vector_search_custom_fields(self, chromadb_manager, mock_chroma_client):
+
         """Test vector search with custom include fields."""
         mock_collection = MagicMock()
         mock_collection.query.return_value = {
@@ -372,6 +440,7 @@ class TestSearchOperations:
         assert all("distance" in r for r in results)
 
     def test_query_with_precomputed_embeddings(self, chromadb_manager, mock_chroma_client):
+
         """Test query with precomputed embeddings."""
         embeddings = [[0.1, 0.2, 0.3]]
         collection_name = "test_collection"
@@ -400,6 +469,7 @@ class TestSearchOperations:
         )
 
     def test_search_handles_empty_results(self, chromadb_manager, mock_chroma_client):
+
         """Test search handles empty results gracefully."""
         mock_collection = MagicMock()
         mock_collection.query.return_value = {
@@ -429,7 +499,10 @@ class TestContentProcessing:
         media_id = "media_123"
 
         # Setup mocks
-        mock_chunk_for_embed.return_value = [{"text": "chunk1", "metadata": {}}, {"text": "chunk2", "metadata": {}}]
+        mock_chunk_for_embed.return_value = [
+            {"text": "chunk1", "metadata": {"paragraph_kind": "header_atx", "start_index": 5, "end_index": 12}},
+            {"text": "chunk2", "metadata": {}},
+        ]
         mock_create_emb.return_value = [[0.1, 0.2], [0.3, 0.4]]
 
         mock_collection = MagicMock()
@@ -446,6 +519,14 @@ class TestContentProcessing:
         mock_chunk_for_embed.assert_called_once()
         mock_create_emb.assert_called_once()
         mock_collection.upsert.assert_called_once()
+
+        args, kwargs = mock_collection.upsert.call_args
+        metadatas = kwargs.get("metadatas") or []
+        assert len(metadatas) == 2
+        assert metadatas[0].get("chunk_type") == "heading"
+        assert metadatas[0].get("start_char") == 5
+        assert metadatas[0].get("end_char") == 12
+        assert metadatas[1].get("chunk_type") == "text"
 
     @patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chunk_for_embedding')
     @patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.create_embeddings_batch')
@@ -509,6 +590,7 @@ class TestSecurityValidation:
     """Test security and input validation."""
 
     def test_sanitize_collection_name(self, chromadb_manager):
+
         """Test collection name sanitization."""
         # Valid names should pass through
         assert chromadb_manager._sanitize_name("valid_name") == "valid_name"
@@ -526,6 +608,7 @@ class TestSecurityValidation:
             chromadb_manager._sanitize_name("..\\malicious")
 
     def test_validate_user_id_security(self):
+
         """Test user ID validation for security."""
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb'):
             # Valid IDs
@@ -549,6 +632,7 @@ class TestSecurityValidation:
                     ChromaDBManager(invalid_id, {})
 
     def test_metadata_validation(self, chromadb_manager):
+
         """Test metadata validation and sanitization."""
         # Valid metadata
         valid_metadata = {"key": "value", "number": 123, "bool": True}
@@ -569,6 +653,7 @@ class TestSecurityValidation:
         assert len(str(sanitized["key"])) <= 5000  # Reasonable limit
 
     def test_embedding_dimension_validation(self, chromadb_manager):
+
         """Test embedding dimension validation."""
         # Valid embeddings
         valid_embeddings = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
@@ -592,6 +677,7 @@ class TestErrorHandlingAndRecovery:
     """Test error handling and recovery mechanisms."""
 
     def test_connection_retry_on_failure(self, chromadb_manager, mock_chroma_client):
+
         """Test connection retry logic."""
         # Simulate connection failure then success
         mock_chroma_client.heartbeat.side_effect = [
@@ -607,6 +693,7 @@ class TestErrorHandlingAndRecovery:
         assert mock_chroma_client.heartbeat.call_count == 3
 
     def test_max_retries_exceeded(self, chromadb_manager, mock_chroma_client):
+
         """Test behavior when max retries exceeded."""
         mock_chroma_client.heartbeat.side_effect = Exception("Connection failed")
 
@@ -616,6 +703,7 @@ class TestErrorHandlingAndRecovery:
         assert result is False
 
     def test_graceful_degradation_on_storage_failure(self, chromadb_manager, mock_chroma_client):
+
         """Test graceful degradation when storage fails."""
         mock_collection = MagicMock()
         mock_collection.add.side_effect = Exception("Storage unavailable")
@@ -632,6 +720,7 @@ class TestErrorHandlingAndRecovery:
         assert result is False
 
     def test_cleanup_on_partial_failure(self, chromadb_manager):
+
         """Test cleanup after partial operation failure."""
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.improved_chunking_process') as mock_chunk:
             with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.create_embeddings_batch') as mock_emb:
@@ -655,6 +744,7 @@ class TestResourceManagement:
     """Test resource management and limits."""
 
     def test_collection_limit_enforcement(self, chromadb_manager, mock_chroma_client):
+
         """Test enforcement of collection limits per user."""
         # Simulate max collections reached
         mock_collections = [MagicMock(name=f"col_{i}") for i in range(10)]
@@ -665,6 +755,7 @@ class TestResourceManagement:
                 chromadb_manager.get_or_create_collection("new_collection")
 
     def test_item_limit_per_collection(self, chromadb_manager, mock_chroma_client):
+
         """Test enforcement of item limits per collection."""
         mock_collection = MagicMock()
         mock_collection.count.return_value = 100000
@@ -680,6 +771,7 @@ class TestResourceManagement:
                 )
 
     def test_memory_limit_check(self, chromadb_manager):
+
         """Test memory usage monitoring."""
         with patch('psutil.Process') as mock_process:
             mock_proc_instance = MagicMock()
@@ -691,6 +783,7 @@ class TestResourceManagement:
                     chromadb_manager._check_memory_usage()
 
     def test_batch_size_limiting(self, chromadb_manager):
+
         """Test batch size limiting for large operations."""
         large_texts = [f"text_{i}" for i in range(1000)]
         large_embeddings = [[0.1] * 384 for _ in range(1000)]
@@ -711,6 +804,7 @@ class TestResourceManagement:
                 assert mock_store.call_count == 10
 
     def test_list_collections(self, chromadb_manager, mock_chroma_client):
+
         """Verify list_collections proxies to client and returns sequence."""
         fake_collections = [MagicMock(name="colA"), MagicMock(name="colB")]
         mock_chroma_client.list_collections.return_value = fake_collections
@@ -792,11 +886,13 @@ class TestConcurrency:
     """Test concurrent operation handling."""
 
     def test_thread_safe_operations(self, chromadb_manager):
+
         """Test thread safety of operations."""
         import threading
         results = []
 
         def store_operation(index):
+
             try:
                 result = chromadb_manager.store_in_chroma(
                     collection_name=f"test_{index}",
@@ -819,6 +915,7 @@ class TestConcurrency:
         assert len(results) == 5
 
     def test_lock_timeout_handling(self, chromadb_manager):
+
         """Lock timeout helper not available; skipping."""
         pytest.skip("Operation lock timeout helper not implemented in current API")
 

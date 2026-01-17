@@ -188,6 +188,7 @@ class TestDatabaseIntegration:
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
         def override_get_db():
+
             return populated_chacha_db
 
         test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db
@@ -224,6 +225,7 @@ class TestDatabaseIntegration:
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
         def override_get_db():
+
             return populated_chacha_db
 
         test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db
@@ -255,8 +257,18 @@ class TestErrorHandling:
     """Test error handling in the API."""
 
     @pytest.mark.integration
-    def test_rate_limit_error_handling(self, test_client, auth_headers):
+    def test_rate_limit_error_handling(self, test_client, auth_headers, monkeypatch):
         """Test rate limit with deterministic TEST_MODE chat limits (per-user RPM=2)."""
+        monkeypatch.setenv("TEST_MODE", "true")
+        monkeypatch.setenv("RG_ENABLED", "0")
+        monkeypatch.setenv("TEST_CHAT_PER_USER_RPM", "2")
+        monkeypatch.setenv("TEST_CHAT_PER_CONVERSATION_RPM", "2")
+        monkeypatch.setenv("TEST_CHAT_GLOBAL_RPM", "10")
+        monkeypatch.setenv("TEST_CHAT_TOKENS_PER_MINUTE", "1000")
+        monkeypatch.delenv("TEST_CHAT_BURST_MULTIPLIER", raising=False)
+        from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter
+        initialize_rate_limiter()
+
         statuses = []
         for i in range(4):
             resp = test_client.post(
@@ -319,9 +331,11 @@ class _BaseQueueStub:
     """Common helpers for queue stubs used in integration tests."""
 
     def __init__(self):
+
         self.enqueue_calls = 0
 
     def is_running(self) -> bool:
+
         return True
 
 
@@ -331,6 +345,7 @@ class _InactiveQueueStub(_BaseQueueStub):
         self._running = False
 
     def is_running(self) -> bool:
+
         return False
 
     async def enqueue(self, *args, **kwargs):
@@ -349,6 +364,7 @@ class _ActiveQueueStub(_BaseQueueStub):
         __slots__ = ()
 
         def __await__(self):
+
             return iter(())
 
     async def enqueue(self, *args, **kwargs):

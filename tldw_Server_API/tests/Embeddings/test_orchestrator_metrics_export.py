@@ -26,7 +26,7 @@ def test_prometheus_metrics_contains_orchestrator_gauges(disable_heavy_startup, 
 
 @pytest.mark.unit
 def test_summary_failure_increments_counter(disable_heavy_startup, admin_user, monkeypatch):
-    # Force Redis connection failure to trigger fallback and counter increment
+     # Force Redis connection failure to trigger fallback and counter increment
     import redis.asyncio as aioredis
 
     async def fake_from_url(*args, **kwargs):
@@ -47,7 +47,7 @@ def test_summary_failure_increments_counter(disable_heavy_startup, admin_user, m
 
 @pytest.mark.unit
 def test_sse_disconnect_increments_counter(disable_heavy_startup, redis_client, monkeypatch):
-    # Call the endpoint function directly and close its generator to trigger disconnect accounting
+     # Call the endpoint function directly and close its generator to trigger disconnect accounting
     from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import orchestrator_events
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 

@@ -12,6 +12,8 @@ pytestmark = pytest.mark.integration
 
 
 def _docker_present() -> bool:
+
+
     try:
         import shutil
         return shutil.which("docker") is not None

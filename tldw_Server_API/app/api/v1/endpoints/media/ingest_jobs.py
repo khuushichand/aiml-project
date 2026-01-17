@@ -1,0 +1,327 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
+import os
+import shutil
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Request
+from pydantic import BaseModel, Field
+from loguru import logger
+from starlette.responses import JSONResponse
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    rbac_rate_limit,
+    require_permissions,
+)
+from tldw_Server_API.app.api.v1.API_Deps.media_add_deps import get_add_media_form
+from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
+from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
+    TempDirManager,
+    save_uploaded_files,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+    validate_add_media_inputs,
+)
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent
+
+
+router = APIRouter()
+
+
+def get_job_manager() -> JobManager:
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    if not db_url:
+        return JobManager()
+    backend = "postgres" if db_url.startswith("postgres") else None
+    return JobManager(backend=backend, db_url=db_url)
+
+
+class MediaIngestJobItem(BaseModel):
+    id: int
+    uuid: Optional[str]
+    source: str
+    source_kind: str
+    status: str
+
+
+class SubmitMediaIngestJobsResponse(BaseModel):
+    batch_id: str
+    jobs: List[MediaIngestJobItem]
+    errors: List[str] = Field(default_factory=list)
+
+
+class MediaIngestJobStatus(BaseModel):
+    id: int
+    uuid: Optional[str]
+    status: str
+    job_type: str
+    owner_user_id: Optional[str]
+    created_at: Optional[str]
+    started_at: Optional[str]
+    completed_at: Optional[str]
+    cancelled_at: Optional[str]
+    cancellation_reason: Optional[str]
+    progress_percent: Optional[float]
+    progress_message: Optional[str]
+    result: Optional[Dict[str, Any]]
+    error_message: Optional[str]
+    media_type: Optional[str] = None
+    source: Optional[str] = None
+    source_kind: Optional[str] = None
+    batch_id: Optional[str] = None
+
+
+class CancelMediaIngestJobResponse(BaseModel):
+    success: bool
+    job_id: int
+    status: str
+    message: Optional[str] = None
+
+
+def _cleanup_dir(path_str: str) -> None:
+    try:
+        shutil.rmtree(path_str, ignore_errors=True)
+    except Exception:
+        pass
+
+
+@router.post(
+    "/ingest/jobs",
+    response_model=SubmitMediaIngestJobsResponse,
+    summary="Submit async media ingestion jobs (one job per item)",
+    tags=["Media Ingestion Jobs"],
+    dependencies=[
+        Depends(require_permissions(MEDIA_CREATE)),
+        Depends(rbac_rate_limit("media.create")),
+    ],
+)
+async def submit_media_ingest_jobs(
+    form_data: AddMediaForm = Depends(get_add_media_form),
+    files: Optional[List[UploadFile]] = File(None, description="Optional media uploads"),
+    current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
+    request: Request = None,
+) -> SubmitMediaIngestJobsResponse:
+    rid = ensure_request_id(request) if request is not None else None
+    tp = ensure_traceparent(request) if request is not None else ""
+
+    # Normalize sentinel urls=[''] from some clients.
+    if form_data.urls and form_data.urls == [""]:
+        form_data.urls = None
+
+    validate_add_media_inputs(form_data.media_type, form_data.urls, files)
+
+    options = form_data.model_dump(mode="json")
+    options.pop("urls", None)
+    options.pop("keywords", None)
+
+    batch_id = str(uuid4())
+    jobs: List[MediaIngestJobItem] = []
+    errors: List[str] = []
+
+    url_list = form_data.urls or []
+    for url in url_list:
+        if not url or not str(url).strip():
+            continue
+        payload = {
+            "batch_id": batch_id,
+            "media_type": str(form_data.media_type),
+            "source": str(url).strip(),
+            "source_kind": "url",
+            "input_ref": str(url).strip(),
+            "options": options,
+        }
+        row = jm.create_job(
+            domain="media_ingest",
+            queue="default",
+            job_type="media_ingest_item",
+            payload=payload,
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=3,
+            request_id=rid,
+            trace_id=tp or None,
+        )
+        jobs.append(
+            MediaIngestJobItem(
+                id=int(row.get("id")),
+                uuid=row.get("uuid"),
+                source=payload["source"],
+                source_kind="url",
+                status=row.get("status"),
+            )
+        )
+
+    if files:
+        for upload in files:
+            temp_dir_path = None
+            try:
+                with TempDirManager(prefix="media_ingest_job_", cleanup=False) as temp_dir:
+                    temp_dir_path = str(temp_dir)
+                    saved_files, file_errors = await save_uploaded_files(
+                        [upload],
+                        temp_dir=temp_dir,
+                        validator=file_validator_instance,
+                        expected_media_type_key=str(form_data.media_type),
+                    )
+                if file_errors:
+                    for err in file_errors:
+                        msg = err.get("error") or "Failed to stage upload"
+                        errors.append(msg)
+                    if temp_dir_path:
+                        _cleanup_dir(temp_dir_path)
+                    continue
+                if not saved_files:
+                    errors.append("Failed to stage upload")
+                    if temp_dir_path:
+                        _cleanup_dir(temp_dir_path)
+                    continue
+
+                saved = saved_files[0]
+                source_path = str(saved.get("path"))
+                original_filename = saved.get("original_filename")
+                input_ref = saved.get("input_ref") or original_filename or source_path
+
+                payload = {
+                    "batch_id": batch_id,
+                    "media_type": str(form_data.media_type),
+                    "source": source_path,
+                    "source_kind": "file",
+                    "input_ref": input_ref,
+                    "original_filename": original_filename,
+                    "temp_dir": temp_dir_path,
+                    "cleanup_temp_dir": True,
+                    "options": options,
+                }
+                row = jm.create_job(
+                    domain="media_ingest",
+                    queue="default",
+                    job_type="media_ingest_item",
+                    payload=payload,
+                    owner_user_id=str(current_user.id),
+                    priority=5,
+                    max_retries=3,
+                    request_id=rid,
+                    trace_id=tp or None,
+                )
+                jobs.append(
+                    MediaIngestJobItem(
+                        id=int(row.get("id")),
+                        uuid=row.get("uuid"),
+                        source=source_path,
+                        source_kind="file",
+                        status=row.get("status"),
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Failed to stage upload for ingest jobs: {}", exc)
+                errors.append(f"Upload staging failed: {exc}")
+                if temp_dir_path:
+                    _cleanup_dir(temp_dir_path)
+
+    if not jobs:
+        if errors:
+            return JSONResponse(
+                status_code=status.HTTP_207_MULTI_STATUS,
+                content=SubmitMediaIngestJobsResponse(
+                    batch_id=batch_id,
+                    jobs=[],
+                    errors=errors,
+                ).model_dump(),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No valid media sources supplied.",
+        )
+
+    return SubmitMediaIngestJobsResponse(batch_id=batch_id, jobs=jobs, errors=errors)
+
+
+@router.get(
+    "/ingest/jobs/{job_id}",
+    response_model=MediaIngestJobStatus,
+    summary="Get media ingest job status",
+    tags=["Media Ingestion Jobs"],
+)
+async def get_media_ingest_job(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
+) -> MediaIngestJobStatus:
+    job = jm.get_job(int(job_id))
+    if not job or str(job.get("domain") or "") != "media_ingest":
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    owner = str(job.get("owner_user_id") or "")
+    if not (principal.is_admin or owner == str(current_user.id)):
+        raise HTTPException(status_code=403, detail="Not authorized for this job")
+
+    payload = job.get("payload") or {}
+    return MediaIngestJobStatus(
+        id=int(job.get("id")),
+        uuid=job.get("uuid"),
+        status=job.get("status"),
+        job_type=job.get("job_type"),
+        owner_user_id=job.get("owner_user_id"),
+        created_at=job.get("created_at"),
+        started_at=job.get("started_at"),
+        completed_at=job.get("completed_at"),
+        cancelled_at=job.get("cancelled_at"),
+        cancellation_reason=job.get("cancellation_reason"),
+        progress_percent=job.get("progress_percent"),
+        progress_message=job.get("progress_message"),
+        result=job.get("result"),
+        error_message=job.get("error_message"),
+        media_type=payload.get("media_type"),
+        source=payload.get("source"),
+        source_kind=payload.get("source_kind"),
+        batch_id=payload.get("batch_id"),
+    )
+
+
+@router.delete(
+    "/ingest/jobs/{job_id}",
+    response_model=CancelMediaIngestJobResponse,
+    summary="Cancel a media ingest job",
+    tags=["Media Ingestion Jobs"],
+)
+async def cancel_media_ingest_job(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
+    reason: Optional[str] = None,
+) -> CancelMediaIngestJobResponse:
+    job = jm.get_job(int(job_id))
+    if not job or str(job.get("domain") or "") != "media_ingest":
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    owner = str(job.get("owner_user_id") or "")
+    if not (principal.is_admin or owner == str(current_user.id)):
+        raise HTTPException(status_code=403, detail="Not authorized for this job")
+
+    status_val = str(job.get("status") or "").lower()
+    if status_val in {"completed", "failed", "cancelled", "quarantined"}:
+        raise HTTPException(status_code=400, detail="Cannot cancel terminal job")
+
+    ok = jm.cancel_job(int(job_id), reason=reason)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Cancellation failed")
+
+    return CancelMediaIngestJobResponse(
+        success=True,
+        job_id=int(job_id),
+        status="cancelled",
+        message="Job cancellation requested",
+    )
+
+
+__all__ = ["router"]

@@ -148,6 +148,7 @@ class TestEvaluationIntegration:
                 assert results.get("partial_results") is True
 
     def test_database_migration(self, temp_db_path):
+
         """Test that database migrations work correctly."""
         # Apply migrations
         migrate_evaluations_database(temp_db_path)

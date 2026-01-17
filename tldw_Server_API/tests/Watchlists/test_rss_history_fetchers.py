@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 
 from tldw_Server_API.app.core.Watchlists import fetchers as F
@@ -41,23 +39,12 @@ async def test_atom_links_extraction_and_follow(monkeypatch):
         p2: {"status": 200, "text": _atom_feed(2, prev_href=None), "headers": {}},
     }
 
-    class _FakeHTTPClient:
-        def __init__(self, mp):
-            self._mapping = mp
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
     async def _fake_afetch(method, url, client=None, headers=None, timeout=None, **kwargs):
         entry = mapping.get(url)
         if entry is None:
             return _FakeResp(404, "", {})
         return _FakeResp(entry.get("status", 200), entry.get("text", ""), entry.get("headers", {}))
 
-    monkeypatch.setattr("tldw_Server_API.app.core.http_client.create_async_client", lambda timeout: _FakeHTTPClient(mapping))
     monkeypatch.setattr("tldw_Server_API.app.core.http_client.afetch", _fake_afetch)
     # Allow outgoing URL by bypassing egress policy in test
     monkeypatch.setattr(F, "is_url_allowed_for_tenant", lambda url, tenant_id: True)

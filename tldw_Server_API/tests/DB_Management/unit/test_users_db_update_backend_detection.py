@@ -46,6 +46,7 @@ class _FakePool:
         self._conn = conn
 
     def transaction(self):
+
         return _FakeTx(self._conn)
 
 

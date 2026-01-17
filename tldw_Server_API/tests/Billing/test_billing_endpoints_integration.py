@@ -13,15 +13,15 @@ which provides:
 Test Groups
 -----------
 1. **Plans endpoint tests**: Verify `/api/v1/billing/plans` returns available
-   subscription plans without authentication.
+    subscription plans without authentication.
 
 2. **Subscription endpoint tests**: Verify `/api/v1/billing/subscription` returns
-   correct subscription status for authenticated users.
+    correct subscription status for authenticated users.
 
 3. **Usage endpoint tests**: Verify `/api/v1/billing/usage` returns usage vs limits.
 
 4. **Billing disabled tests**: Verify endpoints behave correctly when billing
-   is disabled (BILLING_ENABLED=false).
+    is disabled (BILLING_ENABLED=false).
 
 Prerequisites
 -------------
@@ -32,13 +32,17 @@ Note: Stripe-dependent tests (checkout, portal, webhooks) are skipped unless
 STRIPE_API_KEY is configured, as they require external service access.
 """
 
+import json
 import os
+from datetime import datetime, timezone, timedelta
+from urllib.parse import quote
 import pytest
 import pytest_asyncio
 import asyncpg
 import uuid as uuid_lib
 
 from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+from tldw_Server_API.tests.helpers.audit_helpers import flush_audit_events
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.Billing import stripe_client as stripe_client_module
 
@@ -56,6 +60,8 @@ TEST_DB_PASSWORD = _pg.password
 
 
 def _has_postgres_dependencies() -> bool:
+
+
     """Check if PostgreSQL dependencies are available."""
     try:
         import psycopg  # noqa: F401
@@ -80,6 +86,7 @@ class TestBillingPlansEndpoint:
         yield
 
     def test_list_plans_no_auth_required(self):
+
         """Plans endpoint should work without authentication."""
         response = self.client.get("/api/v1/billing/plans")
 
@@ -91,6 +98,7 @@ class TestBillingPlansEndpoint:
         assert "plans" in data
 
     def test_list_plans_returns_default_tiers(self):
+
         """Plans endpoint should return default plan tiers."""
         response = self.client.get("/api/v1/billing/plans")
 
@@ -105,6 +113,7 @@ class TestBillingPlansEndpoint:
         assert "free" in plan_names or len(plans) > 0
 
     def test_plans_include_limits(self):
+
         """Each plan should include limits information."""
         response = self.client.get("/api/v1/billing/plans")
 
@@ -203,6 +212,7 @@ class TestBillingSubscriptionEndpoint:
         yield
 
     def _get_auth_token(self):
+
         """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
@@ -213,6 +223,7 @@ class TestBillingSubscriptionEndpoint:
         return None
 
     def test_subscription_requires_auth(self):
+
         """Subscription endpoint should require authentication."""
         response = self.client.get("/api/v1/billing/subscription")
 
@@ -222,6 +233,7 @@ class TestBillingSubscriptionEndpoint:
         assert response.status_code in [401, 403]
 
     def test_subscription_with_auth(self):
+
         """Subscription endpoint should return data for authenticated user."""
         token = self._get_auth_token()
         if not token:
@@ -239,6 +251,7 @@ class TestBillingSubscriptionEndpoint:
             assert "org_id" in data or "plan_name" in data
 
     def test_subscription_with_org_id(self):
+
         """Subscription endpoint should accept explicit org_id."""
         token = self._get_auth_token()
         if not token:
@@ -252,6 +265,7 @@ class TestBillingSubscriptionEndpoint:
         assert response.status_code in [200, 404]
 
     def test_subscription_rejects_cross_org_access(self):
+
         """Users should not access subscription data for other organizations."""
         token = self._get_auth_token()
         if not token:
@@ -353,6 +367,7 @@ class TestBillingUsageEndpoint:
         yield
 
     def _get_auth_token(self):
+
         """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
@@ -363,6 +378,7 @@ class TestBillingUsageEndpoint:
         return None
 
     def test_usage_requires_auth(self):
+
         """Usage endpoint should require authentication."""
         response = self.client.get("/api/v1/billing/usage")
 
@@ -371,6 +387,7 @@ class TestBillingUsageEndpoint:
         assert response.status_code in [401, 403]
 
     def test_usage_with_auth(self):
+
         """Usage endpoint should return usage data for authenticated user."""
         token = self._get_auth_token()
         if not token:
@@ -388,6 +405,7 @@ class TestBillingUsageEndpoint:
             assert "limits" in data or "usage" in data or "org_id" in data
 
     def test_usage_rejects_cross_org_access(self):
+
         """Users should not access usage data for other organizations."""
         token = self._get_auth_token()
         if not token:
@@ -492,11 +510,28 @@ class TestBillingCheckoutAndPortal:
                     "active",
                 )
 
+            custom_plan_name = "custom-tier"
+            await conn.execute(
+                """
+                INSERT INTO subscription_plans
+                (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, is_active, is_public, sort_order)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, TRUE, TRUE, 10)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                custom_plan_name,
+                "Custom Tier",
+                "Custom plan for integration tests",
+                42,
+                420,
+                json.dumps({"api_calls_day": 123}),
+            )
+
             self.client = client
             self.user_id = user_id
             self.org_id = org_id
             self.username = "billingowner"
             self.password = password
+            self.custom_plan_name = custom_plan_name
 
         finally:
             await conn.close()
@@ -563,6 +598,7 @@ class TestBillingCheckoutAndPortal:
         yield
 
     def _get_auth_token(self):
+
         """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
@@ -573,6 +609,7 @@ class TestBillingCheckoutAndPortal:
         return None
 
     def test_checkout_creates_session_for_owner(self):
+
         """Owner should be able to create a checkout session."""
         token = self._get_auth_token()
         if not token:
@@ -598,6 +635,7 @@ class TestBillingCheckoutAndPortal:
         assert data.get("url") == "https://example.com/checkout"
 
     def test_portal_creates_session_for_owner(self):
+
         """Owner should be able to create a billing portal session."""
         token = self._get_auth_token()
         if not token:
@@ -617,6 +655,30 @@ class TestBillingCheckoutAndPortal:
         assert data.get("session_id") == "ps_int_123"
         assert data.get("url") == "https://example.com/portal"
 
+    def test_checkout_accepts_custom_plan_name(self):
+        """Owner should be able to checkout with a custom plan name."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        response = self.client.post(
+            f"/api/v1/billing/checkout?org_id={self.org_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "plan_name": self.custom_plan_name,
+                "billing_cycle": "monthly",
+                "success_url": "https://example.com/success",
+                "cancel_url": "https://example.com/cancel",
+            },
+        )
+
+        if response.status_code == 404:
+            pytest.skip("Billing routes not available in test environment")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("session_id") == "sess_int_123"
+
 
 @pytest.mark.skipif(
     not _has_postgres_dependencies(),
@@ -626,7 +688,7 @@ class TestOrgInviteEndpoints:
     """Tests for organization invite endpoints."""
 
     @pytest_asyncio.fixture(autouse=True)
-    async def setup_test_user_and_org(self, isolated_test_environment):
+    async def setup_test_user_and_org(self, isolated_test_environment, real_audit_service):
         """Setup test user with organization ownership."""
         client, db_name = isolated_test_environment
 
@@ -653,7 +715,7 @@ class TestOrgInviteEndpoints:
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING id
             """, user_uuid, "inviteowner", "invite@example.com", password_hash,
-                "user", True, True, 5120, 0.0)
+                "admin", True, True, 5120, 0.0)
 
             # Create test organization
             org_id = await conn.fetchval("""
@@ -668,11 +730,43 @@ class TestOrgInviteEndpoints:
                 VALUES ($1, $2, $3)
             """, org_id, user_id, "owner")
 
+            allowed_uuid = str(uuid_lib.uuid4())
+            allowed_password = "Test@Pass#2024!"
+            allowed_hash = password_service.hash_password(allowed_password)
+            allowed_user_id = await conn.fetchval("""
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+            """, allowed_uuid, "inviteallowed", "allowed@example.com", allowed_hash,
+                "user", True, True, 5120, 0.0)
+
+            blocked_uuid = str(uuid_lib.uuid4())
+            blocked_password = "Test@Pass#2024!"
+            blocked_hash = password_service.hash_password(blocked_password)
+            blocked_user_id = await conn.fetchval("""
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+            """, blocked_uuid, "inviteblocked", "blocked@other.com", blocked_hash,
+                "user", True, True, 5120, 0.0)
+
             self.client = client
             self.user_id = user_id
             self.org_id = org_id
             self.username = "inviteowner"
             self.password = password
+            self.allowed_user_id = allowed_user_id
+            self.allowed_username = "inviteallowed"
+            self.allowed_password = allowed_password
+            self.blocked_user_id = blocked_user_id
+            self.blocked_username = "inviteblocked"
+            self.blocked_password = blocked_password
             self.db_name = db_name
 
         finally:
@@ -680,6 +774,7 @@ class TestOrgInviteEndpoints:
         yield
 
     def _get_auth_token(self):
+
         """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
@@ -689,13 +784,124 @@ class TestOrgInviteEndpoints:
             return response.json()["access_token"]
         return None
 
+    def _get_auth_token_for(self, username, password):
+        response = self.client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password}
+        )
+        if response.status_code == 200:
+            return response.json()["access_token"]
+        return None
+
+    def _create_redeem_revoke_invite(self, token: str):
+        create_resp = self.client.post(
+            f"/api/v1/orgs/{self.org_id}/invites",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "role_to_grant": "member",
+                "max_uses": 1,
+                "expiry_days": 7,
+            }
+        )
+
+        if create_resp.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        if create_resp.status_code in [403, 422]:
+            pytest.skip("Invite creation not permitted in this environment")
+        assert create_resp.status_code in [200, 201]
+        invite = create_resp.json()
+        code = invite.get("code")
+        invite_id = invite.get("id")
+        assert code and invite_id
+
+        redeem_resp = self.client.post(
+            "/api/v1/invites/redeem",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"code": code}
+        )
+
+        if redeem_resp.status_code == 404:
+            pytest.skip("Invite routes not available in test environment")
+        assert redeem_resp.status_code == 200
+
+        revoke_resp = self.client.delete(
+            f"/api/v1/orgs/{self.org_id}/invites/{invite_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        if revoke_resp.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        assert revoke_resp.status_code in [200, 204]
+        return code, invite_id
+
+    def _create_revoke_registration_code(self, token: str):
+        create_resp = self.client.post(
+            "/api/v1/admin/registration-codes",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "max_uses": 2,
+                "expiry_days": 7,
+                "role_to_grant": "user",
+            },
+        )
+
+        if create_resp.status_code == 404:
+            pytest.skip("Admin registration code routes not available in test environment")
+        if create_resp.status_code in [403, 422]:
+            pytest.skip("Registration code creation not permitted in this environment")
+        assert create_resp.status_code in [200, 201]
+        code_id = create_resp.json().get("id")
+        assert code_id
+
+        revoke_resp = self.client.delete(
+            f"/api/v1/admin/registration-codes/{code_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        if revoke_resp.status_code == 404:
+            pytest.skip("Admin registration code routes not available in test environment")
+        assert revoke_resp.status_code == 200
+        return code_id
+
+    def _create_revoke_api_key(self, token: str):
+        create_resp = self.client.post(
+            f"/api/v1/admin/users/{self.user_id}/api-keys",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "name": "Audit Test Key",
+                "description": "Audit test",
+                "scope": "write",
+                "expires_in_days": 1,
+            },
+        )
+
+        if create_resp.status_code == 404:
+            pytest.skip("API key admin routes not available in test environment")
+        if create_resp.status_code in [403, 422]:
+            pytest.skip("API key creation not permitted in this environment")
+        assert create_resp.status_code in [200, 201]
+        key_id = create_resp.json().get("id")
+        assert key_id
+
+        revoke_resp = self.client.delete(
+            f"/api/v1/admin/api-keys/{key_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        if revoke_resp.status_code == 404:
+            pytest.skip("API key admin routes not available in test environment")
+        assert revoke_resp.status_code == 200
+        return key_id
+
     def test_preview_invite_invalid_code(self):
+
         """Preview endpoint should return 404 for invalid codes."""
         response = self.client.get("/api/v1/invites/preview?code=INVALID123")
 
         assert response.status_code == 404
 
     def test_redeem_invite_requires_auth(self):
+
         """Redeem endpoint should require authentication."""
         response = self.client.post(
             "/api/v1/invites/redeem",
@@ -707,6 +913,7 @@ class TestOrgInviteEndpoints:
         assert response.status_code in [401, 403, 422]
 
     def test_list_org_invites_requires_auth(self):
+
         """Listing org invites should require authentication."""
         response = self.client.get(f"/api/v1/orgs/{self.org_id}/invites")
 
@@ -715,6 +922,7 @@ class TestOrgInviteEndpoints:
         assert response.status_code in [401, 403]
 
     def test_list_org_invites_with_auth(self):
+
         """Authenticated owner should be able to list org invites."""
         token = self._get_auth_token()
         if not token:
@@ -732,6 +940,7 @@ class TestOrgInviteEndpoints:
             assert "invites" in data or "items" in data or isinstance(data, list)
 
     def test_create_invite_requires_owner_or_admin(self):
+
         """Creating invites should require owner/admin role."""
         token = self._get_auth_token()
         if not token:
@@ -751,6 +960,352 @@ class TestOrgInviteEndpoints:
             pytest.skip("Org/invite routes not available in test environment")
         # Owner should be able to create invites
         assert response.status_code in [200, 201, 403, 422]
+
+    def test_create_invite_with_allowlist_returns_domain(self):
+        """Create invite should return allowed_email_domain when provided."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        response = self.client.post(
+            f"/api/v1/orgs/{self.org_id}/invites",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "role_to_grant": "member",
+                "max_uses": 2,
+                "expiry_days": 7,
+                "allowed_email_domain": "@Example.com",
+            }
+        )
+
+        if response.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        if response.status_code in [403, 422]:
+            pytest.skip("Invite creation not permitted in this environment")
+        assert response.status_code in [200, 201]
+        data = response.json()
+        assert data.get("allowed_email_domain") == "example.com"
+
+    def test_preview_invite_includes_allowlist(self):
+        """Preview should include allowed_email_domain when set."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        create_resp = self.client.post(
+            f"/api/v1/orgs/{self.org_id}/invites",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "role_to_grant": "member",
+                "max_uses": 1,
+                "expiry_days": 7,
+                "allowed_email_domain": "example.com",
+            }
+        )
+
+        if create_resp.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        if create_resp.status_code in [403, 422]:
+            pytest.skip("Invite creation not permitted in this environment")
+        assert create_resp.status_code in [200, 201]
+        code = create_resp.json().get("code")
+        assert code
+
+        preview_resp = self.client.get(f"/api/v1/invites/preview?code={code}")
+        assert preview_resp.status_code == 200
+        preview_data = preview_resp.json()
+        assert preview_data.get("allowed_email_domain") == "example.com"
+
+    def test_redeem_invite_allowlist_blocks_mismatch(self):
+        """Redeem should reject users outside allowed_email_domain."""
+        owner_token = self._get_auth_token()
+        if not owner_token:
+            pytest.skip("Could not get auth token")
+
+        create_resp = self.client.post(
+            f"/api/v1/orgs/{self.org_id}/invites",
+            headers={"Authorization": f"Bearer {owner_token}"},
+            json={
+                "role_to_grant": "member",
+                "max_uses": 1,
+                "expiry_days": 7,
+                "allowed_email_domain": "example.com",
+            }
+        )
+
+        if create_resp.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        if create_resp.status_code in [403, 422]:
+            pytest.skip("Invite creation not permitted in this environment")
+        assert create_resp.status_code in [200, 201]
+        code = create_resp.json().get("code")
+        assert code
+
+        blocked_token = self._get_auth_token_for(self.blocked_username, self.blocked_password)
+        if not blocked_token:
+            pytest.skip("Could not get auth token for blocked user")
+
+        redeem_resp = self.client.post(
+            "/api/v1/invites/redeem",
+            headers={"Authorization": f"Bearer {blocked_token}"},
+            json={"code": code}
+        )
+
+        assert redeem_resp.status_code == 400
+        detail = redeem_resp.json().get("detail", "")
+        assert "allowed email domain" in detail.lower()
+
+    def test_redeem_invite_allowlist_allows_match(self):
+        """Redeem should allow users with matching allowed_email_domain."""
+        owner_token = self._get_auth_token()
+        if not owner_token:
+            pytest.skip("Could not get auth token")
+
+        create_resp = self.client.post(
+            f"/api/v1/orgs/{self.org_id}/invites",
+            headers={"Authorization": f"Bearer {owner_token}"},
+            json={
+                "role_to_grant": "member",
+                "max_uses": 2,
+                "expiry_days": 7,
+                "allowed_email_domain": "example.com",
+            }
+        )
+
+        if create_resp.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        if create_resp.status_code in [403, 422]:
+            pytest.skip("Invite creation not permitted in this environment")
+        assert create_resp.status_code in [200, 201]
+        code = create_resp.json().get("code")
+        assert code
+
+        allowed_token = self._get_auth_token_for(self.allowed_username, self.allowed_password)
+        if not allowed_token:
+            pytest.skip("Could not get auth token for allowed user")
+
+        redeem_resp = self.client.post(
+            "/api/v1/invites/redeem",
+            headers={"Authorization": f"Bearer {allowed_token}"},
+            json={"code": code}
+        )
+
+        assert redeem_resp.status_code == 200
+        data = redeem_resp.json()
+        assert data.get("org_id") == self.org_id
+
+    @pytest.mark.real_audit
+    def test_org_invite_audit_events_emitted(self):
+        """Audit export should include org invite create/redeem/revoke actions."""
+        from tldw_Server_API.app.main import app as _app
+        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+            get_audit_service_for_user,
+            get_or_create_audit_service_for_user_id,
+        )
+
+        async def _override_audit_service(current_user=None):
+            return await get_or_create_audit_service_for_user_id(int(self.user_id))
+
+        _app.dependency_overrides[get_audit_service_for_user] = _override_audit_service
+        try:
+            token = self._get_auth_token()
+            if not token:
+                pytest.skip("Could not get auth token")
+
+            self._create_redeem_revoke_invite(token)
+
+            flush_audit_events(self.client, int(self.user_id))
+
+            start_time = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+            qs = f"format=json&start_time={quote(start_time)}&max_rows=200"
+            audit_resp = self.client.get(
+                f"/api/v1/audit/export?{qs}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            if audit_resp.status_code == 404:
+                pytest.skip("Audit export route not available in test environment")
+            assert audit_resp.status_code == 200
+            entries = audit_resp.json()
+            if isinstance(entries, dict):
+                entries = entries.get("entries", [])
+            actions = {entry.get("action") for entry in entries if isinstance(entry, dict)}
+            assert "org_invite.create" in actions
+            assert "org_invite.redeem" in actions
+            assert "org_invite.revoke" in actions
+        finally:
+            _app.dependency_overrides.pop(get_audit_service_for_user, None)
+
+    @pytest.mark.real_audit
+    def test_audit_export_csv_jsonl_for_org_invites(self):
+        """Audit export should include org invite actions in CSV and JSONL."""
+        from tldw_Server_API.app.main import app as _app
+        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+            get_audit_service_for_user,
+            get_or_create_audit_service_for_user_id,
+        )
+
+        async def _override_audit_service(current_user=None):
+            return await get_or_create_audit_service_for_user_id(int(self.user_id))
+
+        _app.dependency_overrides[get_audit_service_for_user] = _override_audit_service
+        try:
+            token = self._get_auth_token()
+            if not token:
+                pytest.skip("Could not get auth token")
+
+            self._create_redeem_revoke_invite(token)
+            flush_audit_events(self.client, int(self.user_id))
+
+            start_time = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+            csv_qs = f"format=csv&start_time={quote(start_time)}&max_rows=200"
+            csv_resp = self.client.get(
+                f"/api/v1/audit/export?{csv_qs}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            if csv_resp.status_code == 404:
+                pytest.skip("Audit export route not available in test environment")
+            assert csv_resp.status_code == 200
+            csv_text = csv_resp.text
+            assert "action" in csv_text
+            assert "org_invite.create" in csv_text
+            assert "org_invite.redeem" in csv_text
+            assert "org_invite.revoke" in csv_text
+
+            jsonl_qs = f"format=jsonl&start_time={quote(start_time)}&max_rows=200"
+            jsonl_resp = self.client.get(
+                f"/api/v1/audit/export?{jsonl_qs}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            assert jsonl_resp.status_code == 200
+            jsonl_text = jsonl_resp.text.strip()
+            assert jsonl_text
+            actions = set()
+            for line in jsonl_text.splitlines():
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                actions.add(payload.get("action"))
+            assert "org_invite.create" in actions
+            assert "org_invite.redeem" in actions
+            assert "org_invite.revoke" in actions
+        finally:
+            _app.dependency_overrides.pop(get_audit_service_for_user, None)
+
+    @pytest.mark.real_audit
+    def test_audit_export_csv_jsonl_for_registration_codes(self):
+        """Audit export should include registration code actions in CSV and JSONL."""
+        from tldw_Server_API.app.main import app as _app
+        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+            get_audit_service_for_user,
+            get_or_create_audit_service_for_user_id,
+        )
+
+        async def _override_audit_service(current_user=None):
+            return await get_or_create_audit_service_for_user_id(int(self.user_id))
+
+        _app.dependency_overrides[get_audit_service_for_user] = _override_audit_service
+        try:
+            token = self._get_auth_token()
+            if not token:
+                pytest.skip("Could not get auth token")
+
+            self._create_revoke_registration_code(token)
+            flush_audit_events(self.client, int(self.user_id))
+
+            start_time = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+            csv_qs = f"format=csv&start_time={quote(start_time)}&max_rows=200"
+            csv_resp = self.client.get(
+                f"/api/v1/audit/export?{csv_qs}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            if csv_resp.status_code == 404:
+                pytest.skip("Audit export route not available in test environment")
+            assert csv_resp.status_code == 200
+            csv_text = csv_resp.text
+            assert "registration_code.create" in csv_text
+            assert "registration_code.revoke" in csv_text
+
+            jsonl_qs = f"format=jsonl&start_time={quote(start_time)}&max_rows=200"
+            jsonl_resp = self.client.get(
+                f"/api/v1/audit/export?{jsonl_qs}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            assert jsonl_resp.status_code == 200
+            jsonl_text = jsonl_resp.text.strip()
+            assert jsonl_text
+            actions = set()
+            for line in jsonl_text.splitlines():
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                actions.add(payload.get("action"))
+            assert "registration_code.create" in actions
+            assert "registration_code.revoke" in actions
+        finally:
+            _app.dependency_overrides.pop(get_audit_service_for_user, None)
+
+    @pytest.mark.real_audit
+    def test_audit_export_csv_jsonl_for_api_keys(self):
+        """Audit export should include API key actions in CSV and JSONL."""
+        from tldw_Server_API.app.main import app as _app
+        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+            get_audit_service_for_user,
+            get_or_create_audit_service_for_user_id,
+        )
+
+        async def _override_audit_service(current_user=None):
+            return await get_or_create_audit_service_for_user_id(int(self.user_id))
+
+        _app.dependency_overrides[get_audit_service_for_user] = _override_audit_service
+        try:
+            token = self._get_auth_token()
+            if not token:
+                pytest.skip("Could not get auth token")
+
+            self._create_revoke_api_key(token)
+            flush_audit_events(self.client, int(self.user_id))
+
+            start_time = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+            csv_qs = f"format=csv&start_time={quote(start_time)}&max_rows=200"
+            csv_resp = self.client.get(
+                f"/api/v1/audit/export?{csv_qs}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            if csv_resp.status_code == 404:
+                pytest.skip("Audit export route not available in test environment")
+            assert csv_resp.status_code == 200
+            csv_text = csv_resp.text
+            assert "api_key.create" in csv_text
+            assert "api_key.revoke" in csv_text
+
+            jsonl_qs = f"format=jsonl&start_time={quote(start_time)}&max_rows=200"
+            jsonl_resp = self.client.get(
+                f"/api/v1/audit/export?{jsonl_qs}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            assert jsonl_resp.status_code == 200
+            jsonl_text = jsonl_resp.text.strip()
+            assert jsonl_text
+            actions = set()
+            for line in jsonl_text.splitlines():
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                actions.add(payload.get("action"))
+            assert "api_key.create" in actions
+            assert "api_key.revoke" in actions
+        finally:
+            _app.dependency_overrides.pop(get_audit_service_for_user, None)
 
 
 @pytest.mark.skipif(
@@ -800,6 +1355,7 @@ class TestSelfServiceOrgEndpoints:
         yield
 
     def _get_auth_token(self):
+
         """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
@@ -810,6 +1366,7 @@ class TestSelfServiceOrgEndpoints:
         return None
 
     def test_list_user_orgs_requires_auth(self):
+
         """Listing user's orgs should require authentication."""
         response = self.client.get("/api/v1/orgs")
 
@@ -818,6 +1375,7 @@ class TestSelfServiceOrgEndpoints:
         assert response.status_code in [401, 403]
 
     def test_list_user_orgs_with_auth(self):
+
         """Authenticated user should see their orgs (empty initially)."""
         token = self._get_auth_token()
         if not token:
@@ -836,6 +1394,7 @@ class TestSelfServiceOrgEndpoints:
         assert "items" in data or "orgs" in data or isinstance(data, list)
 
     def test_create_org_requires_auth(self):
+
         """Creating an org should require authentication."""
         response = self.client.post(
             "/api/v1/orgs",
@@ -847,6 +1406,7 @@ class TestSelfServiceOrgEndpoints:
         assert response.status_code in [401, 403]
 
     def test_create_org_with_auth(self):
+
         """Authenticated user should be able to create an org."""
         token = self._get_auth_token()
         if not token:

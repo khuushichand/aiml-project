@@ -13,6 +13,7 @@ from fastapi import (
     HTTPException,
     Query,
     Path,
+    Response,
     status
 )
 from loguru import logger
@@ -138,7 +139,9 @@ def _verify_conversation_access(
             detail=f"Chat session {conversation_id} not found"
         )
 
-    if conversation.get('client_id') != str(user_id):
+    stored_client_id = str(conversation.get('client_id', '')).strip()
+    request_user_id = str(user_id).strip()
+    if stored_client_id != request_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this chat session"
@@ -166,7 +169,9 @@ def _verify_message_access(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Chat session {message.get('conversation_id')} not found"
         )
-    if conv.get('client_id') != str(user_id):
+    stored_client_id = str(conv.get('client_id', '')).strip()
+    request_user_id = str(user_id).strip()
+    if stored_client_id != request_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this message"
@@ -203,9 +208,8 @@ async def send_message(
         HTTPException: 404 if chat not found, 403 if unauthorized, 429 if rate limited
     """
     try:
-        # Check rate limits (global + per-minute + per-chat message count)
+        # Check rate limits (per-minute + per-chat message count)
         rate_limiter = get_character_rate_limiter()
-        await rate_limiter.check_rate_limit(current_user.id, "message_send")
         await rate_limiter.check_message_send_rate(current_user.id)
 
         # Verify conversation access
@@ -350,6 +354,10 @@ async def get_chat_messages(
     format_for_completions: bool = Query(False, description="Format messages for use with chat/completions endpoint"),
     include_tool_calls: bool = Query(False, description="Include tool_calls metadata per message when available (standard format only)"),
     include_metadata: bool = Query(False, description="Include stored message metadata.extra JSON where available"),
+    include_message_ids: bool = Query(
+        False,
+        description="Include message_id fields when formatting for completions (no effect on standard format)",
+    ),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -363,6 +371,7 @@ async def get_chat_messages(
         include_deleted: Whether to include soft-deleted messages
         include_character_context: Include character personality as system message
         format_for_completions: Return in format ready for /api/v1/chat/completions
+        include_message_ids: Include message_id fields only in completions-formatted output
         db: Database instance
         current_user: Authenticated user
 
@@ -394,20 +403,25 @@ async def get_chat_messages(
                 formatted_messages = []
                 metadata_extra_map: Dict[str, Any] = {}
 
-                # Add system prompt if character exists
-                if character and include_character_context:
-                    system_prompt_parts = [
-                        f"You are {character.get('name', 'Assistant')}.",
-                        character.get('description', ''),
-                        character.get('personality', ''),
-                        character.get('scenario', ''),
-                        character.get('system_prompt', '')
-                    ]
-                    system_prompt = '\n'.join(part for part in system_prompt_parts if part)
-                    formatted_messages.append({
-                        "role": "system",
-                        "content": system_prompt.strip()
-                    })
+                # Add system prompt only on the first page and only if no system message exists in DB
+                if character and include_character_context and offset == 0:
+                    has_system_in_db = db.has_system_message_for_conversation(
+                        chat_id,
+                        include_deleted=include_deleted,
+                    )
+                    if not has_system_in_db:
+                        system_prompt_parts = [
+                            f"You are {character.get('name', 'Assistant')}.",
+                            character.get('description', ''),
+                            character.get('personality', ''),
+                            character.get('scenario', ''),
+                            character.get('system_prompt', '')
+                        ]
+                        system_prompt = '\n'.join(part for part in system_prompt_parts if part)
+                        formatted_messages.append({
+                            "role": "system",
+                            "content": system_prompt.strip()
+                        })
 
                 # Add conversation messages with optional tool role messages
                 import re as _re
@@ -418,6 +432,8 @@ async def get_chat_messages(
                     msg_id = msg.get('id')
 
                     base_message: Dict[str, Any] = {"role": role, "content": content}
+                    if include_message_ids and msg_id:
+                        base_message["message_id"] = msg_id
 
                     # If assistant message has tool_calls in metadata, include tool role messages (OpenAI-compatible)
                     md = None
@@ -724,14 +740,19 @@ async def edit_message(
         )
 
 
-@router.delete("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Delete a message", tags=["Messages"])
+@router.delete(
+    "/messages/{message_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Delete a message",
+    tags=["Messages"],
+)
 async def delete_message(
     message_id: str = Path(..., description="Message ID"),
     expected_version: int = Query(..., description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
-):
+) -> Response:
     """
     Soft delete a message from a conversation.
 
@@ -777,6 +798,7 @@ async def delete_message(
                 logger.debug(f"Non-fatal: failed to bump conversation metadata for {message['conversation_id']}")
 
         logger.info(f"Soft deleted message {message_id} by user {current_user.id}")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     except HTTPException:
         raise

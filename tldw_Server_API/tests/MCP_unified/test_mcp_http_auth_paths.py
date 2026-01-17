@@ -10,6 +10,7 @@ from tldw_Server_API.app.api.v1.endpoints import mcp_unified_endpoint as mcp_ep
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.MCP_unified.auth import UserRole
+from tldw_Server_API.app.core.MCP_unified import server as mcp_server
 
 
 # Disable HTTP security guard for these tests (IP allowlist/mTLS) to focus on auth behavior.
@@ -58,9 +59,46 @@ class _DummyServer:
 
 
 def _install_dummy_server(monkeypatch) -> _DummyServer:
+
+
     server = _DummyServer()
     monkeypatch.setattr(mcp_ep, "get_mcp_server", lambda: server)
     return server
+
+
+class _RBACAllow:
+    async def check_permission(self, *_args, **_kwargs):
+        return True
+
+
+class _ScopeServer:
+    def __init__(self):
+        from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+
+        self.initialized = True
+        self.protocol = MCPProtocol()
+        self.protocol.rbac_policy = _RBACAllow()
+
+    async def initialize(self):
+        self.initialized = True
+
+    async def handle_http_request(
+        self,
+        request,
+        client_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
+        from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+
+        ctx = RequestContext(
+            request_id=str(getattr(request, "id", "http")),
+            user_id=user_id,
+            client_id=client_id,
+            session_id=None,
+            metadata=metadata or {},
+        )
+        return await self.protocol.process_request(request, ctx)
 
 
 @pytest.mark.asyncio
@@ -128,6 +166,41 @@ async def test_mcp_http_requests_use_single_api_key_validation(monkeypatch):
     assert server.last_metadata is not None
     assert server.last_metadata.get("org_id") == 9
     assert server.last_metadata.get("team_id") == 7
+
+
+def test_http_api_key_scopes_enforced(monkeypatch):
+    """
+    Ensure API key scopes propagate to HTTP metadata and enforce mcp: scope checks.
+    """
+    # Force multi-user API key path (no single-user shim).
+    monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "0")
+    monkeypatch.setattr(mcp_ep, "is_single_user_mode", lambda: False)
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: False)
+
+    class _DummyApiManager:
+        async def validate_api_key(self, key: str, ip_address: Optional[str] = None) -> Dict[str, Any]:
+            scope = ["mcp:tool:media.search"] if key == "scope-match" else ["mcp:tool:other"]
+            return {"user_id": "123", "org_id": 9, "team_id": 7, "scope": scope}
+
+    async def _fake_get_api_key_manager():
+        return _DummyApiManager()
+
+    monkeypatch.setattr(mcp_ep, "get_api_key_manager", _fake_get_api_key_manager)
+
+    server = _ScopeServer()
+    monkeypatch.setattr(mcp_ep, "get_mcp_server", lambda: server)
+
+    payload = {"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "media.search"}, "id": 1}
+
+    # Scope mismatch -> authorization error (403)
+    r0 = client.post("/api/v1/mcp/request", headers={"X-API-KEY": "scope-mismatch"}, json=payload)
+    assert r0.status_code == 403
+
+    # Scope match -> passes auth (handler will fail later with tool-not-found)
+    r1 = client.post("/api/v1/mcp/request", headers={"X-API-KEY": "scope-match"}, json=payload)
+    assert r1.status_code == 200
+    body = r1.json()
+    assert body.get("error", {}).get("code") == -32602
 
 
 @pytest.mark.asyncio
@@ -366,7 +439,7 @@ async def test_get_current_user_authnz_revoked_does_not_fallback(monkeypatch):
             raise AssertionError("MCP JWT fallback should not be attempted")
 
     monkeypatch.setattr(mcp_ep, "verify_jwt_and_fetch_user", _revoked_verify)
-    monkeypatch.setattr(mcp_ep, "get_jwt_service", lambda: _JwtService())
+    monkeypatch.setattr(mcp_server, "get_jwt_service", lambda: _JwtService())
     monkeypatch.setattr(mcp_ep, "get_jwt_manager", lambda: _FailingJwtManager())
 
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="revoked.jwt.token")
@@ -431,7 +504,7 @@ async def test_get_current_user_authnz_and_mcp_failure_use_api_key_and_set_state
     assert isinstance(user, mcp_ep.TokenData)
     assert user.sub == "42"
     assert user.roles == ["api_client"]
-    assert user.permissions == []
+    assert user.permissions == ["read"]
 
     # API key should have been validated exactly once.
     assert len(calls) == 1
@@ -552,7 +625,7 @@ async def test_single_user_test_api_key_uses_api_key_manager_outside_dev_context
     assert isinstance(user, mcp_ep.TokenData)
     assert user.sub == "777"
     assert user.roles == ["api_client"]
-    assert user.permissions == []
+    assert user.permissions == ["read"]
 
     assert len(calls) == 1
     assert calls[0]["key"] == test_key

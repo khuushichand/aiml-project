@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useEffect, useRef, ReactNode } fro
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { LogOut, Menu, X } from 'lucide-react';
-import { logout, getCurrentUser } from '@/lib/auth';
+import { logout } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -51,14 +51,13 @@ function MobileHeader() {
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState(() => getCurrentUser());
-  const { hasPermission, hasRole, loading: permLoading } = usePermissions();
+  const { user, hasPermission, hasRole, loading: permLoading, refresh } = usePermissions();
   const { error: showError } = useToast();
 
   const handleLogout = async () => {
     try {
       await logout();
-      setUser(null);
+      await refresh();
       router.push('/login');
     } catch (error) {
       console.error('Logout failed:', error);

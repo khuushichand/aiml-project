@@ -9,9 +9,11 @@ import binascii
 import io
 import json
 import os
+import struct
 import time
 import uuid
 import yaml
+import zlib
 from typing import Dict, List, Optional, Tuple, Any, Union, Set
 
 from PIL import Image
@@ -44,63 +46,251 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
     """
     file_name_for_log = "image_stream"
 
-    def _create_image_source() -> Tuple[Optional[io.BytesIO], str]:
-        """Create BytesIO source from various input types. Returns (source, filename)."""
+    def _create_image_source() -> Tuple[Optional[io.BytesIO], Optional[bytes], str]:
+        """Create BytesIO source from various input types. Returns (source, raw_bytes, filename)."""
         nonlocal file_name_for_log
+        raw_bytes: Optional[bytes] = None
         if isinstance(image_file_input, str) and os.path.exists(image_file_input):
             file_name_for_log = image_file_input
             with open(image_file_input, 'rb') as f_bytes:
-                return io.BytesIO(f_bytes.read()), file_name_for_log
+                raw_bytes = f_bytes.read()
         elif isinstance(image_file_input, bytes):
-            return io.BytesIO(image_file_input), file_name_for_log
+            raw_bytes = image_file_input
         elif hasattr(image_file_input, 'read'):  # File-like object
             if hasattr(image_file_input, 'name') and image_file_input.name:
                 file_name_for_log = image_file_input.name
-            image_file_input.seek(0)
-            data = io.BytesIO(image_file_input.read())
-            image_file_input.seek(0)  # Reset original stream pointer
-            return data, file_name_for_log
+            try:
+                image_file_input.seek(0)
+            except Exception:
+                pass
+            raw_bytes = image_file_input.read()
+            try:
+                image_file_input.seek(0)  # Reset original stream pointer
+            except Exception:
+                pass
         else:
             logger.error("extract_json_from_image_file: Invalid input type. Must be file path, bytes, or BytesIO.")
-            return None, file_name_for_log
+            return None, None, file_name_for_log
 
-    def _extract_metadata(img_obj: Image.Image) -> Optional[str]:
-        """Extract and decode character metadata from image."""
-        if not hasattr(img_obj, 'info') or not isinstance(img_obj.info, dict):
-            logger.debug(
-                f"'chara' key not found in image metadata for '{file_name_for_log}'. "
-                f"Available metadata keys: {list(img_obj.info.keys()) if isinstance(img_obj.info, dict) else 'N/A'}")
+        if not raw_bytes:
+            logger.error("extract_json_from_image_file: No image data provided.")
+            return None, None, file_name_for_log
+        return io.BytesIO(raw_bytes), raw_bytes, file_name_for_log
+
+    def _normalize_key(raw_key: Any) -> str:
+        if isinstance(raw_key, bytes):
+            return raw_key.decode('utf-8', errors='replace').lower()
+        return str(raw_key).lower()
+
+    def _try_parse_json_text(raw_text: str) -> Optional[str]:
+        trimmed = raw_text.strip()
+        if not trimmed:
             return None
-
-        # Try each metadata key and continue to next if decoding fails
-        for metadata_key in ['chara', 'character', 'tEXt']:
-            if metadata_key not in img_obj.info:
-                continue
-
-            chara_base64_str = img_obj.info[metadata_key]
-            logger.debug(f"Found character data in '{metadata_key}' field")
-
+        if trimmed.startswith("data:") and "base64," in trimmed:
+            trimmed = trimmed.split("base64,", 1)[1].strip()
+        if trimmed[:1] in ("{", "["):
             try:
-                decoded_chara_json_str = base64.b64decode(chara_base64_str).decode('utf-8')
-                json.loads(decoded_chara_json_str)  # Validate it's JSON
-                logger.info(f"Successfully extracted and decoded 'chara' JSON from '{file_name_for_log}' (key: {metadata_key}).")
-                return decoded_chara_json_str
-            except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as decode_err:
-                logger.warning(
-                    f"Error decoding '{metadata_key}' metadata from '{file_name_for_log}': {decode_err}. Trying next key...")
-                continue
-            except Exception as e:
-                logger.warning(f"Unexpected error during '{metadata_key}' processing from '{file_name_for_log}': {e}. Trying next key...")
-                continue
-
-        # No keys worked
-        logger.debug(
-            f"No valid character data found in image metadata for '{file_name_for_log}'. "
-            f"Available metadata keys: {list(img_obj.info.keys())}")
+                json.loads(trimmed)
+                return trimmed
+            except json.JSONDecodeError:
+                return None
         return None
 
+    def _try_base64_json(raw_value: Union[str, bytes], context_label: Optional[str] = None) -> Optional[str]:
+        if isinstance(raw_value, str):
+            normalized = "".join(raw_value.split())
+            if normalized.startswith("data:") and "base64," in normalized:
+                normalized = normalized.split("base64,", 1)[1].strip()
+            if not normalized:
+                return None
+            padded = normalized + ("=" * (-len(normalized) % 4))
+            raw_bytes = padded
+        else:
+            raw_bytes = raw_value
+        try:
+            decoded = base64.b64decode(raw_bytes)
+        except binascii.Error as exc:
+            if context_label:
+                logger.error(
+                    f"Error decoding '{context_label}' metadata from '{file_name_for_log}': {exc}"
+                )
+            return None
+        try:
+            decoded_text = decoded.decode('utf-8').lstrip("\ufeff").strip()
+        except UnicodeDecodeError as exc:
+            if context_label:
+                logger.error(
+                    f"Error decoding '{context_label}' metadata from '{file_name_for_log}': {exc}"
+                )
+            return None
+        if not decoded_text:
+            return None
+        try:
+            json.loads(decoded_text)
+            return decoded_text
+        except json.JSONDecodeError as exc:
+            if context_label:
+                logger.error(
+                    f"Error decoding '{context_label}' metadata from '{file_name_for_log}': {exc}"
+                )
+            return None
+
+    def _decode_candidate_value(raw_value: Any, context_label: Optional[str] = None) -> Optional[str]:
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, dict):
+            for sub_value in raw_value.values():
+                decoded = _decode_candidate_value(sub_value, context_label=context_label)
+                if decoded:
+                    return decoded
+            return None
+        if isinstance(raw_value, (list, tuple)):
+            for entry in raw_value:
+                decoded = _decode_candidate_value(entry, context_label=context_label)
+                if decoded:
+                    return decoded
+            return None
+        if isinstance(raw_value, bytes):
+            try:
+                raw_text = raw_value.decode('utf-8')
+                decoded = _try_parse_json_text(raw_text)
+                if decoded:
+                    return decoded
+            except UnicodeDecodeError:
+                pass
+            return _try_base64_json(raw_value, context_label=context_label)
+        if isinstance(raw_value, str):
+            decoded = _try_parse_json_text(raw_value)
+            if decoded:
+                return decoded
+            return _try_base64_json(raw_value, context_label=context_label)
+        return None
+
+    def _iter_metadata_items(metadata: Dict[str, Any]) -> List[Tuple[Any, Any]]:
+        items: List[Tuple[Any, Any]] = []
+        for key, value in metadata.items():
+            items.append((key, value))
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    items.append((sub_key, sub_value))
+        return items
+
+    def _extract_from_metadata_items(items: List[Tuple[Any, Any]], source_label: str) -> Optional[str]:
+        if not items:
+            return None
+        preferred_keys = {"chara", "character"}
+        attempted_keys: Set[str] = set()
+        for key, value in items:
+            normalized_key = _normalize_key(key)
+            if normalized_key not in preferred_keys:
+                continue
+            attempted_keys.add(normalized_key)
+            decoded = _decode_candidate_value(value, context_label=normalized_key)
+            if decoded:
+                logger.info(
+                    f"Successfully extracted 'chara' JSON from '{file_name_for_log}' (key: {key}, source: {source_label})."
+                )
+                return decoded
+        for key, value in items:
+            if _normalize_key(key) in attempted_keys:
+                continue
+            decoded = _decode_candidate_value(value)
+            if decoded:
+                logger.info(
+                    f"Successfully extracted character JSON from '{file_name_for_log}' (key: {key}, source: {source_label})."
+                )
+                return decoded
+        available_keys = sorted({_normalize_key(key) for key, _ in items})
+        logger.debug(
+            f"No valid character data found in image metadata for '{file_name_for_log}' "
+            f"(source: {source_label}). Available keys: {available_keys}"
+        )
+        return None
+
+    def _extract_png_text_chunks(raw_bytes: bytes) -> Dict[str, str]:
+        if not raw_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
+            return {}
+        pos = 8
+        chunks: Dict[str, str] = {}
+        while pos + 8 <= len(raw_bytes):
+            length = struct.unpack(">I", raw_bytes[pos:pos + 4])[0]
+            chunk_type = raw_bytes[pos + 4:pos + 8]
+            data_start = pos + 8
+            data_end = data_start + length
+            if data_end + 4 > len(raw_bytes):
+                break
+            data = raw_bytes[data_start:data_end]
+            pos = data_end + 4
+
+            if chunk_type == b'tEXt':
+                if b'\x00' not in data:
+                    continue
+                keyword, text = data.split(b'\x00', 1)
+                chunks[keyword.decode('latin-1', errors='ignore')] = text.decode('utf-8', errors='replace')
+            elif chunk_type == b'zTXt':
+                if b'\x00' not in data:
+                    continue
+                keyword, rest = data.split(b'\x00', 1)
+                if not rest:
+                    continue
+                compression_method = rest[:1]
+                compressed_text = rest[1:]
+                if compression_method != b'\x00':
+                    continue
+                try:
+                    text = zlib.decompress(compressed_text)
+                    chunks[keyword.decode('latin-1', errors='ignore')] = text.decode('utf-8', errors='replace')
+                except Exception:
+                    continue
+            elif chunk_type == b'iTXt':
+                parts = data.split(b'\x00', 5)
+                if len(parts) < 6:
+                    continue
+                keyword = parts[0].decode('latin-1', errors='ignore')
+                compression_flag = parts[1][:1]
+                compression_method = parts[2][:1]
+                text = parts[5]
+                if compression_flag == b'\x01':
+                    if compression_method != b'\x00':
+                        continue
+                    try:
+                        text = zlib.decompress(text)
+                    except Exception:
+                        continue
+                chunks[keyword] = text.decode('utf-8', errors='replace')
+        return chunks
+
+    def _extract_from_png_bytes(raw_bytes: Optional[bytes]) -> Optional[str]:
+        if not raw_bytes:
+            return None
+        try:
+            chunks = _extract_png_text_chunks(raw_bytes)
+        except Exception as e:
+            logger.debug(f"Failed to parse PNG text chunks for '{file_name_for_log}': {e}")
+            return None
+        if not chunks:
+            return None
+        return _extract_from_metadata_items(list(chunks.items()), "png-chunks")
+
+    def _extract_metadata(img_obj: Image.Image, raw_bytes: Optional[bytes]) -> Optional[str]:
+        metadata_sources: List[Tuple[str, Dict[str, Any]]] = []
+        if hasattr(img_obj, 'info') and isinstance(img_obj.info, dict):
+            metadata_sources.append(("info", img_obj.info))
+        text_metadata = getattr(img_obj, 'text', None)
+        if isinstance(text_metadata, dict):
+            metadata_sources.append(("text", text_metadata))
+
+        if not metadata_sources:
+            return _extract_from_png_bytes(raw_bytes)
+
+        for label, metadata in metadata_sources:
+            decoded = _extract_from_metadata_items(_iter_metadata_items(metadata), label)
+            if decoded:
+                return decoded
+        return _extract_from_png_bytes(raw_bytes)
+
     try:
-        image_source, file_name_for_log = _create_image_source()
+        image_source, raw_bytes, file_name_for_log = _create_image_source()
         if image_source is None:
             return None
 
@@ -112,13 +302,15 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                 img_obj = Image.open(image_source)
                 if hasattr(img_obj, "__enter__") and hasattr(img_obj, "__exit__"):
                     with img_obj as opened:
-                        # Support for PNG and WEBP cards (TavernAI, SillyTavern convention)
                         if opened.format not in ['PNG', 'WEBP']:
                             logger.warning(
                                 f"Image '{file_name_for_log}' is not in PNG or WEBP format "
                                 f"(format: {opened.format}). 'chara' metadata extraction may fail.")
 
-                        return _extract_metadata(opened)
+                        result = _extract_metadata(opened, raw_bytes)
+                        if result:
+                            return result
+                        return None
 
                 try:
                     if img_obj.format not in ['PNG', 'WEBP']:
@@ -126,7 +318,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                             f"Image '{file_name_for_log}' is not in PNG or WEBP format "
                             f"(format: {img_obj.format}). 'chara' metadata extraction may fail.")
 
-                    return _extract_metadata(img_obj)
+                    return _extract_metadata(img_obj, raw_bytes)
                 finally:
                     if hasattr(img_obj, "close"):
                         try:
@@ -138,6 +330,9 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
             logger.error(
                 f"Cannot open or read image file (or not a valid image): {file_name_for_log}. Error: {e}",
                 exc_info=True)
+            fallback = _extract_from_png_bytes(raw_bytes)
+            if fallback:
+                return fallback
             return None
 
     except FileNotFoundError:
@@ -347,11 +542,42 @@ def load_character_card_from_string_content(content_str: str) -> Optional[Dict[s
         return None
 
 
+def _infer_character_name_from_filename(file_name: Optional[str]) -> str:
+    if not file_name:
+        return "Imported Character"
+    base_name = os.path.basename(file_name)
+    base_name = os.path.splitext(base_name)[0]
+    if base_name.lower().endswith(".card"):
+        base_name = base_name[:-5]
+    base_name = base_name.replace("_", " ").replace("-", " ").strip()
+    base_name = " ".join(base_name.split())
+    return base_name or "Imported Character"
+
+
+def _build_image_only_character(file_name: Optional[str], image_bytes: Optional[bytes]) -> Dict[str, Any]:
+    name = _infer_character_name_from_filename(file_name)
+    payload: Dict[str, Any] = {
+        "name": name,
+        "description": "Imported from image file without embedded character data.",
+        "personality": "Image-only import.",
+        "scenario": "Imported from image file.",
+        "first_message": f"Hello! I'm {name}.",
+        "message_example": "User: Hello\nCharacter: Hi there! I was imported from an image.",
+        "tags": ["image-only-import"],
+        "extensions": {"image_only_import": True},
+    }
+    if image_bytes:
+        payload["image"] = image_bytes
+    return payload
+
+
 def import_and_save_character_from_file(
     db: CharactersRAGDB,
     file_path: Optional[str] = None,
     file_content: Optional[Union[str, bytes]] = None,
-    file_type: Optional[str] = None
+    file_type: Optional[str] = None,
+    file_name: Optional[str] = None,
+    allow_image_only: bool = False
 ) -> Tuple[bool, str, Optional[int]]:
     """Import and save a character from a file.
 
@@ -360,12 +586,16 @@ def import_and_save_character_from_file(
         file_path: Path to the file (optional if file_content provided)
         file_content: File content (optional if file_path provided)
         file_type: File type hint ('json', 'png', 'yaml', etc.)
+        file_name: Optional file name hint (used for image-only fallbacks)
+        allow_image_only: Whether to allow image-only imports when metadata is missing
 
     Returns:
         Tuple of (success, message, character_id)
     """
     try:
         parsed_card = None
+        import_message = None
+        name_hint = file_name or file_path
 
         # Determine file type
         if file_path:
@@ -396,12 +626,19 @@ def import_and_save_character_from_file(
             if json_str:
                 parsed_card = import_character_card_from_json_string(json_str)
                 if parsed_card is not None and original_image_bytes:
-                    if not parsed_card.get("image"):
-                        parsed_card["image"] = original_image_bytes
-                    if parsed_card.get("image_base64") in (None, "", []):
-                        parsed_card.pop("image_base64", None)
+                    parsed_card["image"] = original_image_bytes
+                    parsed_card.pop("image_base64", None)
             else:
-                return False, "No character data found in image metadata", None
+                if original_image_bytes:
+                    if allow_image_only:
+                        parsed_card = _build_image_only_character(name_hint, original_image_bytes)
+                        import_message = (
+                            "No character data found in image metadata; imported image-only character."
+                        )
+                    else:
+                        return False, "missing_character_data", None
+                else:
+                    return False, "No character data found in image metadata", None
 
         elif file_type in ['json', 'yaml', 'text'] or file_content:
             # Handle text-based formats
@@ -426,7 +663,7 @@ def import_and_save_character_from_file(
             character_id = create_new_character_from_data(db, parsed_card)
             if character_id:
                 character_name = parsed_card.get('name', 'Unknown')
-                return True, f"Successfully imported character '{character_name}'", character_id
+                return True, import_message or f"Successfully imported character '{character_name}'", character_id
             else:
                 return False, "Failed to save character to database", None
         else:

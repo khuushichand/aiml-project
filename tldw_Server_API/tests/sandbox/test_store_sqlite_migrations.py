@@ -4,6 +4,8 @@ import sqlite3
 
 
 def test_sqlite_store_migrations_add_new_columns(tmp_path) -> None:
+
+
     db_path = tmp_path / "sandbox_store.db"
     # Create old schema missing runtime_version and resource_usage
     con = sqlite3.connect(str(db_path))

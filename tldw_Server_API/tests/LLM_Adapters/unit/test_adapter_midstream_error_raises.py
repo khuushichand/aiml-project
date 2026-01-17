@@ -73,7 +73,6 @@ class _FakeClient:
     ],
 )
 def test_adapter_midstream_error_raises(monkeypatch, adapter_path: str):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     parts = adapter_path.split(".")
     mod_path = ".".join(parts[:-1])
     cls_name = parts[-1]

@@ -17,6 +17,19 @@ from .exceptions import InvalidInputError
 from .chunker import Chunker
 from .templates import TemplateManager
 from .utils.metrics import get_metrics, MetricsContext
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+
+
+async def _close_response(resp: Any) -> None:
+    if resp is None:
+        return
+    close = getattr(resp, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(resp, "close", None)
+    if callable(close):
+        close()
 
 
 class AsyncChunker:
@@ -207,10 +220,22 @@ class AsyncChunker:
         method_name = normalized_method or str(base_method)
         method_lower = method_name.lower()
         language = options.get('language') or self.config.language
+        language_lower = str(language or "").lower()
         space_delimited_methods = {
             'words', 'sentences', 'paragraphs', 'semantic', 'tokens',
             'propositions', 'structure_aware', 'code', 'fixed_size',
         }
+        languages_no_space = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
+        ws_chars = (' ', '\t', '\n', '\r', '\v', '\f')
+
+        def _needs_space_separator(prefix: str, suffix: str) -> bool:
+            if not prefix or not suffix:
+                return False
+            if suffix[0].isspace() or prefix.endswith(ws_chars):
+                return False
+            if language_lower in languages_no_space:
+                return False
+            return method_lower == 'words' or method_lower in space_delimited_methods
 
         def _coerce_overlap_value(value: Any) -> str:
             """Ensure overlap carry-over stays textual even for structured chunks."""
@@ -234,12 +259,7 @@ class AsyncChunker:
 
             # Chunk the buffer using precise boundary concatenation
             overlap_text = _coerce_overlap_value(overlap_buffer)
-            sep = ''
-            if overlap_text and buffer and not buffer[0].isspace() and not overlap_text.endswith((' ', '\t', '\n', '\r', '\v', '\f')):
-                if method_lower == 'words':
-                    sep = ' '
-                elif method_lower in space_delimited_methods:
-                    sep = ' '
+            sep = ' ' if _needs_space_separator(overlap_text, buffer) else ''
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,
@@ -277,21 +297,13 @@ class AsyncChunker:
 
             buffer = ""
 
-        # Process remaining buffer
+        # Process remaining buffer; only flush overlap-only tail when overlap == 0
         should_flush = bool(buffer)
-        if not should_flush and overlap_buffer:
-            if overlap_size > 0:
-                should_flush = method_lower != 'words'
-            else:
-                should_flush = True
+        if not should_flush and overlap_buffer and overlap_size == 0:
+            should_flush = True
         if should_flush:
             overlap_text = _coerce_overlap_value(overlap_buffer)
-            sep = ''
-            if overlap_text and buffer and not buffer[0].isspace() and not overlap_text.endswith((' ', '\t', '\n', '\r', '\v', '\f')):
-                if method_lower == 'words':
-                    sep = ' '
-                elif method_lower in space_delimited_methods:
-                    sep = ' '
+            sep = ' ' if _needs_space_separator(overlap_text, buffer) else ''
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,
@@ -355,13 +367,18 @@ class AsyncChunker:
         Returns:
             List of text chunks
         """
-        import aiohttp
-
-        # Configure timeout for HTTP request to prevent hanging connections
-        client_timeout = aiohttp.ClientTimeout(total=timeout)
-        async with aiohttp.ClientSession(timeout=client_timeout) as session:
-            async with session.get(url) as response:
-                text = await response.text()
+        resp = None
+        retry_policy = RetryPolicy(attempts=1, retry_on_unsafe=False)
+        try:
+            resp = await afetch(
+                method="GET",
+                url=url,
+                timeout=timeout,
+                retry=retry_policy,
+            )
+            text = resp.text
+        finally:
+            await _close_response(resp)
 
         return await self.chunk_text(text, method, max_size, overlap, **options)
 

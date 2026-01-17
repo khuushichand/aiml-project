@@ -7,7 +7,9 @@ from fastapi.testclient import TestClient
 
 
 def _client(monkeypatch) -> TestClient:
-    # Speed up and stabilize sandbox WS behavior in tests
+
+
+     # Speed up and stabilize sandbox WS behavior in tests
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
@@ -24,12 +26,16 @@ def _client(monkeypatch) -> TestClient:
 
 
 def _admin_user_dep():
+
+
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
     return User(id=1, username="admin", roles=["admin"], is_admin=True)
 
 
 def test_admin_details_includes_resource_usage(monkeypatch) -> None:
-    # Override dependency for admin route using the app from TestClient
+
+
+     # Override dependency for admin route using the app from TestClient
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
     with _client(monkeypatch) as client:

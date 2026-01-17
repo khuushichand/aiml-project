@@ -17,6 +17,8 @@ def _parse_sqlite_ts(s: str) -> datetime:
 
 
 def test_lease_cap_applies_to_acquire_and_renew(monkeypatch, tmp_path):
+
+
     db_path = tmp_path / "jobs.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)

@@ -17,14 +17,32 @@ Notes:
 """
 
 import argparse
+import asyncio
 import json
 import os
 import re
 import sys
 import time
+from pathlib import Path
 from typing import Optional
 
-import requests
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
+
+from common.repo_utils import configure_local_egress, ensure_repo_root
+
+ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def _to_headers(api_key: Optional[str]) -> dict:
@@ -35,7 +53,20 @@ def _to_headers(api_key: Optional[str]) -> dict:
     return h
 
 
-def stream_chat_sse(base_url: str, api_key: Optional[str], model: str, prompt: str, timeout: float = 600.0) -> dict:
+async def _iter_sse_lines(byte_iter):
+    buffer = b""
+    async for chunk in byte_iter:
+        if not chunk:
+            continue
+        buffer += chunk
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            yield line.rstrip(b"\r").decode("utf-8", errors="replace")
+    if buffer:
+        yield buffer.decode("utf-8", errors="replace")
+
+
+async def stream_chat_sse(base_url: str, api_key: Optional[str], model: str, prompt: str, timeout: float = 600.0) -> dict:
     url = base_url.rstrip("/") + "/api/v1/chat/completions"
     payload = {
         "model": model,
@@ -53,10 +84,16 @@ def stream_chat_sse(base_url: str, api_key: Optional[str], model: str, prompt: s
     total_heartbeats = 0
     last_nonempty = ""
 
-    with requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout) as r:
-        r.raise_for_status()
-        print(f"HTTP {r.status_code}; streaming...")
-        for raw in r.iter_lines(decode_unicode=True):
+    print("streaming...")
+    try:
+        byte_iter = http_client.astream_bytes(
+            method="POST",
+            url=url,
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
+        async for raw in _iter_sse_lines(byte_iter):
             if raw is None or raw == "":
                 continue
             s = str(raw)
@@ -76,6 +113,8 @@ def stream_chat_sse(base_url: str, api_key: Optional[str], model: str, prompt: s
             last_nonempty = s
             if s.strip().lower() == "data: [done]":
                 break
+    except Exception as exc:
+        raise RuntimeError(f"Streaming failed: {exc}") from exc
 
     print(f"TTFT: {ttft:.1f} ms" if ttft is not None else "TTFT: n/a")
     print(f"lines: total={total_lines} data={total_data_lines} heartbeats={total_heartbeats}")
@@ -92,7 +131,7 @@ def stream_chat_sse(base_url: str, api_key: Optional[str], model: str, prompt: s
 def fetch_metrics(base_url: str, api_key: Optional[str]) -> str:
     url = base_url.rstrip("/") + "/api/v1/metrics/text"
     headers = _to_headers(api_key)
-    r = requests.get(url, headers=headers, timeout=30)
+    r = http_client.fetch(method="GET", url=url, headers=headers, timeout=30)
     r.raise_for_status()
     return r.text
 
@@ -150,23 +189,28 @@ def main() -> int:
     ap.add_argument("--prompt", default="Hello from unified streaming demo", help="User message content")
     args = ap.parse_args()
 
+    configure_local_egress(args.base_url)
+
+    rc = 0
     try:
-        stream_chat_sse(args.base_url, args.api_key, args.model, args.prompt)
-    except requests.HTTPError as he:
-        print(f"HTTP error: {he}")
-        return 2
+        asyncio.run(stream_chat_sse(args.base_url, args.api_key, args.model, args.prompt))
     except Exception as e:
         print(f"Streaming failed: {e}")
-        return 2
+        rc = 2
+    else:
+        try:
+            mt = fetch_metrics(args.base_url, args.api_key)
+            print_unified_sse_metrics(mt)
+        except Exception as e:
+            print(f"Fetching/printing metrics failed: {e}")
+            rc = 3
+    finally:
+        try:
+            asyncio.run(http_client.shutdown_http_client())
+        except Exception:
+            pass
 
-    try:
-        mt = fetch_metrics(args.base_url, args.api_key)
-        print_unified_sse_metrics(mt)
-    except Exception as e:
-        print(f"Fetching/printing metrics failed: {e}")
-        return 3
-
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +12,9 @@ import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
+import { formatBytes, formatDateTime } from '@/lib/format';
 import { useUrlPagination } from '@/lib/use-url-state';
+import { usePagedResource, type LoadOptions } from '@/lib/use-paged-resource';
 import type { BackupItem } from '@/types';
 import { Database } from 'lucide-react';
 import { Field } from '@/components/data-ops/Field';
@@ -35,41 +37,23 @@ const BACKUP_TYPES = [
   { value: 'incremental', label: 'Incremental' },
 ];
 
-const formatBytes = (value?: number | null) => {
-  if (value === null || value === undefined) return '—';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = value;
-  let idx = 0;
-  while (size >= 1024 && idx < units.length - 1) {
-    size /= 1024;
-    idx += 1;
-  }
-  return `${size.toFixed(1)} ${units[idx]}`;
-};
-
-const formatDate = (value?: string | null) => {
-  if (!value) return '—';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString('en-US', {
+const formatBackupDate = (value?: string | null) => formatDateTime(value, {
+  fallback: '—',
+  options: {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hour12: false,
-  });
-};
+  },
+});
 
 export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
   const { success, error: showError } = useToast();
   const confirm = useConfirm();
-
-  const [backups, setBackups] = useState<BackupItem[]>([]);
-  const [backupTotal, setBackupTotal] = useState(0);
-  const [backupLoading, setBackupLoading] = useState(true);
-  const [backupError, setBackupError] = useState('');
 
   const [listDataset, setListDataset] = useState('');
   const [listUserId, setListUserId] = useState('');
@@ -91,26 +75,20 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
     return params;
   }, [listDataset, listUserId, page, pageSize]);
 
-  const loadBackups = useCallback(async () => {
-    try {
-      setBackupLoading(true);
-      setBackupError('');
-      const data = await api.getBackups(backupParams);
-      setBackups(data.items);
-      setBackupTotal(data.total);
-    } catch (err: unknown) {
-      const message = err instanceof Error && err.message ? err.message : 'Failed to load backups';
-      setBackupError(message);
-      setBackups([]);
-      setBackupTotal(0);
-    } finally {
-      setBackupLoading(false);
-    }
-  }, [backupParams]);
+  const loadBackups = useCallback(({ signal }: LoadOptions = {}) =>
+    api.getBackups(backupParams, signal ? { signal } : undefined), [backupParams]);
 
-  useEffect(() => {
-    void loadBackups();
-  }, [loadBackups, refreshSignal]);
+  const {
+    items: backups,
+    total: backupTotal,
+    loading: backupLoading,
+    error: backupError,
+    reload,
+  } = usePagedResource<BackupItem>({
+    load: loadBackups,
+    deps: [refreshSignal],
+    defaultError: 'Failed to load backups',
+  });
 
   const handleBackupFilterChange = (key: 'dataset' | 'user', value: string) => {
     if (key === 'dataset') {
@@ -147,7 +125,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
       setCreatingBackup(true);
       await api.createBackup(payload);
       success('Backup created', 'Snapshot created successfully.');
-      await loadBackups();
+      await reload();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to create backup';
       showError('Backup failed', message);
@@ -174,7 +152,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
         confirm: true,
       });
       success('Restore complete', 'Backup restored successfully.');
-      await loadBackups();
+      await reload();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to restore backup';
       showError('Restore failed', message);
@@ -219,7 +197,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
             />
           </Field>
           <div className="flex items-end">
-            <Button variant="outline" onClick={loadBackups} disabled={backupLoading}>
+            <Button variant="outline" onClick={reload} disabled={backupLoading}>
               Refresh list
             </Button>
           </div>
@@ -317,8 +295,8 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                       {backup.status}
                     </Badge>
                   </TableCell>
-                  <TableCell>{formatBytes(backup.size_bytes)}</TableCell>
-                  <TableCell>{formatDate(backup.created_at)}</TableCell>
+                  <TableCell>{formatBytes(backup.size_bytes, { fallback: '—' })}</TableCell>
+                  <TableCell>{formatBackupDate(backup.created_at)}</TableCell>
                   <TableCell className="text-right">
                     <Button
                       variant="outline"

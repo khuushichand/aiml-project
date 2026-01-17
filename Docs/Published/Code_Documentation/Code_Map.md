@@ -34,7 +34,8 @@ flowchart LR
 - Server entry: `tldw_Server_API/app/main.py`
 - API endpoints: `tldw_Server_API/app/api/v1/endpoints/`
 - Core logic: `tldw_Server_API/app/core/`
-- Web UI: `tldw_Server_API/WebUI/` (served at `/webui`)
+- Web UI (current): `tldw-frontend/` (Next.js client)
+- Web UI (legacy): `tldw_Server_API/WebUI/` (served at `/webui`)
 - Config files: `tldw_Server_API/Config_Files/`
 - Databases: `Databases/` (top-level) and `tldw_Server_API/Databases/` (runtime)
 - Tests: `tldw_Server_API/tests/`
@@ -42,7 +43,45 @@ flowchart LR
 ## API Surface (Selected)
 
 - Auth & Users: `auth.py`, `users.py`
-- Media: `media.py`, `media_embeddings.py`
+- Media:
+  - `POST /api/v1/media/add` - ingest URLs/files with processing + persistence.
+  - `GET /api/v1/media/` - list media items (paginated).
+  - `GET /api/v1/media/metadata-search` - search by safe metadata fields.
+  - `GET /api/v1/media/by-identifier` - lookup by DOI/PMID/PMCID/arXiv/S2 identifiers.
+  - `POST /api/v1/media/search` - search media items (FTS/filters).
+  - `GET /api/v1/media/{media_id}` - fetch a media item (content/versions optional).
+  - `PUT /api/v1/media/{media_id}` - update a media item (metadata/content).
+  - `GET /api/v1/media/{media_id}/file` - stream the original stored file.
+  - `GET /api/v1/media/debug/schema` - inspect media DB schema/row counts.
+  - `POST /api/v1/media/ingest-web-content` - ingest web content with persistence.
+  - `POST /api/v1/media/{media_id}/reprocess` - rebuild chunks/embeddings for stored media.
+  - `GET /api/v1/media/transcription-models` - list available transcription models.
+  - `POST /api/v1/media/process-documents` - process documents (no DB persistence).
+  - `POST /api/v1/media/process-pdfs` - process PDFs (no DB persistence).
+  - `POST /api/v1/media/process-ebooks` - process EPUBs (no DB persistence).
+  - `POST /api/v1/media/process-emails` - process email files (no DB persistence).
+  - `POST /api/v1/media/process-videos` - process videos (no DB persistence).
+  - `POST /api/v1/media/process-audios` - process audio (no DB persistence).
+  - `POST /api/v1/media/process-code` - process code files (no DB persistence).
+  - `POST /api/v1/media/process-web-scraping` - scrape/summarize URLs (ephemeral or persisted by mode).
+  - `POST /api/v1/media/mediawiki/ingest-dump` - ingest MediaWiki dump (persisted).
+  - `POST /api/v1/media/mediawiki/process-dump` - process MediaWiki dump (no persistence).
+  - `GET /api/v1/media/{media_id}/versions` - list media versions.
+  - `GET /api/v1/media/{media_id}/versions/{version_number}` - get a specific version.
+  - `POST /api/v1/media/{media_id}/versions` - create a new version.
+  - `DELETE /api/v1/media/{media_id}/versions/{version_number}` - soft-delete a version.
+  - `POST /api/v1/media/{media_id}/versions/rollback` - rollback to a previous version.
+  - `PATCH /api/v1/media/{media_id}/metadata` - update safe metadata on latest version.
+  - `PUT /api/v1/media/{media_id}/versions/{version_number}/metadata` - set safe metadata on a version.
+  - `POST /api/v1/media/{media_id}/versions/advanced` - create/update version with content + metadata.
+  - Embeddings (`media_embeddings.py`):
+    - `GET /api/v1/media/{media_id}/embeddings/status` - check embedding status.
+    - `POST /api/v1/media/{media_id}/embeddings` - generate embeddings.
+    - `DELETE /api/v1/media/{media_id}/embeddings` - delete embeddings.
+    - `POST /api/v1/media/embeddings/batch` - enqueue batch embedding jobs.
+    - `POST /api/v1/media/embeddings/search` - vector search over embeddings.
+    - `GET /api/v1/media/embeddings/jobs` - list embedding jobs.
+    - `GET /api/v1/media/embeddings/jobs/{job_id}` - fetch embedding job status.
 - Audio: `audio.py` (OpenAI-compatible STT + WebSocket streaming)
 - Chunking: `chunking.py`, `chunking_templates.py`
 - Embeddings: `embeddings_v5_production_enhanced.py`, `vector_stores_openai.py`
@@ -83,19 +122,21 @@ Routers are mounted in `main.py` with prefix `/api/v1`.
   - Root-level path `Databases/Media_DB_v2.db` is deprecated
   - Backends layer wired for PostgreSQL but SQLite is default
 - AuthNZ (Users):
-  - `DATABASE_URL` (env) - default in single-user mode resolves to `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`
+  - `DATABASE_URL` (env) - default `sqlite:///./Databases/users.db` in single-user mode
   - PostgreSQL recommended for multi-user mode
 - Evaluations DB: `Databases/evaluations.db` (unified schema + audit; DI can map per-user audit paths)
 - Per-user notes/chats: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
-- Per-user prompts/Prompt Studio: `<USER_DB_BASE_DIR>/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`
+- Per-user prompts: `<USER_DB_BASE_DIR>/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`
+- Prompt Studio DB: `<USER_DB_BASE_DIR>/<user_id>/prompt_studio_dbs/prompt_studio.db`
 - Vector store (per user): ChromaDB at `<USER_DB_BASE_DIR>/<user_id>/chroma_storage/` with meta/jobs SQLite under `vector_store/`
+- Per-user storage (non-DB assets): outputs (`<USER_DB_BASE_DIR>/<user_id>/outputs/`), voices (`<USER_DB_BASE_DIR>/<user_id>/voices/`), rewrite cache (`<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl`), personalization (`<USER_DB_BASE_DIR>/<user_id>/rag_personalization.json`)
 
-Note: All paths can be overridden by environment or config. `USER_DB_BASE_DIR` controls the per-user root (defaults to `Databases/user_databases`).
+Note: All paths can be overridden by environment variable or `Config_Files/config.txt`. `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` and controls the per-user root (defaults to `Databases/user_databases/`); `USER_DB_BASE` is deprecated and only used as an alias for rewrite cache resolution.
 
 ## Key Flows
 
 1) Media Ingestion → Chunking → Embedding → RAG Index
-   - Endpoint: `POST /api/v1/media/process` → `core/Ingestion_Media_Processing/*`
+   - Endpoint: `POST /api/v1/media/add` (persist) or `POST /api/v1/media/process-*` (no DB) → `core/Ingestion_Media_Processing/*`
    - Chunking via `core/Chunking/chunker.py` (optionally hierarchical/templates)
    - Embeddings via `core/Embeddings/` → ChromaDB and FTS5 entries in Media DB
 
@@ -129,4 +170,4 @@ Note: All paths can be overridden by environment or config. `USER_DB_BASE_DIR` c
 
 - CORS configured in `main.py` (adjust for deployment)
 - Auth mode and keys set via env or `Config_Files/`
-- Web UI lives under `/webui` and interacts with the same API
+- The Next.js UI lives under `tldw-frontend/` (see `tldw-frontend/README.md`); the legacy WebUI is served at `/webui` (see `tldw_Server_API/WebUI/README.md`)

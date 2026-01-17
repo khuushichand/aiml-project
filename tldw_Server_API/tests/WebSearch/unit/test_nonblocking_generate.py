@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.unit
 
-# Disable rate limiting before importing app (avoids slowapi decorator errors)
+# Disable rate limiting before importing app (keeps tests permissive)
 os.environ["TEST_MODE"] = "true"
 
 

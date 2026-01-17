@@ -27,7 +27,16 @@ from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_pr
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_evaluations_database as _create_evals_db,
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_custom_metrics import get_custom_metrics
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
@@ -48,6 +57,48 @@ except Exception:
         return {"embedding_config": {"default_model_id": ""}}
     def create_embeddings_batch(*args, **kwargs):  # type: ignore[misc]
         raise RuntimeError("Embeddings backend unavailable; install required dependencies")
+
+
+def _call_adapter_text(
+    *,
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    system_message: Optional[str] = None,
+    response_format: Optional[Dict[str, Any]] = None,
+    max_tokens: Optional[int] = None,
+    user: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **extra_kwargs: Any,
+) -> str:
+    provider = normalize_provider(api_endpoint)
+    if not provider:
+        raise ChatConfigurationError(provider=api_endpoint, message="LLM provider is required.")
+    cfg = ensure_app_config(app_config)
+    resolved_model = model or resolve_provider_model(provider, cfg)
+    if not resolved_model:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+    system_msg = system_message
+    cleaned_messages = messages_payload or []
+    if not system_msg:
+        system_msg, cleaned_messages = split_system_message(cleaned_messages)
+    request: Dict[str, Any] = {
+        "messages": cleaned_messages,
+        "system_message": system_msg,
+        "model": resolved_model,
+        "api_key": api_key or resolve_provider_api_key_from_config(provider, cfg),
+        "temperature": temperature,
+        "response_format": response_format,
+        "max_tokens": max_tokens,
+        "user": user,
+        "app_config": cfg,
+    }
+    request.update(extra_kwargs)
+    response = get_adapter_or_raise(provider).chat(request, timeout=timeout)
+    return extract_response_content(response) or str(response)
 
 
 
@@ -595,11 +646,23 @@ class EvaluationRunner:
                     )
                     # Extract normalized metric scores
                     scores = {}
-                    for mname, mdata in rag_metrics.get("metrics", {}).items():
+                    def _extract_score(value: Any) -> Optional[float]:
+                        raw_val = value
+                        if isinstance(value, dict):
+                            raw_val = value.get("score")
+                            if raw_val is None:
+                                raw_val = value.get("raw_score")
+                        else:
+                            raw_val = getattr(value, "score", value)
                         try:
-                            scores[mname] = float(getattr(mdata, "score", 0.0))
-                        except Exception:
-                            pass
+                            return float(raw_val)
+                        except (TypeError, ValueError):
+                            return None
+
+                    for mname, mdata in rag_metrics.get("metrics", {}).items():
+                        score_val = _extract_score(mdata)
+                        if score_val is not None:
+                            scores[mname] = score_val
                     overall = float(rag_metrics.get("overall_score", 0.0))
                 except Exception as e:
                     logger.error(f"RAG metrics failed for {cfg_id} sample {s_idx}: {e}")
@@ -627,9 +690,13 @@ class EvaluationRunner:
 
                     try:
                         if cov is not None:
-                            scores["retrieval_coverage"] = float(getattr(cov, "score", 0.0))
+                            cov_score = _extract_score(cov)
+                            if cov_score is not None:
+                                scores["retrieval_coverage"] = cov_score
                         if div is not None:
-                            scores["retrieval_diversity"] = float(getattr(div, "score", 0.0))
+                            div_score = _extract_score(div)
+                            if div_score is not None:
+                                scores["retrieval_diversity"] = div_score
                     except Exception:
                         pass
 
@@ -1180,7 +1247,7 @@ class EvaluationRunner:
                     except (TypeError, ValueError):
                         continue
                     max_score = 3.0 if metric == "fluency" else 5.0
-                    scores[metric] = raw / max_score if raw > 1.0 else raw
+                    scores[metric] = raw / max_score if raw >= 1.0 else raw
             else:
                 # Legacy string output fallback
                 import re
@@ -1188,7 +1255,8 @@ class EvaluationRunner:
                     pattern = f"{metric}.*?([0-9.]+)"
                     match = re.search(pattern, str(result), re.IGNORECASE)
                     if match:
-                        scores[metric] = float(match.group(1)) / 5.0  # Normalize to 0-1
+                        max_score = 3.0 if metric == "fluency" else 5.0
+                        scores[metric] = float(match.group(1)) / max_score  # Normalize to 0-1
 
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
@@ -1218,7 +1286,13 @@ class EvaluationRunner:
             query = sample["input"].get("query", "")
             contexts = sample["input"].get("contexts", [])
             response = sample["input"].get("response", "")
-            ground_truth = sample.get("expected", {}).get("answer", "")
+            expected = sample.get("expected")
+            if isinstance(expected, dict):
+                ground_truth = expected.get("answer", "")
+            elif isinstance(expected, str):
+                ground_truth = expected
+            else:
+                ground_truth = ""
 
             # Run RAG evaluation
             result = await self.rag_evaluator.evaluate(
@@ -1553,13 +1627,13 @@ class EvaluationRunner:
                 response_format = {"type": "json_object"} if structured else None
 
                 try:
-                    resp = chat_api_call(
+                    resp = _call_adapter_text(
                         api_endpoint=api_name,
                         messages_payload=messages,
-                        temp=temperature,
+                        temperature=temperature,
                         system_message=system_prompt,
                         response_format=response_format,
-                        max_tokens=16
+                        max_tokens=16,
                     )
                 except Exception as ce:
                     logger.error(f"Chat call failed for label_choice {sample_id}: {ce}")
@@ -1747,13 +1821,13 @@ class EvaluationRunner:
                 response_format = {"type": "json_object"} if structured else None
 
                 try:
-                    resp = chat_api_call(
+                    resp = _call_adapter_text(
                         api_endpoint=api_name,
                         messages_payload=messages,
-                        temp=temperature,
+                        temperature=temperature,
                         system_message=system_prompt,
                         response_format=response_format,
-                        max_tokens=16
+                        max_tokens=16,
                     )
                 except Exception as ce:
                     logger.error(f"Chat call failed for nli_factcheck {sample_id}: {ce}")

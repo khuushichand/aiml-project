@@ -12,6 +12,8 @@ def _setup(jobs_pg_dsn):
 
 
 def test_renew_progress_persists_without_enforcement_postgres(monkeypatch, jobs_pg_dsn):
+
+
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
 
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
@@ -28,6 +30,8 @@ def test_renew_progress_persists_without_enforcement_postgres(monkeypatch, jobs_
 
 
 def test_renew_progress_persists_with_enforcement_postgres(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("JOBS_ENFORCE_LEASE_ACK", "true")
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
 

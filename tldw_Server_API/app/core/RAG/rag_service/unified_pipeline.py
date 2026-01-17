@@ -21,7 +21,7 @@ import re
 from datetime import datetime, timedelta
 import calendar
 from typing import Dict, List, Any, Optional, Union, Literal
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from loguru import logger
 import asyncio
 from functools import partial
@@ -46,11 +46,12 @@ except ImportError:
 
 # Query intent analysis / routing
 try:
-    from .query_features import QueryAnalyzer, QueryIntent, QueryRouter
+    from .query_features import QueryAnalyzer, QueryIntent, QueryRouter, QueryRewriter
 except ImportError:
     QueryAnalyzer = None
     QueryIntent = None
     QueryRouter = None
+    QueryRewriter = None
 
 # HyDE utilities
 try:
@@ -206,6 +207,40 @@ try:
 except ImportError:
     UnifiedFeedbackSystem = None
 
+
+def _normalize_chunk_type_value(value: Any) -> Optional[str]:
+    try:
+        if Chunker is not None:
+            normalized = Chunker.normalize_chunk_type(value)  # type: ignore[attr-defined]
+            if normalized:
+                return normalized
+    except Exception:
+        pass
+    if value is None:
+        return None
+    try:
+        raw = str(value).strip().lower()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    aliases = {
+        "header": "heading",
+        "header_atx": "heading",
+        "header_line": "heading",
+        "hr": "heading",
+        "paragraph": "text",
+        "list_unordered": "list",
+        "list_ordered": "list",
+        "code_fence": "code",
+        "table_md": "table",
+    }
+    if raw in aliases:
+        return aliases[raw]
+    if raw in {"image", "video", "audio", "file", "media"}:
+        return "media"
+    return raw
+
 try:
     from .user_personalization_store import UserPersonalizationStore
 except ImportError:
@@ -283,6 +318,7 @@ async def unified_rag_pipeline(
     expand_query: bool = False,
     expansion_strategies: List[str] = None,  # ["acronym", "synonym", "domain", "entity"]
     spell_check: bool = False,
+    max_query_variations: int = 3,
 
     # ========== PSEUDO-RELEVANCE FEEDBACK (PRF) ==========
     enable_prf: bool = False,
@@ -400,6 +436,7 @@ async def unified_rag_pipeline(
     max_subqueries: int = 4,
     subquery_time_budget_sec: Optional[float] = None,
     subquery_doc_budget: Optional[int] = None,
+    subquery_max_concurrency: int = 3,
     # ========== GRAPH-AUGMENTED RETRIEVAL ==========
     enable_graph_retrieval: bool = False,
     graph_version: Optional[str] = None,
@@ -518,6 +555,54 @@ async def unified_rag_pipeline(
         )
     """
 
+    # Basic input validation (short-circuit before heavier setup)
+    if not isinstance(query, str) or not query.strip():
+        msg = "Invalid query"
+        metadata = {"original_query": query}
+        try:
+            inbound_meta = kwargs.get("metadata")
+            if isinstance(inbound_meta, dict):
+                metadata.update(inbound_meta)
+        except Exception:
+            pass
+        timings = {"total": 0.0}
+        # Consistent contract: return UnifiedRAGResponse for all outcomes
+        try:
+            from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
+            return UnifiedRAGResponse(
+                documents=[],
+                query=(query if isinstance(query, str) else ""),
+                expanded_queries=[],
+                metadata=metadata,
+                timings=timings,
+                citations=[],
+                academic_citations=[],
+                chunk_citations=[],
+                generated_answer=msg,
+                cache_hit=False,
+                errors=[msg],
+                security_report=None,
+                total_time=0.0,
+                claims=None,
+                factuality=None,
+            )
+        except Exception:
+            # Fallback to dataclass if schema import fails (non-API contexts)
+            return UnifiedSearchResult(
+                documents=[],
+                query=query if isinstance(query, str) else "",
+                expanded_queries=[],
+                metadata=metadata,
+                timings=timings,
+                citations=[],
+                feedback_id=None,
+                generated_answer=msg,
+                cache_hit=False,
+                errors=[msg],
+                security_report=None,
+                total_time=0.0,
+            )
+
     # Normalize common alias/compat args
     expand_query = expand_query or kwargs.get("enable_expansion", False)
 
@@ -617,49 +702,6 @@ async def unified_rag_pipeline(
             call_coro = _attempt()
 
         return await _with_timeout(call_coro, timeout_seconds)
-
-    # Basic input validation
-    if not isinstance(query, str) or not query.strip():
-        msg = "Invalid query"
-        result.generated_answer = msg
-        result.errors.append(msg)
-        result.timings["total"] = 0.0
-        # Consistent contract: return UnifiedRAGResponse for all outcomes
-        try:
-            from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
-            return UnifiedRAGResponse(
-                documents=[],
-                query=(query if isinstance(query, str) else ""),
-                expanded_queries=[],
-                metadata=result.metadata,
-                timings=result.timings,
-                citations=[],
-                academic_citations=[],
-                chunk_citations=[],
-                generated_answer=msg,
-                cache_hit=False,
-                errors=result.errors,
-                security_report=None,
-                total_time=0.0,
-                claims=None,
-                factuality=None,
-            )
-        except Exception:
-            # Fallback to dataclass if schema import fails (non-API contexts)
-            return UnifiedSearchResult(
-                documents=[],
-                query=query if isinstance(query, str) else "",
-                expanded_queries=[],
-                metadata=result.metadata,
-                timings=result.timings,
-                citations=[],
-                feedback_id=None,
-                generated_answer=msg,
-                cache_hit=False,
-                errors=result.errors,
-                security_report=None,
-                total_time=0.0,
-            )
 
     # Initialize monitoring if requested
     metrics = None
@@ -765,6 +807,26 @@ async def unified_rag_pipeline(
         except Exception:
             pass
 
+        # Precompute query analysis once for reuse across phases
+        analysis = None
+        analysis_intent_val = None
+        analysis_complexity_val = None
+        analysis_domain = None
+        if QueryAnalyzer and query:
+            try:
+                qa = QueryAnalyzer()
+                analysis = qa.analyze_query(query)
+                analysis_intent = getattr(analysis, "intent", None)
+                analysis_complexity = getattr(analysis, "complexity", None)
+                analysis_intent_val = getattr(analysis_intent, "value", str(analysis_intent)) if analysis_intent is not None else None
+                analysis_complexity_val = getattr(analysis_complexity, "value", str(analysis_complexity)) if analysis_complexity is not None else None
+                analysis_domain = getattr(analysis, "domain", None)
+            except Exception:
+                analysis = None
+                analysis_intent_val = None
+                analysis_complexity_val = None
+                analysis_domain = None
+
         # ========== QUERY EXPANSION ==========
         expanded_queries = [query]
         if expand_query:
@@ -772,25 +834,19 @@ async def unified_rag_pipeline(
             try:
                 # Try rewrite cache first
                 cached_rewrites: List[str] = []
-                intent_label = None
-                if QueryAnalyzer:
+                intent_label = analysis_intent_val
+                if RewriteCache and user_id:
                     try:
-                        qa = QueryAnalyzer(); analysis = qa.analyze_query(query)
-                        intent_label = getattr(analysis, "intent", None)
-                        if intent_label is not None:
-                            intent_label = getattr(intent_label, "value", str(intent_label))
-                    except Exception:
-                        intent_label = None
-                if RewriteCache:
-                    try:
-                        rc = RewriteCache(user_id=user_id or "anon")
+                        rc = RewriteCache(user_id=user_id)
                         cached = rc.get(query, intent=intent_label, corpus=index_namespace)
                         if cached:
                             cached_rewrites = [c for c in cached if isinstance(c, str) and c.strip()]
-                            expanded_queries = list({q.strip(): None for q in ([query] + cached_rewrites)}.keys())
+                    except ValueError as exc:
+                        logger.debug(f"Rewrite cache disabled for user_id={user_id}: {exc}")
                     except Exception:
                         pass
                 strategies = (expansion_strategies or ["acronym", "synonym"]).copy()
+                expanded_variants: List[str] = []
                 if multi_strategy_expansion:
                     if index_namespace:
                         expanded = await multi_strategy_expansion(query, strategies=strategies, corpus=index_namespace)
@@ -798,19 +854,63 @@ async def unified_rag_pipeline(
                         # Avoid passing None to preserve expected call signature in tests
                         expanded = await multi_strategy_expansion(query, strategies=strategies)
                     if isinstance(expanded, list):
-                        expanded_queries = list({q.strip(): None for q in ([query] + expanded) if isinstance(q, str)}.keys())
+                        expanded_variants.extend([q for q in expanded if isinstance(q, str)])
                     elif isinstance(expanded, str) and expanded.strip():
-                        expanded_queries = list({q.strip(): None for q in ([query, expanded]) if isinstance(q, str)}.keys())
+                        expanded_variants.append(expanded)
+                rewriter_variants: List[str] = []
+                if QueryRewriter and query:
+                    try:
+                        rewriter = QueryRewriter()
+                        rw = rewriter.rewrite_query(
+                            query,
+                            strategies=["decompose", "generalize", "specify", "clarify"],
+                        )
+                        rewriter_variants = [
+                            r.rewritten_query for r in rw
+                            if getattr(r, "rewritten_query", None)
+                        ]
+                    except Exception:
+                        rewriter_variants = []
+
+                # Merge and dedupe all candidates while preserving order
+                candidate_queries: List[str] = [query]
+                candidate_queries.extend(cached_rewrites)
+                candidate_queries.extend(expanded_variants)
+                candidate_queries.extend(rewriter_variants)
+                expanded_queries = []
+                seen = set()
+                for q in candidate_queries:
+                    if not isinstance(q, str):
+                        continue
+                    s = q.strip()
+                    if not s or s in seen:
+                        continue
+                    seen.add(s)
+                    expanded_queries.append(s)
+
+                # Bound the number of variations to avoid excessive retrieval fan-out
+                try:
+                    max_variations = max(0, int(max_query_variations))
+                except Exception:
+                    max_variations = 3
+                limit = 1 + max_variations
+                if len(expanded_queries) > limit:
+                    expanded_queries = expanded_queries[:limit]
                 # Persist effective rewrites for future reuse (best-effort)
                 try:
-                    if RewriteCache and len(expanded_queries) > 1:
+                    if RewriteCache and user_id and len(expanded_queries) > 1:
                         rew = [q for q in expanded_queries if q != query][:5]
                         if rew:
-                            rc = RewriteCache(user_id=user_id or "anon")
+                            rc = RewriteCache(user_id=user_id)
                             rc.put(query, rewrites=rew, intent=intent_label, corpus=index_namespace)
+                except ValueError as exc:
+                    logger.debug(f"Rewrite cache write disabled for user_id={user_id}: {exc}")
                 except Exception:
                     pass
                 result.expanded_queries = [q for q in expanded_queries if q != query]
+                if result.expanded_queries:
+                    result.metadata.setdefault("query_expansion", {})
+                    result.metadata["query_expansion"]["variations"] = len(result.expanded_queries)
                 result.timings["query_expansion"] = time.time() - expansion_start
                 if metrics:
                     metrics.expansion_time = result.timings["query_expansion"]
@@ -903,6 +1003,19 @@ async def unified_rag_pipeline(
                                 break
 
                 if result.cache_hit:
+                    empty_cached_docs = False
+                    if isinstance(cached_documents, dict):
+                        docs = cached_documents.get("documents")
+                        if isinstance(docs, list) and not docs:
+                            empty_cached_docs = True
+                    elif isinstance(cached_documents, list) and not cached_documents:
+                        empty_cached_docs = True
+                    if empty_cached_docs:
+                        # Treat empty cached results as a miss to avoid stale false negatives.
+                        result.cache_hit = False
+                        cached_documents = None
+
+                if result.cache_hit:
                     if isinstance(cached_documents, dict):
                         ans = cached_documents.get("answer")
                         if ans is not None:
@@ -922,26 +1035,31 @@ async def unified_rag_pipeline(
                 metrics.cache_lookup_time = result.timings["cache_check"]
 
         # ========== INTENT-BASED WEIGHTING (optional) ==========
-        if adaptive_hybrid_weights and search_mode == "hybrid" and QueryAnalyzer:
+        if adaptive_hybrid_weights and search_mode == "hybrid":
             try:
-                qa = QueryAnalyzer()
-                analysis = qa.analyze_query(query)
+                local_analysis = analysis
+                if local_analysis is None and QueryAnalyzer and query:
+                    try:
+                        qa = QueryAnalyzer()
+                        local_analysis = qa.analyze_query(query)
+                    except Exception:
+                        local_analysis = None
                 # Conceptual queries favor semantic; specific factual favor keyword
-                if getattr(analysis, "intent", None) is not None:
-                    if analysis.intent in {
+                if local_analysis and getattr(local_analysis, "intent", None) is not None:
+                    if local_analysis.intent in {
                         getattr(QueryIntent, "EXPLORATORY", None),
                         getattr(QueryIntent, "DEFINITIONAL", None),
                         getattr(QueryIntent, "ANALYTICAL", None),
                         getattr(QueryIntent, "PROCEDURAL", None),
                     }:
                         hybrid_alpha = 0.7
-                    elif analysis.intent in {
+                    elif local_analysis.intent in {
                         getattr(QueryIntent, "FACTUAL", None),
                         getattr(QueryIntent, "COMPARATIVE", None),
                         getattr(QueryIntent, "TEMPORAL", None),
                     }:
                         hybrid_alpha = 0.4
-                    result.metadata["query_intent"] = getattr(analysis.intent, "value", str(analysis.intent))
+                    result.metadata["query_intent"] = getattr(local_analysis.intent, "value", str(local_analysis.intent))
                 result.metadata["adaptive_hybrid_alpha"] = hybrid_alpha
             except Exception:
                 pass
@@ -1219,6 +1337,65 @@ async def unified_rag_pipeline(
                         except Exception as e:
                             result.errors.append(f"HyDE retrieval merge failed: {e}")
 
+                    # Optional: expand retrieval across query variants
+                    if expand_query and expanded_queries and len(expanded_queries) > 1:
+                        exp_start = time.time()
+                        try:
+                            extra_queries = [q for q in expanded_queries if q != query]
+                            exp_docs: List[Document] = []
+                            for eq in extra_queries:
+                                try:
+                                    if search_mode == "hybrid" and hybrid_supported and rh is not None:
+                                        eq_docs = await _resilient_call(
+                                            "retrieval_expansion",
+                                            rh,
+                                            query=eq,
+                                            alpha=hybrid_alpha,
+                                            index_namespace=index_namespace,
+                                            allowed_media_ids=include_media_ids,
+                                        )
+                                    else:
+                                        try:
+                                            exp_cfg = replace(config, max_results=max(1, int(top_k or 1)))
+                                        except Exception:
+                                            exp_cfg = config
+                                        eq_docs = await _resilient_call(
+                                            "retrieval_expansion",
+                                            retriever.retrieve,
+                                            query=eq,
+                                            sources=data_sources,
+                                            config=exp_cfg,
+                                            index_namespace=index_namespace,
+                                            allowed_media_ids=include_media_ids,
+                                            allowed_note_ids=include_note_ids,
+                                        )
+                                    if eq_docs:
+                                        exp_docs.extend(eq_docs)
+                                except Exception as _eq_err:
+                                    result.errors.append(f"Query expansion retrieval failed: {eq}: {str(_eq_err)}")
+                                    continue
+
+                            if exp_docs:
+                                by_id = {d.id: d for d in documents}
+                                added = 0
+                                for d in exp_docs:
+                                    cur = by_id.get(d.id)
+                                    if cur is None or float(getattr(d, "score", 0.0)) > float(getattr(cur, "score", 0.0)):
+                                        if cur is None:
+                                            added += 1
+                                        by_id[d.id] = d
+                                documents = sorted(
+                                    by_id.values(),
+                                    key=lambda x: getattr(x, "score", 0.0),
+                                    reverse=True,
+                                )
+                                result.metadata.setdefault("query_expansion", {})
+                                result.metadata["query_expansion"]["retrieval_queries"] = len(extra_queries)
+                                result.metadata["query_expansion"]["retrieval_added"] = int(added)
+                            result.timings["query_expansion_retrieval"] = time.time() - exp_start
+                        except Exception as _exp_err:
+                            result.errors.append(f"Query expansion retrieval failed: {str(_exp_err)}")
+
                     result.documents = documents
                     # Optional PRF second-pass retrieval to fill remaining slots
                     if (
@@ -1283,7 +1460,7 @@ async def unified_rag_pipeline(
                             result.errors.append(f"PRF second-pass retrieval failed: {str(_prf_err)}")
 
                     # Optional: guided query decomposition to broaden recall for multi-part queries
-                    if enable_query_decomposition and result.documents:
+                    if enable_query_decomposition:
                         decomp_start = time.time()
                         try:
                             # Prefer agentic planner-style decomposition when available and
@@ -1295,30 +1472,19 @@ async def unified_rag_pipeline(
 
                             # Use QueryAnalyzer (if available) to detect complex queries that
                             # benefit from decomposition (comparative/causal/temporal/analytical).
-                            intent_label = None
-                            complexity_label = None
-                            if QueryAnalyzer and q_norm:
+                            intent_val = analysis_intent_val
+                            comp_val = analysis_complexity_val
+                            # Try delegating to agentic-style decomposition when the query
+                            # is complex and of a multi-part intent.
+                            multi_intents = {"comparative", "causal", "analytical", "temporal"}
+                            if intent_val in multi_intents and comp_val == "complex":
                                 try:
-                                    qa = QueryAnalyzer()
-                                    analysis = qa.analyze_query(q_norm)
-                                    intent_label = getattr(analysis, "intent", None)
-                                    complexity_label = getattr(analysis, "complexity", None)
-                                    intent_val = getattr(intent_label, "value", str(intent_label) if intent_label else None)
-                                    comp_val = getattr(complexity_label, "value", str(complexity_label) if complexity_label else None)
-                                    # Try delegating to agentic-style decomposition when the query
-                                    # is complex and of a multi-part intent.
-                                    multi_intents = {"comparative", "causal", "analytical", "temporal"}
-                                    if intent_val in multi_intents and comp_val == "complex":
-                                        try:
-                                            from .agentic_chunker import AgenticConfig as _ACfg, _decompose_query as _agentic_decompose  # type: ignore
-                                            acfg = _ACfg(enable_query_decomposition=True, subgoal_max=max_subqueries or None)
-                                            subqueries = _agentic_decompose(q_norm, acfg) or []
-                                            used_agentic = True
-                                        except Exception:
-                                            used_agentic = False
+                                    from .agentic_chunker import AgenticConfig as _ACfg, _decompose_query as _agentic_decompose  # type: ignore
+                                    acfg = _ACfg(enable_query_decomposition=True, subgoal_max=max_subqueries or None)
+                                    subqueries = _agentic_decompose(q_norm, acfg) or []
+                                    used_agentic = True
                                 except Exception:
-                                    intent_label = None
-                                    complexity_label = None
+                                    used_agentic = False
 
                             if not used_agentic:
                                 # Lightweight heuristic decomposition: split on common coordinators/punctuation.
@@ -1327,6 +1493,22 @@ async def unified_rag_pipeline(
                                     subqueries = [p.strip() for p in parts if p and len(p.strip()) >= 3]
                                 if not subqueries:
                                     subqueries = [q_norm] if q_norm else []
+
+                            # Ensure primary query is the first entry
+                            if q_norm:
+                                seen_norm = set()
+                                ordered = [q_norm]
+                                seen_norm.add(q_norm.lower())
+                                for sq in subqueries:
+                                    sq_norm = (sq or "").strip()
+                                    if not sq_norm:
+                                        continue
+                                    key = sq_norm.lower()
+                                    if key in seen_norm:
+                                        continue
+                                    seen_norm.add(key)
+                                    ordered.append(sq_norm)
+                                subqueries = ordered
 
                             # Apply max_subqueries cap if provided (includes primary query implicitly)
                             try:
@@ -1340,16 +1522,10 @@ async def unified_rag_pipeline(
                                 "enabled": True,
                                 "subqueries": [],
                             }
-                            if intent_label is not None:
-                                try:
-                                    meta_decomp["intent"] = getattr(intent_label, "value", str(intent_label))
-                                except Exception:
-                                    pass
-                            if complexity_label is not None:
-                                try:
-                                    meta_decomp["complexity"] = getattr(complexity_label, "value", str(complexity_label))
-                                except Exception:
-                                    pass
+                            if intent_val is not None:
+                                meta_decomp["intent"] = intent_val
+                            if comp_val is not None:
+                                meta_decomp["complexity"] = comp_val
                             time_budget = float(subquery_time_budget_sec) if subquery_time_budget_sec else None
                             try:
                                 doc_budget = int(subquery_doc_budget) if subquery_doc_budget is not None else None
@@ -1361,25 +1537,63 @@ async def unified_rag_pipeline(
 
                             # Only run additional retrievals for secondary subqueries
                             if len(subqueries) > 1:
-                                for sq in subqueries[1:]:
+                                try:
+                                    subquery_max_results = max(1, int(top_k or 1))
+                                    if doc_budget is not None:
+                                        subquery_max_results = max(1, min(subquery_max_results, int(doc_budget)))
+                                except Exception:
+                                    subquery_max_results = max(1, int(top_k or 1))
+
+                                async def _fetch_subquery(sq: str) -> List[Document]:
+                                    try:
+                                        sq_cfg = replace(config, max_results=subquery_max_results)
+                                    except Exception:
+                                        sq_cfg = config
+                                    return await _resilient_call(
+                                        "retrieval_decomposition",
+                                        retriever.retrieve,
+                                        query=sq,
+                                        sources=data_sources,
+                                        config=sq_cfg,
+                                        index_namespace=index_namespace,
+                                        allowed_media_ids=include_media_ids,
+                                        allowed_note_ids=include_note_ids,
+                                    )
+
+                                subquery_results: Dict[str, Any] = {}
+                                subqueries_to_run = list(subqueries[1:])
+                                try:
+                                    max_workers = max(1, int(subquery_max_concurrency or 1))
+                                except Exception:
+                                    max_workers = 3
+                                max_workers = min(max_workers, len(subqueries_to_run)) or 1
+                                sem = asyncio.Semaphore(max_workers)
+
+                                async def _run_subquery(sq: str) -> None:
+                                    async with sem:
+                                        subquery_results[sq] = await _fetch_subquery(sq)
+
+                                tasks = [asyncio.create_task(_run_subquery(sq)) for sq in subqueries_to_run]
+                                if tasks:
+                                    if time_budget is not None:
+                                        remaining = max(0.0, time_budget - (time.time() - decomp_start))
+                                        done, pending = await asyncio.wait(tasks, timeout=remaining)
+                                        for p in pending:
+                                            p.cancel()
+                                    else:
+                                        done, _ = await asyncio.wait(tasks)
+                                    for task in done:
+                                        try:
+                                            task.result()
+                                        except Exception as _sq_err:
+                                            result.errors.append(f"Decomposition subquery retrieval failed: {_sq_err}")
+
+                                for sq in subqueries_to_run:
                                     if time_budget is not None and (time.time() - decomp_start) >= time_budget:
                                         break
                                     if doc_budget is not None and total_added >= doc_budget:
                                         break
-                                    try:
-                                        sq_docs = await retriever.retrieve(
-                                            query=sq,
-                                            sources=data_sources,
-                                            config=config,
-                                            index_namespace=index_namespace,
-                                            allowed_media_ids=include_media_ids,
-                                            allowed_note_ids=include_note_ids,
-                                        )
-                                        sq_docs = sq_docs or []
-                                    except Exception as _sq_err:
-                                        result.errors.append(f"Decomposition subquery retrieval failed: {sq}: {_sq_err}")
-                                        continue
-
+                                    sq_docs = subquery_results.get(sq) or []
                                     added_ids: List[str] = []
                                     for d in sq_docs:
                                         if d.id not in base_ids:
@@ -1711,9 +1925,18 @@ async def unified_rag_pipeline(
         # ========== OPTIONAL CHUNK TYPE FILTER (metadata-based) ==========
         if chunk_type_filter and result.documents:
             try:
-                allowed = {str(t).lower() for t in chunk_type_filter}
+                allowed: set[str] = set()
+                for t in chunk_type_filter:
+                    norm = _normalize_chunk_type_value(t)
+                    if norm:
+                        allowed.add(norm)
                 before = len(result.documents)
-                result.documents = [d for d in result.documents if str((d.metadata or {}).get("chunk_type", "")).lower() in allowed]
+                filtered_docs = []
+                for d in result.documents:
+                    doc_type = _normalize_chunk_type_value((d.metadata or {}).get("chunk_type"))
+                    if doc_type and doc_type in allowed:
+                        filtered_docs.append(d)
+                result.documents = filtered_docs
                 result.metadata["chunk_type_filter_before"] = before
                 result.metadata["chunk_type_filter_after"] = len(result.documents)
             except Exception:
@@ -1967,6 +2190,8 @@ async def unified_rag_pipeline(
                 store = UserPersonalizationStore(feedback_user_id or user_id)
                 result.documents = store.boost_documents(result.documents, corpus=index_namespace)
                 result.metadata.setdefault("personalization", {})["boost_applied_pre_rerank"] = True
+        except ValueError as exc:
+            logger.debug(f"Personalization boost disabled for user_id={feedback_user_id or user_id}: {exc}")
         except Exception:
             pass
 
@@ -2297,6 +2522,22 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Sibling inclusion failed: {str(e)}")
 
+        # Cap documents to top_k when reranking is disabled
+        if (not enable_reranking or reranking_strategy == "none") and result.documents:
+            try:
+                max_docs = int(top_k or 0)
+            except Exception:
+                max_docs = 0
+            if max_docs > 0 and len(result.documents) > max_docs:
+                try:
+                    result.documents = sorted(
+                        result.documents,
+                        key=lambda d: getattr(d, "score", 0.0),
+                        reverse=True,
+                    )[:max_docs]
+                except Exception:
+                    result.documents = list(result.documents)[:max_docs]
+
         # ========== CITATION GENERATION ==========
         if enable_citations and result.documents:
             citation_start = time.time()
@@ -2598,9 +2839,7 @@ async def unified_rag_pipeline(
                         # Form a concise clarifying question using query analysis if available
                         if QueryAnalyzer:
                             try:
-                                qa = QueryAnalyzer(); an = qa.analyze_query(query)
-                                domain = getattr(an, "domain", None)
-                                intent = getattr(getattr(an, "intent", None), "value", None)
+                                domain = analysis_domain
                                 clar_q = f"Please clarify: what specific aspect of '{query}' should I focus on{f' in {domain}' if domain else ''}?"
                             except Exception:
                                 clar_q = None
@@ -3251,6 +3490,8 @@ async def unified_rag_pipeline(
                             if UserPersonalizationStore:
                                 store = UserPersonalizationStore(feedback_user_id or user_id)
                                 result.documents = store.boost_documents(result.documents, corpus=index_namespace)
+                        except ValueError as exc:
+                            logger.debug(f"Personalization boost disabled for user_id={feedback_user_id or user_id}: {exc}")
                         except Exception:
                             pass
                     # Record anonymized search analytics
@@ -3322,10 +3563,22 @@ async def unified_rag_pipeline(
                             "answer": result.generated_answer,
                             "cached": True,
                         }
-                        if asyncio.iscoroutinefunction(set_fn):
-                            await set_fn(query, cache_payload, ttl=cache_ttl)
-                        else:
-                            set_fn(query, cache_payload, ttl=cache_ttl)
+                        cache_queries = [query]
+                        cache_queries.extend(
+                            [q for q in (result.expanded_queries or []) if isinstance(q, str)]
+                        )
+                        seen = set()
+                        for cq in cache_queries:
+                            if not isinstance(cq, str):
+                                continue
+                            cq = cq.strip()
+                            if not cq or cq in seen:
+                                continue
+                            seen.add(cq)
+                            if asyncio.iscoroutinefunction(set_fn):
+                                await set_fn(cq, cache_payload, ttl=cache_ttl)
+                            else:
+                                set_fn(cq, cache_payload, ttl=cache_ttl)
             except Exception as e:
                 logger.error(f"Cache storage error: {e}")
 

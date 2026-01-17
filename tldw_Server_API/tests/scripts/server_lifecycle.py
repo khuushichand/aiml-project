@@ -65,6 +65,8 @@ def _paths(label: str) -> tuple[Path, Path]:
 
 
 def start_server() -> None:
+
+
     label = _env("SERVER_LABEL", "server")
     base_url = _env("E2E_TEST_BASE_URL", DEFAULT_BASE_URL)
     port = _env("SERVER_PORT") or _extract_port_from_url(base_url) or DEFAULT_PORT
@@ -103,6 +105,8 @@ def start_server() -> None:
 
 
 def _get_timeout_seconds() -> float:
+
+
     """Get the startup timeout in seconds from environment with a sensible default.
 
     Priority order:
@@ -127,6 +131,8 @@ def _get_timeout_seconds() -> float:
 
 
 def health_check() -> None:
+
+
     """
     Probe the server's health endpoints until one reports healthy or the configured startup timeout elapses.
 
@@ -158,6 +164,8 @@ def health_check() -> None:
 
 
 def stop_server() -> None:
+
+
     label = _env("SERVER_LABEL", "server")
     pid_path, log_path = _paths(label)
 
@@ -229,6 +237,8 @@ def _print_recent_logs(label: str, lines: int = 200) -> None:
 
 
 def main() -> None:
+
+
     parser = argparse.ArgumentParser(description="Manage the lifecycle of the FastAPI server used in CI.")
     parser.add_argument("command", choices={"start", "health-check", "stop"}, help="Lifecycle command to execute")
     args = parser.parse_args()

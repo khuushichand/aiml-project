@@ -3,16 +3,12 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { RotateCw, Trash2 } from 'lucide-react';
 import { ApiKey } from '@/types';
+import { formatDate } from '@/lib/format';
 
 type ApiKeysTableProps = {
   apiKeys: ApiKey[];
   onRotate: (keyId: string) => void;
   onRevoke: (keyId: string, keyName: string) => void;
-};
-
-const formatDate = (dateStr?: string) => {
-  if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleDateString();
 };
 
 const isExpired = (expiresAt?: string) => {
@@ -72,18 +68,18 @@ export const ApiKeysTable = ({ apiKeys, onRotate, onRevoke }: ApiKeysTableProps)
               <TableCell>
                 <Badge variant={status.variant}>{status.label}</Badge>
               </TableCell>
-              <TableCell className="text-sm">{formatDate(key.created_at)}</TableCell>
+              <TableCell className="text-sm">{formatDate(key.created_at, { fallback: '-' })}</TableCell>
               <TableCell className="text-sm">
                 {key.expires_at ? (
                   <span className={isExpired(key.expires_at) ? 'text-red-500' : ''}>
-                    {formatDate(key.expires_at)}
+                    {formatDate(key.expires_at, { fallback: '-' })}
                   </span>
                 ) : (
                   'Never'
                 )}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
-                {formatDate(key.last_used_at)}
+                {formatDate(key.last_used_at, { fallback: '-' })}
               </TableCell>
               <TableCell className="text-right">
                 <div className="flex justify-end gap-1">

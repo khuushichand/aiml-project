@@ -24,7 +24,25 @@ import os
 import random
 import sys
 import time
+from pathlib import Path
 from typing import Optional
+
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
+
+from common.repo_utils import configure_local_egress, ensure_repo_root
+
+ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except ImportError:
+    http_client = None  # type: ignore[assignment]
 
 
 async def _xadd_loop(redis, queue: str, rps: float, stop_ts: float):
@@ -53,22 +71,21 @@ async def _xadd_loop(redis, queue: str, rps: float, stop_ts: float):
 
 
 async def _fetch_summary_http(url: str) -> Optional[dict]:
-    try:
-        import httpx  # type: ignore
-    except Exception:
+    if http_client is None:
         return None
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(url)
-            if r.status_code == 200:
-                return r.json()
-    except Exception:
+        r = await http_client.afetch(method="GET", url=url, timeout=5)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"summary fetch error for {url}: {e}", file=sys.stderr)
         return None
     return None
 
 
 async def _summarize(redis, summary_url: Optional[str]):
     if summary_url:
+        configure_local_egress(summary_url)
         data = await _fetch_summary_http(summary_url)
         if data:
             return {
@@ -126,6 +143,8 @@ async def main_async(args):
     sent = await prod
     print(f"Sent {sent} messages to {args.queue}")
     await redis.close()
+    if http_client is not None:
+        await http_client.shutdown_http_client()
     return 0
 
 

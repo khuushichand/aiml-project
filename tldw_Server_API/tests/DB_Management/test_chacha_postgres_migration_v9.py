@@ -9,7 +9,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_postgres_statement_conversion_contains_note_edges(tmp_path):
-    # Create a dummy DB to instantiate class and access converter
+
+
+     # Create a dummy DB to instantiate class and access converter
     db = CharactersRAGDB(db_path=str(tmp_path / "dummy.db"), client_id="test")
 
     sql = getattr(db, "_MIGRATION_SQL_V8_TO_V9")

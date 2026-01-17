@@ -52,6 +52,7 @@ if 'safetensors.torch' not in sys.modules:
     _fake_st_torch.__spec__ = importlib.machinery.ModuleSpec('safetensors.torch', loader=None)
 
     def _noop(*args, **kwargs):
+
         return None
 
     _fake_st_torch.save_file = _noop
@@ -59,6 +60,8 @@ if 'safetensors.torch' not in sys.modules:
 
 
 def _auth_headers():
+
+
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     key = get_settings().SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
@@ -70,6 +73,7 @@ class _FakeConn:
         return None
 
     def commit(self):
+
         return None
 
 
@@ -86,18 +90,22 @@ class _FakeDB:
                 return _FakeConn()
 
             def __exit__(self_inner, exc_type, exc, tb):
+
                 return False
 
         return _Tx()
 
     def get_connection(self):
+
         return _FakeConn()
 
     def search_by_safe_metadata(self, filters=None, match_all=True, page=1, per_page=20, group_by_media=True):
+
         self.last_filters = filters
         return [], 0
 
     def create_document_version(self, media_id, content, prompt, analysis_content, safe_metadata):
+
         self.created_versions.append({
             "media_id": media_id,
             "content": content,
@@ -108,6 +116,7 @@ class _FakeDB:
         return {"version_number": 2, "uuid": "test-uuid"}
 
     def add_media_with_keywords(self, **kwargs):
+
         self.add_calls.append(kwargs)
         return 42, "uuid-42", "ok"
 
@@ -185,6 +194,7 @@ async def test_patch_metadata_invalid_doi_returns_400(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.media as media_ep
 
     def _fake_get_document_version(db_instance, media_id, version_number=None, include_content=True):
+
         return {"id": 1, "media_id": media_id, "version_number": 1, "content": "x", "prompt": None, "analysis_content": None, "safe_metadata": "{}"}
 
     monkeypatch.setattr(media_ep, "get_document_version", _fake_get_document_version)
@@ -221,6 +231,7 @@ async def test_put_version_metadata_invalid_pmcid_returns_400(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.media as media_ep
 
     def _fake_get_document_version(db_instance, media_id, version_number=None, include_content=True):
+
         return {"id": 2, "media_id": media_id, "version_number": 2, "safe_metadata": "{}"}
 
     monkeypatch.setattr(media_ep, "get_document_version", _fake_get_document_version)
@@ -257,6 +268,7 @@ async def test_advanced_version_upsert_invalid_pmid_returns_400(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.media as media_ep
 
     def _fake_get_document_version(db_instance, media_id, version_number=None, include_content=True):
+
         return {"id": 1, "media_id": media_id, "version_number": 1, "content": "x", "prompt": None, "analysis_content": None, "safe_metadata": "{}"}
 
     monkeypatch.setattr(media_ep, "get_document_version", _fake_get_document_version)
@@ -305,6 +317,7 @@ async def test_pubmed_ingest_normalizes_pmcid_in_saved_metadata(monkeypatch):
     from tldw_Server_API.app.core.Third_Party import PMC_OA as _OA
 
     def _fake_pubmed_by_id(pmid):
+
         return {
             "pmid": pmid,
             "pmcid": "PMC123",
@@ -318,6 +331,7 @@ async def test_pubmed_ingest_normalizes_pmcid_in_saved_metadata(monkeypatch):
         }, None
 
     def _fake_download_pmc_pdf(pmcid):
+
         return b"%PDF-1.5\n...", "paper.pdf", None
 
     async def _fake_process_pdf_task(**kwargs):

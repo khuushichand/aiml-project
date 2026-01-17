@@ -53,6 +53,33 @@ except Exception:  # pragma: no cover
     def load_comprehensive_config():  # type: ignore
         return None
 
+
+def _safe_temp_subdir(raw: Optional[str]) -> Optional[Path]:
+    """Return a sanitized temp-only subdirectory path derived from untrusted input."""
+    if not raw:
+        return None
+    try:
+        raw_str = str(raw).strip()
+    except Exception:
+        return None
+    if not raw_str:
+        return None
+    name = Path(raw_str).name
+    if name in {"", ".", ".."}:
+        return None
+    safe = "".join(
+        ch if (ch.isascii() and (ch.isalnum() or ch in "._-")) else "_"
+        for ch in name
+    ).strip("._-")
+    if not safe:
+        return None
+    if len(safe) > 200:
+        safe = safe[:200].rstrip("._-")
+    if not safe:
+        return None
+    base = Path(tempfile.gettempdir()) / "tldw_diarization"
+    return base / safe
+
 # Expose get_whisper_model at module scope so tests can monkeypatch it
 # (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
 try:  # pragma: no cover - import availability varies in test contexts
@@ -524,12 +551,12 @@ class StreamingDiarizer:
         Parameters:
             sample_rate (int): Audio sample rate in Hz used for buffering and diarization. Defaults to 16000 when falsy.
             store_audio (bool): If True, persist the combined audio to disk when finalizing diarization.
-            storage_dir (Optional[str]): Directory path where persisted audio will be written when store_audio is True.
+            storage_dir (Optional[str]): Untrusted directory name hint for persisted audio. Sanitized to a safe subdirectory under system temp; absolute paths and path traversal attempts are constrained to basename only.
             num_speakers (Optional[int]): Optional hint for the expected number of speakers; passed to the underlying diarization service when available.
         """
         self.sample_rate = int(sample_rate or 16000)
         self.store_audio = bool(store_audio)
-        self.storage_dir = Path(storage_dir).expanduser() if storage_dir else None
+        self.storage_dir = _safe_temp_subdir(storage_dir)
         self.num_speakers = num_speakers
         self._audio_chunks: List[np.ndarray] = []
         self._transcript_segments: List[Dict[str, Any]] = []
@@ -679,7 +706,7 @@ class StreamingDiarizer:
             self.available = False
             return {}
         except Exception as exc:
-            logger.error(f"Streaming diarizer unexpected error: {exc}", exc_info=True)
+            logger.exception("Streaming diarizer unexpected error: {}", exc)
             return {}
         finally:
             if tmp_path:
@@ -2071,7 +2098,12 @@ async def handle_unified_websocket(
                         config.diarization_store_audio = bool(diarization_payload.get("store_audio"))
                     storage_dir = diarization_payload.get("storage_dir")
                     if storage_dir:
-                        config.diarization_storage_dir = str(storage_dir)
+                        safe_dir = _safe_temp_subdir(storage_dir)
+                        if safe_dir:
+                            config.diarization_storage_dir = str(safe_dir)
+                        else:
+                            logger.warning("Ignoring diarization.storage_dir from client; using temp directory only")
+                            config.diarization_storage_dir = None
                     if "num_speakers" in diarization_payload:
                         try:
                             config.diarization_num_speakers = int(diarization_payload.get("num_speakers") or 0) or None
@@ -2115,7 +2147,7 @@ async def handle_unified_websocket(
             logger.error(f"Failed to parse config message as JSON: {e}")
             logger.warning("Using default configuration due to JSON parse error")
         except Exception as e:
-            logger.error(f"Unexpected error receiving config message: {e}", exc_info=True)
+            logger.exception("Unexpected error receiving config message: {}", e)
             logger.warning("Using default configuration due to error")
 
         if not config_received:
@@ -2150,7 +2182,7 @@ async def handle_unified_websocket(
                     turn_detector = None
         except Exception as e:
             error_msg = f"Failed to initialize {config.model} model: {str(e)}"
-            logger.error(error_msg, exc_info=True)
+            logger.exception(error_msg)
             # Emit structured warning about model/variant unavailability before fallback attempts
             try:
                 await stream.send_json({
@@ -2283,7 +2315,7 @@ async def handle_unified_websocket(
                         },
                     })
             except Exception as diar_err:
-                logger.error(f"Failed to initialize streaming diarizer: {diar_err}", exc_info=True)
+                logger.exception("Failed to initialize streaming diarizer: {}", diar_err)
                 await stream.send_json({
                     "type": "warning",
                     "state": "diarization_unavailable",
@@ -2304,7 +2336,7 @@ async def handle_unified_websocket(
                     "insights": insights_engine.describe()
                 })
             except Exception as insight_err:
-                logger.error(f"Failed to initialize live insights engine: {insight_err}", exc_info=True)
+                logger.exception("Failed to initialize live insights engine: {}", insight_err)
                 await stream.send_json({
                     "type": "warning",
                     "state": "insights_unavailable",
@@ -2358,7 +2390,7 @@ async def handle_unified_websocket(
                 try:
                     await insights_engine.on_commit(full_transcript)
                 except Exception as insight_err:
-                    logger.error(f"Live insights final summary failed: {insight_err}", exc_info=True)
+                    logger.exception("Live insights final summary failed: {}", insight_err)
             if diarizer:
                 try:
                     mapping, audio_path, speakers = await diarizer.finalize()
@@ -2407,7 +2439,7 @@ async def handle_unified_websocket(
                     except Exception:
                         pass
                 except Exception as diar_err:
-                    logger.error(f"Diarization finalize failed: {diar_err}", exc_info=True)
+                    logger.exception("Diarization finalize failed: {}", diar_err)
 
         # Process messages
         while True:
@@ -2488,14 +2520,14 @@ async def handle_unified_websocket(
                                     if speaker_info.get("speaker_label"):
                                         result.setdefault("speaker_label", speaker_info["speaker_label"])
                             except Exception as diar_err:
-                                logger.error(f"Diarization update failed: {diar_err}", exc_info=True)
+                                logger.exception("Diarization update failed: {}", diar_err)
 
                         await stream.send_json(result)
                         if insights_engine and result.get("is_final"):
                             try:
                                 await insights_engine.on_transcript(result)
                             except Exception as insight_err:
-                                logger.error(f"Live insights failed to ingest segment: {insight_err}", exc_info=True)
+                                logger.exception("Live insights failed to ingest segment: {}", insight_err)
                     if auto_commit_triggered:
                         await _emit_full_transcript(
                             commit_received_at=getattr(turn_detector, "last_trigger_at", None),
@@ -2512,12 +2544,12 @@ async def handle_unified_websocket(
                         try:
                             await insights_engine.reset()
                         except Exception as insight_err:
-                            logger.error(f"Live insights reset failed: {insight_err}", exc_info=True)
+                            logger.exception("Live insights reset failed: {}", insight_err)
                     if diarizer:
                         try:
                             await diarizer.reset()
                         except Exception as diar_err:
-                            logger.error(f"Diarization reset failed: {diar_err}", exc_info=True)
+                            logger.exception("Diarization reset failed: {}", diar_err)
                     await stream.send_json({
                         "type": "status",
                         "state": "reset"

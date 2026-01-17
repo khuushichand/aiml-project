@@ -18,6 +18,7 @@ import glob
 import json
 import multiprocessing
 import os
+import re
 import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -54,8 +55,14 @@ except ImportError:
 # Import Local
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename, logging
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
-from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data, get_stt_config
-from typing import Union
+from tldw_Server_API.app.core.config import (
+    load_and_log_configs,
+    loaded_config_data,
+    get_stt_config,
+    settings,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 #
@@ -195,9 +202,275 @@ def _resolve_project_root() -> Path:
 
 PROJECT_ROOT_DIR = _resolve_project_root()
 WHISPER_MODEL_BASE_DIR = (PROJECT_ROOT_DIR / "models" / "Whisper").resolve()
+TRANSCRIPT_CACHE_DIR_NAME = "transcripts_cache"
 
 _AUDIO_VALIDATION_CACHE: Dict[str, tuple] = {}
 _PRUNE_DISABLED_LOGGED: bool = False
+
+
+def _default_transcript_cache_root() -> Path:
+    """
+    Return the centralized transcript cache root under the system temp directory.
+    """
+    root = Path(tempfile.gettempdir())
+    try:
+        return root.resolve(strict=False)
+    except Exception as exc:
+        logging.debug(f"Failed to resolve temp dir for transcript cache: {exc}")
+        return root
+
+
+def _sanitize_transcription_model_name(model_name: str) -> str:
+    """
+    Return a filesystem-safe transcription model identifier for cache files.
+    """
+    return "".join(
+        c if c.isalnum() or c in ("-", "_") else "_" for c in str(model_name)
+    )
+
+
+def _assert_no_symlink(path: Path, *, label: str) -> None:
+    """
+    Raise ValueError if the path or any existing parent is a symlink.
+    """
+    for candidate in [path, *path.parents]:
+        if not candidate.exists():
+            continue
+        try:
+            if candidate.is_symlink():
+                raise ValueError(f"{label} may not traverse symlinks: {candidate}")
+        except OSError as exc:
+            raise ValueError(f"{label} could not be validated for symlinks: {candidate}") from exc
+
+
+_HUGGINGFACE_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_ALLOWED_MEDIA_BASE_DIRS: Optional[List[Path]] = None
+allowed_media_base_dirs_lock = threading.Lock()
+
+
+def _looks_like_windows_drive(path_str: str) -> bool:
+    return len(path_str) >= 2 and path_str[1] == ":" and path_str[0].isalpha()
+
+
+def _is_hf_model_id(model_name: str) -> bool:
+    return bool(_HUGGINGFACE_MODEL_ID_RE.match(model_name))
+
+
+def _path_is_within(path: Path, base_dir: Path) -> bool:
+    try:
+        path.relative_to(base_dir)
+        return True
+    except ValueError:
+        return False
+
+
+def _get_allowed_media_base_dirs() -> List[Path]:
+    global _ALLOWED_MEDIA_BASE_DIRS
+    with allowed_media_base_dirs_lock:
+        if _ALLOWED_MEDIA_BASE_DIRS is not None:
+            return list(_ALLOWED_MEDIA_BASE_DIRS)
+
+        roots: List[Path] = []
+    try:
+        roots.append(Path(tempfile.gettempdir()).resolve(strict=False))
+    except (OSError, PermissionError, ValueError) as exc:
+        logging.debug(f"Could not resolve temp directory for allowed base dirs: {exc}")
+    try:
+        roots.append(DatabasePaths.get_user_db_base_dir())
+    except (OSError, PermissionError, ValueError, AttributeError) as exc:
+        logging.debug(f"Could not resolve USER_DB_BASE_DIR for allowed base dirs: {exc}")
+
+    _ALLOWED_MEDIA_BASE_DIRS = roots
+    return list(roots)
+
+
+def _resolve_allowed_base_dir(base_dir: Path, *, label: str) -> Path:
+    base_resolved = Path(base_dir).resolve(strict=False)
+    if not base_resolved.is_dir():
+        raise ValueError(f"{label} is not a directory: {base_resolved}")
+    _assert_no_symlink(base_resolved, label=label)
+
+    allowed_roots = _get_allowed_media_base_dirs()
+    if allowed_roots and not any(_path_is_within(base_resolved, root) for root in allowed_roots):
+        allowed_str = ", ".join(str(root) for root in allowed_roots)
+        raise ValueError(
+            f"{label} must be under one of the allowed base directories: {allowed_str}"
+        )
+    return base_resolved
+
+
+def _select_allowed_base_dir_for_path(path: Path, *, label: str) -> Path:
+    if not path.is_absolute():
+        raise ValueError(f"{label} must be an absolute path when base_dir is not provided")
+
+    path_resolved = path.resolve(strict=False)
+    allowed_roots = _get_allowed_media_base_dirs()
+    for root in allowed_roots:
+        if _path_is_within(path_resolved, root):
+            return root
+
+    allowed_str = ", ".join(str(root) for root in allowed_roots) or "<none configured>"
+    raise ValueError(
+        f"{label} must resolve under one of the allowed base directories: {allowed_str}"
+    )
+
+
+def _resolve_safe_input_path(path: Path, *, base_dir: Optional[Path], label: str) -> Path:
+    if base_dir is None:
+        base_dir = _select_allowed_base_dir_for_path(path, label=label)
+    base_resolved = _resolve_allowed_base_dir(base_dir, label=f"{label} base directory")
+    safe_path = resolve_safe_local_path(path, base_resolved)
+    if safe_path is None:
+        raise ValueError(f"{label} must resolve under {base_resolved}")
+    _assert_no_symlink(safe_path, label=label)
+    return safe_path
+
+
+def _normalize_whisper_model_identifier(
+    model_name: str,
+    *,
+    base_dir: Optional[Path] = None,
+) -> str:
+    raw = str(model_name or "").strip()
+    if not raw:
+        raise ValueError("Whisper model identifier cannot be empty")
+
+    # If this looks like a Hugging Face Hub model id and *not* a local path,
+    # return it directly. We avoid interpreting it as a filesystem path.
+    if (
+        _is_hf_model_id(raw)
+        and not raw.startswith(("/", ".", "~"))
+        and not _looks_like_windows_drive(raw)
+    ):
+        return raw
+
+    path_like = (
+        raw.startswith(("/", ".", "~"))
+        or _looks_like_windows_drive(raw)
+        or os.sep in raw
+        or (os.altsep and os.altsep in raw)
+    )
+
+    if not path_like:
+        if raw in {".", ".."} or ".." in raw:
+            raise ValueError("Whisper model identifier may not contain path traversal components")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", raw):
+            raise ValueError("Whisper model identifier contains invalid characters")
+        return raw
+
+    base_root = base_dir if base_dir is not None else WHISPER_MODEL_BASE_DIR
+    safe_path = resolve_safe_local_path(Path(raw), Path(base_root))
+    if safe_path is None:
+        raise ValueError(
+            f"Whisper model path must resolve under {Path(base_root).resolve(strict=False)}"
+        )
+    if not safe_path.exists():
+        raise ValueError(f"Whisper model path does not exist: {safe_path}")
+    try:
+        _assert_no_symlink(safe_path, label="Whisper model path")
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    return str(safe_path)
+
+
+def validate_whisper_model_identifier(model_name: str) -> str:
+    """
+    Validate a Whisper model identifier and return the normalized value.
+
+    This helper rejects path-like identifiers that escape the allowed model
+    root and is safe to call on user-supplied model parameters.
+    """
+    return _normalize_whisper_model_identifier(
+        model_name,
+        base_dir=WHISPER_MODEL_BASE_DIR,
+    )
+
+
+def _resolve_whisper_download_root(download_root: Optional[Union[str, Path]]) -> Path:
+    base_root = WHISPER_MODEL_BASE_DIR
+    root = Path(download_root).expanduser() if download_root else base_root
+
+    if not root.is_absolute():
+        root = (base_root / root).resolve(strict=False)
+    else:
+        root = root.resolve(strict=False)
+
+    safe_root = resolve_safe_local_path(root, base_root)
+    if safe_root is None:
+        raise ValueError(
+            f"Whisper download root must resolve under {base_root.resolve(strict=False)}"
+        )
+
+    _assert_no_symlink(safe_root, label="Whisper model download root")
+    if safe_root.exists() and not safe_root.is_dir():
+        raise ValueError(f"Whisper download root is not a directory: {safe_root}")
+
+    safe_root.mkdir(parents=True, exist_ok=True)
+    return safe_root
+
+
+def _check_standard_model_under_download_root(
+    identifier: str,
+    download_root: Path,
+) -> Optional[Path]:
+    """
+    Check if a standard model identifier exists under the download root.
+
+    Returns the resolved path if found, otherwise None.
+    Skips check if identifier looks like a filesystem path.
+    """
+    if (
+        identifier.startswith(("/", ".", "~"))
+        or _looks_like_windows_drive(identifier)
+        or os.sep in identifier
+        or (os.altsep and os.altsep in identifier)
+    ):
+        logging.info(
+            "Standard model identifier %r looks like a path; skipping local "
+            "directory check under download_root.",
+            identifier,
+        )
+        return None
+
+    candidate = download_root / identifier
+    try:
+        root_resolved = download_root.resolve()
+        candidate_resolved = candidate.resolve()
+        candidate_resolved.relative_to(root_resolved)
+    except (ValueError, OSError):
+        return None
+
+    if candidate_resolved.is_dir():
+        logging.info(
+            "Found standard model '%s' in custom download root: %s",
+            identifier,
+            candidate_resolved,
+        )
+        return candidate_resolved
+
+    logging.info(
+        "Standard model '%s' not in custom root. Passing name to faster-whisper.",
+        identifier,
+    )
+    return None
+
+
+def _resolve_transcript_cache_dir(
+    audio_path: Path,
+    *,
+    base_dir: Optional[Path] = None,
+) -> Path:
+    """
+    Resolve and create the transcript cache directory.
+
+    When base_dir is provided, creates the cache under that directory.
+    Otherwise, uses the system temp root for centralized caching.
+    """
+    root_dir = base_dir if base_dir is not None else _default_transcript_cache_root()
+    cache_dir = root_dir / TRANSCRIPT_CACHE_DIR_NAME
+    _assert_no_symlink(cache_dir, label="Transcript cache directory")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
 
 def prune_transcript_cache(
     cache_dir: Path,
@@ -365,8 +638,8 @@ def perform_transcription(
             exists, it will be loaded.
         transcription_language: The language code (e.g., 'en', 'es') for
             transcription. Defaults to 'en'.
-        temp_dir: An optional path to a temporary directory. (Note: This
-            parameter is not currently used in the function body).
+        temp_dir: An optional path to a temporary directory. When provided,
+            the input and output paths must resolve under this directory.
         end_seconds: Optional absolute end time (in seconds) for transcription.
             When provided, audio is clipped to the interval [offset, end_seconds).
 
@@ -392,13 +665,35 @@ def perform_transcription(
     audio_file_path = None  # Track generated WAV path even if conversion fails early
     try:
         logging.info(f"Initiating transcription process for: {video_path}")
+        base_dir_path = None
+        if temp_dir:
+            try:
+                base_dir_path = _resolve_allowed_base_dir(
+                    Path(temp_dir),
+                    label="Audio temp directory",
+                )
+            except ValueError as exc:
+                logging.error(f"Invalid temp_dir for transcription: {exc}")
+                return None, None
         # 1. Convert to WAV - Catch ConversionError specifically
         try:
+            if base_dir_path is not None:
+                safe_video_path = resolve_safe_local_path(
+                    Path(video_path),
+                    base_dir_path,
+                )
+                if safe_video_path is None:
+                    logging.error(
+                        f"Audio input path rejected outside temp_dir: {video_path}"
+                    )
+                    return None, None
+                video_path = str(safe_video_path)
             audio_file_path = convert_to_wav(
                 video_path,
                 offset=offset,
                 end_time=end_seconds,
-                overwrite=overwrite
+                overwrite=overwrite,
+                base_dir=base_dir_path,
             )
             if not audio_file_path or not os.path.exists(audio_file_path):
                  # This case might occur if convert_to_wav returns None/empty path without raising error
@@ -410,12 +705,28 @@ def perform_transcription(
             return None, None # Critical failure, stop processing
 
         # 2. Define paths
-        base_path = os.path.splitext(audio_file_path)[0]
-        # Sanitize model name for filename
-        transcription_model_sanitized = "".join(c if c.isalnum() or c in ['-', '_'] else '_' for c in transcription_model)
-        segments_json_path = f"{base_path}-transcription_model-{transcription_model_sanitized}.segments.json"
-        diarized_json_path = f"{base_path}-transcription_model-{transcription_model_sanitized}.diarized.json"
-        base_dir_path = Path(temp_dir) if temp_dir else None
+        audio_path_obj = Path(audio_file_path)
+        if base_dir_path is not None:
+            safe_audio_path = resolve_safe_local_path(
+                audio_path_obj,
+                base_dir_path,
+            )
+            if safe_audio_path is None:
+                logging.error(
+                    f"Audio output path rejected outside temp_dir: {audio_file_path}"
+                )
+                return None, None
+            audio_path_obj = safe_audio_path
+            audio_file_path = str(safe_audio_path)
+        _assert_no_symlink(audio_path_obj, label="Audio output path")
+        cache_dir = _resolve_transcript_cache_dir(audio_path_obj, base_dir=base_dir_path)
+        transcription_model_sanitized = _sanitize_transcription_model_name(transcription_model)
+        segments_json_path = (
+            cache_dir / f"{audio_path_obj.stem}-transcription_model-{transcription_model_sanitized}.segments.json"
+        )
+        diarized_json_path = (
+            cache_dir / f"{audio_path_obj.stem}-transcription_model-{transcription_model_sanitized}.diarized.json"
+        )
 
         # --- Perform Diarization and Combination (if requested) ---
         if diarize:
@@ -430,6 +741,7 @@ def perform_transcription(
             else:
                 # Check if diarized file already exists
                 if os.path.exists(diarized_json_path) and not overwrite:
+                    _assert_no_symlink(diarized_json_path, label="Diarized transcript cache file")
                     logging.info(f"Diarized file already exists (overwrite=False): {diarized_json_path}")
                     try:
                         with open(diarized_json_path, 'r', encoding='utf-8') as file:
@@ -486,6 +798,7 @@ def perform_transcription(
                         final_segments = diarized_segments['segments']
 
                         # Save diarized results
+                        _assert_no_symlink(diarized_json_path, label="Diarized transcript cache file")
                         with open(diarized_json_path, 'w', encoding='utf-8') as f:
                             json.dump({'segments': final_segments}, f, ensure_ascii=False, indent=2)
 
@@ -514,6 +827,7 @@ def perform_transcription(
             logging.info(f"Processing without diarization for {audio_file_path}")
             # Check if non-diarized JSON exists
             if os.path.exists(segments_json_path) and not overwrite:
+                _assert_no_symlink(segments_json_path, label="Transcript cache file")
                 logging.info(f"Segments file already exists (overwrite=False): {segments_json_path}")
                 try:
                     with open(segments_json_path, 'r', encoding='utf-8') as file:
@@ -565,7 +879,13 @@ def perform_transcription(
         return (audio_file_path, None) if audio_file_path else (None, None)
 
 
-def re_generate_transcription(audio_file_path, whisper_model, vad_filter, selected_source_lang='en'):
+def re_generate_transcription(
+    audio_file_path,
+    whisper_model,
+    vad_filter,
+    selected_source_lang='en',
+    base_dir: Optional[Path] = None,
+):
     """
     Calls `speech_to_text` to perform transcription on an audio file and handles potential errors.
 
@@ -580,6 +900,7 @@ def re_generate_transcription(audio_file_path, whisper_model, vad_filter, select
         vad_filter: A boolean indicating whether to use Voice Activity Detection (VAD).
         selected_source_lang: The language code for the source audio (e.g., 'en', 'es').
             Defaults to 'en'.
+        base_dir: Optional base directory used to validate the audio file path.
 
     Returns:
         A tuple containing:
@@ -600,7 +921,8 @@ def re_generate_transcription(audio_file_path, whisper_model, vad_filter, select
             whisper_model=whisper_model,
             selected_source_lang=selected_source_lang,  # Ensure language is passed
             vad_filter=vad_filter,
-            diarize=False  # Explicitly false for non-diarized regeneration
+            diarize=False,  # Explicitly false for non-diarized regeneration
+            base_dir=base_dir,
         )
         # speech_to_text returns the segments list directly on success (or raises).
         # Normalize a dict-with-'segments' defensively in case a future change or
@@ -1150,6 +1472,7 @@ def run_stt_batch_via_registry(
             transcription_model,
             vad_filter,
             selected_source_lang=selected_source_lang,
+            base_dir=base_dir,
         )
         if segments is None:
             raise RuntimeError("STT transcription failed; no segments produced")
@@ -1164,14 +1487,14 @@ def run_stt_batch_via_registry(
             segments=segments,
             language=selected_source_lang,
             provider=provider,
-            model=provider_model or transcription_model,
+            model=transcription_model or provider_model,
             duration_seconds=duration_seconds,
         )
 
     # Non-Whisper providers: use adapter transcribe_batch directly.
     artifact = adapter.transcribe_batch(
         audio_file_path,
-        model=provider_model or transcription_model,
+        model=transcription_model or provider_model,
         language=selected_source_lang,
         task="transcribe",
         word_timestamps=False,
@@ -1212,9 +1535,8 @@ def run_stt_job_via_registry(
     )
 
     registry = get_stt_provider_registry()
-    # When no model is provided, fall back to the OpenAI-style default
-    # alias so that Jobs align with the REST audio endpoint's behavior.
-    requested_model = (model or "whisper-1").strip()
+    # When no model is provided, resolve the config default via the registry.
+    requested_model = (model or "").strip()
     provider, provider_model, _ = registry.resolve_provider_for_model(requested_model)
     adapter = registry.get_adapter(provider)
 
@@ -1222,7 +1544,7 @@ def run_stt_job_via_registry(
     # that 'whisper-1' and similar identifiers resolve consistently across
     # REST, ingestion, and Jobs.
     if provider == "faster-whisper":
-        whisper_model_name = _map_openai_audio_model_to_whisper_for_jobs(requested_model)
+        whisper_model_name = _map_openai_audio_model_to_whisper_for_jobs(requested_model or "whisper-1")
         selected_lang = language or None
         artifact = adapter.transcribe_batch(
             wav_path,
@@ -1239,7 +1561,7 @@ def run_stt_job_via_registry(
     # resolved provider-specific model identifier.
     artifact = adapter.transcribe_batch(
         wav_path,
-        model=provider_model or requested_model,
+        model=requested_model or provider_model,
         language=language or None,
         task="transcribe",
         word_timestamps=False,
@@ -1392,33 +1714,45 @@ def check_model_exists(model_name: str) -> bool:
     Returns:
         True if model exists locally, False otherwise
     """
-    default_download_root = str(WHISPER_MODEL_BASE_DIR)
+    if not model_name:
+        return False
 
-    # Check if it's a path that exists
-    if os.path.exists(model_name):
+    # Resolve the default download root once as an absolute, normalized path.
+    # All model paths must remain within this directory.
+    default_root_path = WHISPER_MODEL_BASE_DIR.resolve(strict=False)
+
+    try:
+        normalized = _normalize_whisper_model_identifier(
+            model_name,
+            base_dir=default_root_path,
+        )
+    except ValueError as exc:
+        logging.warning(f"Rejected unsafe whisper model identifier '{model_name}': {exc}")
+        return False
+
+    normalized_path = Path(normalized)
+    if normalized_path.is_absolute():
+        # The normalized path has already been resolved and validated to
+        # reside under default_root_path by _normalize_whisper_model_identifier.
+        # The path has already been validated; just check existence.
+        return normalized_path.exists()
+
+    # Check in default download directory for relative identifiers
+    model_path = default_root_path / normalized
+    if model_path.is_dir():
         return True
 
-    # Check in default download directory
-    model_path = os.path.join(default_download_root, model_name)
-    if os.path.isdir(model_path):
-        return True
-
-    # Check if it's a Hub ID that might be cached
-    if '/' in model_name:
+    # Check if it's a Hub ID that might be cached under our managed root.
+    if _is_hf_model_id(normalized):
         # Convert Hub ID to potential cache path
-        cache_name = model_name.replace('/', '_')
-        cache_path = os.path.join(default_download_root, cache_name)
-        if os.path.isdir(cache_path):
+        cache_name = normalized.replace('/', '_')
+        cache_path = default_root_path / cache_name
+        if cache_path.is_dir():
             return True
 
-    # Check faster-whisper's default cache location
-    home_cache = os.path.expanduser("~/.cache/huggingface/hub")
-    if os.path.exists(home_cache):
-        # Look for model in HuggingFace cache
-        pattern = os.path.join(home_cache, f"*{model_name.replace('/', '--')}*")
-        if glob.glob(pattern):
-            return True
-
+    # Do not probe global HuggingFace cache directories based on user-controlled
+    # identifiers; if the model is not present under the configured root, treat
+    # it as absent and allow the normal download mechanisms to handle it.
     return False
 
 def set_model_download_status(model_name: str, status: str, message: str):
@@ -1509,7 +1843,8 @@ class WhisperModel(OriginalWhisperModel):
                 Set to 0 for faster-whisper to auto-detect.
             num_workers: Number of workers for parallel transcription.
             download_root: Path to the directory for downloading/caching models.
-                If None, uses `WhisperModel.default_download_root`.
+                If None, uses `WhisperModel.default_download_root`. The path must
+                resolve under `WHISPER_MODEL_BASE_DIR`.
             local_files_only: If True, only look for local files and do not
                 attempt to download.
             files: Optional dictionary of specific files to use for the model,
@@ -1522,48 +1857,49 @@ class WhisperModel(OriginalWhisperModel):
                 or if `faster_whisper.WhisperModel` initialization fails.
             RuntimeError: For other unexpected errors during model loading.
         """
-        if download_root is None:
-            download_root = self.default_download_root # Use your default path
+        download_root_path = _resolve_whisper_download_root(
+            download_root or self.default_download_root
+        )
 
-        os.makedirs(download_root, exist_ok=True) # Ensure your target directory exists
-        resolved_identifier = model_size_or_path # Start with the original input
+        try:
+            resolved_identifier = _normalize_whisper_model_identifier(
+                model_size_or_path,
+                base_dir=download_root_path,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
-        # Check 1: Does it contain '/' and is NOT an existing local directory/file?
-        # This is likely a Hugging Face Hub ID.
-        is_potential_hub_id = '/' in model_size_or_path and not os.path.exists(model_size_or_path)
+        resolved_path = Path(resolved_identifier)
+        is_local_path = resolved_path.is_absolute() and resolve_safe_local_path(
+            resolved_path,
+            download_root_path,
+        )
 
-        # Check 2: Is it an existing local directory or file?
-        is_existing_local_path = os.path.exists(model_size_or_path)
-
-        if is_potential_hub_id:
+        if is_local_path:
+            # It's a local path that exists under the allowed model root.
+            logging.info(f"Treating '{resolved_identifier}' as an existing local path.")
+            resolved_identifier = str(resolved_path)
+        elif _is_hf_model_id(resolved_identifier):
             # Assume it's a Hub ID - pass it directly to faster-whisper.
             # faster-whisper will handle downloading it (potentially respecting download_root if configured).
-            logging.info(f"Treating '{model_size_or_path}' as a Hugging Face Hub ID.")
-            resolved_identifier = model_size_or_path # Pass the Hub ID string as is
-        elif is_existing_local_path:
-            # It's a local path that exists - pass the absolute path.
-             logging.info(f"Treating '{model_size_or_path}' as an existing local path.")
-             resolved_identifier = os.path.abspath(model_size_or_path)
+            logging.info(f"Treating '{resolved_identifier}' as a Hugging Face Hub ID.")
         else:
             # Assume it's a standard model size name (e.g., "large-v3").
             # Let faster-whisper handle finding/downloading this standard model.
-            # It will likely use the provided `download_root` or its internal default cache.
-            logging.info(f"Treating '{model_size_or_path}' as a standard model size name.")
-            resolved_identifier = model_size_or_path # Pass the name
+            logging.info(f"Treating '{resolved_identifier}' as a standard model size name.")
+            local_path = _check_standard_model_under_download_root(
+                resolved_identifier,
+                download_root_path,
+            )
+            if local_path is not None:
+                resolved_identifier = str(local_path)
 
-            custom_path_check = os.path.join(download_root, model_size_or_path)
-            if os.path.isdir(custom_path_check):
-                logging.info(f"Found standard model '{model_size_or_path}' in custom download root: {custom_path_check}")
-                resolved_identifier = custom_path_check # Use the local path
-            else:
-                logging.info(f"Standard model '{model_size_or_path}' not in custom root. Passing name to faster-whisper.")
-                # resolved_identifier remains the model size name
 
         # --- Pass the determined identifier and other args to the parent ---
         logging.info(
              f"Initializing faster-whisper with: model='{resolved_identifier}', "
              f"device='{device}', compute_type='{compute_type}', "
-             f"download_root='{download_root}', local_files_only={local_files_only}"
+             f"download_root='{download_root_path}', local_files_only={local_files_only}"
         )
 
         try:
@@ -1574,7 +1910,7 @@ class WhisperModel(OriginalWhisperModel):
                 compute_type=compute_type,
                 cpu_threads=cpu_threads,
                 num_workers=num_workers,
-                download_root=download_root, # Pass your custom root
+                download_root=str(download_root_path), # Pass your custom root
                 local_files_only=local_files_only,
                 **model_kwargs
             )
@@ -1692,20 +2028,29 @@ def get_whisper_model(model_name, device, check_download_status=False):
         compute_type = WHISPER_COMPUTE_TYPE_OVERRIDE
     else:
         compute_type = "float16" if "cuda" in device else "int8"
-    cache_key = (model_name, device, compute_type)
+    try:
+        normalized_model_name = _normalize_whisper_model_identifier(
+            model_name,
+            base_dir=WHISPER_MODEL_BASE_DIR,
+        )
+    except ValueError as exc:
+        logging.error(f"Invalid whisper model identifier '{model_name}': {exc}")
+        raise ValueError(str(exc)) from exc
+
+    cache_key = (normalized_model_name, device, compute_type)
 
     with whisper_model_cache_lock:
         # If checking download status and model not in cache
         if check_download_status and cache_key not in whisper_model_cache:
-            if not check_model_exists(model_name):
+            if not check_model_exists(normalized_model_name):
                 return None, {
                     'status': 'model_downloading',
                     'message': (
-                        f'Model {model_name} is not available locally and will be '
+                        f'Model {normalized_model_name} is not available locally and will be '
                         'downloaded on first use. This may take several minutes '
                         'depending on your internet connection.'
                     ),
-                    'model': model_name
+                    'model': normalized_model_name
                 }
 
         if cache_key not in whisper_model_cache:
@@ -1713,7 +2058,7 @@ def get_whisper_model(model_name, device, check_download_status=False):
             try:
                 # This now calls the *corrected* WhisperModel.__init__
                 instance = WhisperModel(
-                    model_size_or_path=model_name,
+                    model_size_or_path=normalized_model_name,
                     device=device,
                     compute_type=compute_type
                 )
@@ -1721,15 +2066,15 @@ def get_whisper_model(model_name, device, check_download_status=False):
             except (ValueError, RuntimeError) as e:
                 # Check if the error is related to CUDA not being available
                 if "cuda" in device.lower() and ("CUDA" in str(e) or "cuda" in str(e).lower()):
-                    logging.warning(f"CUDA initialization failed for {model_name}: {e}. Falling back to CPU.")
+                    logging.warning(f"CUDA initialization failed for {normalized_model_name}: {e}. Falling back to CPU.")
                     # Try again with CPU
                     cpu_compute_type = "int8"
-                    cpu_cache_key = (model_name, "cpu", cpu_compute_type)
+                    cpu_cache_key = (normalized_model_name, "cpu", cpu_compute_type)
 
                     if cpu_cache_key not in whisper_model_cache:
                         try:
                             instance = WhisperModel(
-                                model_size_or_path=model_name,
+                                model_size_or_path=normalized_model_name,
                                 device="cpu",
                                 compute_type=cpu_compute_type
                             )
@@ -1800,8 +2145,15 @@ def parse_transcription_model(model_name: str) -> tuple:
         elif model_lower.endswith("-standard") or "nemo-parakeet" in model_lower:
             return ("parakeet", "parakeet", "standard")
         else:
-            # Default to standard if no variant specified
-            return ("parakeet", "parakeet", "standard")
+            # Use config default when no variant is specified.
+            try:
+                stt_cfg = get_stt_config()
+            except Exception:
+                stt_cfg = {}
+            variant = str(stt_cfg.get("nemo_model_variant", "standard")).strip().lower()
+            if variant not in {"standard", "onnx", "mlx", "cuda"}:
+                variant = "standard"
+            return ("parakeet", "parakeet", variant)
 
     # Check for Canary models
     elif "canary" in model_lower:
@@ -1814,6 +2166,42 @@ def parse_transcription_model(model_name: str) -> tuple:
     # Default to whisper for all other models
     else:
         # This includes whisper-*, distil-whisper-*, deepdml/*, etc.
+        whisper_prefix = "whisper-"
+        distil_prefix = "distil-whisper-"
+        whisper_sizes = {
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en",
+            "medium",
+            "medium.en",
+            "large-v1",
+            "large-v2",
+            "large-v3",
+            "large-v3-turbo",
+            "large",
+            "turbo",
+        }
+        distil_sizes = {
+            "large-v2",
+            "large-v3",
+            "large-v3.5",
+            "medium.en",
+            "small.en",
+        }
+
+        if model_lower.startswith(distil_prefix):
+            tail = model_lower[len(distil_prefix):]
+            if tail in distil_sizes:
+                return ("whisper", f"distil-{tail}", None)
+
+        if model_lower.startswith(whisper_prefix):
+            tail = model_lower[len(whisper_prefix):]
+            if tail in whisper_sizes:
+                return ("whisper", tail, None)
+
         return ("whisper", model_name, None)
 
 def create_segments_from_text(text: str, audio_duration: float = None, segmentation: str = "sentence") -> list:
@@ -2102,6 +2490,7 @@ def speech_to_text(
     initial_prompt: Optional[str] = None,
     task: str = "transcribe",
     input_sample_rate: Optional[int] = None,
+    base_dir: Optional[Path] = None,
 ) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], Optional[str]]]:
     """
     Canonical file/segment-based speech-to-text helper.
@@ -2131,6 +2520,9 @@ def speech_to_text(
             transcription is always performed.
         input_sample_rate: Sample rate of the provided NumPy array input. Ignored when a
             file path is provided.
+        base_dir: Optional base directory used to validate local file paths and
+            anchor transcript cache output. When provided, audio file paths must
+            resolve under this directory.
 
     Returns:
         By default, a list of segment dictionaries. Each dictionary contains:
@@ -2151,6 +2543,11 @@ def speech_to_text(
         transcript string should explicitly merge segment "Text" fields or use
         `transcribe_audio` instead.
 
+        When persistence is enabled and a file path is provided, transcript
+        cache files are stored under a dedicated `transcripts_cache` directory.
+        If `base_dir` is provided, the cache is created under that directory;
+        otherwise it is created under the system temp root.
+
     Raises:
         ValueError: If `audio_input` is not provided or is invalid.
         FileNotFoundError: If the audio path does not exist.
@@ -2161,6 +2558,7 @@ def speech_to_text(
     file_path: Optional[Path] = None
     file_path_label = "<memory>"
     time_start = time.time()
+    base_dir_resolved: Optional[Path] = None
 
     if audio_input is None or (isinstance(audio_input, (str, Path)) and not str(audio_input)):
         log_counter("speech_to_text_error", labels={"error": "No audio input provided"})
@@ -2178,11 +2576,38 @@ def speech_to_text(
     # If a file path is provided, resolve and validate it
     audio_path_for_model: Union[str, np.ndarray]
     if isinstance(audio_input, (str, Path)):
-        file_path = Path(audio_input).resolve()
+        raw_path = Path(audio_input)
+        try:
+            if base_dir is not None:
+                base_dir_resolved = _resolve_allowed_base_dir(
+                    base_dir,
+                    label="Audio base directory",
+                )
+            candidate_path = raw_path
+            if not candidate_path.is_absolute() and base_dir_resolved is not None:
+                candidate_path = base_dir_resolved / candidate_path
+            if candidate_path.exists():
+                _assert_no_symlink(candidate_path, label="Audio input path")
+            raw_path = _resolve_safe_input_path(
+                raw_path,
+                base_dir=base_dir_resolved,
+                label="Audio input path",
+            )
+        except ValueError as exc:
+            log_counter(
+                "speech_to_text_error",
+                labels={"error": "Audio path rejected", "file_path": str(raw_path)},
+            )
+            raise ValueError(str(exc)) from exc
+        if not raw_path.exists():
+            log_counter(
+                "speech_to_text_error",
+                labels={"error": "Audio file not found", "file_path": str(raw_path)},
+            )
+            raise FileNotFoundError(f"speech-to-text: Audio file not found at {raw_path}")
+        _assert_no_symlink(raw_path, label="Audio input path")
+        file_path = raw_path.resolve()
         file_path_label = str(file_path)
-        if not file_path.exists():
-            log_counter("speech_to_text_error", labels={"error": "Audio file not found", "file_path": str(file_path)})
-            raise FileNotFoundError(f"speech-to-text: Audio file not found at {file_path}")
         audio_path_for_model = str(file_path)
     else:
         audio_np = np.asarray(audio_input, dtype=np.float32).flatten()
@@ -2259,10 +2684,15 @@ def speech_to_text(
 
     try:
         out_file = prettified_out_file = None
+        cache_dir = None
         if file_path is not None:
+            cache_dir = _resolve_transcript_cache_dir(
+                file_path,
+                base_dir=base_dir_resolved,
+            )
             sanitized_whisper_model_name = sanitize_filename(whisper_model)
-            out_file = file_path.with_name(f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments.json")
-            prettified_out_file = file_path.with_name(f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments_pretty.json")
+            out_file = cache_dir / f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments.json"
+            prettified_out_file = cache_dir / f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments_pretty.json"
 
         options = dict(beam_size=5, best_of=5, vad_filter=vad_filter)  # Simplified beam options
         if selected_source_lang:
@@ -2363,17 +2793,19 @@ def speech_to_text(
         _persist_allowed = (file_path is not None) and (PERSIST_TRANSCRIPTS_DEFAULT if persist_segments is None else persist_segments)
         if _persist_allowed and out_file and prettified_out_file:
             try:
+                _assert_no_symlink(out_file, label="Transcript cache file")
                 payload = {"segments": segments}
                 with open(out_file, "w", encoding="utf-8") as f:
                     json.dump(payload, f, ensure_ascii=False)
                 try:
+                    _assert_no_symlink(prettified_out_file, label="Transcript cache file")
                     with open(prettified_out_file, "w", encoding="utf-8") as f:
                         json.dump(payload, f, ensure_ascii=False, indent=2)
                 except Exception as prettify_err:
                     logging.debug(f"Failed to write prettified transcription file: {prettify_err}")
 
                 prune_transcript_cache(
-                    file_path.parent,
+                    cache_dir if cache_dir is not None else file_path.parent,
                     current_file=out_file,
                     max_age_days=cache_max_age_days if cache_max_age_days is not None else CACHE_MAX_AGE_DAYS,
                     max_total_mb=cache_max_total_mb if cache_max_total_mb is not None else CACHE_MAX_TOTAL_MB,
@@ -2562,6 +2994,7 @@ def convert_to_wav(
     offset: int = 0,
     end_time: Optional[int] = None,
     overwrite: bool = False,
+    base_dir: Optional[Path] = None,
 ) -> str:
     """
     Converts a video or audio file to a standardized WAV format using ffmpeg.
@@ -2580,6 +3013,8 @@ def convert_to_wav(
         overwrite: If True, overwrite the output WAV file if it already
             exists. If False and the file exists, the conversion is skipped,
             and the path to the existing file is returned.
+        base_dir: Optional base directory used to validate local input/output
+            paths. When provided, the input must resolve within this directory.
 
     Returns:
         The absolute path to the generated (or existing) WAV file as a string.
@@ -2595,8 +3030,20 @@ def convert_to_wav(
     start_time = time.time()
 
     input_path = Path(video_file_path)
+    try:
+        input_path = _resolve_safe_input_path(
+            input_path,
+            base_dir=base_dir,
+            label="Audio input path",
+        )
+    except ValueError as exc:
+        raise ConversionError(str(exc)) from exc
     if not input_path.exists():
-        raise FileNotFoundError(f"Input file not found: {video_file_path}")
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+    try:
+        _assert_no_symlink(input_path, label="Audio input path")
+    except ValueError as exc:
+        raise ConversionError(str(exc)) from exc
 
     # Output path in the same directory as input
     out_path = input_path.with_suffix(".wav")
@@ -2619,6 +3066,12 @@ def convert_to_wav(
             # Select a new output filename in the same directory
             alt_out_path = input_path.with_name(f"{input_path.stem}_16k_mono.wav")
             out_path = alt_out_path
+
+    if out_path.exists():
+        try:
+            _assert_no_symlink(out_path, label="Audio output path")
+        except ValueError as exc:
+            raise ConversionError(str(exc)) from exc
 
     if out_path.exists() and not overwrite:
         logging.info(f"Skipping conversion as WAV file already exists and overwrite=False: {out_path}")

@@ -191,5 +191,7 @@ def test_check_ffmpeg_handles_unknown_os(monkeypatch):
     result = System_Checks_Lib.check_ffmpeg()
 
     assert result is False
+
+
 def _raise_eof(*_args, **_kwargs):
     raise EOFError()

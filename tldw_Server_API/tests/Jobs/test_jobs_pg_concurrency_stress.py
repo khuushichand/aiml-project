@@ -33,8 +33,10 @@ def _worker_loop(dsn: str, tag: str, max_iters: int = 20, complete: bool = False
     return acquired
 
 
-def test_pg_concurrency_skip_locked_stress(jobs_pg_dsn):
-    # Seed jobs (a few multiples of workers)
+def test_pg_concurrency_skip_locked_stress(jobs_pg_dsn, monkeypatch):
+
+
+     # Seed jobs (a few multiples of workers)
     ensure_jobs_tables_pg(jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     seed_count = 12
@@ -48,6 +50,7 @@ def test_pg_concurrency_skip_locked_stress(jobs_pg_dsn):
         )
 
     # Run 4 processes concurrently acquiring jobs
+    monkeypatch.setenv("JOBS_PG_SKIP_SCHEMA_INIT", "true")
     with ProcessPoolExecutor(max_workers=4) as ex:
         futures = [ex.submit(_worker_loop, jobs_pg_dsn, f"P{i}") for i in range(4)]
         try:

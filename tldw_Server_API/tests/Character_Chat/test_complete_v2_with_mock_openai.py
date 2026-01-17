@@ -24,10 +24,12 @@ async def test_complete_v2_with_mock_openai_server():
 
     # Use isolated DB
     import tempfile, shutil
+
     tmpdir = tempfile.mkdtemp(prefix="chacha_mock_openai_")
     os.environ["USER_DB_BASE_DIR"] = tmpdir
     try:
         from tldw_Server_API.app.main import app
+
         settings = get_settings()
         headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
         transport = httpx.ASGITransport(app=app)
@@ -48,8 +50,8 @@ async def test_complete_v2_with_mock_openai_server():
                     "provider": "openai",
                     "model": "gpt-4o-mini",
                     "append_user_message": "Hello from mock",
-                    "save_to_db": False
-                }
+                    "save_to_db": False,
+                },
             )
             assert r.status_code in (200, 502)  # 502 if mock is unreachable/misconfigured
     finally:

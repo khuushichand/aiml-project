@@ -22,6 +22,8 @@ def make_doc(doc_id: str, content: str, title: str = "Doc") -> Document:
 
 
 def test_assemble_ephemeral_chunk_basic():
+
+
     query = "dropout prevents overfitting"
     content = (
         "Deep learning models often overfit. One method is dropout, which randomly removes units during training. "
@@ -156,7 +158,9 @@ async def test_agentic_query_decomposition_merge(monkeypatch):
 
 
 def test_open_section_anchor_and_table_heuristic():
-    # Build toolbox indirectly via private helpers (unit-level check)
+
+
+     # Build toolbox indirectly via private helpers (unit-level check)
     from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import AgenticToolbox
     doc = make_doc(
         "t3",

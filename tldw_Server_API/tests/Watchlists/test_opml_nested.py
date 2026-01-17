@@ -29,7 +29,9 @@ def client_with_user(monkeypatch):
 
 
 def _nested_opml() -> str:
-    # Mixed-case attributes and nested outlines
+
+
+     # Mixed-case attributes and nested outlines
     return (
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
         "<opml version=\"2.0\">\n"
@@ -46,6 +48,8 @@ def _nested_opml() -> str:
 
 
 def test_opml_nested_and_case_variations(client_with_user):
+
+
     c = client_with_user
     xml = _nested_opml()
     files = {"file": ("nested.opml", io.BytesIO(xml.encode("utf-8")), "application/xml")}

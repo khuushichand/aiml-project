@@ -73,9 +73,10 @@ async def generate_document(
 
         # Resolve provider key requirements
         try:
-            from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+            from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
         except Exception:
-            PROVIDER_REQUIRES_KEY: Dict[str, bool] = {}
+            def provider_requires_api_key(_provider: str) -> bool:  # type: ignore[misc]
+                return True
 
         try:
             _is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
@@ -83,8 +84,10 @@ async def generate_document(
             _is_pytest = False
         _is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
-        explicit_key = (request.api_key or "").strip() if request.api_key else None
-        provider_api_key = explicit_key
+        if request.api_key:
+            logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
+        explicit_key = None
+        provider_api_key = None
         byok_resolution = None
         app_config_override = None
 
@@ -112,7 +115,7 @@ async def generate_document(
             provider_api_key = byok_resolution.api_key
             app_config_override = byok_resolution.app_config
 
-        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key:
+        if provider_requires_api_key(provider_key) and not provider_api_key:
             if (_is_pytest or _is_test_mode) and bool(request.stream):
                 logger.debug(
                     "Bypassing provider API key requirement for streaming document generation during tests (provider=%s)",
@@ -122,7 +125,7 @@ async def generate_document(
             else:
                 record_byok_missing_credentials(provider_key, operation="chat_documents")
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={
                         "error_code": "missing_provider_credentials",
                         "message": f"Provider '{provider_name}' requires an API key.",

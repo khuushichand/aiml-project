@@ -16,21 +16,26 @@ class DummyConn:
         self.closed = False
 
     def commit(self):
+
         self.commits += 1
 
     def rollback(self):
+
         self.rollbacks += 1
 
     def close(self):
+
         self.closed = True
 
 
 def _pg_backend():
+
     # Construct without touching real pool/psycopg; tests pass a connection explicitly
     return PostgreSQLBackend(DatabaseConfig(backend_type=BackendType.POSTGRESQL))
 
 
 def test_transaction_outermost_commits_with_external_connection():
+
     backend = _pg_backend()
     conn = DummyConn()
 
@@ -43,6 +48,7 @@ def test_transaction_outermost_commits_with_external_connection():
 
 
 def test_transaction_nested_commits_once_with_external_connection():
+
     backend = _pg_backend()
     conn = DummyConn()
 
@@ -56,6 +62,7 @@ def test_transaction_nested_commits_once_with_external_connection():
 
 
 def test_transaction_rollback_on_exception_with_external_connection():
+
     backend = _pg_backend()
     conn = DummyConn()
 
@@ -68,6 +75,7 @@ def test_transaction_rollback_on_exception_with_external_connection():
 
 
 def test_transaction_nested_rollback_only_once_on_exception_with_external_connection():
+
     backend = _pg_backend()
     conn = DummyConn()
 

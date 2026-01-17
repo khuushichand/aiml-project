@@ -7,6 +7,8 @@ https://arxiv.org/abs/2412.13171
 https://www.uber.com/en-IN/blog/introducing-the-prompt-engineering-toolkit/
 https://github.com/LouisShark/chatgpt_system_prompt
 https://github.com/microsoft/PromptWizard
+https://github.com/MVPandey/DTS
+
 https://github.com/qixucen/atom
 https://gist.githubusercontent.com/transitive-bullshit/487c9cb52c75a9701d312334ed53b20c/raw/d50ae033bbb0bea41026e338e70d7435f651ae5d/claude-code-prompts.js
 https://github.com/x1xhlol/system-prompts-and-models-of-ai-tools
@@ -21,7 +23,7 @@ https://medium.com/@sahin.samia/prompt-compression-in-large-language-models-llms
 https://github.com/open-compass/ProSA
 https://academy.openai.com/public/tags/prompt-packs-6849a0f98c613939acef841c
 https://huggingface.co/papers/2512.15374
-
+https://github.com/solatis/claude-config/blob/main/skills/prompt-engineer/references/prompt-engineering-single-turn.md
 https://ai-sdk.dev/elements/components/prompt-input
 https://dspy.ai/api/optimizers/MIPROv2/
 https://github.com/davidkimai/Context-Engineering

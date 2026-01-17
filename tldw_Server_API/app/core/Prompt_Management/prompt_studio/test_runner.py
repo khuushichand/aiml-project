@@ -7,7 +7,15 @@ import time
 from typing import Dict, List, Any, Optional
 from loguru import logger
 
-from ....core.Chat.chat_orchestrator import chat_api_call
+from ....core.Chat.Chat_Deps import ChatConfigurationError
+from ....core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 from .program_evaluator import ProgramEvaluator
 
 class TestRunner:
@@ -21,6 +29,39 @@ class TestRunner:
             db_manager: Database manager instance
         """
         self.db = db_manager
+
+    def _call_adapter(
+        self,
+        *,
+        provider: str,
+        model: Optional[str],
+        messages_payload: List[Dict[str, Any]],
+        system_message: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        app_config: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        provider_name = normalize_provider(provider)
+        if not provider_name:
+            raise ChatConfigurationError(provider=provider, message="LLM provider is required.")
+        cfg = ensure_app_config(app_config)
+        resolved_model = model or resolve_provider_model(provider_name, cfg)
+        if not resolved_model:
+            raise ChatConfigurationError(provider=provider_name, message="Model is required for provider.")
+        sys_msg = system_message
+        cleaned_messages = messages_payload
+        if not sys_msg:
+            sys_msg, cleaned_messages = split_system_message(messages_payload)
+        request: Dict[str, Any] = {
+            "messages": cleaned_messages,
+            "system_message": sys_msg,
+            "model": resolved_model,
+            "api_key": resolve_provider_api_key_from_config(provider_name, cfg),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "app_config": cfg,
+        }
+        return get_adapter_or_raise(provider_name).chat(request)
 
     async def run_test_case(
         self,
@@ -65,15 +106,15 @@ class TestRunner:
         # Call LLM
         try:
             response = await asyncio.to_thread(
-                chat_api_call,
-                api_endpoint="openai",
+                self._call_adapter,
+                provider="openai",
                 model=model,
                 messages_payload=[
                     {"role": "user", "content": user_prompt}
                 ],
                 system_message=prompt.get("system_prompt"),
-                temp=temperature,
-                max_tokens=max_tokens
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
 
             actual_output = {"response": self._extract_response_text(response)}

@@ -48,6 +48,7 @@ class TTSProvider(Enum):
     NEUTTS = "neutts"
     INDEX_TTS = "index_tts"
     SUPERTONIC = "supertonic"
+    SUPERTONIC2 = "supertonic2"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -71,6 +72,7 @@ class TTSAdapterRegistry:
         TTSProvider.NEUTTS: "tldw_Server_API.app.core.TTS.adapters.neutts_adapter.NeuTTSAdapter",
         TTSProvider.INDEX_TTS: "tldw_Server_API.app.core.TTS.adapters.index_tts_adapter.IndexTTS2Adapter",
         TTSProvider.SUPERTONIC: "tldw_Server_API.app.core.TTS.adapters.supertonic_adapter.SupertonicOnnxAdapter",
+        TTSProvider.SUPERTONIC2: "tldw_Server_API.app.core.TTS.adapters.supertonic2_adapter.Supertonic2OnnxAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -542,7 +544,8 @@ class TTSAdapterRegistry:
             # Only try to get adapters that are likely to work quickly
             # Skip local model providers in testing unless explicitly enabled
             if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
-                           TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.SUPERTONIC]:
+                           TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.SUPERTONIC,
+                           TTSProvider.SUPERTONIC2]:
                 # Check if explicitly enabled in config
                 if self.config_manager:
                     if not self.config_manager.is_provider_enabled(provider.value):
@@ -804,6 +807,11 @@ class TTSAdapterFactory:
         "tts-supertonic-1": TTSProvider.SUPERTONIC,
         "supertonic": TTSProvider.SUPERTONIC,
         "supertonic-onnx": TTSProvider.SUPERTONIC,
+        # Supertonic2 models (canonical + aliases)
+        "tts-supertonic2-1": TTSProvider.SUPERTONIC2,
+        "supertonic2": TTSProvider.SUPERTONIC2,
+        "supertonic-2": TTSProvider.SUPERTONIC2,
+        "supertonic2-onnx": TTSProvider.SUPERTONIC2,
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

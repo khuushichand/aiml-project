@@ -49,6 +49,7 @@ class TestSecurityLoggerThreadSafety:
         errors = []
 
         def get_logger():
+
             try:
                 instance = get_security_logger()
                 instances.append(instance)
@@ -77,6 +78,7 @@ class TestSecurityLoggerThreadSafety:
         errors = []
 
         def reconfigure():
+
             try:
                 configure_security_logging()
             except Exception as e:
@@ -116,6 +118,7 @@ class TestMetricsThreadSafety:
         errors = []
 
         def get_instance():
+
             try:
                 instance = get_metrics()
                 instances.append(instance)
@@ -195,6 +198,7 @@ class TestTokenizerFailedCacheThreadSafety:
         tokenizers = []
 
         def get_tokenizer():
+
             try:
                 # Use a standard tokenizer name - we're testing thread safety, not fallback behavior
                 strategy = TokenChunkingStrategy(tokenizer_name="gpt2")
@@ -232,6 +236,7 @@ class TestRaceConditionScenarios:
         original_init = SecurityLogger.__init__
 
         def counting_init(self, *args, **kwargs):
+
             nonlocal init_count
             init_count += 1
             return original_init(self, *args, **kwargs)
@@ -239,7 +244,7 @@ class TestRaceConditionScenarios:
         # Reset and patch
         configure_security_logging()  # Reset to known state
 
-        with patch.object(SecurityLogger, '__init__', counting_init):
+        with patch.object(SecurityLogger, "__init__", counting_init):
             # Reconfigure to use patched init
             configure_security_logging()
             init_count = 0  # Reset after configure
@@ -269,11 +274,9 @@ class TestThreadPoolExecutorAccess:
         configure_security_logging()
 
         def get_and_log():
+
             logger = get_security_logger()
-            logger.log_event(
-                SecurityEventType.INVALID_INPUT,  # Use proper enum value
-                "test message"
-            )
+            logger.log_event(SecurityEventType.INVALID_INPUT, "test message")  # Use proper enum value
             return id(logger)
 
         # Use executor for concurrent access
@@ -289,6 +292,7 @@ class TestThreadPoolExecutorAccess:
         from tldw_Server_API.app.core.Chunking.utils.metrics import get_metrics
 
         def get_and_record():
+
             metrics = get_metrics()
             metrics.record_request("test_method", "success")
             return id(metrics)

@@ -12,6 +12,7 @@ full ResourceGovernor integration is rolled out.
 from __future__ import annotations
 
 import os
+import inspect
 from typing import Any, Dict, Tuple
 
 from loguru import logger
@@ -116,7 +117,12 @@ class AuthGovernor:
         limiter = rate_limiter
         if limiter is None:
             try:
-                limiter = await get_rate_limiter()
+                limiter = get_rate_limiter()
+            except Exception:
+                limiter = None
+        if inspect.isawaitable(limiter):
+            try:
+                limiter = await limiter
             except Exception:
                 limiter = None
 
@@ -146,7 +152,12 @@ class AuthGovernor:
         limiter = rate_limiter
         if limiter is None:
             try:
-                limiter = await get_rate_limiter()
+                limiter = get_rate_limiter()
+            except Exception:
+                limiter = None
+        if inspect.isawaitable(limiter):
+            try:
+                limiter = await limiter
             except Exception:
                 limiter = None
 
@@ -168,42 +179,35 @@ class AuthGovernor:
         rate_limiter=None,
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        Check a generic AuthNZ-scoped rate limit via the shared RateLimiter.
+        Rate limit check delegated to the existing AuthNZ rate limiter.
 
-        This wraps RateLimiter.check_rate_limit and normalizes the metadata
-        shape. On limiter errors or when the limiter is disabled/unavailable,
-        this method fails open and returns (True, {}).
-
-        Note: the underlying AuthNZ RateLimiter evaluates Resource Governor
-        (RG) policies even when legacy DB/Redis limiting is disabled, so this
-        wrapper must still call into the limiter when present to allow RG-based
-        enforcement/metrics in dev/staging.
+        Returns a permissive response when the limiter is unavailable.
         """
         limiter = rate_limiter
         if limiter is None:
             try:
-                limiter = await get_rate_limiter()
+                limiter = get_rate_limiter()
+            except Exception:
+                limiter = None
+        if inspect.isawaitable(limiter):
+            try:
+                limiter = await limiter
             except Exception:
                 limiter = None
 
-        if limiter is not None:
+        if limiter and getattr(limiter, "enabled", False):
             try:
-                kwargs: Dict[str, Any] = {}
-                if limit is not None:
-                    kwargs["limit"] = int(limit)
-                if window_minutes is not None:
-                    kwargs["window_minutes"] = int(window_minutes)
-                allowed, meta = await limiter.check_rate_limit(identifier, endpoint, **kwargs)
-                if not isinstance(meta, dict):
-                    try:
-                        meta = dict(meta or {})
-                    except Exception:
-                        meta = {}
-                return bool(allowed), meta
+                return await limiter.check_rate_limit(
+                    identifier,
+                    endpoint,
+                    limit=limit,
+                    window_minutes=window_minutes,
+                )
+            except TypeError:
+                return await limiter.check_rate_limit(identifier, endpoint)
             except Exception as exc:
-                logger.debug(f"AuthGovernor rate-limit check failed for {identifier}:{endpoint}: {exc}")
+                logger.debug(f"AuthGovernor rate limit failed for {identifier}: {exc}")
 
-        # Fail-open when limiter is unavailable or disabled
         return True, {}
 
 

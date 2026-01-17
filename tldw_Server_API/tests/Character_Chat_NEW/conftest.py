@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 # =====================================================================
 
 def pytest_configure(config):
+
     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
@@ -43,6 +44,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "legacy_skip: Skip tests targeting legacy behaviors")
 
 def pytest_collection_modifyitems(config, items):
+
     """No automatic skipping; run unit and integration tests."""
     return
 
@@ -802,6 +804,7 @@ def cleanup_after_test():
 # =====================================================================
 
 def create_test_character(db, **kwargs):
+
     """Helper to create a test character card."""
     character_data = {
         'name': 'Test Character',
@@ -814,6 +817,7 @@ def create_test_character(db, **kwargs):
     return db.add_character_card(character_data)
 
 def create_test_chat(db, character_id, user_id='test_user', **kwargs):
+
     """Helper to create a test chat session."""
     import uuid
     chat_id = str(uuid.uuid4())
@@ -833,6 +837,7 @@ def create_test_chat(db, character_id, user_id='test_user', **kwargs):
     return chat_id
 
 def create_test_world_book(service, **kwargs):
+
     """Helper to create a test world book."""
     world_book_data = {
         'name': 'Test World Book',

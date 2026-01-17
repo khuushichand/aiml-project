@@ -121,6 +121,60 @@ class AuthnzApiKeysRepo:
             logger.error(f"AuthnzApiKeysRepo.fetch_active_by_hash_candidates failed: {exc}")
             raise
 
+    async def fetch_active_by_key_id(
+        self,
+        key_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch the most recent active API key by key_id."""
+        if not key_id:
+            return None
+
+        try:
+            if getattr(self.db_pool, "pool", None) is not None:
+                row = await self.db_pool.fetchone(
+                    """
+                    SELECT id, user_id, name, scope, status, expires_at,
+                           rate_limit, allowed_ips, usage_count, key_hash,
+                           COALESCE(is_virtual, FALSE) AS is_virtual,
+                           parent_key_id, org_id, team_id,
+                           llm_budget_day_tokens, llm_budget_month_tokens,
+                           llm_budget_day_usd, llm_budget_month_usd,
+                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                           metadata
+                    FROM api_keys
+                    WHERE key_id = $1 AND status = $2
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    key_id,
+                    "active",
+                )
+            else:
+                row = await self.db_pool.fetchone(
+                    """
+                    SELECT id, user_id, name, scope, status, expires_at,
+                           rate_limit, allowed_ips, usage_count, key_hash,
+                           COALESCE(is_virtual, 0) AS is_virtual,
+                           parent_key_id, org_id, team_id,
+                           llm_budget_day_tokens, llm_budget_month_tokens,
+                           llm_budget_day_usd, llm_budget_month_usd,
+                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                           metadata
+                    FROM api_keys
+                    WHERE key_id = ? AND status = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (key_id, "active"),
+                )
+
+            if not row:
+                return None
+            return dict(row)
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.fetch_active_by_key_id failed: {exc}")
+            raise
+
     async def fetch_key_for_user(self, key_id: int, user_id: int) -> Optional[Dict[str, Any]]:
         """Fetch a specific key row for a user (id + user_id match)."""
         try:
@@ -216,6 +270,7 @@ class AuthnzApiKeysRepo:
         *,
         user_id: int,
         key_hash: str,
+        key_identifier: Optional[str],
         key_prefix: str,
         name: str,
         description: str,
@@ -235,12 +290,13 @@ class AuthnzApiKeysRepo:
                     await conn.execute(
                         """
                         INSERT INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description,
+                            user_id, key_hash, key_id, key_prefix, name, description,
                             scope, status, is_virtual
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8)
                         ON CONFLICT (key_hash) DO UPDATE SET
                             user_id = EXCLUDED.user_id,
+                            key_id = EXCLUDED.key_id,
                             key_prefix = EXCLUDED.key_prefix,
                             scope = EXCLUDED.scope,
                             status = EXCLUDED.status,
@@ -248,6 +304,7 @@ class AuthnzApiKeysRepo:
                         """,
                         user_id,
                         key_hash,
+                        key_identifier,
                         key_prefix,
                         name,
                         description,
@@ -259,7 +316,7 @@ class AuthnzApiKeysRepo:
                     await conn.execute(
                         """
                         INSERT OR REPLACE INTO api_keys (
-                            id, user_id, key_hash, key_prefix, name, description,
+                            id, user_id, key_hash, key_id, key_prefix, name, description,
                             scope, status, is_virtual
                         )
                         VALUES (
@@ -267,13 +324,14 @@ class AuthnzApiKeysRepo:
                                 (SELECT id FROM api_keys WHERE key_hash = ?),
                                 COALESCE((SELECT MAX(id) FROM api_keys), 0) + 1
                             ),
-                            ?, ?, ?, ?, ?, ?, 'active', ?
+                            ?, ?, ?, ?, ?, ?, ?, 'active', ?
                         )
                         """,
                         (
                             key_hash,
                             user_id,
                             key_hash,
+                            key_identifier,
                             key_prefix,
                             name,
                             description,
@@ -341,6 +399,7 @@ class AuthnzApiKeysRepo:
         *,
         user_id: int,
         key_hash: str,
+        key_identifier: Optional[str],
         key_prefix: str,
         name: Optional[str],
         description: Optional[str],
@@ -368,14 +427,15 @@ class AuthnzApiKeysRepo:
                     key_id = await conn.fetchval(
                         """
                         INSERT INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description,
+                            user_id, key_hash, key_id, key_prefix, name, description,
                             scope, expires_at, rate_limit, allowed_ips, metadata
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                         RETURNING id
                         """,
                         user_id,
                         key_hash,
+                        key_identifier,
                         key_prefix,
                         name,
                         description,
@@ -389,14 +449,15 @@ class AuthnzApiKeysRepo:
                     cursor = await conn.execute(
                         """
                         INSERT INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description,
+                            user_id, key_hash, key_id, key_prefix, name, description,
                             scope, expires_at, rate_limit, allowed_ips, metadata
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             user_id,
                             key_hash,
+                            key_identifier,
                             key_prefix,
                             name,
                             description,
@@ -419,6 +480,7 @@ class AuthnzApiKeysRepo:
         *,
         user_id: int,
         key_hash: str,
+        key_identifier: Optional[str],
         key_prefix: str,
         name: Optional[str],
         description: Optional[str],
@@ -505,21 +567,22 @@ class AuthnzApiKeysRepo:
                         key_id = await conn.fetchval(
                             """
                             INSERT INTO api_keys (
-                                user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                                user_id, key_hash, key_id, key_prefix, name, description, scope, status, expires_at,
                                 is_virtual, parent_key_id, org_id, team_id,
                                 llm_budget_day_tokens, llm_budget_month_tokens,
                                 llm_budget_day_usd, llm_budget_month_usd,
                                 llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
                                 metadata
                             ) VALUES (
-                                $1,$2,$3,$4,$5,$6,'active',$7,
-                                TRUE,$8,$9,$10,
-                                $11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb,
-                                ($18)::jsonb
+                                $1,$2,$3,$4,$5,$6,$7,'active',$8,
+                                TRUE,$9,$10,$11,
+                                $12,$13,$14,$15,$16::jsonb,$17::jsonb,$18::jsonb,
+                                ($19)::jsonb
                             ) RETURNING id
                             """,
                             user_id,
                             key_hash,
+                            key_identifier,
                             key_prefix,
                             name,
                             description,
@@ -541,21 +604,22 @@ class AuthnzApiKeysRepo:
                         key_id = await conn.fetchval(
                             """
                             INSERT INTO api_keys (
-                                user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                                user_id, key_hash, key_id, key_prefix, name, description, scope, status, expires_at,
                                 is_virtual, parent_key_id, org_id, team_id,
                                 llm_budget_day_tokens, llm_budget_month_tokens,
                                 llm_budget_day_usd, llm_budget_month_usd,
                                 llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
                                 metadata
                             ) VALUES (
-                                $1,$2,$3,$4,$5,$6,'active',$7,
-                                TRUE,$8,$9,$10,
-                                $11,$12,$13,$14,$15,$16,$17,
-                                $18
+                                $1,$2,$3,$4,$5,$6,$7,'active',$8,
+                                TRUE,$9,$10,$11,
+                                $12,$13,$14,$15,$16,$17,$18,
+                                $19
                             ) RETURNING id
                             """,
                             user_id,
                             key_hash,
+                            key_identifier,
                             key_prefix,
                             name,
                             description,
@@ -579,19 +643,20 @@ class AuthnzApiKeysRepo:
                     cursor = await conn.execute(
                         """
                         INSERT INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                            user_id, key_hash, key_id, key_prefix, name, description, scope, status, expires_at,
                             is_virtual, parent_key_id, org_id, team_id,
                             llm_budget_day_tokens, llm_budget_month_tokens,
                             llm_budget_day_usd, llm_budget_month_usd,
                             llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
                             metadata
-                        ) VALUES (?,?,?,?,?,?,'active',?,
+                        ) VALUES (?,?,?,?,?,?,?,'active',?,
                             1,?,?,?,?,?,?,?,?,?,?,?
                         )
                         """,
                         (
                             user_id,
                             key_hash,
+                            key_identifier,
                             key_prefix,
                             name,
                             description,
@@ -688,6 +753,7 @@ class AuthnzApiKeysRepo:
         user_id: int,
         old_key_id: int,
         new_key_hash: str,
+        new_key_identifier: Optional[str],
         new_key_prefix: str,
         new_name: Optional[str],
         new_description: Optional[str],
@@ -728,14 +794,15 @@ class AuthnzApiKeysRepo:
                     new_key_id = await conn.fetchval(
                         """
                         INSERT INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description,
+                            user_id, key_hash, key_id, key_prefix, name, description,
                             scope, expires_at, rate_limit, allowed_ips, metadata
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                         RETURNING id
                         """,
                         user_id,
                         new_key_hash,
+                        new_key_identifier,
                         new_key_prefix,
                         new_name,
                         new_description,
@@ -774,14 +841,15 @@ class AuthnzApiKeysRepo:
                     cursor = await conn.execute(
                         """
                         INSERT INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description,
+                            user_id, key_hash, key_id, key_prefix, name, description,
                             scope, expires_at, rate_limit, allowed_ips, metadata
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             user_id,
                             new_key_hash,
+                            new_key_identifier,
                             new_key_prefix,
                             new_name,
                             new_description,

@@ -309,7 +309,7 @@ def configure_for_mock_server(mock_openai_server, monkeypatch):
         return config
 
     monkeypatch.setattr('tldw_Server_API.app.core.config.load_and_log_configs', mock_load_and_log_configs)
-    monkeypatch.setattr('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs', mock_load_and_log_configs)
+    monkeypatch.setattr('tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs', mock_load_and_log_configs)
 
     yield
 

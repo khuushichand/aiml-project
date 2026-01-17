@@ -11,9 +11,28 @@ allow_remote_webui_access = false
 # Provide CIDR ranges or individual IPs, comma-separated
 webui_ip_allowlist =
 
+[ACP]
+# Command used to launch the ACP runner (tldw-agent-acp).
+runner_command = go
+# Accepts JSON array or shell-style args.
+runner_args = ["run", "./cmd/tldw-agent-acp"]
+# Working directory for the runner process (e.g. ../tldw-agent).
+runner_cwd = ../tldw-agent
+# Runner environment (comma-separated key=value or JSON).
+# If you point HOME at a local ACP stub config, use an absolute path to avoid Go GOMODCACHE errors.
+runner_env = HOME=/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/acp_runner_home,PYTHONUNBUFFERED=1
+# Startup timeout for runner initialize.
+startup_timeout_ms = 10000
+
 [Audit]
 # Auto-switch audit exports to streaming when max_rows exceeds this threshold to avoid large in-memory buffers.
 export_stream_auto_max_rows = 5000
+# Audit storage mode (per_user or shared)
+storage_mode = per_user
+# Shared audit DB path used when storage_mode=shared
+shared_db_path = Databases/audit_shared.db
+# Force per_user behavior even when shared mode is configured
+storage_rollback = false
 
 [Processing]
 processing_choice = cuda
@@ -48,6 +67,9 @@ default_rag_prompt = simplified_promptflow_RAG_system_prompt
 [Chat-Module]
 enable_provider_fallback = False
 max_base64_image_size_mb = 3
+# When true, reject data:image payloads larger than max_base64_image_size_mb at ingress.
+# Env override: CHAT_ENFORCE_BASE64_IMAGE_LIMIT
+enforce_base64_image_limit = false
 max_text_length_per_message = 400000
 max_messages_per_request = 1000
 max_images_per_request = 10
@@ -59,6 +81,7 @@ streaming_max_response_size_mb = 10
 # to limit memory use and apply backpressure. Default: 100
 chat_stream_channel_maxsize = 100
 chat_save_default = False
+inject_assistant_name = true
 conversation_creation_max_retries = 3
 db_transaction_max_retries = 3
 rate_limit_per_minute = 60
@@ -117,6 +140,11 @@ CHARACTER_RATE_LIMIT_OPS = 100
 CHARACTER_RATE_LIMIT_WINDOW = 3600
 MAX_CHARACTERS_PER_USER = 1000
 MAX_CHARACTER_IMPORT_SIZE_MB = 10
+MAX_CHATS_PER_USER = 100
+MAX_MESSAGES_PER_CHAT = 1000
+MAX_MESSAGES_PER_CHAT_SOFT = 1000
+MAX_CHAT_COMPLETIONS_PER_MINUTE = 20
+MAX_MESSAGE_SENDS_PER_MINUTE = 60
 
 [Settings]
 chunk_duration = 30
@@ -257,6 +285,8 @@ auth_mode = single_user
 database_url = sqlite:///./Databases/users.db
 enable_registration = true
 require_registration_code = false
+enable_org_scoped_registration_codes = false
+org_invite_allow_missing_email = false
 rate_limit_enabled = true
 rate_limit_per_minute = 60
 rate_limit_burst = 10
@@ -264,6 +294,7 @@ access_token_expire_minutes = 30
 refresh_token_expire_days = 7
 byok_enabled = false
 byok_allowed_providers =
+byok_allowed_base_url_providers = openai,anthropic,zai,moonshot,openrouter,bedrock
 byok_encryption_key =
 byok_secondary_encryption_key =
 
@@ -351,6 +382,10 @@ model_dir = ./App_Function_Libraries/models/embedding_models
 embedding_api_url = http://localhost:8080/v1/embeddings
 chunk_size = 400
 overlap = 200
+# Comma-separated media types that may legitimately produce zero embeddings
+# (e.g., audio/video items without transcripts). When matched, media-embeddings
+# jobs complete successfully even if no vectors are stored.
+allow_zero_embeddings_media_types = audio,video
 enable_contextual_chunking = false
 contextual_llm_model = gpt-3.5-turbo
 context_window_size = None
@@ -460,6 +495,19 @@ agentic_cache_backend = memory
 # and background jobs.
 agentic_cache_ttl_sec = 600
 
+# Precomputed span index caps (late-interaction spans stored per corpus)
+# Env overrides:
+# - RAG_PRECOMPUTED_SPANS_MAX_VECTORS_PER_CORPUS
+# - RAG_PRECOMPUTED_SPANS_MAX_MB_PER_CORPUS
+# - RAG_PRECOMPUTED_SPANS_RETENTION_DAYS
+precomputed_spans_max_vectors_per_corpus = 200000
+precomputed_spans_max_mb_per_corpus = 512
+precomputed_spans_retention_days = 30
+
+# Enable/disable implicit feedback capture (click/copy/expand/dwell/citation-used)
+# Env override: IMPLICIT_FEEDBACK_ENABLED=true|false (default true)
+implicit_feedback_enabled = true
+
 [ResourceGovernor]
 # Global Resource Governor enable flag (env: RG_ENABLED)
 enabled = true
@@ -476,6 +524,25 @@ policy_path = tldw_Server_API/Config_Files/resource_governor_policies.yaml
 # Deprecated: per-module RG enable flags were removed in v1.1; integrations are
 # controlled by the global `enabled` flag. Kept for config compatibility only.
 enable_audio = false
+
+[Jobs]
+# Jobs prune scheduler (env overrides: JOBS_PRUNE_*)
+prune_enforce = false
+prune_interval_sec = 86400
+prune_dry_run = false
+prune_domain =
+prune_queue =
+prune_job_type =
+
+# Retention days (env overrides: JOBS_RETENTION_DAYS_*)
+# terminal (completed/failed/cancelled/quarantined) override
+retention_days_terminal =
+retention_days_completed = 30
+retention_days_failed = 60
+retention_days_cancelled = 60
+retention_days_quarantined = 90
+# non-terminal (queued/processing); 0 disables
+retention_days_nonterminal = 0
 
 [Diarization]
 # VAD backend:
@@ -560,7 +627,7 @@ google_max_tokens = 4096
 google_api_timeout = 90
 google_api_retry = 3
 google_api_retry_delay = 1
-groq_model = gemma2-9b-it
+groq_model = llama-3.3-70b-versatile
 groq_streaming = True
 groq_temperature = 0.7
 groq_max_tokens = 4096
@@ -568,9 +635,10 @@ groq_api_timeout = 90
 groq_api_retry = 3
 groq_api_retry_delay = 1
 huggingface_use_router_url_format = false
-huggingface_router_base_url = https://router.huggingface.co/hf-inference/models
-huggingface_api_chat_path = v1/chat/completions
-huggingface_model = meta-llama/Meta-Llama-3.1-8B-Instruct
+huggingface_router_base_url = https://router.huggingface.co/hf-inference
+huggingface_api_base_url = https://router.huggingface.co/v1
+huggingface_api_chat_path = chat/completions
+huggingface_model = ServiceNow-AI/Apriel-1.6-15b-Thinker:together
 huggingface_streaming = True
 huggingface_temperature = 0.7
 huggingface_max_tokens = 4096
@@ -584,7 +652,15 @@ mistral_max_tokens = 4096
 mistral_api_timeout = 90
 mistral_api_retry = 3
 mistral_api_retry_delay = 1
-openai_model = gpt-4.1-2025-04-14
+bedrock_model = anthropic.claude-3-5-sonnet-20241022-v2:0
+bedrock_streaming = True
+bedrock_temperature = 0.7
+bedrock_top_p = 0.95
+bedrock_max_tokens = 4096
+bedrock_api_timeout = 90
+bedrock_api_retry = 3
+bedrock_api_retry_delay = 1
+openai_model = gpt-4o
 openai_streaming = False
 openai_temperature = 0.7
 openai_top_p = 0.95
@@ -598,7 +674,8 @@ openrouter_max_tokens = 4096
 openrouter_api_timeout = 90
 openrouter_api_retry = 3
 openrouter_api_retry_delay = 1
-custom_openai_api_model = <model_name_here>
+custom_openai_api_ip = https://api.openai.com/v1
+custom_openai_api_model = gpt-4.1-2025-04-14
 custom_openai_api_streaming = True
 custom_openai_api_temperature = 0.7
 custom_openai_api_top_p = 0.9
@@ -607,7 +684,8 @@ custom_openai_api_max_tokens = 4096
 custom_openai_api_timeout = 90
 custom_openai_api_api_retry = 3
 custom_openai_api_api_retry_delay = 1
-custom_openai2_api_model = <model_name_here>
+custom_openai2_api_ip = https://api.openai.com/v1
+custom_openai2_api_model = gpt-4.1-2025-04-14
 custom_openai2_api_streaming = True
 custom_openai2_api_temperature = 0.7
 custom_openai2_api_top_p = 0.9
@@ -622,7 +700,7 @@ default_api_for_tasks = anthropic
 # MLX (Apple Silicon) local provider (in-process)
 [MLX]
 # Path or repo id for the MLX model to load
-mlx_model_path = <path_or_repo_id>
+mlx_model_path = Qwen/Qwen3-0.6B-MLX-4bit
 # Optional overrides; defaults favor single-concurrency + warmup/compile on.
 mlx_max_seq_len =
 mlx_max_batch_size =
@@ -753,7 +831,8 @@ allowed_paths =
 log_output_file =
 
 [STT-Settings]
-default_transcriber = faster-whisper
+default_transcriber = parakeet
+default_stt_provider = parakeet
 nemo_model_variant = mlx
 nemo_device = cpu
 nemo_cache_dir = ./models/nemo
@@ -947,7 +1026,7 @@ stable_only = true
 disable =
 
 # Comma-separated list of route keys to force-enable (useful when stable_only = true)
-enable = tools, jobs
+enable = tools, jobs, acp
 
 # Optionally extend the curated experimental set (comma-separated)
 experimental_routes =
@@ -1003,6 +1082,10 @@ web_scraper_api_retry = 3
 web_scraper_api_retry_delay = 1
 web_scraper_retry_count = 3
 web_scraper_stealth_playwright = False
+custom_scrapers_yaml_path = tldw_Server_API/Config_Files/custom_scrapers.yaml
+web_scraper_default_backend = auto
+web_scraper_ua_mode = fixed
+web_scraper_respect_robots = True
 
 [Logging]
 log_level = INFO
@@ -1010,6 +1093,9 @@ log_file = ./Logs/tldw_app_logs.json
 log_metrics_file = ./Logs/tldw_metrics_logs.json
 max_bytes =
 backup_count = 5
+# System log aggregation (admin system logs)
+system_log_file_path = Databases/system_logs.jsonl
+system_log_file_max_entries = 5000
 
 [Moderation]
 enabled = False

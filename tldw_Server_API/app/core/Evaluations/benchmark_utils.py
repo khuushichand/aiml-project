@@ -836,12 +836,15 @@ class NextTokenCapture:
         # Handle OpenAI-style response
         if "choices" in response and response["choices"]:
             choice = response["choices"][0]
-            result["generated_text"] = choice.get("text", "")
+            if isinstance(choice.get("message"), dict):
+                result["generated_text"] = choice["message"].get("content", "") or ""
+            else:
+                result["generated_text"] = choice.get("text", "")
 
             if "logprobs" in choice and choice["logprobs"]:
                 logprobs = choice["logprobs"]
 
-                # Get the first token's logprobs (next token)
+                # Completions-style logprobs (tokens + top_logprobs dict)
                 if "tokens" in logprobs and logprobs["tokens"]:
                     result["generated_token"] = logprobs["tokens"][0]
 
@@ -860,13 +863,39 @@ class NextTokenCapture:
                             "percentage": f"{prob * 100:.2f}%"
                         })
 
-                    # Sort by probability
-                    result["top_tokens"].sort(key=lambda x: x["probability"], reverse=True)
+                # Chat-style logprobs (content list with top_logprobs)
+                if isinstance(logprobs, dict) and logprobs.get("content"):
+                    content_entries = logprobs.get("content")
+                    if isinstance(content_entries, list) and content_entries:
+                        first_entry = content_entries[0]
+                        token = first_entry.get("token")
+                        if isinstance(token, str):
+                            result["generated_token"] = token
+                        top_entries = first_entry.get("top_logprobs")
+                        if isinstance(top_entries, list):
+                            import math
+                            for entry in top_entries:
+                                if not isinstance(entry, dict):
+                                    continue
+                                token_val = entry.get("token")
+                                logprob_val = entry.get("logprob")
+                                if not isinstance(token_val, str) or not isinstance(logprob_val, (int, float)):
+                                    continue
+                                prob = math.exp(logprob_val)
+                                result["top_tokens"].append({
+                                    "token": token_val,
+                                    "logprob": logprob_val,
+                                    "probability": prob,
+                                    "percentage": f"{prob * 100:.2f}%"
+                                })
 
-                    # Create distribution map
-                    result["probability_distribution"] = {
-                        t["token"]: t["probability"] for t in result["top_tokens"]
-                    }
+                # Sort by probability
+                result["top_tokens"].sort(key=lambda x: x["probability"], reverse=True)
+
+                # Create distribution map
+                result["probability_distribution"] = {
+                    t["token"]: t["probability"] for t in result["top_tokens"]
+                }
 
         # Handle other API formats (Anthropic, etc.)
         elif "completion" in response:

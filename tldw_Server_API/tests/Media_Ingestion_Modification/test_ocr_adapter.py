@@ -10,6 +10,8 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.tesseract_
 
 
 def test_registry_selects_tesseract_when_available(monkeypatch):
+
+
     # Simulate tesseract binary present
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/tesseract" if name == "tesseract" else None)
     backend = get_backend(None)  # auto
@@ -18,6 +20,8 @@ def test_registry_selects_tesseract_when_available(monkeypatch):
 
 
 def test_tesseract_cli_ocr_invocation(monkeypatch):
+
+
     # Ensure registry thinks tesseract is present
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/tesseract" if name == "tesseract" else None)
 
@@ -27,6 +31,7 @@ def test_tesseract_cli_ocr_invocation(monkeypatch):
             self.stdout = stdout
 
     def fake_run(cmd, capture_output, text, check):
+
         assert cmd[0] == "tesseract"
         assert "stdout" in cmd
         return DummyCompleted(stdout="Hello OCR")

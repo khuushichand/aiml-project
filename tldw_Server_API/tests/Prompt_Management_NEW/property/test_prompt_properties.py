@@ -422,6 +422,7 @@ class PromptStateMachine(RuleBasedStateMachine):
     """Stateful testing for prompt management operations."""
 
     def __init__(self):
+
         super().__init__()
         self.service = None
         self.prompt_ids = set()
@@ -533,6 +534,7 @@ class PromptStateMachine(RuleBasedStateMachine):
                         # Content may have been updated
 
     def teardown(self):
+
         """Clean up after test."""
         if self.service:
             self.service.close()

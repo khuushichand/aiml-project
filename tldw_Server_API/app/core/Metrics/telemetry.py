@@ -8,15 +8,59 @@ This module provides centralized telemetry configuration supporting:
 - Multiple export backends (OTLP, Prometheus, Jaeger)
 """
 
+import inspect
 import os
 import socket
 from typing import Dict, Any, Optional, List
 from contextlib import contextmanager
 from loguru import logger
 
-from loguru import logger
+# Fallback implementations used when telemetry init fails or OTel is missing.
+class DummySpan:
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+    def set_attribute(self, key, value):
+        pass
+    def set_status(self, status):
+        pass
+    def add_event(self, name, attributes=None):
+        pass
+    def record_exception(self, exception):
+        pass
 
-# Try to import OpenTelemetry components
+
+class DummyTracer:
+    def start_span(self, name, **kwargs):
+        return DummySpan()
+    def start_as_current_span(self, name, **kwargs):
+        return DummySpan()
+
+
+class DummyInstrument:
+    def add(self, amount, attributes=None):
+        pass
+    def record(self, amount, attributes=None):
+        pass
+    def set(self, amount, attributes=None):
+        pass
+
+
+class DummyMeter:
+    def create_counter(self, name, **kwargs):
+        return DummyInstrument()
+    def create_histogram(self, name, **kwargs):
+        return DummyInstrument()
+    def create_gauge(self, name, **kwargs):
+        return DummyInstrument()
+    def create_observable_gauge(self, name, **kwargs):
+        return DummyInstrument()
+    def create_up_down_counter(self, name, **kwargs):
+        return DummyInstrument()
+
+
+# Try to import core OpenTelemetry components
 try:
     from opentelemetry import trace, metrics, baggage
     from opentelemetry.trace import Status, StatusCode, Tracer
@@ -43,22 +87,6 @@ try:
         ConsoleMetricExporter
     )
 
-    # Exporters
-    from opentelemetry.exporter.prometheus import PrometheusMetricReader
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-
-    # Instrumentation
-    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-    from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
-    from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
-
-    # Context propagation
-    from opentelemetry.propagate import set_global_textmap
-    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-
     OTEL_AVAILABLE = True
 except ImportError as e:
     # Demote to debug/info to reduce noisy logs during tests; telemetry is optional
@@ -68,45 +96,63 @@ except ImportError as e:
     Status = None  # type: ignore
     StatusCode = None  # type: ignore
 
-    # Provide dummy classes for fallback
-    class DummyTracer:
-        def start_span(self, name, **kwargs):
-            return DummySpan()
-        def start_as_current_span(self, name, **kwargs):
-            # Provide a context manager compatible method used by trace_context
-            return DummySpan()
+PrometheusMetricReader = None
+OTLPSpanExporter = None
+OTLPMetricExporter = None
+FastAPIInstrumentor = None
+HTTPXClientInstrumentor = None
+SQLAlchemyInstrumentor = None
+Psycopg2Instrumentor = None
+AioHttpClientInstrumentor = None
+set_global_textmap = None
+TraceContextTextMapPropagator = None
 
-    class DummySpan:
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-        def set_attribute(self, key, value):
-            pass
-        def set_status(self, status):
-            pass
-        def add_event(self, name, attributes=None):
-            pass
-        def record_exception(self, exception):
-            pass
+if OTEL_AVAILABLE:
+    try:
+        from opentelemetry.exporter.prometheus import PrometheusMetricReader
+    except Exception as e:  # pragma: no cover - optional exporter
+        logger.debug(f"Prometheus exporter not available: {e}")
 
-    class DummyMeter:
-        def create_counter(self, name, **kwargs):
-            return DummyInstrument()
-        def create_histogram(self, name, **kwargs):
-            return DummyInstrument()
-        def create_gauge(self, name, **kwargs):
-            return DummyInstrument()
-        def create_up_down_counter(self, name, **kwargs):
-            return DummyInstrument()
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    except Exception as e:  # pragma: no cover - optional exporter
+        logger.debug(f"OTLP trace exporter not available: {e}")
 
-    class DummyInstrument:
-        def add(self, amount, attributes=None):
-            pass
-        def record(self, amount, attributes=None):
-            pass
-        def set(self, amount, attributes=None):
-            pass
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+    except Exception as e:  # pragma: no cover - optional exporter
+        logger.debug(f"OTLP metric exporter not available: {e}")
+
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    except Exception as e:  # pragma: no cover - optional instrumentation
+        logger.debug(f"FastAPI instrumentation not available: {e}")
+
+    try:
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    except Exception as e:  # pragma: no cover - optional instrumentation
+        logger.debug(f"HTTPX instrumentation not available: {e}")
+
+    try:
+        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+    except Exception as e:  # pragma: no cover - optional instrumentation
+        logger.debug(f"SQLAlchemy instrumentation not available: {e}")
+
+    try:
+        from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
+    except Exception as e:  # pragma: no cover - optional instrumentation
+        logger.debug(f"Psycopg2 instrumentation not available: {e}")
+
+    try:
+        from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
+    except Exception as e:  # pragma: no cover - optional instrumentation
+        logger.debug(f"aiohttp instrumentation not available: {e}")
+
+    try:
+        from opentelemetry.propagate import set_global_textmap
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    except Exception as e:  # pragma: no cover - optional propagation
+        logger.debug(f"Trace propagation not available: {e}")
 
 
 class TelemetryConfig:
@@ -127,8 +173,16 @@ class TelemetryConfig:
         self.otlp_insecure = os.getenv("OTEL_EXPORTER_OTLP_INSECURE", "true").lower() == "true"
 
         # Exporter selection
-        self.metrics_exporters = os.getenv("OTEL_METRICS_EXPORTER", "prometheus,console").split(",")
-        self.traces_exporters = os.getenv("OTEL_TRACES_EXPORTER", "console").split(",")
+        self.metrics_exporters = [
+            exporter.strip()
+            for exporter in os.getenv("OTEL_METRICS_EXPORTER", "prometheus").split(",")
+            if exporter.strip()
+        ]
+        self.traces_exporters = [
+            exporter.strip()
+            for exporter in os.getenv("OTEL_TRACES_EXPORTER", "console").split(",")
+            if exporter.strip()
+        ]
 
         # Prometheus Configuration
         self.prometheus_port = int(os.getenv("PROMETHEUS_PORT", "9090"))
@@ -138,6 +192,9 @@ class TelemetryConfig:
         self.enable_metrics = os.getenv("ENABLE_METRICS", "true").lower() == "true"
         self.enable_tracing = os.getenv("ENABLE_TRACING", "true").lower() == "true"
         self.enable_logging = os.getenv("ENABLE_OTEL_LOGGING", "false").lower() == "true"
+        self.enable_console_metrics_exporter = (
+            os.getenv("ENABLE_OTEL_CONSOLE_METRICS_EXPORTER", "false").lower() == "true"
+        )
         self.enable_profiling = os.getenv("ENABLE_PROFILING", "false").lower() == "true"
 
         # Performance settings
@@ -145,6 +202,9 @@ class TelemetryConfig:
         self.traces_export_batch_size = int(os.getenv("TRACES_EXPORT_BATCH_SIZE", "512"))
         self.traces_export_timeout = int(os.getenv("TRACES_EXPORT_TIMEOUT_MS", "30000"))
         self.sample_rate = float(os.getenv("METRICS_SAMPLE_RATE", "1.0"))
+
+        if self.enable_console_metrics_exporter and "console" not in self.metrics_exporters:
+            self.metrics_exporters.append("console")
 
         # Additional metadata
         self.hostname = socket.gethostname()
@@ -208,8 +268,9 @@ class TelemetryManager:
             if self.config.enable_metrics:
                 self._initialize_metrics(resource)
 
-            # Set up context propagation
-            set_global_textmap(TraceContextTextMapPropagator())
+            # Set up context propagation when available
+            if set_global_textmap and TraceContextTextMapPropagator:
+                set_global_textmap(TraceContextTextMapPropagator())
 
             # Auto-instrumentation
             self._setup_auto_instrumentation()
@@ -231,12 +292,19 @@ class TelemetryManager:
         for exporter_name in self.config.traces_exporters:
             exporter = self._create_trace_exporter(exporter_name)
             if exporter:
-                processor = BatchSpanProcessor(
-                    exporter,
-                    max_queue_size=2048,
-                    max_export_batch_size=self.config.traces_export_batch_size,
-                    max_export_timeout_millis=self.config.traces_export_timeout
-                )
+                processor_kwargs = {
+                    "max_queue_size": 2048,
+                    "max_export_batch_size": self.config.traces_export_batch_size,
+                }
+                try:
+                    params = inspect.signature(BatchSpanProcessor.__init__).parameters
+                except (TypeError, ValueError):
+                    params = {}
+                if "export_timeout_millis" in params:
+                    processor_kwargs["export_timeout_millis"] = self.config.traces_export_timeout
+                elif "max_export_timeout_millis" in params:
+                    processor_kwargs["max_export_timeout_millis"] = self.config.traces_export_timeout
+                processor = BatchSpanProcessor(exporter, **processor_kwargs)
                 self.tracer_provider.add_span_processor(processor)
 
         # Set as global tracer provider
@@ -294,7 +362,13 @@ class TelemetryManager:
         if exporter_name == "console":
             return ConsoleSpanExporter()
 
-        elif exporter_name == "otlp" and self.config.otlp_endpoint:
+        elif exporter_name == "otlp":
+            if not self.config.otlp_endpoint:
+                logger.warning("OTLP trace exporter requested without endpoint configured")
+                return None
+            if not OTLPSpanExporter:
+                logger.warning("OTLP trace exporter not available")
+                return None
             headers = {}
             if self.config.otlp_headers:
                 for header in self.config.otlp_headers.split(","):
@@ -316,6 +390,9 @@ class TelemetryManager:
 
         elif exporter_name == "jaeger":
             # Jaeger support via OTLP
+            if not OTLPSpanExporter:
+                logger.warning("OTLP trace exporter not available for Jaeger")
+                return None
             jaeger_endpoint = os.getenv("JAEGER_ENDPOINT", "http://localhost:4317")
             return OTLPSpanExporter(
                 endpoint=jaeger_endpoint,
@@ -339,12 +416,21 @@ class TelemetryManager:
 
         elif exporter_name == "prometheus":
             # Prometheus pull-based metrics
+            if not PrometheusMetricReader:
+                logger.warning("Prometheus metric exporter not available")
+                return None
             return PrometheusMetricReader(
                 host=self.config.prometheus_host,
                 port=self.config.prometheus_port
             )
 
-        elif exporter_name == "otlp" and self.config.otlp_endpoint:
+        elif exporter_name == "otlp":
+            if not self.config.otlp_endpoint:
+                logger.warning("OTLP metric exporter requested without endpoint configured")
+                return None
+            if not OTLPMetricExporter:
+                logger.warning("OTLP metric exporter not available")
+                return None
             headers = {}
             if self.config.otlp_headers:
                 for header in self.config.otlp_headers.split(","):
@@ -378,43 +464,48 @@ class TelemetryManager:
             return
 
         # FastAPI instrumentation
-        try:
-            FastAPIInstrumentor.instrument(
-                tracer_provider=self.tracer_provider,
-                meter_provider=self.meter_provider
-            )
-        except Exception as e:
-            logger.debug(f"Could not instrument FastAPI: {e}")
+        if FastAPIInstrumentor:
+            try:
+                FastAPIInstrumentor.instrument(
+                    tracer_provider=self.tracer_provider,
+                    meter_provider=self.meter_provider
+                )
+            except Exception as e:
+                logger.debug(f"Could not instrument FastAPI: {e}")
 
         # HTTP client instrumentation
-        try:
-            HTTPXClientInstrumentor().instrument(
-                tracer_provider=self.tracer_provider
-            )
-        except Exception as e:
-            logger.debug(f"Could not instrument HTTPX: {e}")
+        if HTTPXClientInstrumentor:
+            try:
+                HTTPXClientInstrumentor().instrument(
+                    tracer_provider=self.tracer_provider
+                )
+            except Exception as e:
+                logger.debug(f"Could not instrument HTTPX: {e}")
 
-        try:
-            AioHttpClientInstrumentor().instrument(
-                tracer_provider=self.tracer_provider
-            )
-        except Exception as e:
-            logger.debug(f"Could not instrument aiohttp: {e}")
+        if AioHttpClientInstrumentor:
+            try:
+                AioHttpClientInstrumentor().instrument(
+                    tracer_provider=self.tracer_provider
+                )
+            except Exception as e:
+                logger.debug(f"Could not instrument aiohttp: {e}")
 
         # Database instrumentation
-        try:
-            SQLAlchemyInstrumentor().instrument(
-                tracer_provider=self.tracer_provider
-            )
-        except Exception as e:
-            logger.debug(f"Could not instrument SQLAlchemy: {e}")
+        if SQLAlchemyInstrumentor:
+            try:
+                SQLAlchemyInstrumentor().instrument(
+                    tracer_provider=self.tracer_provider
+                )
+            except Exception as e:
+                logger.debug(f"Could not instrument SQLAlchemy: {e}")
 
-        try:
-            Psycopg2Instrumentor().instrument(
-                tracer_provider=self.tracer_provider
-            )
-        except Exception as e:
-            logger.debug(f"Could not instrument psycopg2: {e}")
+        if Psycopg2Instrumentor:
+            try:
+                Psycopg2Instrumentor().instrument(
+                    tracer_provider=self.tracer_provider
+                )
+            except Exception as e:
+                logger.debug(f"Could not instrument psycopg2: {e}")
 
     def get_tracer(self, name: Optional[str] = None) -> Tracer:
         """

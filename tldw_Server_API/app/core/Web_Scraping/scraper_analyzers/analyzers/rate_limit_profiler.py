@@ -9,8 +9,6 @@ from typing import Any, Dict, Optional
 warnings.filterwarnings("ignore", message="Event loop is closed", category=RuntimeWarning)
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
-import aiohttp
-
 try:
     from curl_cffi.requests import AsyncSession
 except ImportError:  # pragma: no cover - optional dependency guard
@@ -18,6 +16,7 @@ except ImportError:  # pragma: no cover - optional dependency guard
 
 from ..utils.browser_identities import MODERN_BROWSER_IDENTITIES
 from ..utils.impersonate_target import get_impersonate_target
+from tldw_Server_API.app.core.http_client import afetch
 
 GENTLE_PROBE_COUNT = 4
 BURST_COUNT = 8
@@ -28,13 +27,30 @@ BLOCKING_STATUS_CODES = {429, 403, 503, 401}
 BROWSER_IDENTITY = random.choice(MODERN_BROWSER_IDENTITIES)
 
 
-async def _make_request(session: aiohttp.ClientSession, url: str) -> int:
+async def _make_request(url: str) -> int:
     """Make a single asynchronous GET request and return the status code."""
     try:
-        async with session.get(url, headers=BROWSER_IDENTITY, timeout=15, allow_redirects=True) as response:
-            response.release()
-            return response.status
-    except (aiohttp.ClientError, asyncio.TimeoutError):
+        resp = await afetch(
+            method="GET",
+            url=url,
+            headers=BROWSER_IDENTITY,
+            timeout=15,
+            allow_redirects=True,
+        )
+        try:
+            status = getattr(resp, "status_code", None)
+            if status is None:
+                status = getattr(resp, "status", 0)
+            return int(status or 0)
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
+            else:
+                close = getattr(resp, "close", None)
+                if callable(close):
+                    close()
+    except Exception:
         return 999
 
 
@@ -66,12 +82,30 @@ async def _run_rate_limit_profiler(
         session: Any = AsyncSession(impersonate=impersonate_target)
         request_func = _make_impersonated_request
     else:
-        session = aiohttp.ClientSession()
-        request_func = _make_request
+        session = None
+        request_func = None
 
-    async with session:  # type: ignore[arg-type]
+    if impersonate:
+        async with session:  # type: ignore[arg-type]
+            for index in range(GENTLE_PROBE_COUNT):
+                status = await request_func(session, url)  # type: ignore[arg-type]
+                results["requests_sent"] += 1
+
+                if status in BLOCKING_STATUS_CODES:
+                    results["blocking_code"] = status
+                    results["details"] = (
+                        f'Blocked after {results["requests_sent"]} requests with a {baseline_delay:.1f}s delay.'
+                    )
+                    return results
+
+                if index < GENTLE_PROBE_COUNT - 1:
+                    await asyncio.sleep(baseline_delay)
+
+            burst_tasks = [request_func(session, url) for _ in range(BURST_COUNT)]  # type: ignore[arg-type]
+            burst_statuses = await asyncio.gather(*burst_tasks)
+    else:
         for index in range(GENTLE_PROBE_COUNT):
-            status = await request_func(session, url)  # type: ignore[arg-type]
+            status = await _make_request(url)
             results["requests_sent"] += 1
 
             if status in BLOCKING_STATUS_CODES:
@@ -84,16 +118,16 @@ async def _run_rate_limit_profiler(
             if index < GENTLE_PROBE_COUNT - 1:
                 await asyncio.sleep(baseline_delay)
 
-        burst_tasks = [request_func(session, url) for _ in range(BURST_COUNT)]  # type: ignore[arg-type]
+        burst_tasks = [_make_request(url) for _ in range(BURST_COUNT)]
         burst_statuses = await asyncio.gather(*burst_tasks)
 
-        results["requests_sent"] += len(burst_statuses)
+    results["requests_sent"] += len(burst_statuses)
 
-        for status in burst_statuses:
-            if status in BLOCKING_STATUS_CODES:
-                results["blocking_code"] = status
-                results["details"] = f"Blocked during a concurrent burst of {BURST_COUNT} requests."
-                return results
+    for status in burst_statuses:
+        if status in BLOCKING_STATUS_CODES:
+            results["blocking_code"] = status
+            results["details"] = f"Blocked during a concurrent burst of {BURST_COUNT} requests."
+            return results
 
     results["details"] = f'No blocking detected after {results["requests_sent"]} requests.'
     return results

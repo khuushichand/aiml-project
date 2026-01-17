@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -10,16 +11,308 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 import types
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, terminate_process
 from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
 
 
-class AdapterError(Exception):
-    pass
+def _extract_openai_content(response: Any) -> Optional[str]:
+    if isinstance(response, dict):
+        try:
+            choices = response.get("choices") or []
+            if choices:
+                message = choices[0].get("message") or {}
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+            text = response.get("content") or response.get("text")
+            if isinstance(text, str):
+                return text
+        except Exception:
+            return None
+    if isinstance(response, str):
+        return response
+    return None
+
+
+def _sanitize_path_component(value: str, default: str, max_len: int = 80) -> str:
+    """
+    Normalize a string for safe use as a single filesystem path component.
+
+    Args:
+        value (str): Raw input to sanitize.
+        default (str): Fallback value when the input normalizes to empty.
+        max_len (int): Maximum length of the returned component.
+
+    Returns:
+        str: A sanitized component containing only ASCII letters, digits, dot,
+        underscore, or dash.
+
+    Security:
+        Replaces any other character with "_" and strips leading/trailing
+        dot/underscore/dash to reduce traversal-like components. This does not
+        ensure uniqueness; callers should still enforce base-dir containment.
+    """
+    raw = str(value or "").strip()
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._-")
+    if not cleaned:
+        cleaned = default
+    return cleaned[:max_len]
+
+
+def _is_subpath(parent: Path, child: Path) -> bool:
+    """
+    Return True if 'child' is located within 'parent' (after resolving both).
+    This is a compatibility-safe equivalent of Path.is_relative_to.
+    """
+    try:
+        parent_resolved = parent.resolve(strict=False)
+    except (OSError, ValueError, RuntimeError) as e:
+        logger.debug(f"Failed to resolve parent path {parent}: {e}")
+        parent_resolved = parent
+    try:
+        child_resolved = child.resolve(strict=False)
+    except (OSError, ValueError, RuntimeError) as e:
+        logger.debug(f"Failed to resolve child path {child}: {e}")
+        child_resolved = child
+    try:
+        child_resolved.relative_to(parent_resolved)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_context_user_id(context: Dict[str, Any]) -> Optional[str]:
+    raw = context.get("user_id") or context.get("inputs", {}).get("user_id")
+    return resolve_user_id_value(raw, allow_none=True)
+
+
+def _artifacts_base_dir() -> Path:
+    """
+    Resolve the base directory used for workflow artifacts.
+
+    Args:
+        None.
+
+    Returns:
+        Path: Absolute artifacts base when project root is available, otherwise
+        a relative `Databases/artifacts` path.
+
+    Security:
+        Prefers anchoring to the project root to avoid CWD-dependent behavior.
+        In test mode, uses the current working directory to keep fixtures
+        isolated. On failure, falls back to a relative path that must be
+        resolved and checked for containment by callers.
+    """
+    env_override = os.getenv("WORKFLOWS_ARTIFACTS_DIR") or os.getenv("WORKFLOWS_ARTIFACT_DIR")
+    if env_override:
+        return Path(env_override).expanduser().resolve()
+    try:
+        if os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+            return (Path.cwd() / "Databases" / "artifacts").resolve()
+    except Exception:
+        logger.exception("Error checking TEST_MODE/PYTEST_CURRENT_TEST for artifacts base dir")
+    try:
+        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+        return (Path(get_project_root()) / "Databases" / "artifacts").resolve()
+    except Exception:
+        logger.exception("Error getting project root for artifacts base dir")
+        # Fallback to relative path
+        return Path("Databases") / "artifacts"
+
+
+def _resolve_artifacts_dir(step_run_id: str | None) -> Path:
+    """
+    Build a per-step artifact directory path under the artifacts base.
+
+    Args:
+        step_run_id (str | None): Optional step run identifier used as a folder
+        name after sanitization.
+
+    Returns:
+        Path: A resolved candidate artifact directory path.
+
+    Security:
+        Uses `_sanitize_path_component` to limit characters and length, resolves
+        paths with `strict=False`, and verifies containment via `_is_subpath`.
+        If containment fails, falls back to a generated safe identifier.
+    """
+    base_dir = _artifacts_base_dir()
+    try:
+        base_resolved = base_dir.resolve(strict=False)
+    except Exception as exc:
+        logger.opt(exception=exc).debug(
+            "Artifacts base dir resolve failed for {}. Using unresolved base dir.",
+            base_dir,
+        )
+        base_resolved = base_dir
+    # Sanitize the provided ID and force it to be a single path component.
+    safe_id = _sanitize_path_component(step_run_id or "", f"artifact_{int(time.time() * 1000)}")
+    safe_id = Path(safe_id).name or f"artifact_{int(time.time() * 1000)}"
+    candidate = (base_resolved / safe_id).resolve(strict=False)
+    if not _is_subpath(base_resolved, candidate):
+        # Fall back to a generated artifact id if the original cannot be contained safely.
+        fallback_id = f"artifact_{int(time.time() * 1000)}"
+        fallback_id = Path(fallback_id).name
+        candidate = (base_resolved / fallback_id).resolve(strict=False)
+        if not _is_subpath(base_resolved, candidate):
+            # As a last resort, refuse to use an unsafe path.
+            raise AdapterError("artifact_dir_resolution_failed")
+    return candidate
+
+
+def _resolve_artifact_filename(name: str, ext: str, default_stem: str = "artifact") -> str:
+    """
+    Produce a safe artifact filename with a fixed extension.
+
+    Args:
+        name (str): Original filename input, possibly containing paths.
+        ext (str): Extension to append (without leading dot).
+        default_stem (str): Fallback stem when the name is empty or unsafe.
+
+    Returns:
+        str: Sanitized filename with the requested extension.
+
+    Security:
+        Drops path components (`Path(name).name`) and sanitizes the stem to
+        ASCII alphanumerics plus `._-` to avoid traversal or separator issues.
+    """
+    raw_name = Path(name).name
+    if raw_name in {"", ".", ".."}:
+        raw_name = default_stem
+    stem = Path(raw_name).stem or default_stem
+    safe_stem = _sanitize_path_component(stem, default_stem)
+    return f"{safe_stem}.{ext}"
+
+
+def _unsafe_file_access_allowed(config: Dict[str, Any] | None) -> bool:  # noqa: ARG001
+    """
+    Determine whether unsafe file access is explicitly enabled.
+
+    Args:
+        config (Dict[str, Any] | None): Ignored on purpose to prevent user-
+        supplied overrides.
+
+    Returns:
+        bool: True when the server environment enables unsafe access.
+
+    Security:
+        Only honors the `WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS` environment
+        variable so workflow configs cannot bypass path restrictions.
+    """
+    # Ignore per-step config to avoid user-controlled path bypasses.
+    return str(os.getenv("WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS", "")).lower() in {"1", "true", "yes", "on"}
+
+
+def _workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | None) -> Path:  # noqa: ARG001
+    """
+    Resolve the base directory for workflow file access.
+
+    Args:
+        context (Dict[str, Any]): Workflow context, may include `user_id`.
+        config (Dict[str, Any] | None): Currently unused; reserved for parity.
+
+    Returns:
+        Path: A resolved base directory for allowed file access.
+
+    Security:
+        Only honors server-side `WORKFLOWS_FILE_BASE_DIR` overrides. When a
+        relative override is provided, it is anchored to the project root with
+        `strict=False` resolution. Falls back to per-user database roots or
+        `Databases/` on failure.
+    """
+    # Only allow server-side base dir overrides.
+    env_override = os.getenv("WORKFLOWS_FILE_BASE_DIR")
+    if env_override:
+        base = Path(str(env_override)).expanduser()
+        if not base.is_absolute():
+            try:
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                base = (Path(get_project_root()) / base).resolve()
+            except Exception as exc:
+                logger.debug(f"Workflow file base dir: failed to resolve relative WORKFLOWS_FILE_BASE_DIR {env_override!r}: {exc}")
+                base = base.resolve()
+        else:
+            base = base.resolve()
+        return base
+    try:
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+        raw_user_id = context.get("user_id") if isinstance(context, dict) else None
+        try:
+            user_id = int(raw_user_id) if raw_user_id is not None else DatabasePaths.get_single_user_id()
+        except Exception as exc:
+            logger.debug(f"Workflow file base dir: invalid user_id {raw_user_id!r}; using single-user fallback: {exc}")
+            user_id = DatabasePaths.get_single_user_id()
+        return DatabasePaths.get_user_base_directory(user_id)
+    except Exception as exc:
+        logger.debug(f"Workflow file base dir: failed to resolve per-user base dir; using Databases/: {exc}")
+        return Path("Databases").resolve()
+
+
+def _resolve_workflow_file_path(path_value: str, context: Dict[str, Any], config: Dict[str, Any] | None = None) -> Path:
+    """
+    Resolve a workflow file path relative to the allowed base directory.
+
+    Args:
+        path_value (str): User-supplied path or filename.
+        context (Dict[str, Any]): Workflow context used to derive base dir.
+        config (Dict[str, Any] | None): Optional config; only used to check the
+        unsafe access flag.
+
+    Returns:
+        Path: A resolved filesystem path.
+
+    Security:
+        When unsafe access is enabled, returns the expanded path without
+        containment checks. Otherwise resolves with `strict=False` and enforces
+        containment via `_is_subpath`, raising `AdapterError("file_access_denied")`
+        on violations.
+    """
+    if _unsafe_file_access_allowed(config):
+        return Path(path_value).expanduser()
+    base_dir = _workflow_file_base_dir(context, config)
+    try:
+        base_resolved = base_dir.resolve(strict=False)
+    except Exception as exc:
+        logger.debug(f"Failed to resolve base directory {base_dir}: {exc}")
+        base_resolved = base_dir
+    candidate = Path(path_value).expanduser()
+    if candidate.is_absolute():
+        resolved = candidate.resolve(strict=False)
+    else:
+        resolved = (base_resolved / candidate).resolve(strict=False)
+    if not _is_subpath(base_resolved, resolved):
+        raise AdapterError("file_access_denied")
+    return resolved
+
+
+def _resolve_workflow_file_uri(file_uri: str, context: Dict[str, Any], config: Dict[str, Any] | None = None) -> Path:
+    """
+    Resolve a `file://` URI to a safe local filesystem path.
+
+    Args:
+        file_uri (str): File URI to resolve (must start with `file://`).
+        context (Dict[str, Any]): Workflow context used to derive base dir.
+        config (Dict[str, Any] | None): Optional config for unsafe access flag.
+
+    Returns:
+        Path: A resolved filesystem path.
+
+    Security:
+        Rejects non-file URIs with `AdapterError("missing_or_invalid_file_uri")`
+        and applies the same containment rules as `_resolve_workflow_file_path`.
+    """
+    if not file_uri.startswith("file://"):
+        raise AdapterError("missing_or_invalid_file_uri")
+    raw_path = file_uri[len("file://"):]
+    return _resolve_workflow_file_path(raw_path, context, config)
 
 
 async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,9 +383,8 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     # Optional artifact persistence
     try:
         if bool(config.get("save_artifact")) and callable(context.get("add_artifact")):
-            from pathlib import Path
             step_run_id = str(context.get("step_run_id") or "")
-            art_dir = Path("Databases") / "artifacts" / (step_run_id or f"prompt_{int(time.time()*1000)}")
+            art_dir = _resolve_artifacts_dir(step_run_id or f"prompt_{int(time.time()*1000)}")
             art_dir.mkdir(parents=True, exist_ok=True)
             fpath = art_dir / "prompt.txt"
             fpath.write_text(rendered or "", encoding="utf-8")
@@ -139,15 +431,9 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     try:
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
         media_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-    except Exception:
-        # Anchor fallback to project root to avoid CWD effects
-        try:
-            from tldw_Server_API.app.core.Utils.Utils import get_project_root
-            from pathlib import Path as _Path
-            media_db_path = str((_Path(get_project_root()) / "Databases" / "Media_DB_v2.db").resolve())
-        except Exception:
-            from pathlib import Path as _Path
-            media_db_path = str((_Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
+    except Exception as exc:
+        logger.error(f"Failed to resolve Media DB path for workflow search: {exc}")
+        raise RuntimeError("Failed to resolve Media DB path for workflow search") from exc
 
     # Map supported options directly to pipeline
     passthrough_keys = {
@@ -254,12 +540,16 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
 
         # file:// URIs: read and optionally chunk locally
         if uri.startswith("file://"):
-            path = uri[len("file://"):]
+            try:
+                resolved_path = _resolve_workflow_file_uri(uri, context, config)
+            except AdapterError:
+                out["metadata"].append({"source": uri, "status": "file_access_denied"})
+                continue
             try:
                 try:
-                    text = Path(path).read_text(encoding="utf-8")
+                    text = resolved_path.read_text(encoding="utf-8")
                 except Exception:
-                    text = Path(path).read_text(errors="ignore")
+                    text = resolved_path.read_text(errors="ignore")
             except Exception:
                 out["metadata"].append({"source": uri, "status": "read_error"})
                 continue
@@ -356,16 +646,11 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     try:
                         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
                         _mdb_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-                    except Exception:
-                        try:
-                            from tldw_Server_API.app.core.Utils.Utils import get_project_root
-                            from pathlib import Path as _Path
-                            _mdb_path = str((_Path(get_project_root()) / "Databases" / "Media_DB_v2.db").resolve())
-                        except Exception:
-                            from pathlib import Path as _Path
-                            _mdb_path = str((_Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
+                    except Exception as exc:
+                        logger.error(f"Failed to resolve Media DB path for workflow indexing: {exc}")
+                        raise
                     mdb = MediaDatabase(_mdb_path, client_id="workflow_engine")
-                    title = (config.get("metadata", {}) or {}).get("title") or Path(path).name
+                    title = (config.get("metadata", {}) or {}).get("title") or resolved_path.name
                     keywords = (config.get("metadata", {}) or {}).get("tags") or []
                     media_type = src.get("media_type") or "document"
                     media_id, media_uuid, msg = mdb.add_media_with_keywords(
@@ -907,7 +1192,7 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     import uuid, time as _time, os as _os
     from pathlib import Path
     step_run_id = str(context.get("step_run_id") or f"tts_{int(_time.time()*1000)}")
-    out_dir = Path("Databases") / "artifacts" / step_run_id
+    out_dir = _resolve_artifacts_dir(step_run_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = "mp3" if fmt not in {"wav","opus","flac","aac","pcm"} else fmt
     # Optional file naming template
@@ -937,6 +1222,7 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
             fname = f"speech.{ext}"
     else:
         fname = f"speech.{ext}"
+    fname = _resolve_artifact_filename(fname, ext, default_stem="speech")
     out_path = out_dir / fname
 
     size_bytes = 0
@@ -1104,52 +1390,52 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task
         except Exception:
             return {"error": "web_scraping_service_unavailable"}
+        # Extract and sanitize config
+        scrape_method = str(config.get("scrape_method") or "Individual URLs")
+        url_input = str(config.get("url_input") or "").strip()
+        url_level = config.get("url_level")
+        try:
+            url_level = int(url_level) if url_level is not None else None
+        except Exception:
+            url_level = None
+        max_pages = int(config.get("max_pages", 10))
+        max_depth = int(config.get("max_depth", 3))
+        summarize = bool(config.get("summarize") or config.get("summarize_checkbox") or False)
+        custom_prompt = config.get("custom_prompt")
+        api_name = config.get("api_name")
+        system_prompt = config.get("system_prompt")
+        try:
+            temperature = float(config.get("temperature", 0.7))
+        except Exception:
+            temperature = 0.7
+        custom_cookies = config.get("custom_cookies") if isinstance(config.get("custom_cookies"), list) else None
+        user_agent = config.get("user_agent")
+        custom_headers = config.get("custom_headers") if isinstance(config.get("custom_headers"), dict) else None
 
-    # Extract and sanitize config
-    scrape_method = str(config.get("scrape_method") or "Individual URLs")
-    url_input = str(config.get("url_input") or "").strip()
-    url_level = config.get("url_level")
-    try:
-        url_level = int(url_level) if url_level is not None else None
-    except Exception:
-        url_level = None
-    max_pages = int(config.get("max_pages", 10))
-    max_depth = int(config.get("max_depth", 3))
-    summarize = bool(config.get("summarize") or config.get("summarize_checkbox") or False)
-    custom_prompt = config.get("custom_prompt")
-    api_name = config.get("api_name")
-    system_prompt = config.get("system_prompt")
-    try:
-        temperature = float(config.get("temperature", 0.7))
-    except Exception:
-        temperature = 0.7
-    custom_cookies = config.get("custom_cookies") if isinstance(config.get("custom_cookies"), list) else None
-    user_agent = config.get("user_agent")
-    custom_headers = config.get("custom_headers") if isinstance(config.get("custom_headers"), dict) else None
-
-    try:
-        result = await process_web_scraping_task(
-            scrape_method=scrape_method,
-            url_input=url_input,
-            url_level=url_level,
-            max_pages=max_pages,
-            max_depth=max_depth,
-            summarize_checkbox=summarize,
-            custom_prompt=custom_prompt,
-            api_name=api_name,
-            api_key=None,
-            keywords="",
-            custom_titles=None,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            custom_cookies=custom_cookies,
-            mode="ephemeral",
-            user_id=None,
-            user_agent=user_agent,
-            custom_headers=custom_headers,
-        )
-    except Exception as e:
-        return {"error": f"process_media_error:{e}"}
+        try:
+            result = await process_web_scraping_task(
+                scrape_method=scrape_method,
+                url_input=url_input,
+                url_level=url_level,
+                max_pages=max_pages,
+                max_depth=max_depth,
+                summarize_checkbox=summarize,
+                custom_prompt=custom_prompt,
+                api_name=api_name,
+                api_key=None,
+                keywords="",
+                custom_titles=None,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                custom_cookies=custom_cookies,
+                mode="ephemeral",
+                user_id=None,
+                user_agent=user_agent,
+                custom_headers=custom_headers,
+            )
+        except Exception:
+            logger.exception("Web scraping process media failed")
+            return {"error": "process_media_error"}
         # Normalize response
         articles = []
         try:
@@ -1165,15 +1451,18 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         file_uri = str(config.get("file_uri") or "").strip()
         if not file_uri.startswith("file://"):
             return {"error": "missing_or_invalid_file_uri"}
-        path = file_uri[len("file://"):]
+        try:
+            resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+        except AdapterError as e:
+            return {"error": str(e)}
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
-            fb = Path(path).read_bytes()
+            fb = resolved_path.read_bytes()
             performed_analysis = bool(config.get("perform_analysis", True))
             chunk_opts = config.get("chunking") or {}
             result = await process_pdf_task(
                 file_bytes=fb,
-                filename=Path(path).name,
+                filename=resolved_path.name,
                 parser=str(config.get("parser") or "pymupdf4llm"),
                 perform_analysis=performed_analysis,
                 api_name=config.get("api_name") if performed_analysis else None,
@@ -1200,10 +1489,13 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         file_uri = str(config.get("file_uri") or "").strip()
         if not file_uri.startswith("file://"):
             return {"error": "missing_or_invalid_file_uri"}
-        path = file_uri[len("file://"):]
+        try:
+            resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+        except AdapterError as e:
+            return {"error": str(e)}
         try:
             from tldw_Server_API.app.services.ebook_processing_service import process_ebook_task
-            res = await process_ebook_task(file_path=path, title=config.get("title"), author=config.get("author"), custom_prompt=config.get("custom_prompt"), api_name=config.get("api_name"))
+            res = await process_ebook_task(file_path=str(resolved_path), title=config.get("title"), author=config.get("author"), custom_prompt=config.get("custom_prompt"), api_name=config.get("api_name"))
             out = {"kind": "ebook", "content": res.get("text") or "", "summary": res.get("summary") or "", "metadata": res.get("metadata") or {}}
             return _emit(out)
         except Exception as e:
@@ -1214,13 +1506,16 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         file_uri = str(config.get("file_uri") or "").strip()
         if not file_uri.startswith("file://"):
             return {"error": "missing_or_invalid_file_uri"}
-        path = file_uri[len("file://"):]
+        try:
+            resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+        except AdapterError as e:
+            return {"error": str(e)}
         try:
             from tldw_Server_API.app.services.xml_processing_service import process_xml_task
-            fb = Path(path).read_bytes()
+            fb = resolved_path.read_bytes()
             res = await process_xml_task(
                 file_bytes=fb,
-                filename=Path(path).name,
+                filename=resolved_path.name,
                 title=config.get("title"),
                 author=config.get("author"),
                 keywords=config.get("keywords") or [],
@@ -1242,12 +1537,15 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         if not file_uri.startswith("file://"):
             return {"error": "missing_or_invalid_file_uri"}
         # In workflows, we return a placeholder summary; full streaming is endpoint-only
-        path = file_uri[len("file://"):]
         try:
-            content = Path(path).read_text(errors="ignore")
+            resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+        except AdapterError as e:
+            return {"error": str(e)}
+        try:
+            content = resolved_path.read_text(errors="ignore")
         except Exception:
             content = ""
-        return _emit({"kind": "mediawiki_dump", "content": content[:5000], "metadata": {"file": Path(path).name}})
+        return _emit({"kind": "mediawiki_dump", "content": content[:5000], "metadata": {"file": resolved_path.name}})
 
     # Podcast (url)
     if kind == "podcast":
@@ -1313,7 +1611,6 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
     if not urls:
         return {"results": [], "count": 0}
     try:
-        import httpx
         import xml.etree.ElementTree as ET
         from urllib.parse import urlparse
         for u in urls:
@@ -1414,7 +1711,9 @@ async def run_embed_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
             return {"error": "no_text"}
         texts = [txt]
 
-    user_id = str(context.get("user_id") or "1")
+    user_id = _resolve_context_user_id(context)
+    if not user_id:
+        return {"error": "missing_user_id"}
     collection = str(config.get("collection") or f"user_{user_id}_workflows")
     model_id = str(config.get("model_id") or "") or None
     md_global = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
@@ -1467,18 +1766,22 @@ async def run_translate_adapter(config: Dict[str, Any], context: Dict[str, Any])
     if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
         return {"text": text, "target_lang": target, "simulated": True}
 
-    # Try OpenAI-compatible first; fall back to returning input
+    # Try OpenAI-compatible adapter first; fall back to returning input
     try:
-        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai_async
+        adapter = get_registry().get_adapter("openai")
+        if adapter is None:
+            raise ChatConfigurationError(provider="openai", message="OpenAI adapter unavailable.")
         system = f"You are a professional translator. Translate the user text to {target}. Preserve meaning and tone. Output only the translation."
         messages = [{"role": "user", "content": text}]
-        resp = await chat_with_openai_async(messages, model=None, api_key=None, system_message=system, streaming=False)
-        # Extract text from OpenAI-like response
-        out = None
-        try:
-            out = ((resp or {}).get("choices") or [{}])[0].get("message", {}).get("content")
-        except Exception:
-            out = None
+        resp = await adapter.achat(
+            {
+                "messages": messages,
+                "system_message": system,
+                "model": None,
+                "stream": False,
+            }
+        )
+        out = _extract_openai_content(resp)
         if not out:
             return {"text": text, "target_lang": target, "provider": "openai", "fallback": True}
         return {"text": out, "target_lang": target, "provider": "openai"}
@@ -1502,7 +1805,10 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
     file_uri = str(config.get("file_uri") or "").strip()
     if not (file_uri and file_uri.startswith("file://")):
         return {"error": "missing_or_invalid_file_uri"}
-    path = file_uri[len("file://"):]
+    try:
+        resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+    except AdapterError as e:
+        return {"error": str(e)}
     model = str(config.get("model") or "large-v3")
     language = config.get("language") or None
     diarize = bool(config.get("diarize", False))
@@ -1511,7 +1817,7 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text
         # When language is None, allow the STT backend to auto-detect.
         segs_or_pair = speech_to_text(
-            path,
+            str(resolved_path),
             whisper_model=model,
             selected_source_lang=language,
             vad_filter=False,
@@ -1561,7 +1867,6 @@ async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
             ok = is_url_allowed(url)
         if not ok:
             return {"dispatched": False, "error": "blocked_egress"}
-        import httpx
         headers = {"content-type": "application/json"}
         try:
             headers.update({k: str(v) for k, v in extra_headers.items()})
@@ -1615,7 +1920,10 @@ async def run_diff_change_adapter(config: Dict[str, Any], context: Dict[str, Any
 
 
 class _async_file_writer:
-    """Minimal async file writer context manager for streaming to disk."""
+    """Minimal async file writer context manager for streaming to disk.
+
+    Uses synchronous file I/O; keep payloads small or swap to aiofiles if needed.
+    """
     def __init__(self, path: Path):
         self._path = path
         self._fp = None
@@ -1797,9 +2105,8 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
     # Optional artifact persistence of result
     try:
         if bool(config.get("save_artifact")) and callable(context.get("add_artifact")):
-            from pathlib import Path
             step_run_id = str(context.get("step_run_id") or "")
-            art_dir = Path("Databases") / "artifacts" / (step_run_id or f"mcp_{int(time.time()*1000)}")
+            art_dir = _resolve_artifacts_dir(step_run_id or f"mcp_{int(time.time()*1000)}")
             art_dir.mkdir(parents=True, exist_ok=True)
             fpath = art_dir / "mcp_result.json"
             fpath.write_text(json.dumps(result, default=str, indent=2), encoding="utf-8")
@@ -1897,7 +2204,9 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             return {k: _inject_json_specials(v) for k, v in obj.items()}
         return obj
     from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
-    user_id = str(context.get("user_id") or context.get("inputs", {}).get("user_id") or "1")
+    user_id = _resolve_context_user_id(context)
+    if not user_id:
+        return {"dispatched": False, "error": "missing_user_id"}
     event_name = str(config.get("event") or "workflow.event")
     payload = config.get("data") or {"context": list(context.keys())}
     url = str(config.get("url") or "").strip()
@@ -1925,7 +2234,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 pass
             return {"dispatched": False, "error": "blocked_egress"}
         try:
-            import httpx, hmac, hashlib
+            import hmac, hashlib
             # Method, headers, timeout
             method = str(config.get("method") or "POST").upper()
             headers_cfg = config.get("headers") or {}
@@ -2049,9 +2358,8 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 # Optional artifact of response metadata
                 try:
                     if callable(context.get("add_artifact")):
-                        from pathlib import Path
                         step_run_id = str(context.get("step_run_id") or "")
-                        art_dir = Path("Databases") / "artifacts" / (step_run_id or f"webhook_{int(time.time()*1000)}")
+                        art_dir = _resolve_artifacts_dir(step_run_id or f"webhook_{int(time.time()*1000)}")
                         art_dir.mkdir(parents=True, exist_ok=True)
                         fpath = art_dir / "webhook_response.json"
                         data = {"status_code": resp.status_code, "headers": dict(resp.headers)}

@@ -4,6 +4,8 @@ import pytest
 
 
 def test_media_debug_schema_basic(client_user_only) -> None:
+
+
     response = client_user_only.get("/api/v1/media/debug/schema")
     assert response.status_code == 200
 

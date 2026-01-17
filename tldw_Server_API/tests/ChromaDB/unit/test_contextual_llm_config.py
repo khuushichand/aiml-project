@@ -37,6 +37,7 @@ def test_contextualization_respects_provider_and_model(chromadb_manager, mock_ch
             calls = []
 
             def _fake_analyze(*args, **kwargs):
+
                 calls.append((args, kwargs))
                 return "HEADER"
 

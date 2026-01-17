@@ -85,7 +85,8 @@ def test_hyde_backfill_embeds_real_vectors(monkeypatch):
     monkeypatch.setattr("tldw_Server_API.app.core.Embeddings.hyde.generate_questions", _fake_questions)
 
     def _fake_create(texts, app_config, model_id_override):
-        # Return deterministic vectors with non-zero values
+
+             # Return deterministic vectors with non-zero values
         return [[float(idx + 1), 0.1 * (idx + 1), 0.01 * (idx + 1)] for idx, _ in enumerate(texts)]
 
     monkeypatch.setattr(

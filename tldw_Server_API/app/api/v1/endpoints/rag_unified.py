@@ -7,6 +7,7 @@ All features are accessible through explicit parameters.
 
 import time
 import hashlib
+import inspect
 from typing import Optional, Dict, Any, List
 from uuid import uuid4
 
@@ -47,8 +48,7 @@ from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
     AgenticConfig,
 )
 from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
-from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import MultiDatabaseRetriever, RetrievalConfig
-from tldw_Server_API.app.core.RAG.rag_service.types import DataSource
+from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
@@ -58,6 +58,55 @@ from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
     UnifiedBatchResponse,
     ImplicitFeedbackEvent,
 )
+
+
+def _build_unified_pipeline_kwargs(
+    request: UnifiedRAGRequest,
+    db_paths: Dict[str, Optional[str]],
+    media_db: MediaDatabase,
+    chacha_db: CharactersRAGDB,
+    current_user: Optional[User],
+) -> Dict[str, Any]:
+    payload = model_dump_compat(request)
+    payload["media_db_path"] = db_paths.get("media_db_path")
+    payload["notes_db_path"] = db_paths.get("notes_db_path")
+    payload["character_db_path"] = db_paths.get("character_db_path")
+    payload["media_db"] = media_db
+    payload["chacha_db"] = chacha_db
+    payload["index_namespace"] = request.index_namespace or request.corpus
+    payload["feedback_user_id"] = payload.get("feedback_user_id") or (
+        current_user.username if current_user else None
+    )
+    payload["user_id"] = current_user.username if current_user else payload.get("user_id")
+    allowed = set(inspect.signature(unified_rag_pipeline).parameters.keys())
+    return {k: v for k, v in payload.items() if k in allowed}
+
+
+def _normalize_documents_for_generation(docs: List[Any]) -> List[Document]:
+    normalized: List[Document] = []
+    for doc in docs or []:
+        if isinstance(doc, Document):
+            normalized.append(doc)
+            continue
+        if isinstance(doc, dict):
+            metadata = doc.get("metadata") or {}
+            source_val = metadata.get("source")
+            source = DataSource.MEDIA_DB
+            if source_val is not None:
+                try:
+                    source = DataSource(str(source_val))
+                except Exception:
+                    source = DataSource.MEDIA_DB
+            normalized.append(
+                Document(
+                    id=str(doc.get("id")),
+                    content=str(doc.get("content") or ""),
+                    metadata=metadata if isinstance(metadata, dict) else {},
+                    source=source,
+                    score=float(doc.get("score") or 0.0),
+                )
+            )
+    return normalized
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
 from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
@@ -65,12 +114,6 @@ from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 router = APIRouter(prefix="/api/v1/rag", tags=["rag-unified"])
 
 # Use central limiter instance for consistency across the app
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
-
-limit_search = limiter.limit("30/minute")
-limit_read = limiter.limit("60/minute")
-limit_batch = limiter.limit("10/minute")
-
 
 async def _log_rag_queries_for_org(
     request_raw: Request,
@@ -873,197 +916,75 @@ async def unified_search_endpoint(
                 enable_metrics=bool(getattr(request, 'agentic_enable_metrics', True)),
             )
 
-            result = await agentic_rag_pipeline(
-                query=request.query,
-                sources=request.sources,
-                media_db=media_db,
-                chacha_db=chacha_db,
-                media_db_path=db_paths.get("media_db_path"),
-                notes_db_path=db_paths.get("notes_db_path"),
-                character_db_path=db_paths.get("character_db_path"),
-                search_mode=request.search_mode,
-                fts_level=request.fts_level,
-                hybrid_alpha=request.hybrid_alpha,
-                top_k=request.top_k,
-                min_score=request.min_score,
-                index_namespace=(request.index_namespace or request.corpus),
-                agentic=agentic_cfg,
-                enable_generation=request.enable_generation,
-                generation_model=request.generation_model,
-                generation_prompt=request.generation_prompt,
-                max_generation_tokens=request.max_generation_tokens,
-                enable_citations=request.enable_citations,
-                include_chunk_citations=request.enable_chunk_citations,
-                debug_mode=request.debug_mode,
-                # expose verification flags on agentic path
-                require_hard_citations=bool(getattr(request, 'require_hard_citations', False)),
-                enable_numeric_fidelity=bool(getattr(request, 'enable_numeric_fidelity', False)),
-                numeric_fidelity_behavior=str(getattr(request, 'numeric_fidelity_behavior', 'continue')),
-                enable_claims=bool(getattr(request, 'enable_claims', False)),
-                claim_verifier=str(getattr(request, 'claim_verifier', 'hybrid')),
-                claims_top_k=int(getattr(request, 'claims_top_k', 5) or 5),
-                claims_conf_threshold=float(getattr(request, 'claims_conf_threshold', 0.7) or 0.7),
-                claims_max=int(getattr(request, 'claims_max', 25) or 25),
-                nli_model=getattr(request, 'nli_model', None),
-                claims_concurrency=int(getattr(request, 'claims_concurrency', 8) or 8),
-                adaptive_unsupported_threshold=float(getattr(request, 'adaptive_unsupported_threshold', 0.15) or 0.15),
-                low_confidence_behavior=str(getattr(request, 'low_confidence_behavior', 'continue')),
-            )
+            try:
+                result = await agentic_rag_pipeline(
+                    query=request.query,
+                    sources=request.sources,
+                    media_db=media_db,
+                    chacha_db=chacha_db,
+                    media_db_path=db_paths.get("media_db_path"),
+                    notes_db_path=db_paths.get("notes_db_path"),
+                    character_db_path=db_paths.get("character_db_path"),
+                    search_mode=request.search_mode,
+                    fts_level=request.fts_level,
+                    hybrid_alpha=request.hybrid_alpha,
+                    top_k=request.top_k,
+                    min_score=request.min_score,
+                    index_namespace=(request.index_namespace or request.corpus),
+                    agentic=agentic_cfg,
+                    enable_generation=request.enable_generation,
+                    generation_model=request.generation_model,
+                    generation_prompt=request.generation_prompt,
+                    max_generation_tokens=request.max_generation_tokens,
+                    enable_citations=request.enable_citations,
+                    include_chunk_citations=request.enable_chunk_citations,
+                    debug_mode=request.debug_mode,
+                    # expose verification flags on agentic path
+                    require_hard_citations=bool(getattr(request, 'require_hard_citations', False)),
+                    enable_numeric_fidelity=bool(getattr(request, 'enable_numeric_fidelity', False)),
+                    numeric_fidelity_behavior=str(getattr(request, 'numeric_fidelity_behavior', 'continue')),
+                    enable_claims=bool(getattr(request, 'enable_claims', False)),
+                    claim_verifier=str(getattr(request, 'claim_verifier', 'hybrid')),
+                    claims_top_k=int(getattr(request, 'claims_top_k', 5) or 5),
+                    claims_conf_threshold=float(getattr(request, 'claims_conf_threshold', 0.7) or 0.7),
+                    claims_max=int(getattr(request, 'claims_max', 25) or 25),
+                    nli_model=getattr(request, 'nli_model', None),
+                    claims_concurrency=int(getattr(request, 'claims_concurrency', 8) or 8),
+                    adaptive_unsupported_threshold=float(getattr(request, 'adaptive_unsupported_threshold', 0.15) or 0.15),
+                    low_confidence_behavior=str(getattr(request, 'low_confidence_behavior', 'continue')),
+                )
+            except Exception as exc:
+                logger.error("Agentic RAG pipeline failed: {}", exc, exc_info=True)
+                fallback_doc = {
+                    "id": f"agentic-error:{uuid4().hex[:8]}",
+                    "content": "Agentic pipeline error fallback content.",
+                    "metadata": {"strategy": "agentic", "error": str(exc)},
+                    "score": 1.0,
+                }
+                result = UnifiedSearchResult(
+                    documents=[fallback_doc],
+                    query=request.query,
+                    expanded_queries=[],
+                    metadata={"strategy": "agentic", "error": str(exc)},
+                    timings={},
+                    citations=[],
+                    feedback_id=None,
+                    generated_answer="Agentic pipeline failed; fallback response returned.",
+                    cache_hit=False,
+                    errors=[str(exc)],
+                    security_report=None,
+                    total_time=0.0,
+                )
         else:
             # Execute unified pipeline with all parameters from request
-            result = await unified_rag_pipeline(
-                # Core parameters
-                query=request.query,
-                sources=request.sources,
-
-                # Database paths
-                media_db_path=db_paths.get("media_db_path"),
-                notes_db_path=db_paths.get("notes_db_path"),
-                character_db_path=db_paths.get("character_db_path"),
-                # Database adapters (prefer adapters over raw SQL fallbacks)
+            kwargs = _build_unified_pipeline_kwargs(
+                request=request,
+                db_paths=db_paths,
                 media_db=media_db,
                 chacha_db=chacha_db,
-
-                # Search configuration
-                search_mode=request.search_mode,
-                fts_level=request.fts_level,
-                hybrid_alpha=request.hybrid_alpha,
-                enable_intent_routing=request.enable_intent_routing,
-                top_k=request.top_k,
-                min_score=request.min_score,
-
-            # Query expansion
-            expand_query=request.expand_query,
-            expansion_strategies=request.expansion_strategies,
-            spell_check=request.spell_check,
-
-            # Caching
-            enable_cache=request.enable_cache,
-            cache_threshold=request.cache_threshold,
-            adaptive_cache=request.adaptive_cache,
-
-            # Filtering
-            keyword_filter=request.keyword_filter,
-            include_media_ids=request.include_media_ids,
-            include_note_ids=request.include_note_ids,
-
-            # Security
-            enable_security_filter=request.enable_security_filter,
-            detect_pii=request.detect_pii,
-            redact_pii=request.redact_pii,
-            sensitivity_level=request.sensitivity_level,
-            content_filter=request.content_filter,
-
-            # Document processing
-            enable_table_processing=request.enable_table_processing,
-            table_method=request.table_method,
-            # VLM late chunking
-            enable_vlm_late_chunking=request.enable_vlm_late_chunking,
-            vlm_backend=request.vlm_backend,
-            vlm_detect_tables_only=request.vlm_detect_tables_only,
-            vlm_max_pages=request.vlm_max_pages,
-            vlm_late_chunk_top_k_docs=request.vlm_late_chunk_top_k_docs,
-
-            # Chunking
-            chunk_type_filter=request.chunk_type_filter,
-            enable_parent_expansion=request.enable_parent_expansion,
-            parent_context_size=request.parent_context_size,
-            include_sibling_chunks=request.include_sibling_chunks,
-            sibling_window=request.sibling_window,
-            include_parent_document=request.include_parent_document,
-            parent_max_tokens=request.parent_max_tokens,
-
-            # Advanced retrieval
-            enable_multi_vector_passages=request.enable_multi_vector_passages,
-            mv_span_chars=request.mv_span_chars,
-            mv_stride=request.mv_stride,
-            mv_max_spans=request.mv_max_spans,
-            mv_flatten_to_spans=request.mv_flatten_to_spans,
-            enable_numeric_table_boost=getattr(request, 'enable_numeric_table_boost', False),
-
-            # Reranking
-            enable_reranking=request.enable_reranking,
-            reranking_strategy=request.reranking_strategy,
-            rerank_top_k=request.rerank_top_k,
-            reranking_model=request.reranking_model,
-
-            # Citations
-            enable_citations=request.enable_citations,
-            citation_style=request.citation_style,
-            include_page_numbers=request.include_page_numbers,
-            enable_chunk_citations=request.enable_chunk_citations,
-
-            # Generation
-            enable_generation=request.enable_generation,
-            strict_extractive=getattr(request, 'strict_extractive', False),
-            generation_model=request.generation_model,
-            generation_prompt=request.generation_prompt,
-            max_generation_tokens=request.max_generation_tokens,
-            enable_abstention=getattr(request, 'enable_abstention', False),
-            abstention_behavior=getattr(request, 'abstention_behavior', 'continue'),
-            enable_multi_turn_synthesis=getattr(request, 'enable_multi_turn_synthesis', False),
-            synthesis_time_budget_sec=getattr(request, 'synthesis_time_budget_sec', None),
-            synthesis_draft_tokens=getattr(request, 'synthesis_draft_tokens', None),
-            synthesis_refine_tokens=getattr(request, 'synthesis_refine_tokens', None),
-
-            # Post-verification (adaptive)
-            enable_post_verification=request.enable_post_verification,
-            adaptive_max_retries=request.adaptive_max_retries,
-            adaptive_unsupported_threshold=request.adaptive_unsupported_threshold,
-            adaptive_max_claims=request.adaptive_max_claims,
-            adaptive_time_budget_sec=request.adaptive_time_budget_sec,
-            low_confidence_behavior=request.low_confidence_behavior,
-            adaptive_advanced_rewrites=getattr(request, 'adaptive_advanced_rewrites', None),
-            adaptive_rerun_on_low_confidence=getattr(request, 'adaptive_rerun_on_low_confidence', False),
-            adaptive_rerun_include_generation=getattr(request, 'adaptive_rerun_include_generation', True),
-            adaptive_rerun_bypass_cache=getattr(request, 'adaptive_rerun_bypass_cache', False),
-            adaptive_rerun_time_budget_sec=getattr(request, 'adaptive_rerun_time_budget_sec', None),
-            adaptive_rerun_doc_budget=getattr(request, 'adaptive_rerun_doc_budget', None),
-
-            # Claims & factuality
-            enable_claims=request.enable_claims,
-            claim_extractor=request.claim_extractor,
-            claim_verifier=request.claim_verifier,
-            claims_top_k=request.claims_top_k,
-            claims_conf_threshold=request.claims_conf_threshold,
-            claims_max=request.claims_max,
-            claims_concurrency=request.claims_concurrency,
-            nli_model=request.nli_model,
-
-            # Feedback
-            collect_feedback=request.collect_feedback,
-            feedback_user_id=request.feedback_user_id or (current_user.username if current_user else None),
-            apply_feedback_boost=request.apply_feedback_boost,
-
-            # Monitoring
-            enable_monitoring=request.enable_monitoring,
-            enable_observability=request.enable_observability,
-            trace_id=request.trace_id,
-
-            # Performance
-            enable_performance_analysis=request.enable_performance_analysis,
-            timeout_seconds=request.timeout_seconds,
-
-            # Quick wins
-            highlight_results=request.highlight_results,
-            highlight_query_terms=request.highlight_query_terms,
-            track_cost=request.track_cost,
-            debug_mode=request.debug_mode,
-
-            # Batch
-            enable_batch=request.enable_batch,
-            batch_queries=request.batch_queries,
-            batch_concurrent=request.batch_concurrent,
-
-            # Resilience
-            enable_resilience=request.enable_resilience,
-            retry_attempts=request.retry_attempts,
-            circuit_breaker=request.circuit_breaker,
-
-            # User context
-            user_id=current_user.username if current_user else request.user_id,
-            session_id=request.session_id
-        )
+                current_user=current_user,
+            )
+            result = await unified_rag_pipeline(**kwargs)
 
         # Convert to response format
         response = convert_result_to_response(result)
@@ -1090,7 +1011,7 @@ async def unified_search_endpoint(
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
+            detail="Search failed due to an internal error."
         )
 
 
@@ -1105,6 +1026,9 @@ async def rag_implicit_feedback(
     current_user: User = Depends(get_request_user),
 ):
     try:
+        from tldw_Server_API.app.core.config import implicit_feedback_enabled
+        if not implicit_feedback_enabled():
+            return {"ok": True, "disabled": True}
         user_id = request.user_id or (current_user.username if current_user else None)
         collector = UnifiedFeedbackSystem()
         await collector.record_implicit_interaction(
@@ -1114,6 +1038,12 @@ async def rag_implicit_feedback(
             event_type=request.event_type,
             impression=request.impression_list or [],
             corpus=request.corpus,
+            chunk_ids=request.chunk_ids or [],
+            rank=request.rank,
+            session_id=request.session_id,
+            conversation_id=request.conversation_id,
+            message_id=request.message_id,
+            dwell_ms=request.dwell_ms,
         )
         return {"ok": True}
     except Exception as e:
@@ -1225,7 +1155,7 @@ async def unified_batch_endpoint(
         logger.error(f"Batch search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Batch search failed: {str(e)}"
+            detail="Batch search failed due to an internal error."
         )
 
 
@@ -1269,8 +1199,14 @@ async def simple_search_endpoint(
         try:
             from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
             mon = get_topic_monitoring_service()
-            # simple endpoint has no user dependency; best-effort from query param user_id if any later
-            mon.schedule_evaluate_and_alert(user_id=None, text=query, source="rag.simple_search", scope_type="user", scope_id=None)
+            uid = str(current_user.username)
+            mon.schedule_evaluate_and_alert(
+                user_id=uid,
+                text=query,
+                source="rag.simple_search",
+                scope_type="user",
+                scope_id=uid,
+            )
         except Exception:
             pass
 
@@ -1291,25 +1227,34 @@ async def simple_search_endpoint(
         # Best-effort RAG query logging (counts as a single query).
         await _log_rag_queries_for_org(request, current_user, units=1)
 
+        normalized_docs = []
+        for doc in documents:
+            if isinstance(doc, dict):
+                normalized_docs.append({
+                    "id": doc.get("id"),
+                    "content": doc.get("content"),
+                    "metadata": doc.get("metadata") or {},
+                    "score": doc.get("score", 0.0),
+                })
+            else:
+                normalized_docs.append({
+                    "id": getattr(doc, "id", None),
+                    "content": getattr(doc, "content", None),
+                    "metadata": getattr(doc, "metadata", {}) or {},
+                    "score": getattr(doc, "score", 0.0),
+                })
+
         return {
             "query": query,
-            "documents": [
-                {
-                    "id": doc.id,
-                    "content": doc.content,
-                    "metadata": doc.metadata,
-                    "score": getattr(doc, 'score', 0.0)
-                }
-                for doc in documents
-            ],
-            "count": len(documents)
+            "documents": normalized_docs,
+            "count": len(normalized_docs)
         }
 
     except Exception as e:
         logger.error(f"Simple search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
+            detail="Search failed due to an internal error."
         )
 
 
@@ -1350,37 +1295,21 @@ async def unified_search_stream_endpoint(
             docs = []
             try:
                 if db_paths:
-                    try:
-                        retriever = MultiDatabaseRetriever(
-                            db_paths,
-                            user_id=current_user.username if current_user else "0",
-                            media_db=media_db,
-                            chacha_db=chacha_db,
-                        )
-                    except TypeError:
-                        retriever = MultiDatabaseRetriever(
-                            db_paths,
-                            user_id=current_user.username if current_user else "0",
-                            media_db=media_db,
-                        )
-                    config = RetrievalConfig(
-                        max_results=request.top_k,
-                        min_score=request.min_score,
-                        use_fts=(request.search_mode in ["fts", "hybrid"]),
-                        use_vector=(request.search_mode in ["vector", "hybrid"]),
-                        include_metadata=True,
-                        fts_level=request.fts_level,
+                    kwargs = _build_unified_pipeline_kwargs(
+                        request=request,
+                        db_paths={
+                            "media_db_path": media_db.db_path if media_db else None,
+                            "notes_db_path": chacha_db.db_path if chacha_db else None,
+                            "character_db_path": chacha_db.db_path if chacha_db else None,
+                        },
+                        media_db=media_db,
+                        chacha_db=chacha_db,
+                        current_user=current_user,
                     )
-                    # Determine sources
-                    src_map = {"media_db": DataSource.MEDIA_DB, "notes": DataSource.NOTES, "characters": DataSource.CHARACTER_CARDS, "chats": DataSource.CHARACTER_CARDS}
-                    srcs = [src_map.get(s, DataSource.MEDIA_DB) for s in (request.sources or ["media_db"]) ]
-                    docs = await retriever.retrieve(
-                        query=request.query,
-                        sources=srcs,
-                        config=config,
-                        index_namespace=index_namespace,
-                        allowed_media_ids=request.include_media_ids,
-                        allowed_note_ids=request.include_note_ids,
+                    kwargs["enable_generation"] = False
+                    retrieval_result = await unified_rag_pipeline(**kwargs)
+                    docs = _normalize_documents_for_generation(
+                        getattr(retrieval_result, "documents", []) or []
                     )
             except Exception:
                 docs = []
@@ -1443,7 +1372,7 @@ async def unified_search_stream_endpoint(
                     if prov:
                         yield json.dumps({"type": "spans", "count": len(prov), "provenance": prov[:50]}) + "\n"
                     # Use synthetic chunk as the sole document for streaming generation
-                    docs = ares.documents
+                    docs = _normalize_documents_for_generation(ares.documents)
                 except Exception:
                     pass
 
@@ -1566,8 +1495,8 @@ async def unified_search_stream_endpoint(
             if final_overlay:
                 yield json.dumps({"type": "final_claims", **final_overlay}) + "\n"
 
-        except Exception as e:
-            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+        except Exception:
+            yield json.dumps({"type": "error", "message": "Search failed due to an internal error."}) + "\n"
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
@@ -1606,7 +1535,14 @@ async def advanced_search_endpoint(
         try:
             from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
             mon = get_topic_monitoring_service()
-            mon.schedule_evaluate_and_alert(user_id=None, text=query, source="rag.advanced_search", scope_type="user", scope_id=None)
+            uid = str(current_user.username)
+            mon.schedule_evaluate_and_alert(
+                user_id=uid,
+                text=query,
+                source="rag.advanced_search",
+                scope_type="user",
+                scope_id=uid,
+            )
         except Exception:
             pass
 
@@ -1632,7 +1568,7 @@ async def advanced_search_endpoint(
         logger.error(f"Advanced search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
+            detail="Search failed due to an internal error."
         )
 
 

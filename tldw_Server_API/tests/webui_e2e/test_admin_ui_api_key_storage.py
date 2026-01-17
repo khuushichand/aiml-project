@@ -207,7 +207,7 @@ def test_admin_ui_api_key_session_storage_only(
                 page.evaluate(
                     """
                     const btn = [...document.querySelectorAll('button')]
-                      .find(el => (el.textContent || '').trim() === 'API Key');
+                    .find(el => (el.textContent || '').trim() === 'API Key');
                     if (btn) btn.click();
                     """
                 )

@@ -8,8 +8,3 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ['host.docker.internal:8000']
-
-  # Example scrape for embeddings worker orchestrator inside the compose network
-  - job_name: 'tldw-worker-orchestrator'
-    static_configs:
-      - targets: ['worker-orchestrator:9090']

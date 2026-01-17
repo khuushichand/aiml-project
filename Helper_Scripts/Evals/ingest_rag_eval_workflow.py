@@ -38,7 +38,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
+import httpx
+
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
+
+from common.repo_utils import configure_local_egress, ensure_repo_root
+
+ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception as e:
+    print(
+        f"tldw_Server_API not available; run from the repo root or set PYTHONPATH: {e}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from e
 
 
 DEFAULT_GRID = {
@@ -76,14 +97,14 @@ class ApiClient:
     def url(self, path: str) -> str:
         return f"{self.base.rstrip('/')}{path}"
 
-    def get(self, path: str, **kw) -> requests.Response:
-        return requests.get(self.url(path), headers=self.headers, timeout=self.timeout, **kw)
+    def get(self, path: str, **kw) -> httpx.Response:
+        return http_client.fetch(method="GET", url=self.url(path), headers=self.headers, timeout=self.timeout, **kw)
 
-    def post(self, path: str, **kw) -> requests.Response:
-        return requests.post(self.url(path), headers=self.headers, timeout=self.timeout, **kw)
+    def post(self, path: str, **kw) -> httpx.Response:
+        return http_client.fetch(method="POST", url=self.url(path), headers=self.headers, timeout=self.timeout, **kw)
 
-    def delete(self, path: str, **kw) -> requests.Response:
-        return requests.delete(self.url(path), headers=self.headers, timeout=self.timeout, **kw)
+    def delete(self, path: str, **kw) -> httpx.Response:
+        return http_client.fetch(method="DELETE", url=self.url(path), headers=self.headers, timeout=self.timeout, **kw)
 
 
 def ensure_health(client: ApiClient) -> None:
@@ -124,18 +145,21 @@ def ingest_files(client: ApiClient, media_type: str, paths: List[Path]) -> List[
             "hierarchical_chunking": "true",
         }
         try:
-            r = requests.post(
-                client.url("/api/v1/media/add"),
-                headers={k: v for k, v in client.headers.items() if k.lower() != "content-type"},
-                files=files_param,
-                data=data,
-                timeout=client.timeout,
-            )
-            for _, f in files_param:
-                try:
-                    f[1].close()
-                except Exception:
-                    pass
+            try:
+                r = http_client.fetch(
+                    method="POST",
+                    url=client.url("/api/v1/media/add"),
+                    headers={k: v for k, v in client.headers.items() if k.lower() != "content-type"},
+                    files=files_param,
+                    data=data,
+                    timeout=client.timeout,
+                )
+            finally:
+                for _, f in files_param:
+                    try:
+                        f[1].close()
+                    except Exception:
+                        pass
             r.raise_for_status()
             payload = r.json()
             # Try to extract db_ids from common shapes
@@ -327,6 +351,8 @@ def main() -> int:
     if not args.api_key and not args.jwt:
         print("Provide --api-key or --jwt", file=sys.stderr)
         return 2
+
+    configure_local_egress(args.base)
 
     headers = {"Content-Type": "application/json"}
     if args.jwt:

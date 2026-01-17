@@ -32,6 +32,7 @@ def _insert_minimal_media(db: MediaDatabase) -> int:
 
 
 def test_sqlite_get_media_prompts_filters_and_orders(tmp_path):
+
     db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="unit-sqlite-prompts")
     media_id = _insert_minimal_media(db)
 

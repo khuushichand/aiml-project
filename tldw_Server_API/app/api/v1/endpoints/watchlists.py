@@ -11,18 +11,40 @@ Scraping and scheduling are stubbed; runs are created on trigger.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
+import asyncio
+import csv
+import io
 import json
 import os
 import re
 from datetime import datetime, timezone, timedelta
 from html import escape
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, UploadFile, File, Form, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import PlainTextResponse, HTMLResponse, Response
+from starlette.responses import FileResponse
 from loguru import logger
 from jinja2.sandbox import SandboxedEnvironment
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    get_request_user,
+    User,
+    resolve_user_id_for_request,
+)
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.jwt_service import verify_token as _verify_jwt_token
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.endpoints.outputs import (
+    _build_output_filename,
+    _resolve_output_path_for_user,
+    _strip_html_for_tts,
+    _write_tts_audio_file,
+    _ingest_output_to_media_db,
+)
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 from tldw_Server_API.app.core.Watchlists import template_store
 from tldw_Server_API.app.core.Watchlists.opml import parse_opml, generate_opml
@@ -30,6 +52,10 @@ from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_s
 from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _normalize_job_filters, evaluate_filters as _evaluate_filters
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import TemplateValidationError
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 # Lazy/optional notifications import: avoid blocking router load if optional deps fail
 try:
     from tldw_Server_API.app.core.Notifications import NotificationsService  # type: ignore
@@ -76,6 +102,7 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     ScrapedItem, ScrapedItemsListResponse, ScrapedItemUpdateRequest,
     WatchlistOutput, WatchlistOutputCreateRequest, WatchlistOutputsListResponse,
     WatchlistTemplateCreateRequest, WatchlistTemplateDetail, WatchlistTemplateListResponse, WatchlistTemplateSummary,
+    WatchlistTemplateValidationErrorResponse,
     WatchlistFiltersPayload, WatchlistFilter, SourcesImportResponse, SourcesImportItem,
 )
 
@@ -116,47 +143,6 @@ def _normalize_filters_payload(raw_json: Optional[str]) -> Optional[Dict[str, An
     except Exception:
         return None
     return None
-
-
-# ---- Rate limit helpers (test-aware) ----
-import functools
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _limiter
-
-
-def _limits_disabled_now() -> bool:
-    try:
-        return (
-            os.getenv("WATCHLISTS_DISABLE_RATE_LIMITS", "").strip().lower() in {"1", "true", "yes", "on"}
-            or os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TLDW_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-            or os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        )
-    except Exception:
-        return False
-
-
-def _optional_limit(rate: str):
-    def _decorator(func):
-        if _limiter is None or _limits_disabled_now():
-            return func
-        wrapped = _limiter.limit(rate)(func)
-
-        @functools.wraps(func)
-        async def _inner(*args, **kwargs):  # type: ignore
-            if _limits_disabled_now():
-                return await func(*args, **kwargs)
-            req = kwargs.get("request", None)
-            try:
-                from starlette.requests import Request as _StarReq  # type: ignore
-                if not isinstance(req, _StarReq):
-                    return await func(*args, **kwargs)
-            except Exception:
-                return await func(*args, **kwargs)
-            return await wrapped(*args, **kwargs)
-
-        return _inner
-
-    return _decorator
 
 
 # ---- Helpers ----
@@ -540,6 +526,161 @@ def _validate_youtube_feed_or_raise(url: str, source_type: str) -> None:
             ),
         )
 
+
+def _forums_enabled() -> bool:
+    return str(os.getenv("WATCHLIST_FORUMS_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _raise_if_forum_disabled(source_type: str) -> None:
+    if str(source_type).lower() == "forum" and not _forums_enabled():
+        raise HTTPException(status_code=400, detail="forum_sources_disabled")
+
+
+def _validate_group_ids(db: WatchlistsDatabase, group_ids: Optional[List[int]]) -> List[int]:
+    if not group_ids:
+        return []
+    clean: List[int] = []
+    missing: List[int] = []
+    for gid in group_ids:
+        try:
+            gid_int = int(gid)
+        except Exception as exc:
+            logger.debug(f"watchlists.group_ids: invalid group id {gid}: {exc}")
+            raise HTTPException(status_code=400, detail="group_validation_failed")
+        try:
+            db.get_group(gid_int)
+        except KeyError:
+            missing.append(gid_int)
+        else:
+            clean.append(gid_int)
+    if missing:
+        raise HTTPException(status_code=400, detail=f"group_not_found: {missing}")
+    return clean
+
+
+def _looks_like_jwt(token: Optional[str]) -> bool:
+    return isinstance(token, str) and token.count(".") == 2
+
+
+async def _resolve_watchlists_ws_user_id(
+    websocket: WebSocket,
+    *,
+    token: Optional[str],
+    api_key: Optional[str],
+) -> int:
+    if not token:
+        auth_hdr = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+        if auth_hdr and auth_hdr.lower().startswith("bearer "):
+            token = auth_hdr.split(" ", 1)[1].strip()
+    if not api_key:
+        api_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
+
+    if token and not api_key and not _looks_like_jwt(token):
+        api_key = token
+        token = None
+
+    if token:
+        payload = _verify_jwt_token(token)
+        sub = payload.get("sub")
+        if sub is None:
+            raise HTTPException(status_code=401, detail="invalid_token")
+        return int(sub)
+
+    if api_key:
+        settings = get_settings()
+        client_ip = None
+        try:
+            client = getattr(websocket, "client", None)
+            if client is not None:
+                client_ip = getattr(client, "host", None)
+        except Exception:
+            client_ip = None
+        if getattr(settings, "AUTH_MODE", None) == "single_user":
+            allowed_keys: set[str] = set()
+            primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+            if primary_key:
+                allowed_keys.add(primary_key)
+            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+            if test_key:
+                allowed_keys.add(test_key)
+            if api_key in allowed_keys and is_single_user_ip_allowed(client_ip, settings):
+                return int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+
+        api_mgr = await get_api_key_manager()
+        info = await api_mgr.validate_api_key(api_key=api_key, required_scope="read", ip_address=client_ip)
+        if not info:
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+        user_id = info.get("user_id")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+        return int(user_id)
+
+    raise HTTPException(status_code=401, detail="auth_required")
+
+
+def _read_log_chunk(
+    *,
+    log_path: Optional[str],
+    offset: int,
+    max_bytes: int,
+    inode: Optional[int],
+) -> tuple[Optional[str], int, Optional[int]]:
+    if not log_path:
+        return None, offset, inode
+    try:
+        from pathlib import Path as _Path
+
+        path = _Path(log_path)
+        if not path.exists():
+            return None, offset, inode
+        stat = path.stat()
+        current_inode = getattr(stat, "st_ino", None)
+        if inode is not None and current_inode is not None and inode != current_inode:
+            offset = 0
+        if stat.st_size < offset:
+            offset = 0
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(offset)
+            chunk = fh.read(max_bytes)
+            offset = fh.tell()
+        if not chunk:
+            return None, offset, current_inode
+        return chunk, offset, current_inode
+    except Exception:
+        return None, offset, inode
+
+
+def _read_log_tail(
+    *,
+    log_path: Optional[str],
+    max_bytes: int,
+) -> tuple[Optional[str], int, Optional[int], bool]:
+    if not log_path:
+        return None, 0, None, False
+    try:
+        from pathlib import Path as _Path
+
+        path = _Path(log_path)
+        if not path.exists():
+            return None, 0, None, False
+        stat = path.stat()
+        inode = getattr(stat, "st_ino", None)
+        start = 0
+        truncated = False
+        if stat.st_size > max_bytes:
+            start = max(0, stat.st_size - max_bytes)
+            truncated = True
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(start)
+            text = fh.read(max_bytes)
+            offset = fh.tell()
+        if not text:
+            return None, offset, inode, truncated
+        return text, offset, inode, truncated
+    except Exception:
+        return None, 0, None, False
+
 @router.post("/sources", response_model=Source, summary="Create a source")
 async def create_source(
     payload: SourceCreateRequest = Body(...),
@@ -548,6 +689,10 @@ async def create_source(
     response: Response = None,  # type: ignore[assignment]
 ):
     try:
+        _raise_if_forum_disabled(str(payload.source_type))
+        group_ids: Optional[List[int]] = payload.group_ids
+        if group_ids is not None:
+            group_ids = _validate_group_ids(db, group_ids)
         # Backend normalization/validation for YouTube-as-RSS
         url_str = str(payload.url)
         orig_url_for_log = url_str
@@ -574,13 +719,18 @@ async def create_source(
             active=payload.active,
             settings_json=(json.dumps(payload.settings) if payload.settings else None),
             tags=payload.tags or [],
-            group_ids=payload.group_ids or [],
+            group_ids=group_ids or [],
         )
         # Ensure tags reflect payload even when source pre-exists (idempotent create)
         if payload.tags is not None:
             try:
                 tags = db.set_source_tags(row.id, payload.tags)
                 row.tags = tags  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        if payload.group_ids is not None:
+            try:
+                db.set_source_groups(row.id, group_ids or [])
             except Exception:
                 pass
     except HTTPException:
@@ -641,7 +791,7 @@ async def list_sources(
 async def export_sources_opml(
     tag: Optional[List[str]] = Query(None, description="Filter by tag(s)"),
     group: Optional[List[int]] = Query(None, description="Filter by group id(s) (OR semantics)"),
-    type: Optional[str] = Query(None, description="Filter by source_type (rss/site)"),
+    type: Optional[str] = Query(None, description="Filter by source_type (rss/site/forum)"),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
@@ -673,7 +823,6 @@ async def export_sources_opml(
 
 
 @router.post("/sources/import", response_model=SourcesImportResponse, summary="Import sources from OPML")
-@_optional_limit("10/minute")
 async def import_sources_opml(
     request: Request,
     file: UploadFile = File(...),
@@ -686,6 +835,8 @@ async def import_sources_opml(
 ):
     content = await file.read()
     entries = parse_opml(content)
+    if group_id is not None:
+        _validate_group_ids(db, [group_id])
     items: List[SourcesImportItem] = []
     created = skipped = errors = 0
     default_tags = tags or []
@@ -718,26 +869,6 @@ async def import_sources_opml(
         except Exception as exc:
             items.append(SourcesImportItem(url=url_str, name=e.name, status="skipped", error=str(exc)))
             skipped += 1
-    # Best-effort rate-limit header
-    if not _limits_disabled_now():
-        try:
-            if response is not None:
-                response.headers.setdefault("X-RateLimit-Limit", "10/minute")
-                return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
-        except Exception:
-            pass
-        try:
-            from fastapi.responses import JSONResponse
-            payload = {
-                "items": [i.model_dump() if hasattr(i, "model_dump") else dict(i) for i in items],
-                "total": (created + skipped + errors),
-                "created": created,
-                "skipped": skipped,
-                "errors": errors,
-            }
-            return JSONResponse(content=payload, headers={"X-RateLimit-Limit": "10/minute"})
-        except Exception:
-            pass
     return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
 
 # (moved above /sources/{source_id})
@@ -768,6 +899,96 @@ async def get_source(
     )
 
 
+@router.post("/sources/{source_id}/test", response_model=PreviewResponse, summary="Test source and preview items")
+async def test_source(
+    source_id: int = Path(..., ge=1),
+    limit: int = Query(20, ge=1, le=200),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        src = db.get_source(source_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="source_not_found")
+
+    source_type = str(getattr(src, "source_type", ""))
+    _raise_if_forum_disabled(source_type)
+    settings: Dict[str, Any] = {}
+    try:
+        settings = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
+    except Exception:
+        settings = {}
+
+    items: List[Dict[str, Any]] = []
+    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+    if source_type.lower() == "rss":
+        try:
+            res = await fetch_rss_feed(
+                str(src.url),
+                etag=getattr(src, "etag", None),
+                last_modified=getattr(src, "last_modified", None),
+                tenant_id="default",
+            )
+            items = res.get("items", []) if isinstance(res, dict) else []
+        except Exception as exc:
+            logger.debug(f"watchlists.test_source: rss fetch failed: {exc}")
+            items = []
+    elif source_type.lower() in {"site", "forum"}:
+        scrape_rules = settings.get("scrape_rules") if isinstance(settings.get("scrape_rules"), dict) else None
+        if scrape_rules:
+            try:
+                items = await fetch_site_items_with_rules(
+                    base_url=str(scrape_rules.get("list_url") or src.url),
+                    rules=scrape_rules,
+                    tenant_id="default",
+                )
+            except Exception as exc:
+                logger.debug(f"watchlists.test_source: scrape rules fetch failed: {exc}")
+                items = []
+        elif test_mode:
+            items = [
+                {
+                    "title": "Test scraped item 1",
+                    "url": f"{str(src.url).rstrip('/')}/test-item-1",
+                    "summary": "Test summary from source preview.",
+                }
+            ]
+        else:
+            try:
+                from tldw_Server_API.app.core.Watchlists.fetchers import fetch_site_top_links
+
+                top_n = int(settings.get("top_n", 1) or 1)
+                discover_method = str(settings.get("discover_method", "auto")).lower()
+                urls = await fetch_site_top_links(str(src.url), top_n=top_n, method=discover_method)
+            except Exception:
+                urls = [str(src.url)]
+            items = [{"url": url} for url in (urls or [])]
+
+    if limit and limit > 0:
+        items = items[:limit]
+
+    preview_items: List[PreviewItem] = []
+    for entry in items:
+        preview_items.append(
+            PreviewItem(
+                source_id=int(source_id),
+                source_type=source_type,  # type: ignore[arg-type]
+                url=entry.get("url"),
+                title=entry.get("title"),
+                summary=entry.get("summary"),
+                published_at=entry.get("published") or entry.get("published_at"),
+                decision="ingest",
+                matched_action=None,
+                matched_filter_key=None,
+                flagged=False,
+            )
+        )
+
+    total = len(preview_items)
+    return PreviewResponse(items=preview_items, total=total, ingestable=total, filtered=0)
+
+
 @router.patch("/sources/{source_id}", response_model=Source, summary="Update source")
 async def update_source(
     source_id: int = Path(..., ge=1),
@@ -783,6 +1004,7 @@ async def update_source(
         raise HTTPException(status_code=404, detail="source_not_found")
     target_type = str(payload.source_type) if (getattr(payload, "source_type", None) is not None) else str(existing.source_type)
     target_url = str(payload.url) if (getattr(payload, "url", None) is not None) else str(existing.url)
+    _raise_if_forum_disabled(target_type)
     # Normalize/validate when target_type is rss and URL is YouTube
     if target_type.lower() == "rss" and _is_youtube_url(target_url) and not _is_youtube_feed_url(target_url):
         orig_url_for_log = target_url
@@ -808,6 +1030,8 @@ async def update_source(
             _validate_youtube_feed_or_raise(target_url, target_type)
     patch = payload.model_dump(exclude_unset=True)
     group_ids = patch.pop("group_ids", None)
+    if group_ids is not None:
+        group_ids = _validate_group_ids(db, group_ids)
     if "settings" in patch:
         patch["settings_json"] = json.dumps(patch.pop("settings")) if patch.get("settings") is not None else None
     # Coerce pydantic types to primitives for DB layer
@@ -901,6 +1125,20 @@ async def bulk_create_sources(
     created_count = 0
     errors_count = 0
     for s in payload.sources:
+        try:
+            _raise_if_forum_disabled(str(s.source_type))
+        except HTTPException as ve:
+            items.append(
+                SourcesBulkCreateItem(
+                    name=s.name,
+                    url=str(s.url),
+                    status="error",
+                    error=str(ve.detail),
+                    source_type=str(s.source_type),
+                )
+            )
+            errors_count += 1
+            continue
         # Normalize/Validate YouTube-as-RSS for each entry; collect per-entry error instead of silent skip
         try:
             url_str = str(s.url)
@@ -943,7 +1181,8 @@ async def bulk_create_sources(
                     )
                     errors_count += 1
                     continue
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"bulk_create_sources: tag validation error for {s.name}: {exc}")
             items.append(
                 SourcesBulkCreateItem(
                     name=s.name,
@@ -958,26 +1197,22 @@ async def bulk_create_sources(
 
         # Validate group_ids existence per-entry
         try:
-            if s.group_ids:
-                missing: List[int] = []
-                for gid in s.group_ids:
-                    try:
-                        db.get_group(int(gid))
-                    except KeyError:
-                        missing.append(int(gid))
-                if missing:
-                    items.append(
-                        SourcesBulkCreateItem(
-                            name=s.name,
-                            url=str(s.url),
-                            status="error",
-                            error=f"group_not_found: {missing}",
-                            source_type=str(s.source_type),
-                        )
-                    )
-                    errors_count += 1
-                    continue
-        except Exception as e:
+            if s.group_ids is not None:
+                _validate_group_ids(db, s.group_ids)
+        except HTTPException as ve:
+            items.append(
+                SourcesBulkCreateItem(
+                    name=s.name,
+                    url=str(s.url),
+                    status="error",
+                    error=str(ve.detail),
+                    source_type=str(s.source_type),
+                )
+            )
+            errors_count += 1
+            continue
+        except Exception as exc:
+            logger.debug(f"bulk_create_sources: group validation error for {s.name}: {exc}")
             items.append(
                 SourcesBulkCreateItem(
                     name=s.name,
@@ -1658,7 +1893,6 @@ async def delete_job(
 
 
 @router.patch("/jobs/{job_id}/filters", response_model=WatchlistFiltersPayload, summary="Replace job filters")
-@_optional_limit("30/minute")
 async def replace_job_filters(
     request: Request,
     job_id: int = Path(..., ge=1),
@@ -1677,17 +1911,10 @@ async def replace_job_filters(
         parsed = json.loads(updated.job_filters_json or "{}") if getattr(updated, "job_filters_json", None) else {"filters": []}
     except Exception:
         parsed = {"filters": []}
-    # Best-effort rate-limit header for visibility
-    try:
-        if response is not None and not _limits_disabled_now():
-            response.headers.setdefault("X-RateLimit-Limit", "30/minute")
-    except Exception:
-        pass
     return WatchlistFiltersPayload(**parsed) if isinstance(parsed, dict) else WatchlistFiltersPayload(filters=[])
 
 
 @router.post("/jobs/{job_id}/filters:add", response_model=WatchlistFiltersPayload, summary="Append job filters")
-@_optional_limit("30/minute")
 async def append_job_filters(
     request: Request,
     job_id: int = Path(..., ge=1),
@@ -1704,15 +1931,15 @@ async def append_job_filters(
     to_add = payload.filters or []
     new_filters = existing + [f.model_dump() if hasattr(f, "model_dump") else f for f in to_add]
     db.set_job_filters(job_id, {"filters": new_filters})
-    try:
-        if response is not None and not _limits_disabled_now():
-            response.headers.setdefault("X-RateLimit-Limit", "30/minute")
-    except Exception:
-        pass
     return WatchlistFiltersPayload(filters=[WatchlistFilter(**f) if isinstance(f, dict) else f for f in new_filters])
 
 
-@router.post("/jobs/{job_id}/run", response_model=Run, summary="Trigger a run (executes pipeline)")
+@router.post(
+    "/jobs/{job_id}/run",
+    response_model=Run,
+    summary="Trigger a run (executes pipeline)",
+    dependencies=[Depends(rbac_rate_limit("watchlists.run"))],
+)
 async def trigger_run(
     job_id: int = Path(..., ge=1),
     current_user: User = Depends(get_request_user),
@@ -1829,23 +2056,27 @@ async def export_runs_csv(
     ]
     if include_tallies:
         headers.append("filter_tallies_json")
-    out_lines = [",".join(headers)]
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(headers)
     for r in rows:
         try:
             stats = json.loads(r.stats_json or "{}") if r.stats_json else {}
         except Exception:
             stats = {}
+        if not isinstance(stats, dict):
+            stats = {}
         vals = [
-            str(r.id),
-            str(r.job_id),
-            json.dumps(r.status or ""),
-            json.dumps(r.started_at or ""),
-            json.dumps(r.finished_at or ""),
-            str(int((stats or {}).get("items_found", 0) or 0)),
-            str(int((stats or {}).get("items_ingested", 0) or 0)),
-            str(int(((stats.get("filters_actions") or {}).get("include", 0)) if isinstance(stats, dict) else 0)),
-            str(int(((stats.get("filters_actions") or {}).get("exclude", 0)) if isinstance(stats, dict) else 0)),
-            str(int(((stats.get("filters_actions") or {}).get("flag", 0)) if isinstance(stats, dict) else 0)),
+            int(r.id),
+            int(r.job_id),
+            r.status or "",
+            r.started_at or "",
+            r.finished_at or "",
+            int((stats or {}).get("items_found", 0) or 0),
+            int((stats or {}).get("items_ingested", 0) or 0),
+            int(((stats.get("filters_actions") or {}).get("include", 0)) if isinstance(stats, dict) else 0),
+            int(((stats.get("filters_actions") or {}).get("exclude", 0)) if isinstance(stats, dict) else 0),
+            int(((stats.get("filters_actions") or {}).get("flag", 0)) if isinstance(stats, dict) else 0),
         ]
         if include_tallies:
             try:
@@ -1853,7 +2084,7 @@ async def export_runs_csv(
                 vals.append(json.dumps(tallies or {}))
             except Exception:
                 vals.append("{}")
-        out_lines.append(",".join(vals))
+        writer.writerow(vals)
     filename = f"watchlists_runs_{scope}_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"
     # Include lightweight pagination metadata parity via header
     try:
@@ -1861,7 +2092,7 @@ async def export_runs_csv(
     except Exception:
         has_more = False
     return PlainTextResponse(
-        "\n".join(out_lines),
+        output.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={
             "Content-Disposition": f"attachment; filename={filename}",
@@ -1930,7 +2161,13 @@ async def get_run_details(
             log_text = None
             truncated = False
     # Build stats for detail view, including filter totals when present
-    detail_stats: Dict[str, int] = {"items_found": items_found, "items_ingested": items_ingested}
+    detail_stats: Dict[str, int] = {
+        "items_found": items_found,
+        "items_ingested": items_ingested,
+        "filters_include": 0,
+        "filters_exclude": 0,
+        "filters_flag": 0,
+    }
     try:
         if isinstance(stats.get("filters_matched"), int):
             detail_stats["filters_matched"] = int(stats.get("filters_matched") or 0)
@@ -1992,6 +2229,132 @@ async def get_run_details(
         truncated=truncated,
         filtered_sample=filtered_sample,
     )
+
+
+# --------------------
+# WebSocket run stream
+# --------------------
+
+
+@router.websocket("/runs/{run_id}/stream")
+async def stream_run(
+    websocket: WebSocket,
+    run_id: int,
+    token: Optional[str] = Query(None),
+    api_key: Optional[str] = Query(None),
+):
+    try:
+        user_id = await _resolve_watchlists_ws_user_id(websocket, token=token, api_key=api_key)
+    except HTTPException:
+        try:
+            await websocket.close(code=4401)
+        finally:
+            return
+    db = WatchlistsDatabase.for_user(user_id)
+    try:
+        run = db.get_run(int(run_id))
+    except KeyError:
+        try:
+            await websocket.close(code=4404)
+        finally:
+            return
+
+    await websocket.accept()
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=0.0,
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "watchlists", "endpoint": "watchlists_run_ws"},
+    )
+    await stream.start()
+
+    log_tail_max = int(os.getenv("WATCHLISTS_WS_LOG_TAIL_MAX", "65536") or 65536)
+    log_chunk_max = int(os.getenv("WATCHLISTS_WS_LOG_CHUNK_MAX", "8192") or 8192)
+    poll_interval = float(os.getenv("WATCHLISTS_WS_POLL_INTERVAL", "1.0") or 1.0)
+    if poll_interval < 0.2:
+        poll_interval = 0.2
+
+    def _parse_stats(raw: Optional[str]) -> Dict[str, Any]:
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    last_status = run.status
+    last_stats_raw = run.stats_json
+    last_error = run.error_msg
+    log_text, log_offset, log_inode, log_truncated = _read_log_tail(
+        log_path=run.log_path,
+        max_bytes=log_tail_max,
+    )
+    await stream.send_json(
+        {
+            "type": "snapshot",
+            "run": {
+                "id": run.id,
+                "job_id": run.job_id,
+                "status": run.status,
+                "started_at": run.started_at,
+                "finished_at": run.finished_at,
+            },
+            "stats": _parse_stats(run.stats_json),
+            "error_msg": run.error_msg,
+            "log_tail": log_text,
+            "log_truncated": log_truncated,
+        }
+    )
+
+    try:
+        while True:
+            run = db.get_run(int(run_id))
+            stats_raw = run.stats_json
+            if run.status != last_status or stats_raw != last_stats_raw or run.error_msg != last_error:
+                await stream.send_json(
+                    {
+                        "type": "run_update",
+                        "run": {
+                            "id": run.id,
+                            "job_id": run.job_id,
+                            "status": run.status,
+                            "started_at": run.started_at,
+                            "finished_at": run.finished_at,
+                        },
+                        "stats": _parse_stats(stats_raw),
+                        "error_msg": run.error_msg,
+                    }
+                )
+                last_status = run.status
+                last_stats_raw = stats_raw
+                last_error = run.error_msg
+
+            chunk, log_offset, log_inode = _read_log_chunk(
+                log_path=run.log_path,
+                offset=log_offset,
+                max_bytes=log_chunk_max,
+                inode=log_inode,
+            )
+            if chunk:
+                await stream.send_json({"type": "log", "text": chunk})
+            elif run.status not in {"running", "queued"}:
+                await stream.send_json({"type": "complete", "status": run.status})
+                break
+            else:
+                await stream.send_json({"type": "heartbeat", "ts": datetime.utcnow().isoformat()})
+
+            await asyncio.sleep(poll_interval)
+    except WebSocketDisconnect:
+        logger.info("Watchlists WS disconnected")
+        raise
+    except Exception as exc:
+        logger.error(f"Watchlists WS error: {exc}")
+        try:
+            await stream.ws.close(code=status.WS_1011_INTERNAL_ERROR)
+        except Exception:
+            pass
 
 
 # --------------------
@@ -2101,6 +2464,8 @@ async def create_output(
     payload: WatchlistOutputCreateRequest,
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
+    collections_db = Depends(get_collections_db_for_user),
+    media_db = Depends(get_media_db_for_user),
 ):
     db.purge_expired_outputs()
     try:
@@ -2147,23 +2512,45 @@ async def create_output(
 
     template_name = payload.template_name or template_defaults.get("default_name")
     template_record = None
+    output_template = None
     if template_name:
-        if not _TEMPLATE_NAME_RE.fullmatch(template_name):
-            raise HTTPException(status_code=400, detail="invalid_template_name")
         try:
-            template_record = template_store.load_template(template_name)
-        except template_store.TemplateNotFoundError:
-            raise HTTPException(status_code=404, detail="template_not_found")
-    output_format = (
-        payload.format
-        or template_defaults.get("default_format")
-        or (template_record.format if template_record else "md")
-    )
+            output_template = collections_db.get_output_template_by_name(template_name)
+        except KeyError:
+            output_template = None
+        except Exception as exc:
+            logger.error(f"Watchlists template lookup failed: {exc}")
+            raise HTTPException(status_code=500, detail="template_lookup_failed")
+        if output_template and output_template.format not in {"md", "html"}:
+            raise HTTPException(status_code=400, detail="template_format_not_supported")
+        if not output_template:
+            if not _TEMPLATE_NAME_RE.fullmatch(template_name):
+                raise HTTPException(status_code=400, detail="invalid_template_name")
+            try:
+                template_record = template_store.load_template(template_name)
+            except template_store.TemplateNotFoundError:
+                raise HTTPException(status_code=404, detail="template_not_found")
+    template_format = None
+    if output_template:
+        template_format = output_template.format
+    elif template_record:
+        template_format = template_record.format
+
+    output_format = payload.format or template_defaults.get("default_format") or (template_format or "md")
     if output_format not in {"md", "html"}:
         raise HTTPException(status_code=400, detail="invalid_format")
 
     context = _build_output_context(title, job, run, item_models)
-    if template_record:
+    if output_template:
+        context["template_name"] = output_template.name
+        if output_template.description:
+            context["template_description"] = output_template.description
+        try:
+            content = _render_template_with_context(output_template.body, context)
+        except Exception as exc:
+            logger.error(f"Watchlists template render failed: {exc}")
+            raise HTTPException(status_code=400, detail=f"template_render_failed: {exc}")
+    elif template_record:
         context["template_name"] = template_record.name
         if template_record.description:
             context["template_description"] = template_record.description
@@ -2192,8 +2579,15 @@ async def create_output(
             "type": payload.type,
         }
     )
-    if template_record:
+    if output_template:
+        metadata["template_id"] = output_template.id
+        metadata["template_name"] = output_template.name
+        metadata["template_source"] = "outputs_templates"
+        if output_template.description:
+            metadata["template_description"] = output_template.description
+    elif template_record:
         metadata["template_name"] = template_record.name
+        metadata["template_source"] = "watchlists_templates"
         if template_record.description:
             metadata["template_description"] = template_record.description
     metadata["version"] = version
@@ -2220,21 +2614,231 @@ async def create_output(
     metadata["temporary"] = bool(payload.temporary)
     metadata = {k: v for k, v in metadata.items() if v is not None}
 
-    row = db.create_output(
-        run_id=payload.run_id,
-        job_id=job_id,
-        type=payload.type,
-        format=output_format,
-        title=title,
-        content=content,
-        metadata=metadata,
-        version=version,
-        expires_at=expires_at,
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
     )
+    try:
+        out_dir = DatabasePaths.get_user_outputs_dir(user_id)
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        logger.error(f"watchlists outputs: failed to create outputs dir: {exc}")
+        raise HTTPException(status_code=500, detail="storage_unavailable")
+
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    base_metadata = dict(metadata)
+    tags = sorted({t for itm in item_models for t in (itm.tags or []) if isinstance(t, str)})
+    created_output_ids: List[int] = []
+    created_paths: List[Any] = []
+    template_id = output_template.id if output_template else None
+
+    def _variant_metadata(
+        *,
+        output_type: str,
+        output_format: str,
+        variant_kind: str,
+        variant_of: int,
+    ) -> Dict[str, Any]:
+        meta = dict(base_metadata)
+        meta["type"] = output_type
+        meta["format"] = output_format
+        meta["variant_of"] = variant_of
+        meta["variant_kind"] = variant_kind
+        return meta
+
+    def _apply_template_meta(meta: Dict[str, Any], tpl) -> None:
+        if tpl is None:
+            return
+        meta["template_id"] = tpl.id
+        meta["template_name"] = tpl.name
+        meta["template_source"] = "outputs_templates"
+        if getattr(tpl, "description", None):
+            meta["template_description"] = tpl.description
+
+    async def _persist_output_row(
+        *,
+        output_type: str,
+        output_format: str,
+        output_title: str,
+        output_content: Optional[str],
+        storage_path: Optional[str],
+        meta: Dict[str, Any],
+        tpl,
+        variant_of: Optional[int],
+        template_id_override: Optional[int] = None,
+    ) -> Any:
+        meta = dict(meta)
+        if tpl is not None:
+            _apply_template_meta(meta, tpl)
+        row = db.create_output(
+            run_id=payload.run_id,
+            job_id=job_id,
+            type=output_type,
+            format=output_format,
+            title=output_title,
+            content=output_content,
+            storage_path=storage_path,
+            metadata=meta,
+            version=version,
+            expires_at=expires_at,
+        )
+        created_output_ids.append(row.id)
+        if storage_path:
+            try:
+                path = _resolve_output_path_for_user(user_id, storage_path)
+                if path not in created_paths:
+                    created_paths.append(path)
+            except Exception:
+                pass
+
+        if payload.ingest_to_media_db:
+            media_id = await _ingest_output_to_media_db(
+                media_db=media_db,
+                output_id=row.id,
+                title=output_title,
+                content=output_content or "",
+                output_type=output_type,
+                output_format=output_format,
+                storage_path=storage_path or "",
+                template_id=(tpl.id if tpl is not None else template_id_override),
+                run_id=payload.run_id,
+                item_ids=meta.get("item_ids", []),
+                tags=tags,
+                variant_of=variant_of,
+            )
+            row = db.update_output_record(row.id, media_item_id=media_id)
+        return row
+
+    def _cleanup_outputs() -> None:
+        for path in created_paths:
+            try:
+                if path and hasattr(path, "exists") and path.exists():
+                    path.unlink()
+            except Exception:
+                pass
+        for oid in created_output_ids:
+            try:
+                db.delete_output(oid)
+            except Exception:
+                pass
+
+    try:
+        row = await _persist_output_row(
+            output_type=payload.type,
+            output_format=output_format,
+            output_title=title,
+            output_content=content,
+            storage_path=None,
+            meta=base_metadata,
+            tpl=output_template,
+            variant_of=None,
+            template_id_override=template_id,
+        )
+
+        if payload.generate_mece and payload.type != "mece_markdown":
+            mece_tpl = None
+            if payload.mece_template_name:
+                try:
+                    mece_tpl = collections_db.get_output_template_by_name(payload.mece_template_name)
+                except KeyError:
+                    raise HTTPException(status_code=404, detail="mece_template_not_found")
+                if mece_tpl.type != "mece_markdown":
+                    raise HTTPException(status_code=422, detail="invalid_mece_template")
+            else:
+                mece_tpl = collections_db.get_default_output_template_by_type("mece_markdown")
+                if not mece_tpl:
+                    raise HTTPException(status_code=404, detail="mece_template_not_found")
+            try:
+                mece_rendered = _render_template_with_context(mece_tpl.body, context)
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail="mece_render_failed") from exc
+            mece_meta = _variant_metadata(
+                output_type=mece_tpl.type,
+                output_format=mece_tpl.format,
+                variant_kind="mece",
+                variant_of=row.id,
+            )
+            await _persist_output_row(
+                output_type=mece_tpl.type,
+                output_format=mece_tpl.format,
+                output_title=f"{title} (MECE)",
+                output_content=mece_rendered,
+                storage_path=None,
+                meta=mece_meta,
+                tpl=mece_tpl,
+                variant_of=row.id,
+                template_id_override=None,
+            )
+
+        if payload.generate_tts:
+            tts_tpl = None
+            tts_rendered = None
+            if payload.tts_template_name:
+                try:
+                    tts_tpl = collections_db.get_output_template_by_name(payload.tts_template_name)
+                except KeyError:
+                    raise HTTPException(status_code=404, detail="tts_template_not_found")
+                if tts_tpl.type != "tts_audio":
+                    raise HTTPException(status_code=422, detail="invalid_tts_template")
+            else:
+                tts_tpl = collections_db.get_default_output_template_by_type("tts_audio")
+            if tts_tpl:
+                try:
+                    tts_rendered = _render_template_with_context(tts_tpl.body, context)
+                except Exception as exc:
+                    raise HTTPException(status_code=422, detail="tts_render_failed") from exc
+            else:
+                tts_rendered = _strip_html_for_tts(content) if output_format == "html" else content
+            tts_rendered = tts_rendered or ""
+
+            tts_filename = _build_output_filename(title, "audio", ts, "mp3")
+            tts_path = _resolve_output_path_for_user(user_id, tts_filename)
+            await _write_tts_audio_file(
+                rendered=tts_rendered,
+                path=tts_path,
+                tts_model=payload.tts_model,
+                tts_voice=payload.tts_voice,
+                tts_speed=payload.tts_speed,
+                template_row=tts_tpl,
+            )
+            if tts_path not in created_paths:
+                created_paths.append(tts_path)
+            tts_meta = _variant_metadata(
+                output_type="tts_audio",
+                output_format="mp3",
+                variant_kind="tts",
+                variant_of=row.id,
+            )
+            await _persist_output_row(
+                output_type="tts_audio",
+                output_format="mp3",
+                output_title=f"{title} (Audio)",
+                output_content=tts_rendered,
+                storage_path=tts_filename,
+                meta=tts_meta,
+                tpl=tts_tpl,
+                variant_of=row.id,
+                template_id_override=None,
+            )
+    except HTTPException:
+        _cleanup_outputs()
+        raise
+    except Exception as exc:
+        logger.error(f"watchlists outputs create failed: {exc}")
+        _cleanup_outputs()
+        raise HTTPException(status_code=500, detail="output_create_failed")
+
     output = _row_to_output(row)
 
     notifications = NotificationsService(
-        user_id=int(current_user.id or 0),
+        user_id=resolve_user_id_for_request(
+            current_user,
+            as_int=True,
+            error_status=500,
+            invalid_detail="invalid user_id",
+        ),
         user_email=getattr(current_user, "email", None),
     )
     delivery_results: List[Dict[str, Any]] = []
@@ -2383,6 +2987,24 @@ async def download_output(
     content = output.content or ""
     fmt = output.format or "md"
     filename = (output.title or f"watchlist-output-{output_id}").replace("/", "_")
+    if fmt == "mp3":
+        storage_name = output.storage_path
+        if not storage_name:
+            raise HTTPException(status_code=404, detail="output_file_missing")
+        user_id = resolve_user_id_for_request(
+            current_user,
+            as_int=True,
+            error_status=500,
+            invalid_detail="invalid user_id",
+        )
+        try:
+            audio_path = _resolve_output_path_for_user(user_id, storage_name)
+        except HTTPException as exc:
+            raise HTTPException(status_code=400, detail=exc.detail)
+        if not audio_path.exists():
+            raise HTTPException(status_code=404, detail="output_file_missing")
+        headers = {"Content-Disposition": f'attachment; filename="{filename}.mp3"'}
+        return FileResponse(path=audio_path, media_type="audio/mpeg", headers=headers)
     if fmt == "html":
         headers = {"Content-Disposition": f'attachment; filename="{filename}.html"'}
         return HTMLResponse(content=content, headers=headers)
@@ -2430,7 +3052,12 @@ async def get_template(
     )
 
 
-@router.post("/templates", response_model=WatchlistTemplateDetail, summary="Create or update a template")
+@router.post(
+    "/templates",
+    response_model=WatchlistTemplateDetail,
+    summary="Create or update a template",
+    responses={400: {"model": WatchlistTemplateValidationErrorResponse}},
+)
 async def create_template(
     payload: WatchlistTemplateCreateRequest,
     current_user: User = Depends(get_request_user),
@@ -2443,8 +3070,11 @@ async def create_template(
             description=payload.description,
             overwrite=payload.overwrite,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except TemplateValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "template_validation_error", "message": str(exc)},
+        ) from exc
     except template_store.TemplateExistsError:
         raise HTTPException(status_code=409, detail="template_exists")
     return WatchlistTemplateDetail(

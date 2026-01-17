@@ -16,8 +16,7 @@ import sqlite3
 import tempfile
 import shutil
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
-from aioresponses import aioresponses
+from unittest.mock import patch, AsyncMock
 import sys
 import os
 #
@@ -116,6 +115,7 @@ class TestDatabaseMigration:
         shutil.rmtree(temp_dir)
 
     def test_migration_success(self, temp_db):
+
         """Test successful migration to unified schema."""
         # Run migration
         result = migrate_to_unified_evaluations(temp_db)
@@ -152,6 +152,7 @@ class TestDatabaseMigration:
             assert cursor.fetchone() is not None
 
     def test_migration_idempotent(self, temp_db):
+
         """Test migration can be run multiple times safely."""
         # Run migration twice
         result1 = migrate_to_unified_evaluations(temp_db)
@@ -161,6 +162,7 @@ class TestDatabaseMigration:
         assert result2 is True  # Should skip and return True
 
     def test_rollback(self, temp_db):
+
         """Test migration rollback."""
         # Run migration
         migrate_to_unified_evaluations(temp_db)
@@ -603,6 +605,7 @@ class TestAdvancedMetrics:
         return AdvancedEvaluationMetrics(registry)
 
     def test_business_metrics_tracking(self, metrics):
+
         """Test business metrics collection."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
@@ -638,6 +641,7 @@ class TestAdvancedMetrics:
         assert "evaluation_accuracy_score" in output
 
     def test_slo_tracking(self, metrics):
+
         """Test SLI/SLO tracking."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
@@ -666,6 +670,7 @@ class TestAdvancedMetrics:
         assert "evaluation_error_budget_remaining_percentage" in output
 
     def test_rate_limit_metrics(self, metrics):
+
         """Test rate limit metrics."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
@@ -688,6 +693,7 @@ class TestAdvancedMetrics:
         assert "rate_limit_utilization_percentage" in output
 
     def test_webhook_metrics(self, metrics):
+
         """Test webhook metrics."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
@@ -714,6 +720,7 @@ class TestAdvancedMetrics:
         assert "webhook_retries_total" in output
 
     def test_model_performance_metrics(self, metrics):
+
         """Test model performance tracking."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
@@ -792,9 +799,17 @@ class TestIntegration:
                     )
 
             # 4. Send webhook notification (mocked)
-            with aioresponses() as m:
-                m.post("https://example.com/webhook", status=200)
+            class _DummyResp:
+                def __init__(self, status_code: int, text: str = "ok"):
+                    self.status_code = status_code
+                    self.text = text
+                async def aclose(self):
+                    return None
 
+            with patch(
+                "tldw_Server_API.app.core.Evaluations.webhook_manager.afetch",
+                new=AsyncMock(return_value=_DummyResp(200)),
+            ):
                 await webhook_manager.send_webhook(
                     user_id,
                     WebhookEvent.EVALUATION_COMPLETED,

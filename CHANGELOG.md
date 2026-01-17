@@ -8,12 +8,60 @@ and this project adheres to Some kind of Versioning
 ## [Unreleased]
 
 ### Added
+- Jobs Postgres RLS policy setup now supports `JOBS_PG_RLS_DEBUG` for policy output and `JOBS_PG_RLS_ROLE` role overrides.
+- Jobs prune scheduler for retention-based cleanup (env-gated, internal scheduler).
+- `CHAT_COMMANDS_ASYNC_ONLY` flag to force async chat orchestration (`achat`) and block sync `chat(...)`.
+- Chat command concurrency integration test and PERF-gated p50 latency smoke test.
 
 ### Changed
+- Jobs Postgres tests now default to the shared per-test Postgres fixture by wiring `JOBS_DB_URL` and ensuring Jobs tables/counters.
+- Jobs RLS policy setup uses negotiated Postgres DSNs for compatibility across server versions.
+- Sync `chat(...)` now offloads to a worker when invoked from a running event loop (non-streaming).
+
+### Removed
+- Legacy `command_router.dispatch_command` path (now raises with migration hint).
+
+### Fixed
+- Jobs RLS debug output now reports distinct settings fields without clobbering values.
+
+## [0.1.15] - 2026-01-10
+
+### Added
+
+### Changed
+- Jobs adapters now ignore legacy read-backend flags; Chatbooks/Prompt Studio are core Jobs only, embeddings read fallback is disabled.
+- Documentation updated to reflect core Jobs defaults and the current embeddings execution modes.
 
 ### Removed
 
 ### Fixed
+- Legacy AuthNZ rate limiting now bypasses only when an RG policy is attached, and cancellations propagate correctly in rate limit fallbacks.
+- ChaChaNotes shutdown now drains default-character tasks and waits for the executor to prevent SQLite close races (fixes Jobs web UI TTL test segfaults).
+
+
+## [0.1.14] - 2026-01-06
+
+### Added
+- Added tldw-admin react frontend for admin Mgmt of the server. Very much WIP. 
+- Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming, 
+- introduced API key KDF/key_id, 
+- added admin effective-config endpoint/UI,
+
+### Changed
+- Centralized per-user path utilities for storage safety and consistency
+- Migrated ingress rate limiting to Resource Governance (RG), removed SlowAPI decorators
+- Enhanced feedback system with explicit endpoint, schemas, and idempotent merge rules
+- Expanded chat streaming metadata to include system and assistant message IDs
+- Integrated UI feedback across chat and search (rating, source feedback, implicit events)
+- Updated documentation and configuration for feedback system and config management
+- Comprehensive test coverage for feedback, chat metadata, and UI integration
+
+### Removed
+- slowapi usage
+
+
+### Fixed
+- Lots of Bugs
 
 
 ## [0.1.13] - 2025-12-29
@@ -38,20 +86,20 @@ and this project adheres to Some kind of Versioning
 ## [0.1.12] - 2025-12-20
 
 ### Added
-- Full Kanban API (boards, lists, cards, labels, checklists, comments, import/export, bulk ops, card linking) with hybrid search (FTS + vector).
+- Full Kanban API (boards, lists, cards, labels, checklists, comments, import/export, bulk ops, card linking) with hybrid search (FTS vector).
 - Self‑service Organizations & Teams (invites preview/redeem) and org admin flows.
 - Billing & subscriptions (plans, checkout/portal, invoices, usage) and Stripe webhook handling.
 - BYOK (per‑user and shared provider keys) with admin management and testing.
 - TTS providers onboarding and user TTS guide.
 
 ### Changed
-- Adds a full billing/subscription system (plans, limits, Stripe integration, webhooks), BYOK (per‑user and shared provider keys) with admin tooling, invitations/org/team RBAC, a Kanban module with per‑user DB + FTS/vector search, many new endpoints/schemas/repos, DB migrations, audit/auth dependency changes, media visibility, and extensive docs/config updates.
+- Adds a full billing/subscription system (plans, limits, Stripe integration, webhooks), BYOK (per‑user and shared provider keys) with admin tooling, invitations/org/team RBAC, a Kanban module with per‑user DB FTS/vector search, many new endpoints/schemas/repos, DB migrations, audit/auth dependency changes, media visibility, and extensive docs/config updates.
 
 ### Removed
 - A sense of failure.
 
 ### Fixed
-- 500+ bugs
+- 500bugs
 
 ## [0.1.11] - 2025-11-27
 
@@ -70,7 +118,7 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 - ChaChaNotes health snapshot surfaced in `/api/v1/health` to monitor init attempts/failures and cache state.
-- MLX local provider scaffolding (Apple Silicon): adapters + admin lifecycle endpoints, metrics parity, and config keys/tests with non-Apple skips.
+- MLX local provider scaffolding (Apple Silicon): adapters admin lifecycle endpoints, metrics parity, and config keys/tests with non-Apple skips.
 - `LLM_MLX` extra in `pyproject.toml` to install `mlx-lm`/`mlx` for Apple Silicon users.
 - Config-driven llama.cpp handler: `LLMInferenceManager` now constructs `LlamaCppHandler` when `[LlamaCpp]` is enabled in `config.txt` or via env, and `/llamacpp` endpoints are wired to the managed handler.
 - ChaChaNotes schema v10 adds conversation metadata (state with `in-progress` default/backfill, topic labels, clusters) plus backlinks on notes (`conversation_id`, `message_id`) with covering indexes and SQLite/Postgres migrations.
@@ -102,7 +150,7 @@ and this project adheres to Some kind of Versioning
 - ChaChaNotes health snapshot surfaced in `/api/v1/health` to monitor init attempts/failures and cache state.
 
 ### Changed
-- ChaChaNotes dependency now initializes in a dedicated executor with WAL/busy-timeout tuning and background default-character creation; request path reduced to cache lookup + health probe.
+- ChaChaNotes dependency now initializes in a dedicated executor with WAL/busy-timeout tuning and background default-character creation; request path reduced to cache lookup health probe.
 - Startup warms the single-user ChaChaNotes instance to avoid first-request blocking; shutdown now closes cached instances and stops the ChaChaNotes executor to prevent lingering threads.
 
 ### Removed
@@ -118,7 +166,7 @@ and this project adheres to Some kind of Versioning
 - Model discovery for local LLM endpoints
 - Audit event replay mechanism for failed exports
 - Enhanced HTTP error handling for DNS resolution failures
-- SuperSonicTTS support + setup script
+- SuperSonicTTS support setup script
 - STT:
   - `get_stt_config()` helper in `config.py` to centralize resolution of `[STT-Settings]` for all STT modules.
   - Documentation for `speech_to_text(...)` (segment-based) and `transcribe_audio(...)` (waveform-based) as the two canonical STT entrypoints, including guidance on error sentinel handling.
@@ -202,6 +250,8 @@ and this project adheres to Some kind of Versioning
 
 
 ## [0.1.1.0] - 2025-X
+### Breaking
+- Prometheus scraping for MCP metrics now requires authentication with the `system.logs` permission; `MCP_PROMETHEUS_PUBLIC` no longer enables public access, is deprecated, and will be removed. Migration: update Prometheus scrape configs to send a Bearer token (API key or JWT) that includes `system.logs` (see `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md` migration note and scrape_config example).
 ### Features
 - Version 0.1
 ### Fixed

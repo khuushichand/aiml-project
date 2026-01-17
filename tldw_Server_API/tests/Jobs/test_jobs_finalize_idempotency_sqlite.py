@@ -3,6 +3,8 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _set_env(monkeypatch, tmp_path):
+
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
@@ -14,6 +16,8 @@ def _set_env(monkeypatch, tmp_path):
 
 
 def test_complete_idempotent_with_token(monkeypatch, tmp_path):
+
+
     _set_env(monkeypatch, tmp_path)
     jm = JobManager()
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
@@ -31,6 +35,8 @@ def test_complete_idempotent_with_token(monkeypatch, tmp_path):
 
 
 def test_fail_idempotent_with_token(monkeypatch, tmp_path):
+
+
     _set_env(monkeypatch, tmp_path)
     jm = JobManager()
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")

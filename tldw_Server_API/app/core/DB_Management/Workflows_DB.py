@@ -1456,6 +1456,8 @@ class WorkflowsDatabase:
         tokens_input: Optional[int] = None,
         tokens_output: Optional[int] = None,
         cost_usd: Optional[float] = None,
+        *,
+        connection: Any = None,
     ) -> None:
         params = (
             status,
@@ -1483,8 +1485,11 @@ class WorkflowsDatabase:
         """
 
         if self._using_backend():
-            with self.backend.transaction() as conn:  # type: ignore[union-attr]
-                self._execute_backend(query, params, connection=conn)
+            if connection is None:
+                with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                    self._execute_backend(query, params, connection=conn)
+            else:
+                self._execute_backend(query, params, connection=connection)
         else:
             try:
                 self._conn.execute(query, params)
@@ -1548,10 +1553,12 @@ class WorkflowsDatabase:
         event_type: str,
         payload: Optional[Dict[str, Any]] = None,
         step_run_id: Optional[str] = None,
+        *,
+        connection: Any = None,
     ) -> int:
         # Prefer per-run counters when available
         if self._using_backend():
-            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+            def _append_with_connection(conn: Any) -> int:
                 # Increment or initialize per-run counter atomically
                 try:
                     # Use upsert to bump counter and read back the new value
@@ -1594,6 +1601,11 @@ class WorkflowsDatabase:
                     connection=conn,
                 )
                 return next_seq
+
+            if connection is None:
+                with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                    return _append_with_connection(conn)
+            return _append_with_connection(connection)
 
         # SQLite path
         conn = self._acquire_sqlite()
@@ -2309,6 +2321,7 @@ class WorkflowsDatabase:
         step_id: str,
         approved_by: str,
         comment: Optional[str] = None,
+        connection: Any = None,
     ) -> None:
         """Mark step decision rejected and set status to failed for matching rows."""
         params = ("rejected", approved_by, _utcnow_iso(), comment or "", "failed", run_id, step_id)
@@ -2317,8 +2330,11 @@ class WorkflowsDatabase:
             "WHERE run_id = ? AND step_id = ?"
         )
         if self._using_backend():
-            with self.backend.transaction() as conn:  # type: ignore[union-attr]
-                self._execute_backend(query, params, connection=conn)
+            if connection is None:
+                with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                    self._execute_backend(query, params, connection=conn)
+            else:
+                self._execute_backend(query, params, connection=connection)
             return
         cur = self._conn.cursor()
         cur.execute(query, params)

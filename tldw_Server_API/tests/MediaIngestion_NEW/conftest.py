@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
 # =====================================================================
 
 def pytest_configure(config):
+
     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")

@@ -1,16 +1,22 @@
 import pytest
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
+
 
 def _dummy_response(payload):
     class R:
         status_code = 200
+
         def json(self):
             # Echo back the payload to simplify assertions
             return payload
+
         def raise_for_status(self):
             return None
+
         def close(self):
             return None
+
     return R()
 
 
@@ -18,13 +24,16 @@ def _patch_openai(monkeypatch, captured):
     class _Client:
         def __enter__(self):
             return self
+
         def __exit__(self, exc_type, exc, tb):
             return False
+
         def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
             return _dummy_response(json)
+
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
         lambda *args, **kwargs: _Client(),
@@ -35,13 +44,16 @@ def _patch_groq(monkeypatch, captured):
     class _Client:
         def __enter__(self):
             return self
+
         def __exit__(self, exc_type, exc, tb):
             return False
+
         def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
             return _dummy_response(json)
+
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.http_client_factory",
         lambda *args, **kwargs: _Client(),
@@ -49,22 +61,20 @@ def _patch_groq(monkeypatch, captured):
 
 
 def test_openai_tool_choice_gating(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openai
 
     captured = {}
     _patch_openai(monkeypatch, captured)
 
     messages = [{"role": "user", "content": "hi"}]
 
-    # 1) No tools, function tool_choice should not be set
-    chat_with_openai(messages, tool_choice={"type": "function", "function": {"name": "f"}})
-    payload = captured["json"]
-    assert "tool_choice" not in payload
+    # 1) No tools, tool_choice should raise a deterministic 400
+    with pytest.raises(ChatBadRequestError):
+        chat_with_openai(messages, tool_choice={"type": "function", "function": {"name": "f"}})
 
-    # 2) No tools, tool_choice == "none" should be set
-    chat_with_openai(messages, tool_choice="none")
-    payload = captured["json"]
-    assert payload.get("tool_choice") == "none"
+    # 2) No tools, tool_choice == "none" should raise as well
+    with pytest.raises(ChatBadRequestError):
+        chat_with_openai(messages, tool_choice="none")
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
@@ -75,22 +85,20 @@ def test_openai_tool_choice_gating(monkeypatch):
 
 
 def test_groq_tool_choice_gating(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_groq
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_groq
 
     captured = {}
     _patch_groq(monkeypatch, captured)
 
     messages = [{"role": "user", "content": "hi"}]
 
-    # 1) No tools, function tool_choice should not be set
-    chat_with_groq(messages, tool_choice={"type": "function", "function": {"name": "f"}})
-    payload = captured["json"]
-    assert "tool_choice" not in payload
+    # 1) No tools, tool_choice should raise a deterministic 400
+    with pytest.raises(ChatBadRequestError):
+        chat_with_groq(messages, tool_choice={"type": "function", "function": {"name": "f"}})
 
-    # 2) No tools, tool_choice == "none" should be set
-    chat_with_groq(messages, tool_choice="none")
-    payload = captured["json"]
-    assert payload.get("tool_choice") == "none"
+    # 2) No tools, tool_choice == "none" should raise as well
+    with pytest.raises(ChatBadRequestError):
+        chat_with_groq(messages, tool_choice="none")
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]

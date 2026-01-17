@@ -12,8 +12,10 @@ Tests cover:
 - Search functionality
 - Error handling
 """
-import pytest
 from typing import Dict, Any
+import sqlite3
+
+import pytest
 
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
     KanbanDB,
@@ -22,6 +24,46 @@ from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
     ConflictError,
     NotFoundError,
 )
+from tldw_Server_API.app.core.DB_Management import Kanban_DB as kanban_db_module
+
+
+class TestDbPathValidation:
+    """Tests for KanbanDB path validation."""
+
+    def test_rejects_external_db_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+        external_path = tmp_path / "outside" / "Kanban.db"
+
+        with pytest.raises(InputError):
+            KanbanDB(db_path=str(external_path), user_id="1")
+
+    def test_memory_db_initializes_schema(self):
+
+        db = KanbanDB(db_path=":memory:", user_id="mem-user")
+        board = db.create_board(name="Memory Board", client_id="mem-1")
+        fetched = db.get_board(board["id"])
+
+        assert fetched is not None
+        assert fetched["id"] == board["id"]
+        db.close()
+
+    def test_configure_connection_raises_on_pragma_failure(self):
+
+        class _StubConn:
+            def __init__(self, fail_on: str):
+                self.fail_on = fail_on
+                self.row_factory = None
+
+            def execute(self, statement: str):
+                if self.fail_on in statement:
+                    raise sqlite3.OperationalError("bad pragma")
+                return None
+
+        db = KanbanDB.__new__(KanbanDB)
+        conn = _StubConn("PRAGMA foreign_keys=ON")
+
+        with pytest.raises(KanbanDBError, match="foreign_keys=ON"):
+            kanban_db_module.KanbanDB._configure_connection(db, conn, enable_wal=False)
 
 
 # =============================================================================

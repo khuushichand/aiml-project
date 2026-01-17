@@ -30,7 +30,7 @@ Harden slash-command rate limiting and standardize chat orchestration on async p
 
 - [ ] Phase 1: Async-first orchestration
   - [ ] Implement robust sync wrapper: run `achat` via `asyncio.run` when no loop; handle running-loop case safely.
-  - [ ] Route `Chat_Functions.chat` internally through the safe wrapper.
+  - [x] Retire the legacy compatibility shim and route callers through `chat_orchestrator`/`chat_service`.
 
 - [ ] Phase 2: Call-site migration
   - [ ] Replace remaining `dispatch_command` usage in async contexts with `await async_dispatch_command`.

@@ -29,14 +29,22 @@ async def test_upload_and_delete_voice_happy_path(tmp_path, monkeypatch):
     manager = VoiceManager()
 
     # Ensure VoiceManager writes into a temporary user DB base dir
-    from tldw_Server_API.app.core.TTS import voice_manager as vm_mod
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
-    def _fake_settings_get(key: str, default=None):
-        if key == "USER_DB_BASE_DIR":
-            return tmp_path
-        return default
+    voices_root = tmp_path / "voices"
 
-    monkeypatch.setattr(vm_mod.settings, "get", _fake_settings_get, raising=False)
+    def _fake_user_db_base_dir(*, allow_legacy_alias: bool = False):
+        return tmp_path
+
+    def _fake_user_voices_dir(user_id):
+        voices_root.mkdir(parents=True, exist_ok=True)
+        (voices_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (voices_root / "processed").mkdir(parents=True, exist_ok=True)
+        (voices_root / "temp").mkdir(parents=True, exist_ok=True)
+        return voices_root
+
+    monkeypatch.setattr(DatabasePaths, "get_user_db_base_dir", _fake_user_db_base_dir, raising=True)
+    monkeypatch.setattr(DatabasePaths, "get_user_voices_dir", _fake_user_voices_dir, raising=True)
 
     # Patch duration and processing helpers to be deterministic and fast
     async def fake_duration(path: Path) -> float:  # type: ignore[override]
@@ -93,14 +101,22 @@ async def test_upload_voice_short_duration_warning_and_strict_mode(tmp_path, mon
     """
     manager = VoiceManager()
 
-    from tldw_Server_API.app.core.TTS import voice_manager as vm_mod
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
-    def _fake_settings_get(key: str, default=None):
-        if key == "USER_DB_BASE_DIR":
-            return tmp_path
-        return default
+    voices_root = tmp_path / "voices"
 
-    monkeypatch.setattr(vm_mod.settings, "get", _fake_settings_get, raising=False)
+    def _fake_user_db_base_dir(*, allow_legacy_alias: bool = False):
+        return tmp_path
+
+    def _fake_user_voices_dir(user_id):
+        voices_root.mkdir(parents=True, exist_ok=True)
+        (voices_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (voices_root / "processed").mkdir(parents=True, exist_ok=True)
+        (voices_root / "temp").mkdir(parents=True, exist_ok=True)
+        return voices_root
+
+    monkeypatch.setattr(DatabasePaths, "get_user_db_base_dir", _fake_user_db_base_dir, raising=True)
+    monkeypatch.setattr(DatabasePaths, "get_user_voices_dir", _fake_user_voices_dir, raising=True)
 
     # Force a duration that is too short for higgs
     async def fake_short_duration(path: Path) -> float:  # type: ignore[override]

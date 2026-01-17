@@ -104,6 +104,8 @@ async def protected_by_role(
 
 
 def _build_single_user_app() -> FastAPI:
+
+
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     return app

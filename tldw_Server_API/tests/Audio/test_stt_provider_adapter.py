@@ -4,6 +4,8 @@ import pytest
 
 
 def _import_module():
+
+
     # Local import so tests don't break when heavy STT deps are absent.
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter as spa
 
@@ -32,6 +34,7 @@ def test_default_provider_name_falls_back_to_stt_provider(monkeypatch):
     spa = _import_module()
 
     def fake_get_stt_config():
+
         return {
             "default_stt_provider": "parakeet",
             # No default_transcriber key
@@ -48,6 +51,7 @@ def test_get_adapter_unknown_provider_falls_back_to_faster_whisper(monkeypatch):
     spa = _import_module()
 
     def fake_get_stt_config():
+
         return {
             "default_stt_provider": "parakeet",
         }
@@ -94,6 +98,49 @@ def test_resolve_provider_for_model_uses_parser(monkeypatch):
 
 
 @pytest.mark.unit
+def test_resolve_provider_for_model_allows_external_prefix():
+    spa = _import_module()
+
+    registry = spa.SttProviderRegistry()
+    provider, model, variant = registry.resolve_provider_for_model("external:custom")
+    assert provider == "external"
+    assert model == "external:custom"
+    assert variant is None
+
+
+@pytest.mark.unit
+def test_resolve_provider_for_model_uses_config_default(monkeypatch):
+    spa = _import_module()
+
+    def fake_get_stt_config():
+        return {
+            "default_transcriber": "parakeet",
+            "nemo_model_variant": "mlx",
+        }
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+
+    registry = spa.SttProviderRegistry()
+    provider, model, variant = registry.resolve_provider_for_model(None)
+    assert provider == "parakeet"
+    assert model == "parakeet-mlx"
+    assert variant == "mlx"
+
+
+@pytest.mark.unit
+def test_resolve_default_transcription_model_uses_whisper_fallback(monkeypatch):
+    spa = _import_module()
+
+    def fake_get_stt_config():
+        return {"default_transcriber": "faster-whisper"}
+
+    monkeypatch.setattr(spa, "get_stt_config", fake_get_stt_config)
+
+    default_model = spa.resolve_default_transcription_model("whisper-1")
+    assert default_model == "whisper-1"
+
+
+@pytest.mark.unit
 def test_capabilities_exposed_for_known_providers():
     spa = _import_module()
 
@@ -133,7 +180,9 @@ def test_transcribe_batch_whisper_normalizes_artifact(monkeypatch, tmp_path):
         return_language,
         initial_prompt=None,
         task="transcribe",
+        base_dir=None,
     ):
+
         assert str(path) == str(audio_file)
         assert whisper_model == "tiny"
         assert selected_source_lang is None
@@ -184,7 +233,9 @@ def test_transcribe_batch_parakeet_normalizes_artifact(monkeypatch, tmp_path):
         vad_filter,
         diarize,
         return_language,
+        base_dir=None,
     ):
+
         assert str(path) == str(audio_file)
         # Parakeet adapter encodes model name into whisper_model
         assert whisper_model == "parakeet-standard"
@@ -230,6 +281,7 @@ def test_transcribe_batch_canary_normalizes_artifact(monkeypatch, tmp_path):
     )
 
     def fake_transcribe_with_canary(audio_np, sample_rate, language, task="transcribe", target_language=None):
+
         assert sample_rate == 16000
         return "canary transcript"
 
@@ -269,6 +321,7 @@ def test_transcribe_batch_external_normalizes_artifact(monkeypatch, tmp_path):
         sample_rate=None,
         base_dir=None,
     ):
+
         assert str(path) == str(audio_file)
         assert base_dir is None
         return "external transcript"
@@ -313,6 +366,7 @@ def test_transcribe_batch_external_passes_base_dir(monkeypatch, tmp_path):
         sample_rate=None,
         base_dir=None,
     ):
+
         captured["path"] = str(path)
         captured["base_dir"] = base_dir
         return "external ok"

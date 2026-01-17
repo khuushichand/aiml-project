@@ -14,21 +14,31 @@ from typing import Optional, Dict, Any, List, TypedDict
 from urllib.parse import urlparse, urlencode, unquote
 #
 # 3rd-Party Imports
-import requests
-import httpx
 from lxml.etree import _Element
 from lxml.html import document_fromstring
-# Removed: HTTPAdapter/Retry (migrated to httpx)
+# Removed: HTTPAdapter/Retry (migrated to http_client)
 #
 # Local Imports
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Utils.Utils import logging
 from functools import lru_cache
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     build_browser_headers,
     pick_ua_profile,
 )
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.http_client import fetch
 
 
 def _websearch_browser_headers(
@@ -101,7 +111,12 @@ class _SimpleCircuitBreaker:
         if self.fail_count >= self.fail_threshold:
             self.open_until = time.time() + self.reset_after_s
             self.fail_count = 0
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+
+
+def _close_response(resp: Any) -> None:
+    close = getattr(resp, "close", None)
+    if callable(close):
+        close()
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 #
 #
@@ -143,6 +158,62 @@ def _build_messages(
     if user_prompt:
         messages.append({"role": "user", "content": user_prompt})
     return messages
+
+
+def _call_adapter_text(
+    *,
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **extra_kwargs: Any,
+) -> str:
+    provider = normalize_provider(api_endpoint)
+    if not provider:
+        raise ChatConfigurationError(provider=api_endpoint, message="LLM provider is required.")
+    cfg = ensure_app_config(app_config or get_loaded_config())
+    resolved_model = model or resolve_provider_model(provider, cfg)
+    if not resolved_model:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+    system_message, cleaned_messages = split_system_message(messages_payload or [])
+    request: Dict[str, Any] = {
+        "messages": cleaned_messages,
+        "system_message": system_message,
+        "model": resolved_model,
+        "api_key": api_key or resolve_provider_api_key_from_config(provider, cfg),
+        "temperature": temperature,
+        "app_config": cfg,
+    }
+    request.update(extra_kwargs)
+    response = get_adapter_or_raise(provider).chat(request, timeout=timeout)
+    return extract_response_content(response) or str(response)
+
+
+def chat_api_call(
+    *,
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **extra_kwargs: Any,
+) -> str:
+    """Compatibility wrapper for tests and legacy call sites."""
+    return _call_adapter_text(
+        api_endpoint=api_endpoint,
+        messages_payload=messages_payload,
+        temperature=temperature,
+        api_key=api_key,
+        model=model,
+        app_config=app_config,
+        timeout=timeout,
+        **extra_kwargs,
+    )
 #
 #######################################################################################################################
 #
@@ -393,15 +464,11 @@ def analyze_question(question: str, api_endpoint) -> Dict:
                 system_prompt=sub_question_generation_prompt,
                 user_prompt=input_data,
             )
-            response = chat_api_call(
+            response = _call_adapter_text(
                 api_endpoint=api_endpoint,
                 messages_payload=messages_payload,
-                temp=0.7,
-                system_message=None,
-                streaming=False,
-                minp=None,
-                maxp=None,
-                model=None,
+                temperature=0.7,
+                app_config=get_loaded_config(),
             )
             if response:
                 try:
@@ -533,15 +600,9 @@ async def search_result_relevance(
                     lambda: chat_api_call(
                         api_endpoint=api_endpoint,
                         messages_payload=messages_payload,
-                        api_key=None,
-                        temp=0.7,
-                        system_message=None,
-                        streaming=False,
-                        minp=None,
-                        maxp=None,
-                        model=None,
-                        topk=None,
-                        topp=None,
+                        temperature=0.7,
+                        app_config=get_loaded_config(),
+                        timeout=timeouts["llm"],
                     )
                 )
 
@@ -978,15 +1039,8 @@ def aggregate_results(
         returned_response = chat_api_call(
             api_endpoint=api_endpoint,
             messages_payload=messages_payload,
-            api_key=None,
-            temp=0.7,
-            system_message=None,
-            streaming=False,
-            minp=None,
-            maxp=None,
-            model=None,
-            topk=None,
-            topp=None,
+            temperature=0.7,
+            app_config=get_loaded_config(),
         )
         logging.debug("Returned response from LLM for aggregation: %s", returned_response)
         if returned_response:
@@ -1414,6 +1468,10 @@ def parse_bing_results(raw_results: Dict, output_dict: Dict) -> None:
     output_dict.setdefault("processing_error", "Bing provider deprecated")
 
 
+def brave_http_get(url: str, *, headers: Dict[str, str], params: Dict[str, Any]):
+    return fetch(method="GET", url=url, headers=headers, params=params, timeout=15.0)
+
+
 ######################### Brave Search #########################
 #
 # https://brave.com/search/api/
@@ -1486,7 +1544,10 @@ def search_web_brave(
 
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
     response = brave_http_get(search_url, headers=headers, params=filtered_params)
-    return response.json()
+    try:
+        return response.json()
+    finally:
+        _close_response(response)
 
 
 def test_search_brave():
@@ -1575,11 +1636,6 @@ def test_parse_brave_results():
 #
 # https://github.com/deedy5/duckduckgo_search
 # Copied request format/structure from https://github.com/deedy5/duckduckgo_search/blob/main/duckduckgo_search/duckduckgo_search.py
-def create_httpx_client() -> httpx.Client:
-    """Create an httpx client with centralized defaults (egress policy enforced at request-time)."""
-    from tldw_Server_API.app.core.http_client import create_client
-    return create_client(timeout=10.0)
-
 def search_web_duckduckgo(
     keywords: str,
     region: str = "wt-wt",
@@ -1623,9 +1679,11 @@ def search_web_duckduckgo(
 
     headers = _websearch_browser_headers(restrict_encodings_for_requests=True)
     for _ in range(5):
-        with create_httpx_client() as client:
-            response = client.post(ddg_url, data=payload, headers=headers)
-        resp_content = response.content
+        response = fetch(method="POST", url=ddg_url, data=payload, headers=headers, timeout=10.0)
+        try:
+            resp_content = response.content
+        finally:
+            _close_response(response)
         if b"No  results." in resp_content:
             return results
 
@@ -1696,7 +1754,7 @@ def test_search_duckduckgo():
 
     except ValueError as e:
         print(f"Invalid input: {str(e)}")
-    except httpx.RequestError as e:
+    except (NetworkError, RetryExhaustedError) as e:
         print(f"Request error: {str(e)}")
 
 
@@ -1913,7 +1971,7 @@ def search_web_google(
         logging.error(f"Configuration error: {str(ve)}")
         raise
 
-    except httpx.RequestError as re:
+    except (NetworkError, RetryExhaustedError) as re:
         logging.error(f"Error during API request: {str(re)}")
         raise
 
@@ -2169,7 +2227,7 @@ def test_parse_kagi_results():
 #
 # https://searx.space
 # https://searx.github.io/searx/dev/search_api.html
-# (legacy session helper removed; using httpx directly)
+# (legacy session helper removed; using http_client directly)
 
 def search_web_searx(search_query, language='auto', time_range='', safesearch=0, pageno=1, categories='general', searx_url=None):
     """
@@ -2227,19 +2285,19 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         delay = random.uniform(2, 5)  # Random delay between 2 and 5 seconds
         time.sleep(delay)
 
-        # Use centralized http client for request
-        from tldw_Server_API.app.core.http_client import fetch
         response = fetch(method="GET", url=search_url, headers=headers, timeout=15.0)
-
-        # Check if the response is JSON
-        content_type = response.headers.get('Content-Type', '')
-        if 'application/json' in content_type:
-            search_data = response.json()
-        else:
-            # If not JSON, assume it's HTML and parse it
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(response.text, 'html.parser')
-            search_data = parse_html_search_results_generic(soup)
+        try:
+            # Check if the response is JSON
+            content_type = response.headers.get('Content-Type', '')
+            if 'application/json' in content_type:
+                search_data = response.json()
+            else:
+                # If not JSON, assume it's HTML and parse it
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(response.text, 'html.parser')
+                search_data = parse_html_search_results_generic(soup)
+        finally:
+            _close_response(response)
 
         # Process results
         if isinstance(search_data, dict):
@@ -2265,7 +2323,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
 
         return {"results": data}
 
-    except httpx.RequestError as e:
+    except (NetworkError, RetryExhaustedError) as e:
         logging.error(f"Error searching for content: {str(e)}")
         return {"error": f"There was an error searching for content. {str(e)}"}
 

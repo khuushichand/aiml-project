@@ -198,6 +198,13 @@ class UnifiedRAGRequest(BaseModel):
         description="Enable spell checking",
         example=False
     )
+    max_query_variations: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum number of query expansion variations to retrieve",
+        example=3,
+    )
 
     # ========== CACHING ==========
     enable_cache: bool = Field(
@@ -875,6 +882,39 @@ class UnifiedRAGRequest(BaseModel):
         example=10,
     )
 
+    # ========== QUERY DECOMPOSITION & MULTI-HOP ==========
+    enable_query_decomposition: bool = Field(
+        default=False,
+        description="Enable guided decomposition into sub-queries for complex questions",
+        example=False,
+    )
+    max_subqueries: int = Field(
+        default=4,
+        ge=1,
+        le=10,
+        description="Maximum number of sub-queries to generate (including the primary query)",
+        example=4,
+    )
+    subquery_time_budget_sec: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Soft time budget for decomposition and per-subquery retrieval",
+        example=4.0,
+    )
+    subquery_doc_budget: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Maximum docs per sub-query sent to synthesis",
+        example=8,
+    )
+    subquery_max_concurrency: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum concurrent subquery retrievals",
+        example=3,
+    )
+
     # ========== FEEDBACK ==========
     collect_feedback: bool = Field(
         default=False,
@@ -1268,6 +1308,7 @@ class UnifiedBatchRequest(BaseModel):
     expand_query: bool = Field(default=False)
     expansion_strategies: Optional[List[str]] = Field(default=None)
     spell_check: bool = Field(default=False)
+    max_query_variations: int = Field(default=3, ge=0, le=10)
 
     # Caching
     enable_cache: bool = Field(default=True)
@@ -1359,6 +1400,13 @@ class UnifiedBatchRequest(BaseModel):
     adaptive_rerun_bypass_cache: bool = Field(default=False)
     adaptive_rerun_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
     adaptive_rerun_doc_budget: Optional[int] = Field(default=None, ge=1)
+
+    # Query Decomposition & Multi-hop
+    enable_query_decomposition: bool = Field(default=False)
+    max_subqueries: int = Field(default=4, ge=1, le=10)
+    subquery_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
+    subquery_doc_budget: Optional[int] = Field(default=None, ge=1)
+    subquery_max_concurrency: int = Field(default=3, ge=1, le=10)
 
     # Feedback
     collect_feedback: bool = Field(default=False)
@@ -1468,13 +1516,47 @@ class UnifiedBatchResponse(BaseModel):
 
 
 class ImplicitFeedbackEvent(BaseModel):
-    """Schema for implicit feedback signals from WebUI (click/expand/copy)."""
-    event_type: Literal["click", "expand", "copy"] = Field(description="Type of implicit event")
+    """Schema for implicit feedback signals from WebUI (click/expand/copy/dwell/citation)."""
+    event_type: Literal["click", "expand", "copy", "dwell_time", "citation_used"] = Field(
+        description="Type of implicit event"
+    )
     query: Optional[str] = Field(default=None, description="Original query text")
     feedback_id: Optional[str] = Field(default=None, description="Optional feedback correlation id")
     doc_id: Optional[str] = Field(default=None, description="Document/chunk id involved")
+    chunk_ids: Optional[List[str]] = Field(default=None, description="Optional chunk ids involved")
     rank: Optional[int] = Field(default=None, description="Rank position of the doc in the displayed list")
-    impression_list: Optional[List[str]] = Field(default=None, description="Ordered doc ids visible when the event happened")
+    impression_list: Optional[List[str]] = Field(
+        default=None,
+        description="Ordered doc ids visible when the event happened"
+    )
     corpus: Optional[str] = Field(default=None, description="Corpus/namespace if set in the request")
     user_id: Optional[str] = Field(default=None, description="User id if available")
     session_id: Optional[str] = Field(default=None, description="Browser session id if available")
+    conversation_id: Optional[str] = Field(default=None, description="Conversation id if available")
+    message_id: Optional[str] = Field(default=None, description="Message id if available")
+    dwell_ms: Optional[int] = Field(default=None, ge=0, description="Dwell time in milliseconds")
+
+    if model_validator is not None:
+        @model_validator(mode="before")
+        def _validate_dwell_ms(cls, values):  # type: ignore
+            if isinstance(values, dict) and values.get("event_type") == "dwell_time":
+                dwell_ms = values.get("dwell_ms")
+                if dwell_ms is None:
+                    raise ValueError("dwell_ms is required when event_type='dwell_time'")
+            return values
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "event_type": "dwell_time",
+            "query": "how to reset auth",
+            "doc_id": "doc_1",
+            "chunk_ids": ["chunk_9"],
+            "rank": 2,
+            "impression_list": ["doc_1", "doc_2", "doc_3"],
+            "corpus": "media_db",
+            "session_id": "sess_abc123",
+            "conversation_id": "C_...",
+            "message_id": "M_...",
+            "dwell_ms": 3000,
+        }
+    })

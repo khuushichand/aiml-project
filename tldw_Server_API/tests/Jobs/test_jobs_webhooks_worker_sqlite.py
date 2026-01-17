@@ -7,6 +7,8 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _env(monkeypatch, tmp_path):
+
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
@@ -47,38 +49,23 @@ async def test_jobs_webhooks_worker_emits_signed_event_sqlite(monkeypatch, tmp_p
     sent = {"count": 0, "headers": None, "body": None}
 
     class _Resp:
-        def __init__(self):
-            self.status_code = 200
-            self.text = "ok"
-
-    class _StubClient:
-        def __init__(self, *a, **k):
-            pass
-        async def __aenter__(self):
-            return self
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-        async def post(self, url, headers=None, content=None):
-            sent["count"] += 1
-            sent["headers"] = headers
-            sent["body"] = content
-            return _Resp()
+        status_code = 200
+        text = "ok"
+        async def aclose(self):
+            return None
 
     # Fix timestamp used for signature
     import time as _time
     monkeypatch.setattr(_time, "time", lambda: 1700000000)
 
-    # Monkeypatch async http client factory to return our stub client
+    # Monkeypatch async fetch to return our stub response
     import tldw_Server_API.app.services.jobs_webhooks_service as svc
-    import tldw_Server_API.app.core.http_client as http_client_mod
-    class _AsyncClientWrapper:
-        def __init__(self, *a, **k):
-            self._c = _StubClient()
-        async def __aenter__(self):
-            return self._c
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-    monkeypatch.setattr(http_client_mod, "create_async_client", lambda *a, **k: _AsyncClientWrapper())
+    async def _fake_afetch(*, method, url, headers=None, data=None, **kwargs):
+        sent["count"] += 1
+        sent["headers"] = headers
+        sent["body"] = data
+        return _Resp()
+    monkeypatch.setattr(svc, "afetch", _fake_afetch)
 
     stop = asyncio.Event()
     # Run worker briefly
@@ -136,32 +123,19 @@ async def test_webhooks_cursor_persist_and_resume_sqlite(monkeypatch, tmp_path):
     sent = {"ids": []}
 
     class _Resp:
-        def __init__(self):
-            self.status_code = 200
-            self.text = "ok"
-
-    class _StubClient:
-        async def __aenter__(self):
-            return self
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-        async def post(self, url, headers=None, content=None):
-            try:
-                sent["ids"].append(int(headers.get("X-Jobs-Event-Id")))
-            except Exception:
-                pass
-            return _Resp()
+        status_code = 200
+        text = "ok"
+        async def aclose(self):
+            return None
 
     import tldw_Server_API.app.services.jobs_webhooks_service as svc
-    import tldw_Server_API.app.core.http_client as http_client_mod
-    class _AsyncClientWrapper:
-        def __init__(self, *a, **k):
+    async def _fake_afetch(*, method, url, headers=None, data=None, **kwargs):
+        try:
+            sent["ids"].append(int(headers.get("X-Jobs-Event-Id")))
+        except Exception:
             pass
-        async def __aenter__(self):
-            return _StubClient()
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-    monkeypatch.setattr(http_client_mod, "create_async_client", lambda *a, **k: _AsyncClientWrapper())
+        return _Resp()
+    monkeypatch.setattr(svc, "afetch", _fake_afetch)
 
     stop = asyncio.Event()
     task = asyncio.create_task(svc.run_jobs_webhooks_worker(stop))

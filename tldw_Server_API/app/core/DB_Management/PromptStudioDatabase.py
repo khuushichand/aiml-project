@@ -172,7 +172,11 @@ class PromptStudioBackendCursorAdapter:
         self.lastrowid = result.lastrowid
         self.description = result.description or []
         self._columns: Tuple[str, ...] = tuple(
-            desc[0] if isinstance(desc, (list, tuple)) and desc else desc
+            (
+                desc[0]
+                if isinstance(desc, (list, tuple)) and desc
+                else getattr(desc, "name", desc)
+            )
             for desc in (self.description or [])
         )
 
@@ -375,6 +379,7 @@ class BackendPromptStudioDatabaseBase:
         self.db_path_str = str(self.db_path)
         self._local = threading.local()
         self._write_lock = threading.RLock()
+        self._sync_log_available: Optional[bool] = None
 
         class _ConnCloseProxy:
             def __init__(self, outer: 'BackendPromptStudioDatabaseBase'):
@@ -812,10 +817,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def _idem_record(self, entity_type: str, key: str, entity_id: int, user_id: Optional[str]) -> None:
         try:
             # INSERT OR IGNORE is translated to ON CONFLICT DO NOTHING for Postgres by the query adapter
-            self._execute(
-                "INSERT OR IGNORE INTO prompt_studio_idempotency (entity_type, idempotency_key, entity_id, user_id) VALUES (?, ?, ?, ?)",
-                (entity_type, key, entity_id, user_id),
-            )
+            with self.transaction() as conn:
+                self._execute(
+                    "INSERT OR IGNORE INTO prompt_studio_idempotency (entity_type, idempotency_key, entity_id, user_id) VALUES (?, ?, ?, ?)",
+                    (entity_type, key, entity_id, user_id),
+                    connection=conn,
+                )
         except BackendDatabaseError:
             pass
 
@@ -936,9 +943,23 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: Dict[str, Any]) -> None:
         if not entity or not entity_uuid or not operation:
             return
+        if self._sync_log_available is False:
+            return
 
         try:
             with self.transaction() as conn:
+                if self._sync_log_available is None:
+                    try:
+                        self._sync_log_available = self.backend.table_exists(
+                            "sync_log",
+                            connection=conn.raw_connection,
+                        )
+                    except Exception as exc:
+                        logger.debug("Prompt Studio sync_log availability check failed: %s", exc)
+                        self._sync_log_available = False
+                        return
+                if not self._sync_log_available:
+                    return
                 cursor = self._cursor_exec(
                     conn,
                     """
@@ -958,6 +979,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             err_str = str(e).lower()
             if "no such table" in err_str or "does not exist" in err_str or "relation" in err_str:
                 # Table doesn't exist - expected in some deployments
+                self._sync_log_available = False
                 logger.debug(
                     "Prompt Studio sync_log table not available; skipping event for %s/%s",
                     entity,
@@ -2756,130 +2778,6 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         pass
                 return success
 
-    def get_job_stats(self) -> Dict[str, Any]:
-        stats: Dict[str, Any] = {}
-        try:
-            cursor = self._execute(
-                """
-                SELECT status, COUNT(*) AS count
-                FROM prompt_studio_job_queue
-                GROUP BY status
-                """,
-            )
-            stats["by_status"] = {row[0]: row[1] for row in cursor.fetchall()}
-
-            cursor = self._execute(
-                """
-                SELECT job_type, COUNT(*) AS count
-                FROM prompt_studio_job_queue
-                GROUP BY job_type
-                """,
-            )
-            stats["by_type"] = {row[0]: row[1] for row in cursor.fetchall()}
-
-            cursor = self._execute(
-                """
-                SELECT AVG(
-                    CAST((EXTRACT(EPOCH FROM (completed_at - started_at))) AS BIGINT)
-                )
-                FROM prompt_studio_job_queue
-                WHERE status = 'completed'
-                  AND started_at IS NOT NULL
-                  AND completed_at IS NOT NULL
-                """,
-            )
-            avg_time_row = cursor.fetchone()
-            stats["avg_processing_time_seconds"] = (
-                avg_time_row[0] if avg_time_row and avg_time_row[0] is not None else 0
-            )
-
-            cursor = self._execute(
-                """
-                SELECT
-                    COUNT(CASE WHEN status = 'completed' THEN 1 END) * 100.0 /
-                    NULLIF(COUNT(CASE WHEN status IN ('completed', 'failed') THEN 1 END), 0)
-                FROM prompt_studio_job_queue
-                WHERE status IN ('completed', 'failed')
-                """,
-            )
-            success_row = cursor.fetchone()
-            stats["success_rate"] = (
-                float(success_row[0]) if success_row and success_row[0] is not None else 0.0
-            )
-
-            stats.setdefault("by_status", {})
-            stats["queue_depth"] = stats["by_status"].get("queued", 0)
-            stats["processing"] = stats["by_status"].get("processing", 0)
-            return stats
-        except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to compute job statistics: {exc}") from exc
-
-    def count_jobs(
-        self,
-        *,
-        status: Optional[str] = None,
-        job_type: Optional[str] = None,
-    ) -> int:
-        """Return count of jobs filtered by optional status and job_type."""
-        try:
-            with self.transaction() as conn:
-                cursor = conn.cursor()
-                query = "SELECT COUNT(*) AS c FROM prompt_studio_job_queue WHERE 1=1"
-                params: List[Any] = []
-                if status:
-                    query += " AND status = ?"
-                    params.append(status)
-                if job_type:
-                    query += " AND job_type = ?"
-                    params.append(job_type)
-                cursor.execute(query, params)
-                row = cursor.fetchone()
-                return int(row[0]) if row else 0
-        except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to count jobs: {exc}") from exc
-
-    def get_lease_stats(self, warn_seconds: int = 30) -> Dict[str, int]:
-        """Return basic lease health: active, expiring soon, and stale processing counts."""
-        try:
-            warn_seconds = max(1, min(3600, int(warn_seconds)))
-        except Exception:
-            warn_seconds = 30
-        try:
-            result: Dict[str, int] = {}
-            # Active leases: processing with future leased_until
-            cursor = self._execute(
-                """
-                SELECT COUNT(*) FROM prompt_studio_job_queue
-                WHERE status = 'processing' AND leased_until IS NOT NULL AND leased_until > NOW()
-                """,
-            )
-            result["active"] = int(cursor.fetchone()[0])
-
-            # Expiring soon: processing with lease expiring within warn_seconds
-            cursor = self._execute(
-                f"""
-                SELECT COUNT(*) FROM prompt_studio_job_queue
-                WHERE status = 'processing'
-                  AND leased_until IS NOT NULL
-                  AND leased_until > NOW()
-                  AND leased_until <= NOW() + INTERVAL '{warn_seconds} seconds'
-                """,
-            )
-            result["expiring_soon"] = int(cursor.fetchone()[0])
-
-            # Stale processing: processing with missing/expired lease
-            cursor = self._execute(
-                """
-                SELECT COUNT(*) FROM prompt_studio_job_queue
-                WHERE status = 'processing'
-                  AND (leased_until IS NULL OR leased_until < NOW())
-                """,
-            )
-            result["stale_processing"] = int(cursor.fetchone()[0])
-            return result
-        except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to compute lease stats: {exc}") from exc
-
     def cleanup_jobs(self, older_than_days: int = 30) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
         try:
@@ -3227,7 +3125,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         params: List[Any] = [project_id]
 
         if not include_deleted:
-            conditions.append("deleted = 0")
+            conditions.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
 
         if signature_id is not None:
             conditions.append("signature_id = ?")
@@ -3313,7 +3211,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         where_clauses = ["id = ?"]
         params: List[Any] = [test_case_id]
         if not include_deleted:
-            where_clauses.append("deleted = 0")
+            where_clauses.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
 
         query = (
             "SELECT * FROM prompt_studio_test_cases WHERE "
@@ -3429,10 +3327,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")
         params.append(test_case_id)
 
+        deleted_clause = "deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0"
         update_sql = f"""
             UPDATE prompt_studio_test_cases
             SET {', '.join(set_clauses)}
-            WHERE id = ? AND deleted = 0
+            WHERE id = ? AND {deleted_clause}
             RETURNING *
         """
 
@@ -3449,6 +3348,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def delete_test_case(self, test_case_id: int, *, hard_delete: bool = False) -> bool:
         try:
             with self.transaction() as conn:
+                deleted_clause = "deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0"
+                deleted_value = "TRUE" if self.backend_type == BackendType.POSTGRESQL else "1"
                 if hard_delete:
                     cursor = self._cursor_exec(
                         conn,
@@ -3458,11 +3359,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 else:
                     cursor = self._cursor_exec(
                         conn,
-                        """
+                        f"""
                         UPDATE prompt_studio_test_cases
-                        SET deleted = 1,
+                        SET deleted = {deleted_value},
                             deleted_at = CURRENT_TIMESTAMP
-                        WHERE id = ? AND deleted = 0
+                        WHERE id = ? AND {deleted_clause}
                         RETURNING id
                         """,
                         (test_case_id,),
@@ -3746,6 +3647,28 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             cursor.execute(query, params)
         else:
             cursor.execute(query)
+        return cursor
+
+    def _execute(
+        self,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict, Any]] = None,
+        *,
+        connection: Optional[sqlite3.Connection] = None,
+    ):
+        conn = connection or self.get_connection()
+        return self._cursor_exec(conn, query, params)
+
+    def _executemany(
+        self,
+        query: str,
+        params_list: List[Union[Tuple, List, Dict, Any]],
+        *,
+        connection: Optional[sqlite3.Connection] = None,
+    ):
+        conn = connection or self.get_connection()
+        cursor = conn.cursor()
+        cursor.executemany(query, params_list)
         return cursor
 
     def _apply_prompt_studio_migrations(self, conn: sqlite3.Connection):
@@ -5966,132 +5889,6 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         return False
 
-    def get_job_stats(self) -> Dict[str, Any]:
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            stats: Dict[str, Any] = {}
-
-            cursor.execute(
-                """
-                SELECT status, COUNT(*) AS count
-                FROM prompt_studio_job_queue
-                GROUP BY status
-                """,
-            )
-            stats["by_status"] = {row[0]: row[1] for row in cursor.fetchall()}
-
-            cursor.execute(
-                """
-                SELECT job_type, COUNT(*) AS count
-                FROM prompt_studio_job_queue
-                GROUP BY job_type
-                """,
-            )
-            stats["by_type"] = {row[0]: row[1] for row in cursor.fetchall()}
-
-            cursor.execute(
-                """
-                SELECT AVG(
-                    CAST((julianday(completed_at) - julianday(started_at)) * 24 * 60 * 60 AS INTEGER)
-                )
-                FROM prompt_studio_job_queue
-                WHERE status = 'completed'
-                  AND started_at IS NOT NULL
-                  AND completed_at IS NOT NULL
-                """,
-            )
-            avg_time = cursor.fetchone()[0]
-            stats["avg_processing_time_seconds"] = avg_time if avg_time else 0
-
-            cursor.execute(
-                """
-                SELECT
-                    COUNT(CASE WHEN status = 'completed' THEN 1 END) * 100.0 /
-                    COUNT(CASE WHEN status IN ('completed', 'failed') THEN 1 END)
-                FROM prompt_studio_job_queue
-                WHERE status IN ('completed', 'failed')
-                """,
-            )
-            success_rate = cursor.fetchone()[0]
-            stats["success_rate"] = success_rate if success_rate else 0
-
-            stats.setdefault("by_status", {})
-            stats["queue_depth"] = stats["by_status"].get("queued", 0)
-            stats["processing"] = stats["by_status"].get("processing", 0)
-            return stats
-        except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to compute job stats: {exc}") from exc
-
-    def count_jobs(
-        self,
-        *,
-        status: Optional[str] = None,
-        job_type: Optional[str] = None,
-    ) -> int:
-        """Return count of jobs filtered by optional status and job_type."""
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            query = "SELECT COUNT(*) FROM prompt_studio_job_queue WHERE 1=1"
-            params: List[Any] = []
-            if status:
-                query += " AND status = ?"
-                params.append(status)
-            if job_type:
-                query += " AND job_type = ?"
-                params.append(job_type)
-            cursor.execute(query, params)
-            row = cursor.fetchone()
-            return int(row[0]) if row else 0
-        except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to count jobs: {exc}") from exc
-
-    def get_lease_stats(self, warn_seconds: int = 30) -> Dict[str, int]:
-        """Return basic lease health: active, expiring soon, and stale processing counts."""
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            try:
-                warn_seconds = max(1, min(3600, int(warn_seconds)))
-            except Exception:
-                warn_seconds = 30
-
-            # Active leases: processing with future leased_until
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM prompt_studio_job_queue
-                WHERE status = 'processing' AND leased_until IS NOT NULL AND leased_until > CURRENT_TIMESTAMP
-                """,
-            )
-            active = int(cursor.fetchone()[0])
-
-            # Expiring soon within warn_seconds
-            cursor.execute(
-                f"""
-                SELECT COUNT(*) FROM prompt_studio_job_queue
-                WHERE status = 'processing'
-                  AND leased_until IS NOT NULL
-                  AND leased_until > CURRENT_TIMESTAMP
-                  AND leased_until <= DATETIME('now', '+{warn_seconds} seconds')
-                """,
-            )
-            expiring_soon = int(cursor.fetchone()[0])
-
-            # Stale: missing or expired lease
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM prompt_studio_job_queue
-                WHERE status = 'processing'
-                  AND (leased_until IS NULL OR leased_until < CURRENT_TIMESTAMP)
-                """,
-            )
-            stale = int(cursor.fetchone()[0])
-
-            return {"active": active, "expiring_soon": expiring_soon, "stale_processing": stale}
-        except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to compute lease stats: {exc}") from exc
-
     def cleanup_jobs(self, older_than_days: int = 30) -> int:
         try:
             conn = self.get_connection()
@@ -7047,9 +6844,6 @@ class PromptStudioDatabase:
                 return False
         return False
 
-    def get_job_stats(self) -> Dict[str, Any]:
-        return self._impl.get_job_stats()
-
     def cleanup_jobs(self, older_than_days: int = 30) -> int:
         return self._impl.cleanup_jobs(older_than_days)
 
@@ -7058,18 +6852,6 @@ class PromptStudioDatabase:
 
     def list_jobs_for_entity(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
         return self._impl.list_jobs_for_entity(*args, **kwargs)
-    def get_lease_stats(self, warn_seconds: int = 30) -> Dict[str, int]:
-        return self._impl.get_lease_stats(warn_seconds)
-
-    # Job counters --------------------------------------------------------
-    def count_jobs(
-        self,
-        *,
-        status: Optional[str] = None,
-        job_type: Optional[str] = None,
-    ) -> int:
-        return self._impl.count_jobs(status=status, job_type=job_type)
-
     # Test case delegation -------------------------------------------------
 
     def create_test_case(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:

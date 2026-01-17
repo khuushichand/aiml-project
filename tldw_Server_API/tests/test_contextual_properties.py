@@ -251,6 +251,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
     """
 
     def __init__(self):
+
         super().__init__()
         self.context = None
         self.original_doc_count = 0
@@ -370,6 +371,8 @@ def test_configuration_combinations(enable_contextual, llm_model, context_window
 
     if context_window is not None:
         assert 100 <= context_window <= 2000
+
+
 @dataclass
 class SimpleContext:
     query: str

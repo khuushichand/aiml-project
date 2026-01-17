@@ -5,6 +5,8 @@ from tldw_Server_API.app.core.Jobs.pg_util import normalize_pg_dsn, negotiate_pg
 
 
 def test_normalize_pg_dsn_encodes_options_spaces():
+
+
     dsn = "postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_content"
     out = normalize_pg_dsn(dsn)
     assert out.startswith(dsn)
@@ -18,7 +20,9 @@ def test_normalize_pg_dsn_encodes_options_spaces():
 
 
 def test_negotiate_pg_dsn_downgrades_on_unrecognized_parameter(monkeypatch):
-    # Inject a fake psycopg module that fails when idle_in_transaction_session_timeout is present
+
+
+     # Inject a fake psycopg module that fails when idle_in_transaction_session_timeout is present
     fake_psycopg = types.SimpleNamespace()
 
     calls = {"dsns": []}
@@ -27,6 +31,7 @@ def test_negotiate_pg_dsn_downgrades_on_unrecognized_parameter(monkeypatch):
         pass
 
     def fake_connect(dsn):
+
         calls["dsns"].append(dsn)
         q = dsn.split("?", 1)[-1]
         if "options=" in q and "idle_in_transaction_session_timeout" in q:
@@ -37,12 +42,16 @@ def test_negotiate_pg_dsn_downgrades_on_unrecognized_parameter(monkeypatch):
                 return self
 
             def __exit__(self, exc_type, exc, tb):
+
                 return False
 
         return _Conn()
 
     fake_psycopg.connect = fake_connect  # type: ignore
     monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+    # Clear cached negotiation results to avoid cross-test leakage
+    from tldw_Server_API.app.core.Jobs import pg_util as _pg_util
+    _pg_util._NEGOTIATED_OPTIONS_CACHE.clear()
 
     base = "postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_content"
     out = negotiate_pg_dsn(base)

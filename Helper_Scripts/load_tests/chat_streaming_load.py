@@ -41,9 +41,53 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
+
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
+
+from common.repo_utils import configure_local_egress, ensure_repo_root
+
+
+def _status_from_exc(exc: Exception) -> int:
+    """Extract an HTTP status code from an exception.
+
+    Args:
+        exc: Exception to inspect.
+
+    Returns:
+        HTTP status code if found, otherwise 0. Checks exc.response.status_code, then scans the message for a 3-digit token.
+    """
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            return int(getattr(resp, "status_code", 0) or 0)
+        except Exception:
+            pass
+    msg = str(exc)
+    for token in msg.split():
+        if token.isdigit() and len(token) == 3:
+            try:
+                return int(token)
+            except Exception:
+                continue
+    return 0
+
+
+ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception as e:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1) from e
 
 
 def _now_ms() -> float:
@@ -111,7 +155,7 @@ def _build_payload(model: str, prompt_bytes: int) -> Dict[str, Any]:
 
 
 async def _run_single_stream(
-    client: httpx.AsyncClient,
+    client: Any,
     url: str,
     headers: Dict[str, str],
     payload: Dict[str, Any],
@@ -125,58 +169,39 @@ async def _run_single_stream(
     try:
         stream_headers = dict(headers)
         stream_headers.setdefault("Accept", "text/event-stream")
-        async with client.stream("POST", url, headers=stream_headers, json=payload, timeout=timeout_s) as resp:
-            status = resp.status_code
-            if status >= 500 or status == 429:
-                # Read and truncate body for error context
-                text = (await resp.aread()).decode(errors="ignore")
-                latency_ms = _now_ms() - t0
-                return StreamResult(
-                    ok=False,
-                    status=status,
-                    latency_ms=latency_ms,
-                    ttft_ms=ttft_ms,
-                    chunk_latencies_ms=chunk_latencies,
-                    error=text[:200],
-                )
+        async for event in http_client.astream_sse(
+            method="POST",
+            url=url,
+            headers=stream_headers,
+            json=payload,
+            timeout=timeout_s,
+            client=client,
+        ):
+            data = (event.data or "").strip()
+            if not data:
+                continue
+            now = _now_ms()
+            if data.lower() == "[done]":
+                break
+            if ttft_ms is None:
+                ttft_ms = now - t0
+            if last_chunk_ts is not None:
+                chunk_latencies.append(now - last_chunk_ts)
+            last_chunk_ts = now
 
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                s = str(line).strip()
-                if not s or s.startswith(":"):
-                    # Skip empty lines and comment/heartbeat frames
-                    continue
-                if not s.startswith("data:"):
-                    # Ignore non-data SSE fields
-                    continue
-
-                now = _now_ms()
-                data = s[len("data:") :].strip()
-
-                if data.lower() == "[done]":
-                    break
-
-                if ttft_ms is None:
-                    ttft_ms = now - t0
-
-                if last_chunk_ts is not None:
-                    chunk_latencies.append(now - last_chunk_ts)
-                last_chunk_ts = now
-
-            latency_ms = _now_ms() - t0
-            return StreamResult(
-                ok=True,
-                status=status,
-                latency_ms=latency_ms,
-                ttft_ms=ttft_ms,
-                chunk_latencies_ms=chunk_latencies,
-            )
+        latency_ms = _now_ms() - t0
+        return StreamResult(
+            ok=True,
+            status=200,
+            latency_ms=latency_ms,
+            ttft_ms=ttft_ms,
+            chunk_latencies_ms=chunk_latencies,
+        )
     except Exception as exc:
         latency_ms = _now_ms() - t0
         return StreamResult(
             ok=False,
-            status=0,
+            status=_status_from_exc(exc),
             latency_ms=latency_ms,
             ttft_ms=ttft_ms,
             chunk_latencies_ms=chunk_latencies,
@@ -200,11 +225,17 @@ async def _run_load(
     headers = _build_headers(api_key, bearer)
     payload = _build_payload(model, prompt_bytes)
 
-    limits = httpx.Limits(
-        max_keepalive_connections=max(concurrency, 1),
-        max_connections=max(concurrency * 2, 10),
-    )
-    client = httpx.AsyncClient(http2=http2, limits=limits)
+    limits = None
+    hx = getattr(http_client, "httpx", None)
+    if hx is not None:
+        try:
+            limits = hx.Limits(
+                max_keepalive_connections=max(concurrency, 1),
+                max_connections=max(concurrency * 2, 10),
+            )
+        except Exception:
+            limits = None
+    client = http_client.create_async_client(http2=http2, limits=limits)
 
     results: List[StreamResult] = []
     results_lock = asyncio.Lock()
@@ -403,6 +434,8 @@ def _to_serializable(metrics: AggregateMetrics) -> Dict[str, Any]:
 async def _main_async(args: argparse.Namespace) -> int:
     if not args.api_key and not args.bearer:
         print("Warning: no API key or bearer token provided; requests may fail if auth is enabled.", file=sys.stderr)
+
+    configure_local_egress(args.base_url)
 
     print("Chat streaming load harness")
     print(f"  Base URL           : {args.base_url}")

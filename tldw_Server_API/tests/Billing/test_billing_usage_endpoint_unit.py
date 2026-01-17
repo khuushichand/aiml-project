@@ -3,7 +3,7 @@ Unit tests for the billing usage endpoint wiring.
 
 These tests verify that:
 - The /billing/usage handler maps UsageSummary fields to the
-  current_usage dict passed into SubscriptionService.check_usage.
+    current_usage dict passed into SubscriptionService.check_usage.
 """
 from __future__ import annotations
 

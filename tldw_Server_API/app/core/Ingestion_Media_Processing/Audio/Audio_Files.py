@@ -33,7 +33,6 @@ from typing import Optional, List, Dict, Any, Callable
 from urllib.parse import urlparse
 #
 # External Imports
-import requests
 import yt_dlp
 #
 # Local Imports
@@ -122,7 +121,19 @@ def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
         - 'message': Human-readable status message
         - 'model': The model name
     """
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import check_model_exists
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        check_model_exists,
+        validate_whisper_model_identifier,
+    )
+
+    try:
+        model_name = validate_whisper_model_identifier(model_name)
+    except ValueError as exc:
+        return {
+            'available': False,
+            'message': str(exc),
+            'model': model_name,
+        }
 
     if check_model_exists(model_name):
         return {
@@ -186,6 +197,19 @@ def _validate_outbound_url(url: str) -> Optional[str]:
         return result.reason or "URL blocked by security policy"
     return None
 
+
+def _unique_path(target_path: Path) -> Path:
+    if not target_path.exists():
+        return target_path
+    stem = target_path.stem
+    suffix = target_path.suffix
+    for counter in range(1, 1000):
+        candidate = target_path.with_name(f"{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+    unique_suffix = uuid.uuid4().hex[:UUID_LENGTH]
+    return target_path.with_name(f"{stem}_{unique_suffix}{suffix}")
+
 def download_audio_file(
     url: str,
     target_temp_dir: str,
@@ -208,19 +232,16 @@ def download_audio_file(
         cookies: A JSON string or a dictionary of cookies to use if `use_cookies` is True.
                  Defaults to None.
         downloader: Optional override for streaming download function (test injection).
-                    If provided, it should be a callable compatible with requests.get,
-                    returning an object exposing .headers, .iter_content(), and
-                    .raise_for_status(). When not provided, the function uses the
-                    centralized http_client downloader in production; if a monkeypatch
-                    is detected on requests.get, it uses requests.get streaming to allow
-                    unit tests to simulate network responses.
+                    If provided, it should be a callable that returns an object exposing
+                    .headers, .iter_content(), and .raise_for_status(). When not provided,
+                    the function uses the centralized http_client downloader.
 
     Returns:
         The absolute local path to the downloaded audio file.
 
     Raises:
-        requests.exceptions.RequestException: If the download fails due to network issues,
-                                              bad HTTP status codes, or timeouts.
+        AudioDownloadError: If the download fails due to network issues,
+                            bad HTTP status codes, or timeouts.
         ValueError: If the file size exceeds `MAX_FILE_SIZE`, or if `cookies`
                     are provided in an invalid JSON format when `use_cookies` is True.
         TypeError: If `cookies` is not a string or dictionary when `use_cookies` is True.
@@ -276,7 +297,7 @@ def download_audio_file(
 
         logging.info(f"Downloading {url} to: {save_path}")
 
-        def _requests_stream_download(get_callable: Callable[..., Any]) -> str:
+        def _stream_download(get_callable: Callable[..., Any]) -> str:
             resp = get_callable(url, headers=headers, stream=True, timeout=30)
             resp.raise_for_status()
             content_type = (resp.headers.get("content-type") or "").lower()
@@ -334,61 +355,45 @@ def download_audio_file(
             return str(save_path)
 
         # Choose download strategy:
-        use_requests_stream = False
         if downloader is not None:
-            use_requests_stream = True
-            get_impl = downloader
-        else:
-            # Detect if requests.get is monkeypatched (as in unit tests)
-            try:
-                import requests as _rq_mod  # local import to compare
-                from requests import api as _rq_api
-                if getattr(_rq_mod, 'get', None) is not getattr(_rq_api, 'get', object()):
-                    use_requests_stream = True
-                    get_impl = _rq_mod.get
-            except Exception:
-                # Be safe; fallback to centralized client
-                use_requests_stream = False
+            return _stream_download(downloader)
 
-        if use_requests_stream:
-            return _requests_stream_download(get_impl)  # type: ignore[name-defined]
-        else:
-            # Centralized downloader with size/content-type enforcement
-            try:
-                http_download(
-                    url=url,
-                    dest=save_path,
-                    headers=headers,
-                    retry=RetryPolicy(),
-                    require_content_type="audio/",
-                    max_bytes_total=int(MAX_FILE_SIZE) if MAX_FILE_SIZE else None,
-                )
-            except Exception as e:
-                # Map size-related failures to AudioFileSizeError
-                msg = str(e)
-                if any(k in msg.lower() for k in ["disk quota exceeded", "quota exceeded", "exceed", "exceeds"]):
-                    try:
-                        Path(save_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    raise AudioFileSizeError(
-                        f"Downloaded content for {url} exceeded the configured limit."
-                    ) from e
-                # Clean up and wrap remaining errors
+        # Centralized downloader with size/content-type enforcement
+        try:
+            http_download(
+                url=url,
+                dest=save_path,
+                headers=headers,
+                retry=RetryPolicy(),
+                require_content_type="audio/",
+                max_bytes_total=int(MAX_FILE_SIZE) if MAX_FILE_SIZE else None,
+            )
+        except Exception as e:
+            # Map size-related failures to AudioFileSizeError
+            msg = str(e)
+            if any(k in msg.lower() for k in ["disk quota exceeded", "quota exceeded", "exceed", "exceeds"]):
                 try:
                     Path(save_path).unlink(missing_ok=True)
                 except Exception:
                     pass
-                raise AudioDownloadError(f"Download failed for {url}: {e}") from e
-            # Success path
+                raise AudioFileSizeError(
+                    f"Downloaded content for {url} exceeded the configured limit."
+                ) from e
+            # Clean up and wrap remaining errors
             try:
-                downloaded_bytes = Path(save_path).stat().st_size
+                Path(save_path).unlink(missing_ok=True)
             except Exception:
-                downloaded_bytes = 0
-            logging.info(
-                f"Audio file downloaded successfully from {url}: {save_path} ({downloaded_bytes / (1024*1024):.2f} MB)"
-            )
-            return str(save_path)
+                pass
+            raise AudioDownloadError(f"Download failed for {url}: {e}") from e
+        # Success path
+        try:
+            downloaded_bytes = Path(save_path).stat().st_size
+        except Exception:
+            downloaded_bytes = 0
+        logging.info(
+            f"Audio file downloaded successfully from {url}: {save_path} ({downloaded_bytes / (1024*1024):.2f} MB)"
+        )
+        return str(save_path)
 
     except AudioFileSizeError:
         logging.error(f"Audio download aborted: file exceeded configured limit for {url}")
@@ -402,13 +407,6 @@ def download_audio_file(
     except AudioDownloadError:
         # Allow previously raised download errors to bubble without double-wrapping
         raise
-    except requests.exceptions.Timeout:
-         logging.error(f"Timeout occurred while downloading audio file: {url}")
-         raise AudioDownloadError(f"Download timed out for {url}") from None
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error downloading audio file from {url}: {type(e).__name__} - {e}")
-        err_msg = str(e)
-        raise AudioDownloadError(f"Download failed for {url}. Reason: {err_msg}") from e
     except ValueError as e: # Handles cookie format issues and other value errors
         logging.error(f"Value error during download from {url}: {e}")
         if "cookies" in str(e).lower():
@@ -651,6 +649,7 @@ def process_audio_files(
                                 input_item,
                                 use_cookies=use_cookies,
                                 cookies=cookies,
+                                output_dir=processing_temp_dir_path,
                             )
                             if not downloaded_path:
                                 raise RuntimeError(f"YouTube download failed: {download_message}")
@@ -660,6 +659,7 @@ def process_audio_files(
                             target_path = processing_temp_dir_path / source_path.name
                             if source_path.parent != processing_temp_dir_path:
                                 import shutil
+                                target_path = _unique_path(target_path)
                                 shutil.move(str(source_path), str(target_path))
                                 current_audio_path = str(target_path)
                             else:
@@ -747,7 +747,11 @@ def process_audio_files(
                     update_progress(f"Converting '{Path(current_audio_path).name}' to WAV...")
                     try:
                         # Overwrite in temp dir context for non-WAV inputs
-                        wav_file_path = convert_to_wav(current_audio_path, overwrite=True)
+                        wav_file_path = convert_to_wav(
+                            current_audio_path,
+                            overwrite=True,
+                            base_dir=processing_temp_dir_path,
+                        )
                         # ... (path checking logic - ensure wav_file_path is valid) ...
                         if not wav_file_path or not Path(wav_file_path).exists():
                              raise TranscriptionConversionError(f"convert_to_wav did not return a valid path or file does not exist: {wav_file_path}")
@@ -789,6 +793,7 @@ def process_audio_files(
                         selected_source_lang=transcription_language,
                         vad_filter=vad_use,
                         diarize=diarize,
+                        base_dir=processing_temp_dir_path,
                     )
                     raw_segments = transcription_output
 
@@ -1181,14 +1186,20 @@ def _cookies_to_header_value(cookies) -> Optional[str]:
         return None
 
 
-def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Optional[str | Dict[str, Any]] = None) -> tuple[Optional[str], str]:
+def download_youtube_audio(
+    url: str,
+    *,
+    use_cookies: bool = False,
+    cookies: Optional[str | Dict[str, Any]] = None,
+    output_dir: Optional[str | Path] = None,
+) -> tuple[Optional[str], str]:
     """
     Downloads audio from a YouTube URL using yt-dlp.
 
     It attempts to download the best M4A audio stream or, failing that, the best
     video stream up to 480p, and then extracts the audio as an MP3 file.
-    The downloaded MP3 is saved to a "downloads" subdirectory in the current
-    working directory.
+        The downloaded MP3 is saved to a configured downloads directory unless
+        `output_dir` is provided, in which case the file is placed there.
 
     Args:
         url: The YouTube video URL.
@@ -1203,7 +1214,7 @@ def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Opti
         This function requires `ffmpeg` to be installed and accessible in the
         system's PATH (or `ffmpeg.exe` in `./Bin/` on Windows).
         Downloaded files are stored in a `downloads/` directory created in the
-        current working directory.
+        current working directory unless an explicit `output_dir` is supplied.
     """
     try:
         block_reason = _validate_outbound_url(url)
@@ -1230,16 +1241,20 @@ def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Opti
             # Extract information about the video
             with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
                 info_dict = ydl.extract_info(url, download=False)
-                sanitized_title = sanitize_filename(info_dict['title'])
+                raw_title = info_dict.get('title') or "youtube_audio"
+                sanitized_title = sanitize_filename(raw_title) or "youtube_audio"
+                video_id = sanitize_filename(info_dict.get("id") or "") or uuid.uuid4().hex[:UUID_LENGTH]
+                unique_token = uuid.uuid4().hex[:UUID_LENGTH]
+                filename_stem = f"{sanitized_title}_{video_id}_{unique_token}"
 
             # Setup the temporary filename (yt-dlp will create .mp3 directly with postprocessor)
-            temp_audio_path = Path(temp_dir) / f"{sanitized_title}.mp3"
+            temp_audio_path = Path(temp_dir) / f"{filename_stem}.mp3"
 
             # Initialize yt-dlp with options for downloading and extracting audio
             ydl_opts = {
                 'format': 'bestaudio/best',  # Prefer best audio quality
                 'ffmpeg_location': ffmpeg_path,
-                'outtmpl': str(Path(temp_dir) / f"{sanitized_title}.%(ext)s"),
+                'outtmpl': str(Path(temp_dir) / f"{filename_stem}.%(ext)s"),
                 'noplaylist': True,
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
@@ -1264,26 +1279,33 @@ def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Opti
             if not temp_audio_path.exists():
                 raise FileNotFoundError(f"Expected audio file was not found: {temp_audio_path}")
 
-            # Create a persistent directory for the download using configured path if available
-            try:
-                media_cfg = loaded_config_data.get('media_processing', {}) if loaded_config_data else {}
-                downloads_root = media_cfg.get('audio_downloads_dir')
-                if downloads_root:
-                    persistent_dir = Path(downloads_root)
-                else:
-                    persistent_dir = Path(get_project_root()) / 'Databases' / 'downloads' / 'audio'
-            except Exception:
-                persistent_dir = Path("downloads")
-            persistent_dir.mkdir(parents=True, exist_ok=True)
+            destination_dir: Optional[Path] = None
+            if output_dir is not None:
+                destination_dir = Path(output_dir)
+            else:
+                # Create a persistent directory for the download using configured path if available
+                try:
+                    media_cfg = loaded_config_data.get('media_processing', {}) if loaded_config_data else {}
+                    downloads_root = media_cfg.get('audio_downloads_dir')
+                    if downloads_root:
+                        destination_dir = Path(downloads_root)
+                    else:
+                        destination_dir = Path(get_project_root()) / 'Databases' / 'downloads' / 'audio'
+                except Exception:
+                    destination_dir = Path("downloads")
 
-            # Move the file from the temporary directory to the persistent directory
-            persistent_file_path = persistent_dir / f"{sanitized_title}.mp3"
-            os.replace(str(temp_audio_path), str(persistent_file_path))
+            destination_dir.mkdir(parents=True, exist_ok=True)
 
-            # Add the file to the list of downloaded files
-            downloaded_files.append(str(persistent_file_path))
+            # Move the file from the temporary directory to the destination directory.
+            destination_path = _unique_path(destination_dir / f"{filename_stem}.mp3")
+            import shutil
+            shutil.move(str(temp_audio_path), str(destination_path))
 
-            return str(persistent_file_path), f"Audio downloaded successfully: {sanitized_title}.mp3"
+            # Track only persistent downloads for cleanup at shutdown.
+            if output_dir is None:
+                downloaded_files.append(str(destination_path))
+
+            return str(destination_path), f"Audio downloaded successfully: {destination_path.name}"
     except Exception as e:
         return None, f"Error downloading audio: {str(e)}"
 

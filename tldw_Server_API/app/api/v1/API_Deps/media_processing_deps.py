@@ -4,6 +4,7 @@ from typing import List, Optional
 
 import json
 from fastapi import Form, HTTPException, status
+from loguru import logger
 from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.media_request_models import (
@@ -13,6 +14,10 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ProcessPDFsForm,
     ProcessEbooksForm,
     ProcessEmailsForm,
+    TRANSCRIPTION_MODEL_ENUM,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+    resolve_default_transcription_model,
 )
 
 try:
@@ -57,6 +62,25 @@ def _coerce_urls(urls: Optional[List[str]]) -> Optional[List[str]]:
         except Exception:
             return [urls]
     return [str(urls)]
+
+
+def _resolve_transcription_model_or_default(
+    transcription_model: Optional[str],
+    *,
+    fallback_whisper_model: str,
+    context: str,
+) -> str:
+    model = (transcription_model or "").strip()
+    default_model = resolve_default_transcription_model(fallback_whisper_model)
+    if model and model not in TRANSCRIPTION_MODEL_ENUM:
+        logger.warning(
+            "Invalid transcription_model '%s' for %s; defaulting to %s",
+            model,
+            context,
+            default_model,
+        )
+        return default_model
+    return model or default_model
 
 
 def _raise_422(exc: ValidationError) -> None:
@@ -150,9 +174,10 @@ async def get_process_videos_form(
     perform_analysis: bool = Form(True),
     perform_chunking: bool = Form(True),
     summarize_recursively: bool = Form(False),
-    transcription_model: str = Form(
-        "deepdml/faster-distil-whisper-large-v3.5",
-        description="Transcription model for video audio tracks",
+    transcription_model: Optional[str] = Form(
+        None,
+        description="Transcription model for video audio tracks (defaults to config when omitted)",
+        json_schema_extra={"enum": TRANSCRIPTION_MODEL_ENUM},
     ),
     transcription_language: str = Form("en"),
     diarize: bool = Form(False),
@@ -175,6 +200,11 @@ async def get_process_videos_form(
 
     Used by /media/process-videos (no DB persistence).
     """
+    transcription_model = _resolve_transcription_model_or_default(
+        transcription_model,
+        fallback_whisper_model="deepdml/faster-distil-whisper-large-v3.5",
+        context="process-videos",
+    )
     try:
         urls_norm = _coerce_urls(urls)
         title_val = title or titles
@@ -220,9 +250,10 @@ async def get_process_audios_form(
     perform_analysis: bool = Form(True),
     perform_chunking: bool = Form(True),
     summarize_recursively: bool = Form(False),
-    transcription_model: str = Form(
-        "deepdml/faster-distil-whisper-large-v3.5",
-        description="Transcription model for audio inputs",
+    transcription_model: Optional[str] = Form(
+        None,
+        description="Transcription model for audio inputs (defaults to config when omitted)",
+        json_schema_extra={"enum": TRANSCRIPTION_MODEL_ENUM},
     ),
     transcription_language: str = Form("en"),
     diarize: bool = Form(False),
@@ -245,6 +276,11 @@ async def get_process_audios_form(
 
     Used by /media/process-audios (no DB persistence).
     """
+    transcription_model = _resolve_transcription_model_or_default(
+        transcription_model,
+        fallback_whisper_model="deepdml/faster-distil-whisper-large-v3.5",
+        context="process-audios",
+    )
     try:
         urls_norm = _coerce_urls(urls)
         title_val = title or titles

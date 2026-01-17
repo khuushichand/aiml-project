@@ -10,12 +10,15 @@ class DummyResponse:
         self.status_code = 200
 
     def raise_for_status(self):
+
         return None
 
     def json(self):
+
         return {}
 
     def close(self):
+
         return None
 
 
@@ -46,10 +49,11 @@ def test_llamacpp_strict_filter_drops_top_k_from_payload_non_streaming():
             raise AssertionError("Streaming should not be invoked in this test")
 
         def close(self):
+
             self.closed = True
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.load_settings",
         return_value=fake_settings,
     ):
 

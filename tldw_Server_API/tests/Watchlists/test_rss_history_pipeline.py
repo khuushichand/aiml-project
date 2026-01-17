@@ -45,7 +45,9 @@ def _make_job(client: TestClient, src_id: int, *, history_cfg: dict | None = Non
 
 
 def test_history_atom_ingests_across_pages(monkeypatch, client_user):
-    # Offline-friendly: ensure pipeline runs in TEST_MODE to bypass heavy ingestion paths
+
+
+     # Offline-friendly: ensure pipeline runs in TEST_MODE to bypass heavy ingestion paths
     monkeypatch.setenv("TEST_MODE", "1")
     c = client_user
     # Create RSS source
@@ -87,6 +89,8 @@ def test_history_atom_ingests_across_pages(monkeypatch, client_user):
 
 
 def test_history_on_304_true_wordpress(monkeypatch, client_user):
+
+
     monkeypatch.setenv("TEST_MODE", "1")
     c = client_user
     r = c.post(
@@ -121,6 +125,8 @@ def test_history_on_304_true_wordpress(monkeypatch, client_user):
 
 
 def test_prefer_feed_full_text_skips_fetch(monkeypatch, client_user):
+
+
     monkeypatch.setenv("TEST_MODE", "1")
     c = client_user
     r = c.post(

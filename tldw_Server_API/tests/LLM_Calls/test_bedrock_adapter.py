@@ -1,4 +1,5 @@
 import os
+
 import pytest
 
 
@@ -65,11 +66,13 @@ def test_bedrock_adapter_non_stream_uses_factory_and_sets_stream(monkeypatch):
 
     adapter = mod.BedrockAdapter()
     with pytest.raises(Exception):  # normalized to ChatBadRequestError by adapter
-        adapter.chat({
-            "messages": [{"role": "user", "content": "hi"}],
-            "model": "meta.llama3-8b-instruct",
-            "api_key": "key",
-        })
+        adapter.chat(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "model": "meta.llama3-8b-instruct",
+                "api_key": "key",
+            }
+        )
 
     assert isinstance(fake.last_json, dict)
     assert fake.last_json.get("stream") is False
@@ -85,11 +88,13 @@ def test_bedrock_adapter_base_url_from_runtime_endpoint(monkeypatch):
     monkeypatch.setenv("BEDROCK_RUNTIME_ENDPOINT", "https://bedrock-runtime.us-test-1.amazonaws.com")
     try:
         adapter = mod.BedrockAdapter()
-        adapter.chat({
-            "messages": [{"role": "user", "content": "ping"}],
-            "model": "meta.llama3-8b-instruct",
-            "api_key": "key",
-        })
+        adapter.chat(
+            {
+                "messages": [{"role": "user", "content": "ping"}],
+                "model": "meta.llama3-8b-instruct",
+                "api_key": "key",
+            }
+        )
         assert fake.last_url == "https://bedrock-runtime.us-test-1.amazonaws.com/openai/v1/chat/completions"
     finally:
         monkeypatch.delenv("BEDROCK_RUNTIME_ENDPOINT", raising=False)

@@ -11,6 +11,7 @@ class _StubCursor:
         self.lastrowid = 1
 
     def execute(self, *args, **kwargs):
+
         # Do nothing; simulate successful INSERT
         self.lastrowid = 1
 
@@ -20,6 +21,7 @@ class _StubConn:
         return _StubCursor()
 
     def commit(self):
+
         pass
 
 
@@ -52,9 +54,12 @@ def override_ps_deps(monkeypatch):
 
 
 def test_evaluation_async_add_task_receives_request_id(monkeypatch, override_ps_deps):
+
+
     # Force scheduling branch (not inline) by removing PyTest env hint and disabling TEST_MODE
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("TEST_MODE", "false")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
     # Capture add_task call arguments
     captured = {"func": None, "args": None, "kwargs": None}

@@ -136,7 +136,7 @@ pg_pool_timeout = 30.0
 
 # If using SQLite instead
 # type = sqlite
-# sqlite_path = Databases/user_databases/<user_id>/Media_DB_v2.db
+# sqlite_path = <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db
 # sqlite_wal_mode = true
 # sqlite_foreign_keys = true
 # backup_path = ./tldw_DB_Backups/
@@ -669,7 +669,7 @@ finally:
 - Verify schema version and bootstrap
   - Back up the DB file first.
   - Instantiate `MediaDatabase` once to run schema checks/migrations. Verify with:
-    - SQLite: `sqlite3 Databases/user_databases/<user_id>/Media_DB_v2.db "SELECT version FROM schema_version;"` → should be `5`.
+    - SQLite: `sqlite3 <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db "SELECT version FROM schema_version;"` → should be `5`.
 
 - Add `safe_metadata` to older databases (manual)
   - If you cannot run the app to migrate, add the column manually:
@@ -686,7 +686,7 @@ finally:
   - The library updates FTS on mutators; for manual maintenance, script the rebuilds.
 
 - Move to per-user layout
-  - Move file to `Databases/user_databases/<user_id>/Media_DB_v2.db` and update config (`USER_DB_BASE_DIR` or content DB settings).
+  - Move file to `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db` and update config (`USER_DB_BASE_DIR` in `tldw_Server_API.app.core.config`, override via environment variable or `Config_Files/config.txt`, or content DB settings).
 
 - Migrate SQLite → PostgreSQL
   - Recommended: re-ingest via the library (mutators handle sync/versioning/metadata) into a Postgres-backed `MediaDatabase`.

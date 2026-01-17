@@ -21,6 +21,8 @@ class _Req:
 
 
 def test_allowed_endpoints_and_max_calls(monkeypatch):
+
+
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")

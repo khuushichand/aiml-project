@@ -54,6 +54,9 @@ class MetricConfig:
     include_result: bool = False
 
 
+_DEFAULT_DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+
+
 def track_metrics(
     name: Optional[str] = None,
     labels: Optional[Dict[str, str]] = None,
@@ -92,6 +95,9 @@ def track_metrics(
         # Ensure metrics are registered on first import
         try:
             registry = get_metrics_registry()
+            call_metric_name = registry.normalize_metric_name(call_metric_name)
+            duration_metric_name = registry.normalize_metric_name(duration_metric_name)
+            error_metric_name = registry.normalize_metric_name(error_metric_name)
             if track_calls and call_metric_name not in registry.metrics:
                 registry.register_metric(MetricDefinition(
                     name=call_metric_name,
@@ -105,7 +111,8 @@ def track_metrics(
                     type=MetricType.HISTOGRAM,
                     description=f"Execution duration for {base_name}",
                     unit="s",
-                    labels=list((labels or {}).keys())
+                    labels=list((labels or {}).keys()),
+                    buckets=_DEFAULT_DURATION_BUCKETS
                 ))
             if track_errors and error_metric_name not in registry.metrics:
                 registry.register_metric(MetricDefinition(
@@ -135,13 +142,13 @@ def track_metrics(
                 if track_calls:
                     increment_counter(call_metric_name, labels=metric_labels)
 
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     result = await func(*args, **kwargs)
 
                     # Track duration
                     if track_duration:
-                        duration = time.time() - start_time
+                        duration = time.monotonic() - start_time
                         observe_histogram(duration_metric_name, duration, labels=metric_labels)
 
                     return result
@@ -155,7 +162,7 @@ def track_metrics(
 
                     # Still track duration for failed calls
                     if track_duration:
-                        duration = time.time() - start_time
+                        duration = time.monotonic() - start_time
                         failed_labels = dict(metric_labels)
                         failed_labels["status"] = "error"
                         observe_histogram(duration_metric_name, duration, labels=failed_labels)
@@ -181,13 +188,13 @@ def track_metrics(
                 if track_calls:
                     increment_counter(call_metric_name, labels=metric_labels)
 
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     result = func(*args, **kwargs)
 
                     # Track duration
                     if track_duration:
-                        duration = time.time() - start_time
+                        duration = time.monotonic() - start_time
                         observe_histogram(duration_metric_name, duration, labels=metric_labels)
 
                     return result
@@ -201,7 +208,7 @@ def track_metrics(
 
                     # Still track duration for failed calls
                     if track_duration:
-                        duration = time.time() - start_time
+                        duration = time.monotonic() - start_time
                         failed_labels = dict(metric_labels)
                         failed_labels["status"] = "error"
                         observe_histogram(duration_metric_name, duration, labels=failed_labels)
@@ -231,16 +238,18 @@ def measure_latency(
     """
     def decorator(func: F) -> F:
         histogram_name = metric_name or f"{func.__module__}.{func.__name__}_latency_seconds"
+        resolved_buckets = buckets if buckets is not None else _DEFAULT_DURATION_BUCKETS
         # Register histogram if missing
         try:
             registry = get_metrics_registry()
+            histogram_name = registry.normalize_metric_name(histogram_name)
             if histogram_name not in registry.metrics:
                 registry.register_metric(MetricDefinition(
                     name=histogram_name,
                     type=MetricType.HISTOGRAM,
                     description=f"Latency for {func.__module__}.{func.__name__}",
                     unit="s",
-                    buckets=buckets
+                    buckets=resolved_buckets
                 ))
         except Exception:
             pass
@@ -248,22 +257,22 @@ def measure_latency(
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     return await func(*args, **kwargs)
                 finally:
-                    latency = time.time() - start_time
+                    latency = time.monotonic() - start_time
                     observe_histogram(histogram_name, latency, labels=labels)
 
             return async_wrapper
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     return func(*args, **kwargs)
                 finally:
-                    latency = time.time() - start_time
+                    latency = time.monotonic() - start_time
                     observe_histogram(histogram_name, latency, labels=labels)
 
             return sync_wrapper
@@ -292,6 +301,7 @@ def count_calls(
         # Register counter if missing
         try:
             registry = get_metrics_registry()
+            counter_name = registry.normalize_metric_name(counter_name)
             if counter_name not in registry.metrics:
                 registry.register_metric(MetricDefinition(
                     name=counter_name,
@@ -358,6 +368,7 @@ def track_errors(
         # Register error counter if missing
         try:
             registry = get_metrics_registry()
+            error_metric = registry.normalize_metric_name(error_metric)
             if error_metric not in registry.metrics:
                 registry.register_metric(MetricDefinition(
                     name=error_metric,
@@ -434,6 +445,8 @@ def monitor_resource(
         # Ensure a gauge exists for active count so we never emit negative increments
         try:
             registry = get_metrics_registry()
+            count_metric = registry.normalize_metric_name(count_metric)
+            usage_metric = registry.normalize_metric_name(usage_metric)
             if count_metric not in registry.metrics:
                 registry.register_metric(
                     MetricDefinition(
@@ -468,7 +481,7 @@ def monitor_resource(
                     active_count += 1
                     set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
 
-                start_time = time.time() if track_usage else None
+                start_time = time.monotonic() if track_usage else None
 
                 try:
                     return await func(*args, **kwargs)
@@ -478,7 +491,7 @@ def monitor_resource(
                         set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
 
                     if track_usage and start_time:
-                        usage = time.time() - start_time
+                        usage = time.monotonic() - start_time
                         observe_histogram(usage_metric, usage, labels={"resource": resource_name})
 
             return async_wrapper
@@ -490,7 +503,7 @@ def monitor_resource(
                     active_count += 1
                     set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
 
-                start_time = time.time() if track_usage else None
+                start_time = time.monotonic() if track_usage else None
 
                 try:
                     return func(*args, **kwargs)
@@ -500,7 +513,7 @@ def monitor_resource(
                         set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
 
                     if track_usage and start_time:
-                        usage = time.time() - start_time
+                        usage = time.monotonic() - start_time
                         observe_histogram(usage_metric, usage, labels={"resource": resource_name})
 
             return sync_wrapper
@@ -542,7 +555,7 @@ def track_llm_usage(
                 # Track request
                 increment_counter("llm_requests_total", labels={**labels, "status": "started"})
 
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     result = await func(*args, **kwargs)
 
@@ -550,7 +563,7 @@ def track_llm_usage(
                     increment_counter("llm_requests_total", labels={**labels, "status": "success"})
 
                     # Track duration
-                    duration = time.time() - start_time
+                    duration = time.monotonic() - start_time
                     observe_histogram("llm_request_duration_seconds", duration, labels=labels)
 
                     # Extract token counts if available
@@ -598,7 +611,7 @@ def track_llm_usage(
                 # Track request
                 increment_counter("llm_requests_total", labels={**labels, "status": "started"})
 
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     result = func(*args, **kwargs)
 
@@ -606,7 +619,7 @@ def track_llm_usage(
                     increment_counter("llm_requests_total", labels={**labels, "status": "success"})
 
                     # Track duration
-                    duration = time.time() - start_time
+                    duration = time.monotonic() - start_time
                     observe_histogram("llm_request_duration_seconds", duration, labels=labels)
 
                     # Extract token counts if available
@@ -715,8 +728,8 @@ def cache_metrics(
                 # Track hit ratio if enabled
                 if track_ratio:
                     registry = get_metrics_registry()
-                    hits = registry.get_metric_stats("cache_hits_total", {"cache": cache_name}).get("sum", 0)
-                    misses = registry.get_metric_stats("cache_misses_total", {"cache": cache_name}).get("sum", 0)
+                    hits = registry.get_cumulative_counter("cache_hits_total", {"cache": cache_name})
+                    misses = registry.get_cumulative_counter("cache_misses_total", {"cache": cache_name})
                     total = hits + misses
                     ratio = hits / total if total > 0 else 0
                     set_gauge("cache_hit_ratio", ratio, labels={"cache": cache_name})
@@ -747,8 +760,8 @@ def cache_metrics(
                 # Track hit ratio if enabled
                 if track_ratio:
                     registry = get_metrics_registry()
-                    hits = registry.get_metric_stats("cache_hits_total", {"cache": cache_name}).get("sum", 0)
-                    misses = registry.get_metric_stats("cache_misses_total", {"cache": cache_name}).get("sum", 0)
+                    hits = registry.get_cumulative_counter("cache_hits_total", {"cache": cache_name})
+                    misses = registry.get_cumulative_counter("cache_misses_total", {"cache": cache_name})
                     total = hits + misses
                     ratio = hits / total if total > 0 else 0
                     set_gauge("cache_hit_ratio", ratio, labels={"cache": cache_name})

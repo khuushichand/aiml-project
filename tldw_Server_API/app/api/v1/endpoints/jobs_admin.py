@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from typing import Any, Optional
-import base64
-import gzip
+from datetime import datetime
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
+from loguru import logger
 from pydantic import BaseModel, Field, ConfigDict
 #
 try:
@@ -144,47 +144,6 @@ def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
         _JM.set_rls_context(is_admin=True, domain_allowlist=str(domain) if domain else None, owner_user_id=uid)
     except Exception:
         pass
-
-
-def _parse_json_value(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    if isinstance(value, memoryview):
-        value = value.tobytes()
-    if isinstance(value, (bytes, bytearray)):
-        try:
-            return _parse_json_value(bytes(value).decode("utf-8"))
-        except Exception:
-            return value
-    if isinstance(value, str):
-        try:
-            return _json.loads(value)
-        except Exception:
-            return value
-    return value
-
-
-def _decode_archive_blob(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, memoryview):
-        value = value.tobytes()
-    if isinstance(value, (bytes, bytearray)):
-        try:
-            decoded = gzip.decompress(bytes(value)).decode("utf-8")
-            return _parse_json_value(decoded)
-        except Exception:
-            return _parse_json_value(value)
-    if isinstance(value, str) and value.startswith("gzip64:"):
-        try:
-            payload = value[len("gzip64:"):]
-            decoded = gzip.decompress(base64.b64decode(payload)).decode("utf-8")
-            return _parse_json_value(decoded)
-        except Exception:
-            return _parse_json_value(value)
-    return _parse_json_value(value)
 
 
 class PruneRequest(BaseModel):
@@ -494,6 +453,19 @@ class AttachmentItem(BaseModel):
     created_at: str
 
 
+def _normalize_attachment_item(item: dict[str, Any]) -> AttachmentItem:
+    created_at = item.get("created_at")
+    if isinstance(created_at, datetime):
+        created_at = created_at.isoformat()
+    elif created_at is None:
+        created_at = ""
+    else:
+        created_at = str(created_at)
+    payload = dict(item)
+    payload["created_at"] = created_at
+    return AttachmentItem(**payload)
+
+
 @router.post("/jobs/{job_id}/attachments", response_model=AttachmentItem)
 async def add_job_attachment_endpoint(
     job_id: int,
@@ -513,7 +485,7 @@ async def add_job_attachment_endpoint(
         item = next((i for i in items if int(i.get('id')) == int(rid)), None)
         if not item:
             raise HTTPException(status_code=500, detail="Failed to read back attachment")
-        return AttachmentItem(**item)
+        return _normalize_attachment_item(item)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
 
@@ -531,7 +503,7 @@ async def list_job_attachments_endpoint(
         _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
     items = jm.list_job_attachments(job_id, limit=500)
-    return [AttachmentItem(**i) for i in items]
+    return [_normalize_attachment_item(i) for i in items]
 
 
 # --- SLA policies ---
@@ -1320,66 +1292,6 @@ class JobDetailResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-@router.get("/jobs/{job_id}", response_model=JobDetailResponse)
-async def get_job_detail(
-    job_id: int,
-    principal: AuthPrincipal = Depends(get_auth_principal),
-    domain: Optional[str] = None,
-) -> JobDetailResponse:
-    admin_user = _enforce_domain_scope_unified(principal, domain)
-    db_url = os.getenv("JOBS_DB_URL")
-    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
-    if backend == "postgres":
-        _set_pg_rls_for_user(admin_user, domain)
-    jm = JobManager(backend=backend, db_url=db_url)
-    job = jm.get_job(job_id)
-    if job:
-        if domain and job.get("domain") != domain:
-            raise HTTPException(status_code=404, detail="Job not found")
-        job["archived"] = False
-        return JobDetailResponse(**job)
-
-    conn = jm._connect()
-    try:
-        row = None
-        if jm.backend == "postgres":
-            with jm._pg_cursor(conn) as cur:
-                if domain:
-                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s AND domain = %s", (int(job_id), domain))
-                else:
-                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s", (int(job_id),))
-                row = cur.fetchone()
-        else:
-            if domain:
-                row = conn.execute(
-                    "SELECT * FROM jobs_archive WHERE id = ? AND domain = ?",
-                    (int(job_id), domain),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT * FROM jobs_archive WHERE id = ?",
-                    (int(job_id),),
-                ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Job not found")
-        job_data = dict(row)
-        payload = _parse_json_value(job_data.get("payload"))
-        result = _parse_json_value(job_data.get("result"))
-        if payload is None:
-            payload = _decode_archive_blob(job_data.get("payload_compressed"))
-        if result is None:
-            result = _decode_archive_blob(job_data.get("result_compressed"))
-        job_data["payload"] = jm._maybe_decrypt_json(payload)
-        job_data["result"] = jm._maybe_decrypt_json(result)
-        job_data["archived"] = True
-        return JobDetailResponse(**job_data)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
 @router.get("/jobs/list", response_model=list[JobItem])
 async def list_jobs_endpoint(
     domain: Optional[str] = None,
@@ -1493,12 +1405,30 @@ async def stale_processing_endpoint(
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.opt(exception=True).debug("Failed to close connection in list_stale_groups")
         return out
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Stale groups failed: {e}")
+
+
+@router.get("/jobs/{job_id}", response_model=JobDetailResponse)
+async def get_job_detail(
+    job_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    domain: Optional[str] = None,
+) -> JobDetailResponse:
+    admin_user = _enforce_domain_scope_unified(principal, domain)
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(admin_user, domain)
+    jm = JobManager(backend=backend, db_url=db_url)
+    job = jm.get_job_or_archived(job_id, domain=domain)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobDetailResponse(**job)
 
 
 class BatchCancelRequest(BaseModel):
@@ -1553,7 +1483,11 @@ async def batch_cancel_endpoint(
                             tuple(params),
                         )
                         c = cur.fetchone()
-                        return BatchCancelResponse(affected=int(c[0] if c else 0))
+                        if isinstance(c, dict):
+                            count = int(c.get("count") or 0)
+                        else:
+                            count = int(c[0] if c else 0)
+                        return BatchCancelResponse(affected=count)
                     # Counters pre-measure per group
                     counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
                     grp_ready = []
@@ -1623,6 +1557,10 @@ async def batch_cancel_endpoint(
                                     "UPDATE job_counters SET processing_count = GREATEST(processing_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                     (c, d, q, jt),
                                 )
+                    except Exception:
+                        pass
+                    try:
+                        conn.commit()
                     except Exception:
                         pass
                     try:
@@ -1796,6 +1734,10 @@ async def batch_reschedule_endpoint(
                     except Exception:
                         pass
                     try:
+                        conn.commit()
+                    except Exception:
+                        pass
+                    try:
                         if req.domain and req.queue and req.job_type:
                             jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
                     except Exception:
@@ -1964,9 +1906,13 @@ async def batch_requeue_quarantined_endpoint(
                 with conn:
                     with jm._pg_cursor(conn) as cur:
                         if req.dry_run:
-                            cur.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params))
+                            cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))
                             r = cur.fetchone()
-                            return BatchRequeueQuarantinedResponse(affected=int(r[0] if r else 0))
+                            if isinstance(r, dict):
+                                count = int(r.get("c") or 0)
+                            else:
+                                count = int(r[0] if r else 0)
+                            return BatchRequeueQuarantinedResponse(affected=count)
                         # Compute group counts to adjust counters post-update when enabled
                         counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
                         grp_rows: list = []

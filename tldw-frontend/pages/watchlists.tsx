@@ -56,6 +56,14 @@ interface TemplateSummary {
   description?: string | null;
 }
 
+interface OutputTemplateSummary {
+  id: number;
+  name: string;
+  type: string;
+  format: string;
+  description?: string | null;
+}
+
 interface WatchlistSettings {
   default_output_ttl_seconds?: number;
   temporary_output_ttl_seconds?: number;
@@ -305,8 +313,17 @@ export default function WatchlistsPage() {
 
   const fetchTemplates = useCallback(async () => {
     try {
-      const data = await apiClient.get<{ items: TemplateSummary[] }>('/watchlists/templates');
-      setTemplates(data.items || []);
+      const data = await apiClient.get<{ items: OutputTemplateSummary[] }>('/outputs/templates', {
+        params: { limit: 200, offset: 0 },
+      });
+      const filtered = (data.items || []).filter((tpl) => tpl.format !== 'mp3');
+      setTemplates(
+        filtered.map((tpl) => ({
+          name: tpl.name,
+          format: tpl.format,
+          description: tpl.description,
+        }))
+      );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       show({ title: 'Failed to load templates', description: message, variant: 'warning' });
@@ -1566,7 +1583,7 @@ export default function WatchlistsPage() {
                       ))}
                     </select>
                     <span className="mt-1 text-xs text-gray-500">
-                      Templates are managed via <code>/watchlists/templates</code>.
+                      Templates are managed via <code>/outputs/templates</code>.
                     </span>
                   </label>
 

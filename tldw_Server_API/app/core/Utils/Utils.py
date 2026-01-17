@@ -743,8 +743,9 @@ def get_db_config():
         try:
             from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
             default_sqlite = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-        except Exception:
-            default_sqlite = str(Path(__file__).resolve().parents[3] / 'Databases' / 'Media_DB_v2.db')
+        except Exception as exc:
+            logging.error(f"Failed to resolve default SQLite path via DatabasePaths: {exc}")
+            raise
         return {
             'type': 'sqlite',
             'sqlite_path': default_sqlite,

@@ -3,7 +3,7 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
-from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 def _project_root_from(file_path: Path) -> Path:
@@ -11,10 +11,8 @@ def _project_root_from(file_path: Path) -> Path:
     return file_path.parent.parent.parent.parent
 
 
-def get_db_path(user_id: str) -> Path:
-    base_dir: Path = settings.get("USER_DB_BASE_DIR")
-    user_dir = base_dir / str(user_id) / 'vector_store'
-    user_dir.mkdir(parents=True, exist_ok=True)
+def get_db_path(user_id: Optional[str]) -> Path:
+    user_dir = DatabasePaths.get_user_vector_store_dir(user_id)
     return user_dir / 'vector_store_batches.db'
 
 
@@ -31,11 +29,11 @@ def _prime(conn: sqlite3.Connection) -> sqlite3.Connection:
     return conn
 
 
-def _connect(user_id: str) -> sqlite3.Connection:
+def _connect(user_id: Optional[str]) -> sqlite3.Connection:
     return _prime(sqlite3.connect(get_db_path(user_id), check_same_thread=False))
 
 
-def _ensure_initialized(user_id: str) -> None:
+def _ensure_initialized(user_id: Optional[str]) -> None:
     """Ensure the batches table exists for the given user.
 
     This guards against cases where the base directory changes during tests
@@ -48,7 +46,7 @@ def _ensure_initialized(user_id: str) -> None:
         pass
 
 
-def init_db(user_id: str) -> None:
+def init_db(user_id: Optional[str]) -> None:
     with _connect(user_id) as conn:
         conn.execute(
             """
@@ -71,9 +69,8 @@ def init_db(user_id: str) -> None:
 def create_batch(batch_id: str, store_id: str, user_id: Optional[str], status: str = 'processing',
                  upserted: int = 0, error: Optional[str] = None, meta: Optional[Dict[str, Any]] = None) -> None:
     ts = int(time.time())
-    uid = str(user_id) if user_id is not None else '1'
-    _ensure_initialized(uid)
-    with _connect(uid) as conn:
+    _ensure_initialized(user_id)
+    with _connect(user_id) as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO vector_store_batches
@@ -88,9 +85,9 @@ def create_batch(batch_id: str, store_id: str, user_id: Optional[str], status: s
         conn.commit()
 
 
-def update_batch(batch_id: str, user_id: str, status: Optional[str] = None, upserted: Optional[int] = None,
+def update_batch(batch_id: str, user_id: Optional[str], status: Optional[str] = None, upserted: Optional[int] = None,
                  error: Optional[str] = None, meta: Optional[Dict[str, Any]] = None) -> None:
-    _ensure_initialized(str(user_id))
+    _ensure_initialized(user_id)
     fields = []
     values = []
     if status is not None:
@@ -113,14 +110,14 @@ def update_batch(batch_id: str, user_id: str, status: Optional[str] = None, upse
     if not fields:
         return
 
-    with _connect(str(user_id)) as conn:
+    with _connect(user_id) as conn:
         conn.execute(f"UPDATE vector_store_batches SET {', '.join(fields)} WHERE id = ?", values)
         conn.commit()
 
 
-def get_batch(batch_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-    _ensure_initialized(str(user_id))
-    with _connect(str(user_id)) as conn:
+def get_batch(batch_id: str, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    _ensure_initialized(user_id)
+    with _connect(user_id) as conn:
         cur = conn.execute(
             "SELECT id, store_id, user_id, status, upserted, error, meta_json, created_at, updated_at\n             FROM vector_store_batches WHERE id = ?",
             (batch_id,)
@@ -141,8 +138,8 @@ def get_batch(batch_id: str, user_id: str) -> Optional[Dict[str, Any]]:
         }
 
 
-def list_batches(user_id: str, status: Optional[str] = None, limit: int = 50, offset: int = 0):
-    _ensure_initialized(str(user_id))
+def list_batches(user_id: Optional[str], status: Optional[str] = None, limit: int = 50, offset: int = 0):
+    _ensure_initialized(user_id)
     query = "SELECT id, store_id, user_id, status, upserted, error, meta_json, created_at, updated_at FROM vector_store_batches"
     params = []
     if status:
@@ -150,7 +147,7 @@ def list_batches(user_id: str, status: Optional[str] = None, limit: int = 50, of
         params.append(status)
     query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
-    with _connect(str(user_id)) as conn:
+    with _connect(user_id) as conn:
         cur = conn.execute(query, params)
         rows = cur.fetchall()
         return [

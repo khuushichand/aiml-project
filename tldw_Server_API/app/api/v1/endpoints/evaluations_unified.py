@@ -46,6 +46,10 @@ from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager,
 # Import additional services
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
+from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+    log_evaluation_deleted,
+    log_evaluation_exported,
+)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -54,7 +58,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
 # Create router
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
@@ -102,6 +106,7 @@ def get_db_for_user(user_id: int):
     svc = get_unified_evaluation_service_for_user(user_id)
     return getattr(svc, 'db', None)
 
+
 def _is_eval_test_mode() -> bool:
     return (
         os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -117,6 +122,16 @@ def _normalize_eval_user_id(current_user: User) -> Optional[int]:
         return int(user_id)
     except (TypeError, ValueError):
         return None
+
+
+async def _get_admin_principal_if_needed(
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Optional[AuthPrincipal]:
+    """Resolve AuthPrincipal only when heavy-eval admin gating is enabled."""
+    if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() in {"true", "1", "yes", "on"}:
+        return principal
+    return None
 
 
 async def _resolve_eval_credentials(
@@ -149,13 +164,13 @@ async def _validate_provider_credentials(
     """Validate required provider credentials for evaluation endpoints."""
     if (
         eval_type in {"geval", "rag", "response_quality"}
-        and PROVIDER_REQUIRES_KEY.get(provider_key, False)
+        and provider_requires_api_key(provider_key)
         and not provider_api_key
         and not _is_eval_test_mode()
     ):
         record_byok_missing_credentials(provider_key, operation="evaluations")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "error_code": "missing_provider_credentials",
                 "message": f"Provider '{provider_name}' requires an API key.",
@@ -173,8 +188,11 @@ async def _resolve_and_validate_eval_provider(
     """Resolve provider credentials and validate BYOK requirements for evaluation requests."""
     provider_name = (request.api_name or "openai").strip() or "openai"
     provider_key = provider_name.lower()
-    explicit_key = (request.api_key or "").strip() if request.api_key else None
-    provider_api_key = explicit_key
+    raw_api_key = getattr(request, "api_key", None)
+    if raw_api_key:
+        logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
+    explicit_key = None
+    provider_api_key = None
     byok_resolution: Optional[ResolvedByokCredentials] = None
 
     if not provider_api_key:
@@ -200,10 +218,9 @@ async def _resolve_and_validate_eval_provider(
 
 @router.post(
     "/admin/idempotency/cleanup",
-    dependencies=[Depends(require_roles("admin"))],
 )
 async def admin_cleanup_idempotency(
-    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
+    principal: Annotated[Optional[AuthPrincipal], Depends(_get_admin_principal_if_needed)],
     _current_user: Annotated[User, Depends(get_eval_request_user)],  # dependency for side effects
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
@@ -432,10 +449,10 @@ async def delete_embeddings_abtest(
     current_user: User = Depends(get_eval_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
-    """Cancel/cleanup an embeddings A/B test (stub)."""
+    """Cancel/cleanup an embeddings A/B test."""
+    svc = get_unified_evaluation_service_for_user(current_user.id)
     # Idempotency: if prior mapping exists, return canonical response without side effects
     try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
         if idempotency_key:
             prior = svc.db.lookup_idempotency("emb_abtest_delete", idempotency_key, user_ctx)
             if prior:
@@ -444,8 +461,20 @@ async def delete_embeddings_abtest(
     except Exception:
         pass
 
-    # Perform delete/cleanup (stubbed)
-    logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
+    try:
+        from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import cleanup_abtest_resources
+        cleanup_abtest_resources(
+            svc.db,
+            str(current_user.id),
+            test_id,
+            delete_db=True,
+            delete_idempotency=True,
+        )
+        logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
+    except Exception as exc:
+        logger.warning(f"A/B test cleanup failed for {test_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to delete A/B test")
+    log_evaluation_deleted(user_id=str(current_user.id), eval_id=test_id)
     try:
         if idempotency_key:
             svc.db.record_idempotency("emb_abtest_delete", idempotency_key, test_id, user_ctx)
@@ -481,6 +510,13 @@ async def export_embeddings_abtest(
                 svc.db.record_idempotency("emb_abtest_export_json", idempotency_key, f"{test_id}:json", user_ctx)
         except Exception:
             pass
+        log_evaluation_exported(
+            user_id=str(current_user.id),
+            eval_id=test_id,
+            eval_type="embeddings_abtest",
+            export_format="json",
+            total=total,
+        )
         headers = {}
         if idempotency_key:
             headers = {"Idempotency-Key": idempotency_key}
@@ -498,6 +534,13 @@ async def export_embeddings_abtest(
             svc.db.record_idempotency("emb_abtest_export_csv", idempotency_key, f"{test_id}:csv", user_ctx)
     except Exception:
         pass
+    log_evaluation_exported(
+        user_id=str(current_user.id),
+        eval_id=test_id,
+        eval_type="embeddings_abtest",
+        export_format="csv",
+        total=total,
+    )
     headers = {"Content-Disposition": f"attachment; filename=abtest_{test_id}.csv"}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
@@ -733,20 +776,30 @@ async def evaluate_geval(
         raw_metrics = result["results"].get("metrics", {})
         formatted_metrics = {}
         explanations_fallback = result["results"].get("explanations", {})
+
+        def _normalize_geval_metric(metric_name: str, score_val: Optional[float], raw_score_val: Optional[float] = None) -> tuple[float, Optional[float]]:
+            raw_candidate = raw_score_val if raw_score_val is not None else score_val
+            try:
+                raw_value = float(raw_candidate) if raw_candidate is not None else 0.0
+            except (TypeError, ValueError):
+                raw_value = 0.0
+            if metric_name == "fluency":
+                # Some providers report fluency on a 1-3 scale, others on 1-5.
+                max_score = 3.0 if raw_value <= 3.0 else 5.0
+            else:
+                max_score = 5.0
+            normalized = raw_value / max_score if raw_value >= 1.0 else raw_value
+            if normalized > 1.0:
+                normalized = 1.0
+            return normalized, raw_value
+
         for metric_name, metric_value in raw_metrics.items():
             if isinstance(metric_value, dict):
                 # Structured metric already provided
                 name = metric_value.get("name", metric_name)
-                score_val = metric_value.get("score", 0.0)
-                try:
-                    score_float = float(score_val) if score_val is not None else 0.0
-                except (TypeError, ValueError):
-                    score_float = 0.0
                 raw_score_val = metric_value.get("raw_score", None)
-                try:
-                    raw_score_float = float(raw_score_val) if raw_score_val is not None else None
-                except (TypeError, ValueError):
-                    raw_score_float = None
+                score_val = metric_value.get("score", raw_score_val)
+                score_float, raw_score_float = _normalize_geval_metric(metric_name, score_val, raw_score_val)
                 explanation = metric_value.get("explanation")
                 metadata = metric_value.get("metadata", {})
                 formatted_metrics[metric_name] = EvaluationMetric(
@@ -762,11 +815,11 @@ async def evaluate_geval(
                     score_num = float(metric_value)
                 except (TypeError, ValueError):
                     score_num = 0.0
-                normalized = score_num / 5.0 if score_num > 1.0 else score_num
+                normalized, raw_score = _normalize_geval_metric(metric_name, score_num)
                 formatted_metrics[metric_name] = EvaluationMetric(
                     name=metric_name,
                     score=normalized,
-                    raw_score=score_num,
+                    raw_score=raw_score,
                     explanation=explanations_fallback.get(metric_name, ""),
                 )
 
@@ -800,7 +853,7 @@ async def evaluate_geval(
             _avg_val = float(_avg_raw)
         except (TypeError, ValueError):
             _avg_val = 0.0
-        _avg_norm = (_avg_val / 5.0) if _avg_val > 1.0 else _avg_val
+        _avg_norm = (_avg_val / 5.0) if _avg_val >= 1.0 else _avg_val
 
         resp_payload = GEvalResponse(
             metrics=formatted_metrics,
@@ -816,6 +869,8 @@ async def evaluate_geval(
             pass
         return resp_payload
 
+    except HTTPException:
+        raise
     except Exception as e:
         # Log with stack trace for diagnostics
         logger.exception(f"G-Eval evaluation failed: {e}")
@@ -979,6 +1034,8 @@ async def evaluate_rag(
             pass
         return resp_payload
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"RAG evaluation failed: {e}")
         raise HTTPException(
@@ -1150,6 +1207,8 @@ async def evaluate_response_quality(
             pass
         return resp_payload
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Response quality evaluation failed: {e}")
         raise HTTPException(
@@ -1280,9 +1339,11 @@ async def batch_evaluate(
             explicit_key: Optional[str] = None
             if isinstance(eval_request, dict):
                 provider_name = (eval_request.get("api_name") or "openai").strip() or "openai"
-                explicit_key = (eval_request.get("api_key") or "").strip() if eval_request.get("api_key") else None
+                raw_api_key = eval_request.get("api_key")
+                if raw_api_key:
+                    logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
             provider_key = provider_name.lower()
-            provider_api_key = explicit_key
+            provider_api_key = None
             byok_resolution = None
 
             if eval_type in {"geval", "rag", "response_quality"} and not provider_api_key:
@@ -1781,10 +1842,12 @@ async def get_evaluation_history(
     """
     try:
         service = get_unified_evaluation_service_for_user(current_user.id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        target_user_id = request.user_id or stable_user_id
 
         # Get evaluations from database
         evaluations = await service.get_evaluation_history(
-            user_id=request.user_id or user_id,
+            user_id=target_user_id,
             evaluation_type=request.evaluation_type,
             start_date=request.start_date,
             end_date=request.end_date,
@@ -1794,7 +1857,7 @@ async def get_evaluation_history(
 
         # Get total count for pagination
         total_count = await service.count_evaluations(
-            user_id=request.user_id or user_id,
+            user_id=target_user_id,
             evaluation_type=request.evaluation_type,
             start_date=request.start_date,
             end_date=request.end_date
@@ -1807,7 +1870,7 @@ async def get_evaluation_history(
                 "limit": request.limit or 100,
                 "offset": request.offset or 0,
                 "filtered_by": {
-                    "user_id": request.user_id or user_id,
+                    "user_id": target_user_id,
                     "evaluation_type": request.evaluation_type,
                     "date_range": {
                         "start": request.start_date.isoformat() if request.start_date else None,

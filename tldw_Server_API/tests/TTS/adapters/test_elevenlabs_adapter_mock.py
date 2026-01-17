@@ -146,24 +146,14 @@ class TestElevenLabsAdapterMock:
         adapter = ElevenLabsAdapter({"elevenlabs_api_key": "test-key"})
         await adapter.initialize()
 
-        # Mock the stream method
-        async def mock_stream_context():
-            mock_response = AsyncMock()
-            mock_response.status_code = 200
-            mock_response.raise_for_status = AsyncMock()
+        call_state = {"count": 0}
 
-            async def mock_aiter_bytes(chunk_size=1024):
-                yield b"chunk1"
-                yield b"chunk2"
+        async def fake_stream(*args, **kwargs):
+            call_state["count"] += 1
+            yield b"chunk1"
+            yield b"chunk2"
 
-            mock_response.aiter_bytes = mock_aiter_bytes
-            return mock_response
-
-        mock_stream = AsyncMock()
-        mock_stream.__aenter__ = AsyncMock(side_effect=mock_stream_context)
-        mock_stream.__aexit__ = AsyncMock(return_value=None)
-
-        with patch.object(adapter.client, 'stream', return_value=mock_stream):
+        with patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.astream_bytes', new=fake_stream):
             request = TTSRequest(text="Test", voice="rachel", stream=True)
             response = await adapter.generate(request)
 
@@ -172,8 +162,7 @@ class TestElevenLabsAdapterMock:
                 chunks.append(chunk)
 
             assert len(chunks) > 0
-            mock_stream.__aenter__.assert_called_once()
-            mock_stream.__aexit__.assert_called_once()
+            assert call_state["count"] == 1
 
     async def test_error_handling_during_streaming(self):
         """Test error handling during streaming"""
@@ -184,11 +173,13 @@ class TestElevenLabsAdapterMock:
         async def mock_stream_error(*args, **kwargs):
             raise httpx.NetworkError("Connection lost", request=MagicMock())
 
-        with patch.object(adapter.client, 'stream', new=mock_stream_error):
+        with patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.astream_bytes', new=mock_stream_error):
             request = TTSRequest(text="Test", voice="rachel", stream=True)
 
+            response = await adapter.generate(request)
             with pytest.raises(Exception):  # Should raise network error
-                await adapter.generate(request)
+                async for _ in response.audio_stream:
+                    pass
 
     async def test_format_header_mapping(self):
         """Test audio format to Accept header mapping"""

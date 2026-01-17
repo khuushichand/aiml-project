@@ -48,7 +48,12 @@ export function Header() {
     { href: '/audio', label: 'Audio' },
     { href: '/evaluations', label: 'Evals' },
     ...(canReviewClaims ? [{ href: '/claims-review', label: 'Claims Review' } as const] : []),
-    ...(userIsAdmin ? [{ href: '/admin/maintenance', label: 'Admin' } as const] : []),
+    ...(userIsAdmin
+      ? [
+          { href: '/admin/data-ops', label: 'Data Ops' } as const,
+          { href: '/admin', label: 'Admin' } as const,
+        ]
+      : []),
     { href: '/profile', label: 'Profile' },
     { href: '/config', label: 'Config' },
   ];

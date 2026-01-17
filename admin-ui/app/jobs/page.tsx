@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, Repeat } from 'lucide-react';
 import { api, ApiError } from '@/lib/api-client';
+import { formatDateTime } from '@/lib/format';
 
 interface JobItem {
   id: number;
@@ -61,12 +62,8 @@ interface StaleGroup {
   count: number;
 }
 
-const formatDateTime = (value?: string | null) => {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString();
-};
+const formatJobDateTime = (value?: string | null) =>
+  formatDateTime(value, { fallback: '—' });
 
 const statusBadge = (status: string) => {
   const normalized = status.toLowerCase();
@@ -289,7 +286,7 @@ export default function JobsPage() {
   };
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -530,9 +527,9 @@ export default function JobsPage() {
                             <TableCell className="text-right">
                               {job.retry_count ?? 0}/{job.max_retries ?? 0}
                             </TableCell>
-                            <TableCell>{formatDateTime(job.created_at)}</TableCell>
-                            <TableCell>{formatDateTime(job.started_at)}</TableCell>
-                            <TableCell>{formatDateTime(job.completed_at)}</TableCell>
+                            <TableCell>{formatJobDateTime(job.created_at)}</TableCell>
+                            <TableCell>{formatJobDateTime(job.started_at)}</TableCell>
+                            <TableCell>{formatJobDateTime(job.completed_at)}</TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2">
                                 <Button
@@ -629,15 +626,15 @@ export default function JobsPage() {
                     </div>
                     <div className="space-y-1">
                       <Label>Created</Label>
-                      <div className="text-sm">{formatDateTime(jobDetail.created_at)}</div>
+                      <div className="text-sm">{formatJobDateTime(jobDetail.created_at)}</div>
                     </div>
                     <div className="space-y-1">
                       <Label>Started</Label>
-                      <div className="text-sm">{formatDateTime(jobDetail.started_at)}</div>
+                      <div className="text-sm">{formatJobDateTime(jobDetail.started_at)}</div>
                     </div>
                     <div className="space-y-1">
                       <Label>Completed</Label>
-                      <div className="text-sm">{formatDateTime(jobDetail.completed_at)}</div>
+                      <div className="text-sm">{formatJobDateTime(jobDetail.completed_at)}</div>
                     </div>
                     <div className="space-y-1">
                       <Label>Archived</Label>
@@ -669,6 +666,6 @@ export default function JobsPage() {
           </Dialog>
         </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

@@ -17,7 +17,9 @@ def _client():
 
 
 def test_embeddings_token_limit_rejected():
-    # Ensure test mode rate limiting bypass
+
+
+     # Ensure test mode rate limiting bypass
     os.environ["TESTING"] = "true"
     try:
         # Preserve existing settings to avoid cross-test contamination
@@ -61,6 +63,8 @@ def test_embeddings_token_limit_rejected():
 
 
 def test_embeddings_allowlist_rejected():
+
+
     os.environ["TESTING"] = "true"
     try:
         original_allowed_providers = settings.get("ALLOWED_EMBEDDING_PROVIDERS")

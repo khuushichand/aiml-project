@@ -5,8 +5,6 @@ These tests mirror the stubbed AuthGovernor lockout tests but exercise the
 actual RateLimiter and AuthNZ rate-limit storage over Postgres.
 """
 
-from datetime import datetime, timedelta, timezone
-
 import asyncpg
 import pytest
 import pytest_asyncio
@@ -93,13 +91,9 @@ class TestAuthLoginLockoutRealRateLimiter:
 
         # Build a limiter tied to the isolated Postgres DB and patch the dependency
         async def _get_real_limiter():
-            # Late import to get the per-test db_pool from the fixture
-            from tldw_Server_API.tests.AuthNZ.conftest import TEST_DB_HOST as _H, TEST_DB_PORT as _P, TEST_DB_USER as _U, TEST_DB_PASSWORD as _PW, TEST_DB_NAME as _N  # type: ignore[attr-defined]  # noqa: E501
             # The isolated_test_environment already created and migrated the DB; use get_db_pool,
             # which is configured to the same DATABASE_URL in this context.
             limiter = RateLimiter(settings=rl_settings)
-            # Ensure Redis is not used for these tests
-            limiter.redis_client = None
             await limiter.initialize()
             return limiter
 
@@ -114,7 +108,8 @@ class TestAuthLoginLockoutRealRateLimiter:
         _app.dependency_overrides.pop(auth_deps.get_rate_limiter_dep, None)
 
     def test_repeated_invalid_logins_lead_to_lockout_real_limiter(self):
-        # First attempt: invalid password, should be 401 (no lockout yet)
+
+             # First attempt: invalid password, should be 401 (no lockout yet)
         r1 = self.client.post(
             "/api/v1/auth/login",
             data={"username": self.username, "password": "WrongPassword1!"},

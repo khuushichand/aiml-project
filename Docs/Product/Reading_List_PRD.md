@@ -71,6 +71,8 @@ P1 (post-MVP)
 ### 5.1 Capture & Ingestion
 - Accepts `url` plus optional `title`, `tags`, and `notes`.
 - Fetch with safe defaults: timeouts, max download size, content-type checks.
+- For JS-rendered pages, use optional headless rendering (Playwright) in MVP, gated by config and resource limits.
+- SSRF protections: block localhost and private networks, deny redirects to private ranges, validate DNS results, and block cloud metadata IPs.
 - Extract main content using a readability-style parser; store both sanitized HTML and plain text.
 - Compute canonical URL, domain, content hash (e.g., SHA256), word count, reading time, language.
 - Dedupe by canonical URL and/or content hash; merge metadata (e.g., tags) when duplicates found.
@@ -113,9 +115,9 @@ Directory and module plan aligning with current repository:
   - `extractors/readability.py` (content extraction & sanitization)
   - `dedupe.py` (canonicalization + hashing)
   - `importers/pocket.py`, `importers/instapaper.py`
-- DB Abstractions: integrate via `app/core/DB_Management/Media_DB_v2.py` or a dedicated module if cleaner
+- DB Abstractions: integrate via `app/core/DB_Management/Media_DB_v2.py` (per-user Media DB v2)
 - Background Services: reuse `services/` for embedding/summarize queues
-- WebUI: `tldw_Server_API/WebUI/` under a new `reading/` feature (list + detail + read view)
+- WebUI: `tldw-frontend/` (Next.js) under a new `reading/` feature (list + detail + read view); legacy `tldw_Server_API/WebUI/` is out of scope.
 
 ### 7.1 Data Model (Conceptual)
 
@@ -146,18 +148,19 @@ Embeddings mapping (ChromaDB)
 - Collection/namespace: `reading_list:{user_id}`
 - `item_id` → vector_id; metadata: `title`, `url`, `tags`, `status`, timestamps
 
-Note: If reusing Media_DB_v2, add a lightweight `reading_items` table with FK to existing media item when available; otherwise store standalone and link later during ingestion.
+Note: Add `reading_items` to per-user Media_DB_v2 with FK to existing media item when available; otherwise store standalone and link later during ingestion.
 
 ### 7.2 Ingestion Flow
 
 1) `POST /api/v1/reading/save`
 2) Validate URL, schedule or perform fetch (timeout, size cap, content-type checks)
+2a) If non-HTML content (PDF/DOCX/etc), route into existing document ingestion pipeline; link `reading_items` to created media item.
 3) Extract with readability parser; sanitize HTML, derive plain text
 4) Compute canonical URL + content hash; dedupe/merge metadata
 5) Persist item; update FTS5; enqueue embedding job; optionally enqueue summary
 6) Return item payload with `status: processing|ready`
 
-Failure modes: unreachable URL, non-HTML content, oversized content, extraction failure → store minimal record with error details; allow retry.
+Failure modes: unreachable URL, oversized content, extraction failure, unsupported content types → store minimal record with error details; allow retry.
 
 ## 8. API Design (OpenAPI-style)
 
@@ -204,6 +207,7 @@ Rate limiting: align with chat/evals rate limiters; tighter limits on `/save` an
 
 ## 9. WebUI (MVP)
 
+- API-first: backend delivers the Reading List API; frontend team owns UX implementation in `tldw-frontend/`.
 - Reading List page: table/list with quick filters (status, tags, domain), search box, sort control.
 - Item view: distraction-free reader; top bar actions (Back, Tag, Favorite, Mark Read, Summarize, Listen).
 - Tag editor: multi-select with suggestions.
@@ -215,6 +219,7 @@ Accessibility: keyboard navigation; readable theme; proper heading semantics.
 ## 10. Security & Privacy
 
 - Validate and sanitize all inputs; reject non-HTTP(S) schemes.
+- Enforce SSRF protections: block localhost/private ranges, deny redirects to private ranges, validate DNS results, and block cloud metadata IPs.
 - Enforce fetch timeouts and max size; respect content types; strip scripts/styles from HTML, keep only safe tags/attrs.
 - Do not circumvent paywalls or scrape authenticated content.
 - Log with context via Loguru; never log raw content or secrets.
@@ -229,6 +234,7 @@ Accessibility: keyboard navigation; readable theme; proper heading semantics.
 
 Unit Tests (markers: `unit`)
 - URL validation and canonicalization
+- SSRF guardrails (private IPs, redirects to private ranges, DNS rebinding, metadata IPs)
 - Readability extraction on diverse fixtures (news/blog/docs)
 - HTML sanitization safety and correctness
 - Tag normalization, status transitions, dedupe logic
@@ -248,16 +254,17 @@ Coverage target: ≥80% for new modules.
 ## 13. Rollout Plan
 
 Phase 0: PRD + API design review
-Phase 1 (MVP Core): Data model, `/save`, `/items`, FTS, dedupe, WebUI list/detail
+Phase 1 (MVP Core): Data model, `/save`, `/items`, FTS, dedupe, ingestion pipeline
 Phase 2: Tags, favorites, status management, import/export
 Phase 3: Embeddings + RAG exposure, summarize + TTS actions
 Phase 4: Highlights/notes, suggestions/digest, bookmarklet, extension scaffolding
+Frontend: API-first delivery; `tldw-frontend/` UX implementation tracked separately.
 
 Migration: Provide DB migration helpers in `Config_Files/` and `DB_Management` utilities.
 
 ## 14. Open Questions & Risks
 
-- JS-rendered pages: do we add optional headless rendering (Playwright) for stubborn sites?
+- Headless rendering (Playwright) in MVP adds heavier dependencies and resource usage; requires strict sandbox and time/CPU caps.
 - Storage policy for archived HTML/PDF and images; quotas and cleanup.
 - Large/complex documents (magazine layouts, PDFs) - lean on existing document pipeline vs. special handling here?
 - Namespace strategy for embeddings when users re-tag or archive: re-embed vs. soft moves.
@@ -268,7 +275,7 @@ Migration: Provide DB migration helpers in `Config_Files/` and `DB_Management` u
 - Can save at least 95% of typical news/blog/article URLs with readable text.
 - Search returns relevant items in < 200ms P50 on a library of 1k items.
 - Items are discoverable in RAG with correct metadata and per-user isolation.
-- WebUI provides a clean reader with basic actions working end-to-end.
+- API returns reader-ready `clean_html` + `text` and supports basic actions end-to-end.
 - Import of Pocket or Instapaper succeeds on official export formats.
 
 ---

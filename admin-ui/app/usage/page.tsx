@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,9 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { RefreshCw, BarChart3, Calendar, Download } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { getAuthHeaders } from '@/lib/auth';
+import { buildApiUrl } from '@/lib/api-config';
+import { buildAuthHeaders } from '@/lib/http';
+import { formatBytes, formatLatency } from '@/lib/format';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useToast } from '@/components/ui/toast';
 
@@ -56,10 +58,6 @@ interface LlmTopSpenderRow {
 
 type ExportKey = 'daily' | 'top' | 'llm';
 
-const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const API_VERSION = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
-const API_URL = `${API_HOST.replace(/\/$/, '')}/api/${API_VERSION}`;
-
 const toDateInput = (date: Date) => date.toISOString().slice(0, 10);
 
 const defaultEnd = () => toDateInput(new Date());
@@ -69,22 +67,11 @@ const defaultStart = () => {
   return toDateInput(date);
 };
 
-const formatBytes = (value?: number | null) => {
-  if (value === null || value === undefined) return '—';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = value;
-  let idx = 0;
-  while (size >= 1024 && idx < units.length - 1) {
-    size /= 1024;
-    idx += 1;
-  }
-  return `${size.toFixed(1)} ${units[idx]}`;
-};
+const formatBytesDisplay = (value?: number | null) =>
+  formatBytes(value, { fallback: '—' });
 
-const formatLatency = (value?: number | null) => {
-  if (value === null || value === undefined) return '—';
-  return `${value.toFixed(1)} ms`;
-};
+const formatLatencyDisplay = (value?: number | null) =>
+  formatLatency(value, { fallback: '—' });
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
@@ -110,8 +97,8 @@ const downloadCsv = async (
   fallbackFilename: string
 ) => {
   const query = new URLSearchParams(params).toString();
-  const response = await fetch(`${API_URL}${endpoint}${query ? `?${query}` : ''}`, {
-    headers: getAuthHeaders(),
+  const response = await fetch(buildApiUrl(`${endpoint}${query ? `?${query}` : ''}`), {
+    headers: buildAuthHeaders('GET'),
     credentials: 'include',
   });
   if (!response.ok) {
@@ -281,7 +268,7 @@ export default function UsagePage() {
   }, [loadData]);
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -425,9 +412,9 @@ export default function UsagePage() {
                             <TableCell>{row.user_id}</TableCell>
                             <TableCell className="text-right">{row.requests}</TableCell>
                             <TableCell className="text-right">{row.errors}</TableCell>
-                            <TableCell className="text-right">{formatBytes(row.bytes_total)}</TableCell>
-                            <TableCell className="text-right">{formatBytes(row.bytes_in_total ?? undefined)}</TableCell>
-                            <TableCell className="text-right">{formatLatency(row.latency_avg_ms)}</TableCell>
+                            <TableCell className="text-right">{formatBytesDisplay(row.bytes_total)}</TableCell>
+                            <TableCell className="text-right">{formatBytesDisplay(row.bytes_in_total ?? undefined)}</TableCell>
+                            <TableCell className="text-right">{formatLatencyDisplay(row.latency_avg_ms)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -484,9 +471,9 @@ export default function UsagePage() {
                             <TableCell>{row.user_id}</TableCell>
                             <TableCell className="text-right">{row.requests}</TableCell>
                             <TableCell className="text-right">{row.errors}</TableCell>
-                            <TableCell className="text-right">{formatBytes(row.bytes_total)}</TableCell>
-                            <TableCell className="text-right">{formatBytes(row.bytes_in_total ?? undefined)}</TableCell>
-                            <TableCell className="text-right">{formatLatency(row.latency_avg_ms)}</TableCell>
+                            <TableCell className="text-right">{formatBytesDisplay(row.bytes_total)}</TableCell>
+                            <TableCell className="text-right">{formatBytesDisplay(row.bytes_in_total ?? undefined)}</TableCell>
+                            <TableCell className="text-right">{formatLatencyDisplay(row.latency_avg_ms)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -551,7 +538,7 @@ export default function UsagePage() {
                             <TableCell className="text-right">{row.output_tokens}</TableCell>
                             <TableCell className="text-right">{row.total_tokens}</TableCell>
                             <TableCell className="text-right">${row.total_cost_usd.toFixed(4)}</TableCell>
-                            <TableCell className="text-right">{formatLatency(row.latency_avg_ms)}</TableCell>
+                            <TableCell className="text-right">{formatLatencyDisplay(row.latency_avg_ms)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -602,6 +589,6 @@ export default function UsagePage() {
           </Tabs>
         </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

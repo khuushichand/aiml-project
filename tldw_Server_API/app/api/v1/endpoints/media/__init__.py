@@ -4,7 +4,6 @@ from typing import Any, Dict
 
 from fastapi import APIRouter
 from loguru import logger
-import httpx  # legacy shim for tests that monkeypatch media.httpx
 
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (
     file_validator_instance,
@@ -13,6 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
     download_url_async as _download_url_async,
 )
+from tldw_Server_API.app.core.http_client import adownload as _m_adownload
 from tldw_Server_API.app.core.Utils.Utils import smart_download as _smart_download
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager as CoreTempDirManager,
@@ -52,6 +52,9 @@ from tldw_Server_API.app.api.v1.endpoints.media import add as add_endpoint  # no
 from tldw_Server_API.app.api.v1.endpoints.media import debug as debug_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import (
     ingest_web_content as ingest_web_content_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    ingest_jobs as ingest_jobs_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import item as item_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import listing as listing_endpoint  # noqa: E402
@@ -101,6 +104,7 @@ for _router in (
     add_endpoint.router,
     debug_endpoint.router,
     ingest_web_content_endpoint.router,
+    ingest_jobs_endpoint.router,
     process_code_endpoint.router,
     process_documents_endpoint.router,
     process_pdfs_endpoint.router,
@@ -254,7 +258,6 @@ __all__ = [
     "cache",
     "cache_response",
     "invalidate_cache",
-    "httpx",
     "get_request_user",
     "get_media_db_for_user",
     "get_usage_event_logger",

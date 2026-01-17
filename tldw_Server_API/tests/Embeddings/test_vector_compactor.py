@@ -30,6 +30,7 @@ class _FakeCollection:
         self.deleted = []
 
     def delete(self, where=None, ids=None):
+
         if where:
             self.deleted.append(where)
 
@@ -49,12 +50,13 @@ class _FakeMgr:
         return self._collections[name]
 
     def close(self):
+
         return None
 
 
 @pytest.mark.unit
 def test_compact_once_deletes_vectors(monkeypatch):
-    # Fake list of soft-deleted media ids
+     # Fake list of soft-deleted media ids
     async def _fake_ids(dbp):
         return [5, 7]
     monkeypatch.setattr(vc, "_get_media_ids_marked_deleted", _fake_ids, raising=True)

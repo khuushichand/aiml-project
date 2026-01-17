@@ -37,6 +37,7 @@ class TestPathTraversalProtection:
     """Test path traversal attack prevention"""
 
     def test_path_traversal_in_config(self):
+
         """Test that path traversal attempts in config are blocked"""
         manager = EvaluationManager()
         expected_path = DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id()).resolve()
@@ -55,6 +56,7 @@ class TestPathTraversalProtection:
             assert safe_path == expected_path
 
     def test_absolute_path_outside_project(self):
+
         """Test that absolute paths outside project are rejected"""
         manager = EvaluationManager()
         expected_path = DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id()).resolve()
@@ -70,6 +72,7 @@ class TestPathTraversalProtection:
             assert safe_path == expected_path
 
     def test_null_byte_injection(self):
+
         """Test that null byte injection is handled"""
         manager = EvaluationManager()
 
@@ -273,6 +276,7 @@ class TestConnectionPoolThreadSafety:
     """Test connection pool thread safety"""
 
     def test_concurrent_connection_access(self):
+
         """Test that connections are thread-safe"""
         with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
             pool = ConnectionPool(
@@ -285,6 +289,7 @@ class TestConnectionPoolThreadSafety:
             results = []
 
             def worker(worker_id):
+
                 """Worker function that uses connections"""
                 try:
                     for i in range(10):
@@ -330,6 +335,7 @@ class TestConnectionPoolThreadSafety:
                 assert counts == list(range(1, 11))
 
     def test_connection_pool_exhaustion(self):
+
         """Test that pool exhaustion is handled correctly"""
         import time
         with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:

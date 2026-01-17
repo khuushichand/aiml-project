@@ -302,10 +302,12 @@ Lightweight liveness check for the Chatbooks subsystem.
   "status": "healthy|degraded|unhealthy",
   "timestamp": "2024-01-15T10:30:00Z",
   "components": {
-    "storage_base": {"path": "/var/lib/tldw/user_data", "exists": true, "writable": true}
+    "storage_base": {"path": "<USER_DB_BASE_DIR>", "exists": true, "writable": true}
   }
 }
 ```
+
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 ## Data Models
 
@@ -411,55 +413,93 @@ Exceeded limits return HTTP 429.
 ### Python Example
 
 ```python
-import requests
 import json
+import time
+import uuid
+from urllib.request import Request, urlopen
 
 # Configuration
 API_BASE = "http://localhost:8000/api/v1"
 TOKEN = "your-jwt-token"
 headers = {"Authorization": f"Bearer {TOKEN}"}  # In single-user mode use: {"X-API-KEY": API_KEY}
 
+def request_json(method, url, payload=None, headers=None):
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update(headers)
+    req = Request(url, data=data, headers=hdrs, method=method)
+    with urlopen(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def download_file(url, headers, dest_path, chunk_size=8192):
+    req = Request(url, headers=headers, method="GET")
+    with urlopen(req) as resp, open(dest_path, "wb") as f:
+        while True:
+            chunk = resp.read(chunk_size)
+            if not chunk:
+                break
+            f.write(chunk)
+
+def encode_multipart(fields, files):
+    boundary = uuid.uuid4().hex
+    body = bytearray()
+
+    def add_line(line):
+        body.extend(line.encode("utf-8"))
+        body.extend(b"\r\n")
+
+    for name, value in fields.items():
+        add_line(f"--{boundary}")
+        add_line(f'Content-Disposition: form-data; name="{name}"')
+        add_line("")
+        add_line(str(value))
+
+    for name, filename, content, content_type in files:
+        add_line(f"--{boundary}")
+        add_line(f'Content-Disposition: form-data; name="{name}"; filename="{filename}"')
+        add_line(f"Content-Type: {content_type or 'application/octet-stream'}")
+        add_line("")
+        body.extend(content)
+        body.extend(b"\r\n")
+
+    add_line(f"--{boundary}--")
+    return boundary, bytes(body)
+
 # Create a chatbook export (async)
-response = requests.post(
+data = request_json(
+    "POST",
     f"{API_BASE}/chatbooks/export",
-    headers=headers,
-    json={
+    {
         "name": "Weekly Backup",
         "description": "Complete backup of all content",
         "content_selections": {},  # Empty = export everything
         "include_media": True,
-        "async_mode": True
-    }
+        "async_mode": True,
+    },
+    headers=headers,
 )
-
-data = response.json()
 job_id = data.get("job_id")
 if job_id:
     print(f"Export started: {job_id}")
 
     # Monitor export job
-    import time
     while True:
-        job_status = requests.get(
+        status_data = request_json(
+            "GET",
             f"{API_BASE}/chatbooks/export/jobs/{job_id}",
-            headers=headers
+            headers=headers,
         )
-        status_data = job_status.json()
 
         print(f"Progress: {status_data['progress_percentage']}%")
 
         if status_data["status"] == "completed":
             # Download the chatbook
-            download_response = requests.get(
+            download_file(
                 f"{API_BASE}/chatbooks/download/{job_id}",
                 headers=headers,
-                stream=True
+                dest_path="my_backup.chatbook",
             )
-
-            with open("my_backup.chatbook", "wb") as f:
-                for chunk in download_response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
             print("Download complete!")
             break
         elif status_data["status"] == "failed":
@@ -470,16 +510,26 @@ if job_id:
 
 # Import a chatbook (options as query parameters)
 with open("my_backup.chatbook", "rb") as f:
-    files = {"file": f}
-    import_response = requests.post(
-        f"{API_BASE}/chatbooks/import?conflict_resolution=skip&prefix_imported=false",
-        headers=headers,
-        files=files
+    boundary, body = encode_multipart(
+        {},
+        [("file", "my_backup.chatbook", f.read(), "application/octet-stream")],
     )
-
-    if import_response.status_code == 200:
-        result = import_response.json()
-        print(f"Imported: {result['imported_items']}")
+    upload_headers = {
+        **headers,
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    req = Request(
+        f"{API_BASE}/chatbooks/import?conflict_resolution=skip&prefix_imported=false",
+        data=body,
+        headers=upload_headers,
+        method="POST",
+    )
+    with urlopen(req) as resp:
+        if resp.status != 200:
+            print(f"Import failed with status {resp.status}")
+        else:
+            result = json.loads(resp.read().decode("utf-8"))
+            print(f"Imported: {result['imported_items']}")
 ```
 
 ### JavaScript Example

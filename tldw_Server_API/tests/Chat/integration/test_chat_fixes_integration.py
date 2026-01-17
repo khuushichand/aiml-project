@@ -4,6 +4,7 @@ Tests the fixes for issues identified in the code review.
 """
 
 import pytest
+
 pytestmark = pytest.mark.unit
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.main import app
@@ -18,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from tldw_Server_API.app.api.v1.endpoints.chat import (
     _save_message_turn_to_db,
     _process_content_for_db_sync,
-    create_chat_completion
+    create_chat_completion,
 )
 from tldw_Server_API.app.core.Chat.chat_helpers import (
     validate_request_payload,
@@ -26,15 +27,11 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
     extract_response_content,
     load_conversation_history,
 )
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
-    CharactersRAGDB,
-    ConflictError
-)
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
-    ChatCompletionUserMessageParam
+    ChatCompletionUserMessageParam,
 )
-
 
 
 @pytest.fixture
@@ -42,12 +39,7 @@ def setup_auth_override():
     """Override authentication for tests."""
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
-    test_user = User(
-        id=1,
-        username="test_user",
-        email="test@example.com",
-        is_active=True
-    )
+    test_user = User(id=1, username="test_user", email="test@example.com", is_active=True)
 
     async def mock_get_request_user(api_key=None, token=None):
         return test_user
@@ -76,31 +68,21 @@ class TestEmptyMessageFix:
         # Create a message with invalid image
         message_obj = {
             "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "data:image/invalid;base64,invalid_base64_data"
-                    }
-                }
-            ]
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/invalid;base64,invalid_base64_data"}}],
         }
 
         # Process the message
-        with patch('tldw_Server_API.app.api.v1.endpoints.chat.validate_image_url') as mock_validate:
+        with patch("tldw_Server_API.app.api.v1.endpoints.chat.validate_image_url") as mock_validate:
             mock_validate.return_value = (False, None, None)  # Invalid image
-            result = await _save_message_turn_to_db(
-                mock_db,
-                "conv_123",
-                message_obj,
-                use_transaction=False
-            )
+            result = await _save_message_turn_to_db(mock_db, "conv_123", message_obj, use_transaction=False)
 
         # Verify placeholder was saved
         assert mock_db.add_message.called
         saved_payload = mock_db.add_message.call_args[0][0]
-        assert "<Message processing failed" in saved_payload['content'] or \
-               "<Image failed validation" in saved_payload['content']
+        assert (
+            "<Message processing failed" in saved_payload["content"]
+            or "<Image failed validation" in saved_payload["content"]
+        )
 
     @pytest.mark.asyncio
     async def test_empty_message_not_ignored(self):
@@ -110,17 +92,9 @@ class TestEmptyMessageFix:
         mock_db.add_message = MagicMock(return_value="msg_124")
 
         # Empty message
-        message_obj = {
-            "role": "user",
-            "content": ""
-        }
+        message_obj = {"role": "user", "content": ""}
 
-        result = await _save_message_turn_to_db(
-            mock_db,
-            "conv_123",
-            message_obj,
-            use_transaction=False
-        )
+        result = await _save_message_turn_to_db(mock_db, "conv_123", message_obj, use_transaction=False)
 
         # Should save something, not return None
         assert mock_db.add_message.called
@@ -183,20 +157,17 @@ class TestDuplicateSerializationFix:
     async def test_single_json_serialization(self):
         """Test that request is only serialized once for performance."""
         request_data = ChatCompletionRequest(
-            model="test-model",
-            messages=[
-                ChatCompletionUserMessageParam(role="user", content="Test message")
-            ]
+            model="test-model", messages=[ChatCompletionUserMessageParam(role="user", content="Test message")]
         )
 
-        with patch('json.dumps') as mock_dumps:
+        with patch("json.dumps") as mock_dumps:
             mock_dumps.return_value = '{"test": "data"}'
 
             # Mock other dependencies
-            with patch('tldw_Server_API.app.api.v1.endpoints.chat.validate_request_payload') as mock_validate:
+            with patch("tldw_Server_API.app.api.v1.endpoints.chat.validate_request_payload") as mock_validate:
                 mock_validate.return_value = (True, None)
 
-                with patch('tldw_Server_API.app.api.v1.endpoints.chat.validate_request_size') as mock_size:
+                with patch("tldw_Server_API.app.api.v1.endpoints.chat.validate_request_size") as mock_size:
                     # This should receive the cached JSON
 
                     # Simulate partial execution of create_chat_completion
@@ -206,6 +177,7 @@ class TestDuplicateSerializationFix:
 
                     # Validate gets the cached version
                     from tldw_Server_API.app.api.v1.schemas.chat_validators import validate_request_size
+
                     validate_request_size(request_json)
 
         # Should only serialize once
@@ -223,6 +195,7 @@ class TestConversationRaceCondition:
 
         # Simulate conflict on first attempt, success on retry
         call_count = 0
+
         def add_conversation_side_effect(conv_data):
             nonlocal call_count
             call_count += 1
@@ -233,16 +206,11 @@ class TestConversationRaceCondition:
         mock_db.add_conversation = MagicMock(side_effect=add_conversation_side_effect)
 
         # The actual implementation doesn't use db_transaction, just test the logic directly
-        with patch.object(mock_db, 'add_conversation', side_effect=add_conversation_side_effect):
+        with patch.object(mock_db, "add_conversation", side_effect=add_conversation_side_effect):
 
             loop = asyncio.get_running_loop()
             conv_id, was_created = await get_or_create_conversation(
-                mock_db,
-                None,  # No existing conversation
-                1,     # character_id
-                "TestChar",
-                "client_123",
-                loop
+                mock_db, None, 1, "TestChar", "client_123", loop  # No existing conversation  # character_id
             )
 
         # Should succeed after retry
@@ -260,7 +228,7 @@ class TestConversationRaceCondition:
         creation_attempts = []
 
         def add_conversation_concurrent(conv_data):
-            creation_attempts.append(conv_data['title'])
+            creation_attempts.append(conv_data["title"])
             # Simulate some succeeding, some failing
             if len(creation_attempts) % 2 == 0:
                 raise ConflictError("Duplicate")
@@ -271,14 +239,7 @@ class TestConversationRaceCondition:
         # Create multiple parallel requests
         async def create_conversation_task(task_id):
             loop = asyncio.get_running_loop()
-            return await get_or_create_conversation(
-                mock_db,
-                None,
-                1,
-                f"Char_{task_id}",
-                f"client_{task_id}",
-                loop
-            )
+            return await get_or_create_conversation(mock_db, None, 1, f"Char_{task_id}", f"client_{task_id}", loop)
 
         # Run parallel tasks
         tasks = [create_conversation_task(i) for i in range(5)]
@@ -299,19 +260,13 @@ class TestTransactionConsistency:
         mock_db.client_id = "test_client"
         mock_db.add_message = MagicMock(return_value="msg_125")
 
-        message_obj = {
-            "role": "user",
-            "content": "Test message"
-        }
+        message_obj = {"role": "user", "content": "Test message"}
 
         # The actual implementation doesn't use transaction_utils, just test the logic directly
         # Test that the function works with the database
 
         result = await _save_message_turn_to_db(
-            mock_db,
-            "conv_123",
-            message_obj,
-            use_transaction=True  # Should use transaction
+            mock_db, "conv_123", message_obj, use_transaction=True  # Should use transaction
         )
 
         # Verify message was saved
@@ -324,11 +279,7 @@ class TestErrorResponseStandardization:
 
     def test_5xx_errors_masked(self, setup_auth_override):
         """Test that 5xx errors don't expose internal details."""
-        from tldw_Server_API.app.core.Chat.Chat_Deps import (
-            ChatProviderError,
-            ChatAPIError,
-            ChatConfigurationError
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError, ChatAPIError, ChatConfigurationError
 
         # Test various 5xx errors
         errors_to_test = [
@@ -351,7 +302,7 @@ class TestErrorResponseStandardization:
         from tldw_Server_API.app.core.Chat.Chat_Deps import (
             ChatAuthenticationError,
             ChatRateLimitError,
-            ChatBadRequestError
+            ChatBadRequestError,
         )
 
         # Test client errors
@@ -376,7 +327,7 @@ class TestConfigurationLoading:
             MAX_BASE64_BYTES,
             MAX_TEXT_LENGTH,
             MAX_MESSAGES_PER_REQUEST,
-            MAX_IMAGES_PER_REQUEST
+            MAX_IMAGES_PER_REQUEST,
         )
 
         # These should be loaded from config or have defaults
@@ -393,10 +344,7 @@ class TestConfigurationLoading:
 
     def test_streaming_config_loaded(self):
         """Test that streaming configuration is loaded."""
-        from tldw_Server_API.app.core.Chat.streaming_utils import (
-            STREAMING_IDLE_TIMEOUT,
-            HEARTBEAT_INTERVAL
-        )
+        from tldw_Server_API.app.core.Chat.streaming_utils import STREAMING_IDLE_TIMEOUT, HEARTBEAT_INTERVAL
 
         # Should be loaded from config
         assert STREAMING_IDLE_TIMEOUT > 0
@@ -418,10 +366,7 @@ class TestValidationImprovements:
         """Test comprehensive request validation."""
         # Valid request
         valid_request = ChatCompletionRequest(
-            model="test-model",
-            messages=[
-                ChatCompletionUserMessageParam(role="user", content="Test")
-            ]
+            model="test-model", messages=[ChatCompletionUserMessageParam(role="user", content="Test")]
         )
 
         is_valid, error = await validate_request_payload(valid_request)
@@ -432,9 +377,8 @@ class TestValidationImprovements:
         many_messages = ChatCompletionRequest(
             model="test-model",
             messages=[
-                ChatCompletionUserMessageParam(role="user", content=f"Message {i}")
-                for i in range(1001)  # Over limit
-            ]
+                ChatCompletionUserMessageParam(role="user", content=f"Message {i}") for i in range(1001)  # Over limit
+            ],
         )
 
         is_valid, error = await validate_request_payload(many_messages, max_messages=1000)
@@ -444,9 +388,7 @@ class TestValidationImprovements:
         # Message too long
         long_message = ChatCompletionRequest(
             model="test-model",
-            messages=[
-                ChatCompletionUserMessageParam(role="user", content="x" * 2000)  # Over limit for test validator
-            ]
+            messages=[ChatCompletionUserMessageParam(role="user", content="x" * 2000)],  # Over limit for test validator
         )
 
         is_valid, error = await validate_request_payload(long_message, max_text_length=1000)
@@ -459,11 +401,7 @@ class TestValidationImprovements:
         assert extract_response_content("Simple response") == "Simple response"
 
         # OpenAI-style dict response
-        openai_response = {
-            "choices": [
-                {"message": {"content": "OpenAI response"}}
-            ]
-        }
+        openai_response = {"choices": [{"message": {"content": "OpenAI response"}}]}
         assert extract_response_content(openai_response) == "OpenAI response"
 
         # Empty response

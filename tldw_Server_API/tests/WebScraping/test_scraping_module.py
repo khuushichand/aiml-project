@@ -36,26 +36,20 @@ async def test_extract_links_text_vs_html(monkeypatch):
 
     scraper = EnhancedWebScraper()
 
-    # Dummy session and response to avoid real network
+    # Dummy response to avoid real network
     class DummyResp:
-        async def text(self):
-            return "<html><body><a href='/a'>A</a></body></html>"
+        text = "<html><body><a href='/a'>A</a></body></html>"
 
-        async def __aenter__(self):
-            return self
+        async def aclose(self):
+            return None
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
+    async def fake_afetch(*args, **kwargs):  # noqa: ANN001, ARG001
+        return DummyResp()
 
-    class DummySession:
-        def get(self, url):
-            return DummyResp()
-
-    # Monkeypatch cookie manager to return dummy session (awaitable)
-    async def fake_get_session(url, **kw):
-        return DummySession()
-
-    monkeypatch.setattr(scraper.cookie_manager, 'get_session', fake_get_session)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping.afetch",
+        fake_afetch,
+    )
 
     # Case 1: plain text content should trigger a fetch and return links
     links_text = await scraper._extract_links("https://example.com", "plain text no html")
@@ -71,13 +65,15 @@ def test_provider_missing_keys_google(monkeypatch):
     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
     def fake_cfg():
-        return {"search_engines": {
-            "google_search_api_key": "",
-            "google_search_engine_id": "",
-            "google_search_api_url": "https://customsearch.googleapis.com/customsearch/v1",
-            "google_simp_trad_chinese": "1",
-            "limit_google_search_to_country": False,
-        }}
+        return {
+            "search_engines": {
+                "google_search_api_key": "",
+                "google_search_engine_id": "",
+                "google_search_api_url": "https://customsearch.googleapis.com/customsearch/v1",
+                "google_simp_trad_chinese": "1",
+                "limit_google_search_to_country": False,
+            },
+        }
 
     monkeypatch.setattr(ws, 'get_loaded_config', fake_cfg)
 

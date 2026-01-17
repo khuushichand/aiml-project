@@ -4,6 +4,7 @@
 import pytest
 import asyncio
 import datetime
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch, call
 from typing import Dict, Any
 
@@ -41,6 +42,13 @@ class MockMessagePart:
         self.text = text
 
 
+class MockImagePart:
+    """Mock image part for testing."""
+    def __init__(self, url: str):
+        self.type = "image_url"
+        self.image_url = {"url": url}
+
+
 class MockDatabase:
     """Mock database for testing."""
 
@@ -59,6 +67,7 @@ class MockDatabase:
             }
 
     def transaction(self):
+
         """Mock transaction context manager."""
         from contextlib import contextmanager
 
@@ -69,15 +78,18 @@ class MockDatabase:
         return mock_transaction()
 
     def get_character_card_by_id(self, char_id):
+
         return self._characters.get(char_id)
 
     def get_character_card_by_name(self, name):
+
         for card in self._characters.values():
             if card.get("name") == name:
                 return card
         return None
 
     def add_character_card(self, data):
+
         new_id = data.get("id") or self._next_id
         self._next_id += 1
         card = dict(data)
@@ -86,6 +98,7 @@ class MockDatabase:
         return new_id
 
     def get_conversation_by_id(self, conv_id):
+
         if conv_id == "existing_conv":
             return {
                 "id": "existing_conv",
@@ -96,9 +109,11 @@ class MockDatabase:
         return None
 
     def add_conversation(self, data):
+
         return f"new_conv_{data.get('character_id', 0)}"
 
     def get_messages_for_conversation(self, conv_id, limit, offset, order):
+
         if conv_id == "existing_conv":
             return [
                 {
@@ -172,6 +187,21 @@ class TestValidateRequestPayload:
         is_valid, error = await validate_request_payload(request, max_images=10)
         assert is_valid is False
         assert "too many images" in error.lower()
+
+    async def test_image_size_enforcement_rejects_oversized_payload(self):
+        """Test validation fails when data URI exceeds configured image byte cap."""
+        big_b64 = "A" * 5000
+        msg = MockMessage()
+        msg.content = [MockImagePart(f"data:image/png;base64,{big_b64}")]
+        request = MockChatRequest([msg])
+
+        is_valid, error = await validate_request_payload(
+            request,
+            enforce_image_max_bytes=True,
+            max_image_bytes=100,
+        )
+        assert is_valid is False
+        assert "too large" in error.lower()
 
 
 @pytest.mark.asyncio
@@ -296,6 +326,44 @@ class TestGetOrCreateConversation:
             )
 
         assert conv_id != "existing_conv"
+        assert was_created is True
+
+    async def test_conversation_creation_transaction_thread(self):
+        """Ensure conversation creation runs inside a single-thread transaction."""
+
+        class ThreadAwareDB:
+            def __init__(self):
+                self.client_id = "threaded_client"
+                self._tx_thread = None
+
+            def transaction(self):
+                from contextlib import contextmanager
+
+                @contextmanager
+                def _tx():
+                    self._tx_thread = threading.get_ident()
+                    try:
+                        yield self
+                    finally:
+                        self._tx_thread = None
+
+                return _tx()
+
+            def get_conversation_by_id(self, conv_id):
+                return None
+
+            def add_conversation(self, data):
+                assert self._tx_thread == threading.get_ident()
+                return "threaded_conv"
+
+        db = ThreadAwareDB()
+        loop = asyncio.get_running_loop()
+
+        conv_id, was_created = await get_or_create_conversation(
+            db, None, 1, "TestChar", "threaded_client", loop
+        )
+
+        assert conv_id == "threaded_conv"
         assert was_created is True
 
 

@@ -103,12 +103,12 @@ def test_variant_decode_selection(monkeypatch):
         Create a placeholder transcription label that encodes the Parakeet variant.
 
         Parameters:
-        	audio_np (numpy.ndarray): Array of audio samples.
-        	sample_rate (int): Sample rate of the audio in Hz.
-        	variant (str): Variant identifier to include in the label (default: "standard").
+            audio_np (numpy.ndarray): Array of audio samples.
+            sample_rate (int): Sample rate of the audio in Hz.
+            variant (str): Variant identifier to include in the label (default: "standard").
 
         Returns:
-        	transcription (str): String in the form `nemo:{variant}`.
+            transcription (str): String in the form `nemo:{variant}`.
         """
         return f"nemo:{variant}"
     mod_nemo.transcribe_with_parakeet = _tx_parakeet

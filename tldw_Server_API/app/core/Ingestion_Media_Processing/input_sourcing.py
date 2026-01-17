@@ -12,6 +12,7 @@ Behavior is intentionally kept backwards compatible with the original helpers.
 """
 
 import asyncio
+import math
 import os
 import shutil
 import tempfile
@@ -26,6 +27,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     FileValidator,
     process_and_validate_file,
 )
+from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Utils.Utils import logging, sanitize_filename
 from tldw_Server_API.app.core.Utils.Utils import logging as logger
 
@@ -353,16 +355,27 @@ async def save_uploaded_files(
 
             max_cfg_bytes: Optional[int] = None
             try:
-                cfg = validator.get_media_config(inferred_media_key)
+                size_key = inferred_media_key or expected_media_type_key
+                cfg = validator.get_media_config(size_key)
                 if cfg:
-                    if inferred_media_key == "archive":
+                    if size_key == "archive":
                         size_mb = cfg.get("archive_file_size_mb") or cfg.get("max_size_mb")
                     else:
                         size_mb = cfg.get("max_size_mb")
-                    if isinstance(size_mb, (int, float)):
-                        max_cfg_bytes = int(size_mb) * 1024 * 1024
+                    if isinstance(size_mb, (int, float)) and size_mb > 0:
+                        max_cfg_bytes = int(math.ceil(size_mb)) * 1024 * 1024
             except Exception:
                 max_cfg_bytes = None
+            if max_cfg_bytes is None and not (inferred_media_key or expected_media_type_key):
+                try:
+                    media_cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
+                    fallback_mb = media_cfg.get("max_unknown_file_size_mb")
+                    if fallback_mb is None:
+                        fallback_mb = media_cfg.get("max_document_file_size_mb", 50)
+                    if isinstance(fallback_mb, (int, float)) and fallback_mb > 0:
+                        max_cfg_bytes = int(math.ceil(fallback_mb)) * 1024 * 1024
+                except Exception:
+                    max_cfg_bytes = None
 
             written = 0
             try:

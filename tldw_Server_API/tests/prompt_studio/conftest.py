@@ -3,6 +3,7 @@
 
 import os
 import tempfile
+import sqlite3
 from pathlib import Path
 import uuid
 from unittest.mock import patch
@@ -34,16 +35,33 @@ from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBack
 
 # Postgres setup is unified via tests._plugins.postgres.
 
+@pytest.fixture(scope="session", autouse=True)
+def prompt_studio_jobs_test_env(tmp_path_factory: pytest.TempPathFactory):
+    jobs_dir = tmp_path_factory.mktemp("prompt_studio_jobs")
+    jobs_db_path = jobs_dir / "jobs.sqlite"
+    os.environ["JOBS_DB_PATH"] = str(jobs_db_path)
+    os.environ["JOBS_QUOTA_MAX_QUEUED_PROMPT_STUDIO"] = "0"
+    os.environ["JOBS_QUOTA_MAX_INFLIGHT_PROMPT_STUDIO"] = "0"
+    os.environ["JOBS_QUOTA_SUBMITS_PER_MIN_PROMPT_STUDIO"] = "0"
+    yield
+    for key in (
+        "JOBS_DB_PATH",
+        "JOBS_QUOTA_MAX_QUEUED_PROMPT_STUDIO",
+        "JOBS_QUOTA_MAX_INFLIGHT_PROMPT_STUDIO",
+        "JOBS_QUOTA_SUBMITS_PER_MIN_PROMPT_STUDIO",
+    ):
+        os.environ.pop(key, None)
+
 @pytest.fixture(autouse=True)
 def enable_test_mode(monkeypatch):
-    """Enable test mode for all tests"""
+    """Enable test mode for all tests."""
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("CSRF_ENABLED", "false")
 
 @pytest.fixture
 def mock_current_user():
-    """Mock user for authentication"""
+    """Mock user for authentication."""
     return {
         "id": "test-user-123",
         "username": "testuser",
@@ -54,7 +72,7 @@ def mock_current_user():
 
 @pytest.fixture(autouse=True)
 def mock_auth_dependency(mock_current_user):
-    """Automatically mock authentication for all tests"""
+    """Automatically mock authentication for all tests."""
     with patch('tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_current_user') as mock_get_user:
         mock_get_user.return_value = mock_current_user
         with patch('tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_current_active_user') as mock_active:
@@ -63,14 +81,14 @@ def mock_auth_dependency(mock_current_user):
 
 @pytest.fixture(scope="session")
 def test_db_path():
-    """Session-scoped test database path"""
+    """Session-scoped test database path."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test_prompt_studio.db"
         yield str(db_path)
 
 @pytest.fixture
 def isolated_db(test_db_path):
-    """Isolated database for each test"""
+    """Isolated database for each test."""
     import uuid
 
     unique_path = f"{test_db_path}_{uuid.uuid4()}.db"
@@ -89,50 +107,172 @@ def isolated_db(test_db_path):
 
 @pytest.fixture
 def auth_headers():
-    """Authentication headers for API tests"""
+    """Authentication headers for API tests."""
     return {
         "Authorization": "Bearer test-token",
         "Content-Type": "application/json"
     }
 
+def _quote_ident(name: str) -> str:
+    return f"\"{name.replace('\"', '\"\"')}\""
+
+def _row_name(row) -> str:
+    if isinstance(row, (list, tuple)) and row:
+        value = row[0]
+        return "" if value is None else str(value)
+    if isinstance(row, dict):
+        value = row.get("tablename") or row.get("name")
+        return "" if value is None else str(value)
+    if hasattr(row, "keys"):
+        try:
+            keys = set(row.keys())
+            if "tablename" in keys:
+                value = row["tablename"]
+            elif "name" in keys:
+                value = row["name"]
+            else:
+                value = None
+            return "" if value is None else str(value)
+        except Exception:
+            return ""
+    if hasattr(row, "get"):
+        try:
+            value = row.get("tablename") or row.get("name")
+            return "" if value is None else str(value)
+        except Exception:
+            return ""
+    return ""
+
+
+def _reset_prompt_studio_tables(db: PromptStudioDatabase) -> None:
+    if db.backend_type == BackendType.POSTGRESQL:
+        with db.transaction() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'prompt_studio_%'"
+            )
+            rows = cursor.fetchall()
+            tables = [name for name in (_row_name(row) for row in rows) if name and "_fts" not in name]
+            if tables:
+                joined = ", ".join(_quote_ident(name) for name in tables)
+                cursor.execute(f"TRUNCATE {joined} RESTART IDENTITY CASCADE")
+        return
+
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'prompt_studio_%'"
+    )
+    rows = cursor.fetchall()
+    tables = [name for name in (_row_name(row) for row in rows) if name and "_fts" not in name]
+    cursor.execute("PRAGMA foreign_keys=OFF")
+    try:
+        for name in tables:
+            cursor.execute(f"DELETE FROM {_quote_ident(name)}")
+        if tables:
+            placeholders = ", ".join("?" for _ in tables)
+            try:
+                cursor.execute(
+                    f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
+                    tables,
+                )
+            except Exception:
+                pass
+    finally:
+        cursor.execute("PRAGMA foreign_keys=ON")
+    conn.commit()
+
+
+@pytest.fixture(scope="session")
+def prompt_studio_sqlite_db_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    base = tmp_path_factory.mktemp("prompt_studio_shared")
+    db_path = base / "prompt_studio_shared.sqlite"
+    db = PromptStudioDatabase(str(db_path), "prompt-studio-session")
+    if hasattr(db, "close"):
+        try:
+            db.close()
+        except Exception:
+            pass
+    return db_path
+
+
+@pytest.fixture(scope="session")
+def prompt_studio_pg_placeholder_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    base = tmp_path_factory.mktemp("prompt_studio_pg")
+    return str(base / "prompt_studio_pg_placeholder.sqlite")
+
+
+@pytest.fixture(scope="session")
+def prompt_studio_pg_shared_db(
+    pg_database_config_session: DatabaseConfig,
+    prompt_studio_pg_placeholder_path: str,
+) -> PromptStudioDatabase:
+    backend = DatabaseBackendFactory.create_backend(pg_database_config_session)
+    db_instance = PromptStudioDatabase(
+        db_path=prompt_studio_pg_placeholder_path,
+        client_id="dual-postgres",
+        backend=backend,
+    )
+    try:
+        yield db_instance
+    finally:
+        try:
+            db_instance.close_connection()
+        except Exception:
+            pass
+        try:
+            db_instance.close()
+        except Exception:
+            pass
+        try:
+            backend.get_pool().close_all()
+        except Exception:
+            pass
+
 
 @pytest.fixture(params=["sqlite", "postgres"])
-def prompt_studio_dual_backend_db(request, tmp_path):
+def prompt_studio_dual_backend_db(
+    request,
+    prompt_studio_sqlite_db_path,
+):
     """Provide a PromptStudioDatabase instance configured for the requested backend."""
 
     label: str = request.param
-    backend = None
 
     if label == "sqlite":
-        db_path = tmp_path / f"prompt_studio_{label}.sqlite"
-        db_instance = PromptStudioDatabase(str(db_path), f"dual-{label}")
+        db_instance = PromptStudioDatabase(str(prompt_studio_sqlite_db_path), f"dual-{label}")
     else:
-        # Use unified pg temp database fixture (lazy to avoid resolving when running sqlite branch)
-        config: DatabaseConfig = request.getfixturevalue("pg_database_config")
-        backend = DatabaseBackendFactory.create_backend(config)
-        db_instance = PromptStudioDatabase(
-            db_path=str(tmp_path / "prompt_studio_pg_placeholder.sqlite"),
-            client_id="dual-postgres",
-            backend=backend,
-        )
+        db_instance = request.getfixturevalue("prompt_studio_pg_shared_db")
 
     try:
-        yield label, db_instance
-    finally:
-        if hasattr(db_instance, "close"):
-            try:
-                db_instance.close()
-            except Exception:
-                pass
-        elif hasattr(db_instance, "close_connection"):
+        try:
+            _reset_prompt_studio_tables(db_instance)
+        except sqlite3.DatabaseError:
+            if label != "sqlite":
+                raise
             try:
                 db_instance.close_connection()
             except Exception:
                 pass
-
-        if backend is not None:
             try:
-                backend.get_pool().close_all()
+                db_instance.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(str(prompt_studio_sqlite_db_path))
+            except Exception:
+                pass
+            db_instance = PromptStudioDatabase(str(prompt_studio_sqlite_db_path), f"dual-{label}")
+            _reset_prompt_studio_tables(db_instance)
+        yield label, db_instance
+    finally:
+        try:
+            db_instance.close_connection()
+        except Exception:
+            pass
+        if label == "sqlite":
+            try:
+                db_instance.close()
             except Exception:
                 pass
         # No explicit drop needed; pg_database_config fixture handles DB cleanup
@@ -166,7 +306,13 @@ def prompt_studio_dual_backend_client(
         )
 
     async def override_db():
-        return db_instance
+        try:
+            yield db_instance
+        finally:
+            try:
+                db_instance.close_connection()
+            except Exception:
+                pass
 
     _app: Any = fastapi_app  # appease static analyzers about dynamic attributes
     _app.dependency_overrides[get_request_user] = override_user

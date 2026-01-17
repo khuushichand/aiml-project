@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -22,8 +24,62 @@ try:
 except Exception:  # pragma: no cover
     aioredis = None  # type: ignore
 
+try:
+    from chromadb.errors import ChromaError
+except Exception:  # pragma: no cover
+    ChromaError = None  # type: ignore
+
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+_DB_CLOSE_EXCEPTIONS = (BackendDatabaseError, sqlite3.Error, OSError, RuntimeError)
+_CHROMA_CLOSE_EXCEPTIONS = (RuntimeError, OSError)
+if ChromaError is not None:
+    _CHROMA_CLOSE_EXCEPTIONS = (*_CHROMA_CLOSE_EXCEPTIONS, ChromaError)
+
+
+def _sanitize_media_db_path(user_id: str, db_path: Optional[str]) -> str:
+    """
+    Resolve and validate the media DB path for the given user.
+
+    Ensures that any override stays within the media DB root directory.
+    """
+    # Compute the default per-user database path and root directory
+    default_path = str(
+        DatabasePaths.get_media_db_path(
+            int(user_id) if str(user_id).isdigit() else DatabasePaths.get_single_user_id()
+        )
+    )
+    default_path_obj = Path(default_path)
+    media_root = default_path_obj.parent
+
+    # Start from environment/default behavior if explicit path is not provided
+    raw_path = db_path or os.getenv("MEDIA_DB_PATH", default_path)
+
+    # Normalize the candidate path
+    candidate = Path(raw_path).expanduser()
+
+    # If the candidate is relative, interpret it as relative to the media root
+    if not candidate.is_absolute():
+        candidate = media_root / candidate
+
+    # Resolve the final path
+    try:
+        candidate_resolved = candidate.resolve(strict=False)
+    except TypeError:
+        # Fallback for environments where strict parameter is not supported
+        candidate_resolved = candidate.resolve()
+
+    # Enforce that the final path remains within the media root directory
+    try:
+        candidate_resolved.relative_to(media_root)
+    except ValueError:
+        raise ValueError("Invalid media_db_path; must reside within the media DB root directory") from None
+
+    return str(candidate_resolved)
 
 
 async def _get_media_ids_marked_deleted(db_path: str) -> list[int]:
@@ -35,8 +91,10 @@ async def _get_media_ids_marked_deleted(db_path: str) -> list[int]:
     finally:
         try:
             db.close_connection()
-        except Exception:
-            pass
+        except _DB_CLOSE_EXCEPTIONS as e:
+            logger.debug(f"Compactor: failed to close media DB connection: {e}")
+        except Exception as e:
+            logger.debug(f"Compactor: unexpected error closing media DB connection: {e}")
 
 
 def _collection_name_for(user_id: str, media_id: int) -> str:
@@ -56,8 +114,12 @@ async def compact_once(user_id: str, db_path: Optional[str] = None) -> int:
         logger.error(f"Compactor initialization failed: {e}")
         return 0
 
-    default_path = str(DatabasePaths.get_media_db_path(int(user_id) if str(user_id).isdigit() else DatabasePaths.get_single_user_id()))
-    dbp = db_path or os.getenv("MEDIA_DB_PATH", default_path)
+    try:
+        dbp = _sanitize_media_db_path(user_id, db_path)
+    except ValueError as e:
+        logger.error(f"Compactor received invalid media_db_path for user_id={user_id}: {e}")
+        return 0
+
     ids = await _get_media_ids_marked_deleted(dbp)
     if not ids:
         return 0
@@ -76,8 +138,10 @@ async def compact_once(user_id: str, db_path: Optional[str] = None) -> int:
             logger.warning(f"Compactor error removing vectors for media_id={mid}: {e}")
     try:
         mgr.close()
-    except Exception:
-        pass
+    except _CHROMA_CLOSE_EXCEPTIONS as e:
+        logger.debug(f"Compactor: failed to close ChromaDB manager: {e}")
+    except Exception as e:
+        logger.debug(f"Compactor: unexpected error closing ChromaDB manager: {e}")
     return touched
 
 
@@ -86,17 +150,25 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
 
     Environment variables:
     - EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS (default: 1800)
-    - COMPACTOR_USER_ID (default: SINGLE_USER_FIXED_ID from settings or "1")
+    - COMPACTOR_USER_ID (required in multi-user mode; defaults to SINGLE_USER_FIXED_ID in single-user)
     - MEDIA_DB_PATH (optional)
     """
     try:
         from tldw_Server_API.app.core.config import settings
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import is_single_user_mode
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     except Exception as e:  # pragma: no cover
         logger.error(f"Compactor settings load failed: {e}")
         return
 
     interval = int(os.getenv("EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS", "1800") or 1800)
-    user_id = os.getenv("COMPACTOR_USER_ID") or str(settings.get("SINGLE_USER_FIXED_ID", "1"))
+    user_id = os.getenv("COMPACTOR_USER_ID")
+    if not user_id:
+        if is_single_user_mode():
+            user_id = str(DatabasePaths.get_single_user_id())
+        else:
+            logger.error("Compactor requires COMPACTOR_USER_ID in multi-user mode; exiting")
+            return
     logger.info(f"Starting Embeddings Vector Compactor for user_id={user_id}, interval={interval}s")
 
     while True:

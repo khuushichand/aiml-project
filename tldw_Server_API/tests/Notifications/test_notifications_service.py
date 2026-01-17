@@ -35,6 +35,7 @@ class _FakeDocService:
         model,
         conversation_id=None,
     ):
+
         self.calls.append(
             {
                 "title": title,
@@ -99,6 +100,7 @@ async def test_notifications_email_skips_without_recipient(monkeypatch):
 
 
 def test_notifications_chatbook_delivery(monkeypatch):
+
     fake_doc = _FakeDocService()
     svc = NotificationsService(user_id=2, user_email=None)
 

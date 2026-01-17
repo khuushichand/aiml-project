@@ -4,6 +4,8 @@ from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import extract_
 
 
 def test_ingestion_llm_extractor_parses_json_in_fenced_block(monkeypatch):
+
+
     # Simulate provider returning JSON inside triple backticks
     def _fake_chat_api_call(api_endpoint, messages_payload, api_key=None, temp=None, system_message=None, streaming=False, model=None):
         payload = {"claims": [{"text": "Claim A."}, {"text": "Claim B."}]}

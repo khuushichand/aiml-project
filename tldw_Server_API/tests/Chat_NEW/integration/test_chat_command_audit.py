@@ -134,7 +134,7 @@ def test_chat_command_rbac_enforcement(monkeypatch, test_client, auth_headers):
 
 @pytest.mark.integration
 def test_chat_command_weather_default_location_system_mode(monkeypatch, test_client, auth_headers):
-    # Enable commands and system injection; ensure env default_location not set
+     # Enable commands and system injection; ensure env default_location not set
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
     monkeypatch.delenv("DEFAULT_LOCATION", raising=False)

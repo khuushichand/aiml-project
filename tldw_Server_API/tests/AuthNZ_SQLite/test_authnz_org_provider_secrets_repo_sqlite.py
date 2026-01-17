@@ -44,7 +44,7 @@ async def test_org_provider_secrets_repo_sqlite(tmp_path, monkeypatch) -> None:
 
     users_db = UsersDB(pool)
     await users_db.initialize()
-    await users_db.create_user(
+    created_user = await users_db.create_user(
         username="byok-org",
         email="byok-org@example.com",
         password_hash="hashed-password",
@@ -54,6 +54,7 @@ async def test_org_provider_secrets_repo_sqlite(tmp_path, monkeypatch) -> None:
         storage_quota_mb=5120,
         uuid_value=uuid.uuid4(),
     )
+    user_id = int(created_user["id"])
 
     repo = AuthnzOrgProviderSecretsRepo(pool)
     await repo.ensure_tables()
@@ -72,6 +73,8 @@ async def test_org_provider_secrets_repo_sqlite(tmp_path, monkeypatch) -> None:
         key_hint=key_hint,
         metadata={"label": "org-shared"},
         updated_at=now,
+        created_by=user_id,
+        updated_by=user_id,
     )
 
     row = await repo.fetch_secret("org", 1, "openai")
@@ -79,6 +82,8 @@ async def test_org_provider_secrets_repo_sqlite(tmp_path, monkeypatch) -> None:
     assert row["provider"] == "openai"
     assert row["encrypted_blob"] == encrypted_blob
     assert row["key_hint"] == key_hint
+    assert row["created_by"] == user_id
+    assert row["updated_by"] == user_id
 
     items = await repo.list_secrets(scope_type="org", scope_id=1)
     assert len(items) == 1
@@ -96,3 +101,6 @@ async def test_org_provider_secrets_repo_sqlite(tmp_path, monkeypatch) -> None:
     assert deleted
     missing = await repo.fetch_secret("org", 1, "openai")
     assert missing is None
+    revoked_rows = await repo.list_secrets(scope_type="org", scope_id=1, include_revoked=True)
+    assert len(revoked_rows) == 1
+    assert revoked_rows[0]["revoked_at"] is not None

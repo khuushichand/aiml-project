@@ -9,6 +9,7 @@ import secrets
 import base64
 import os
 import stat
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, Tuple
 import asyncio
@@ -80,6 +81,8 @@ class SessionManager:
         self.cipher_suite: Optional[Fernet] = None
         self._fernet_candidates: List[Fernet] = []
         self._persisted_key_path: Optional[Path] = None
+        self._ephemeral_cache: Dict[str, Tuple[str, float]] = {}
+        self._ephemeral_lock = threading.Lock()
         self._init_encryption()
 
     async def initialize(self):
@@ -1631,6 +1634,82 @@ class SessionManager:
 
         except RedisError as e:
             logger.warning(f"Redis cache cleanup failed: {e}")
+
+    @staticmethod
+    def _ephemeral_redis_key(key: str) -> str:
+        return f"authnz:ephemeral:{key}"
+
+    def _purge_ephemeral_cache_locked(self, now: float) -> None:
+        if not self._ephemeral_cache:
+            return
+        expired = [k for k, (_, exp) in self._ephemeral_cache.items() if exp <= now]
+        for key in expired:
+            self._ephemeral_cache.pop(key, None)
+
+    async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int) -> None:
+        """Store an encrypted ephemeral value with TTL in Redis or memory."""
+        if not self._initialized:
+            await self.initialize()
+        if not key:
+            raise ValueError("Ephemeral cache key is required")
+        ttl = max(int(ttl_seconds), 1)
+        encrypted = self.encrypt_token(value)
+        if self.redis_client:
+            try:
+                await self.redis_client.setex(self._ephemeral_redis_key(key), ttl, encrypted)
+                return
+            except RedisError as exc:
+                logger.warning("Failed to cache ephemeral value in Redis: {}", exc)
+        now = time.monotonic()
+        with self._ephemeral_lock:
+            self._purge_ephemeral_cache_locked(now)
+            self._ephemeral_cache[key] = (encrypted, now + ttl)
+
+    async def get_ephemeral_value(self, key: str) -> Optional[str]:
+        """Retrieve and decrypt an ephemeral value if present and unexpired."""
+        if not self._initialized:
+            await self.initialize()
+        if not key:
+            return None
+        if self.redis_client:
+            try:
+                cached = await self.redis_client.get(self._ephemeral_redis_key(key))
+                if cached:
+                    return self.decrypt_token(cached)
+                return None
+            except RedisError as exc:
+                logger.warning("Failed to read ephemeral value from Redis: {}", exc)
+            except Exception as exc:
+                logger.debug("Failed to decrypt ephemeral value: {}", exc)
+                return None
+        now = time.monotonic()
+        with self._ephemeral_lock:
+            entry = self._ephemeral_cache.get(key)
+            if not entry:
+                return None
+            encrypted, expires_at = entry
+            if expires_at <= now:
+                self._ephemeral_cache.pop(key, None)
+                return None
+        try:
+            return self.decrypt_token(encrypted)
+        except Exception as exc:
+            logger.debug("Failed to decrypt ephemeral value: {}", exc)
+            return None
+
+    async def delete_ephemeral_value(self, key: str) -> None:
+        """Delete an ephemeral value from Redis and in-memory cache."""
+        if not self._initialized:
+            await self.initialize()
+        if not key:
+            return
+        if self.redis_client:
+            try:
+                await self.redis_client.delete(self._ephemeral_redis_key(key))
+            except RedisError as exc:
+                logger.warning("Failed to delete ephemeral value from Redis: {}", exc)
+        with self._ephemeral_lock:
+            self._ephemeral_cache.pop(key, None)
 
     @staticmethod
     def _coerce_datetime(value: Optional[Any]) -> Optional[datetime]:

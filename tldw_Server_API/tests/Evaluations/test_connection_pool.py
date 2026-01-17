@@ -68,6 +68,7 @@ class TestConnectionPool:
     """Test connection pool functionality."""
 
     def test_pool_initialization(self, connection_pool):
+
         """Test that connection pool initializes correctly."""
         stats = connection_pool.get_statistics()
         assert stats.total_connections >= 3  # Should pre-create core pool
@@ -75,6 +76,7 @@ class TestConnectionPool:
         assert stats.active_connections == 0
 
     def test_connection_checkout_return(self, connection_pool):
+
         """Test basic connection checkout and return."""
         with connection_pool.get_connection() as conn:
             assert isinstance(conn, PooledConnection)
@@ -91,6 +93,7 @@ class TestConnectionPool:
         assert stats.checkout_count == 1
 
     def test_multiple_connections(self, connection_pool):
+
         """Test multiple concurrent connections."""
         connections = []
 
@@ -111,6 +114,7 @@ class TestConnectionPool:
         assert stats.active_connections == 0
 
     def test_overflow_connections(self, connection_pool):
+
         """Test overflow connection creation."""
         connections = []
 
@@ -131,6 +135,7 @@ class TestConnectionPool:
                 context.__exit__(None, None, None)
 
     def test_pool_exhaustion(self, connection_pool):
+
         """Test pool exhaustion timeout."""
         connections = []
 
@@ -156,6 +161,7 @@ class TestConnectionPool:
                 context.__exit__(None, None, None)
 
     def test_stale_connection_cleanup(self, connection_pool):
+
         """Test that stale connections are cleaned up."""
         # Mock time to make connections appear stale
         with patch('time.time') as mock_time:
@@ -176,6 +182,7 @@ class TestConnectionPool:
             assert stats.total_connections >= 3
 
     def test_database_operations(self, connection_pool):
+
         """Test various database operations through pool."""
         with connection_pool.get_connection() as conn:
             # Insert data
@@ -201,7 +208,18 @@ class TestConnectionPool:
             count = cursor.fetchone()[0]
             assert count == 4
 
+    @pytest.mark.asyncio
+    async def test_async_connection_in_use_flag(self, connection_pool):
+        """Ensure async checkout keeps the connection marked in use."""
+        async with await connection_pool.get_connection_async() as conn:
+            assert conn.in_use is True
+            cursor = conn.execute("SELECT 1")
+            result = cursor.fetchone()
+            assert result[0] == 1
+        assert conn.in_use is False
+
     def test_transaction_rollback(self, connection_pool):
+
         """Test transaction rollback functionality."""
         with connection_pool.get_connection() as conn:
             # Start transaction and insert data
@@ -216,6 +234,7 @@ class TestConnectionPool:
             assert count == 0
 
     def test_health_status(self, connection_pool):
+
         """Test health status reporting."""
         health = connection_pool.get_health_status()
 
@@ -239,6 +258,7 @@ class TestEvaluationsConnectionManager:
     """Test the connection manager integration."""
 
     def test_manager_initialization(self, temp_db):
+
         """Test connection manager initialization."""
         manager = EvaluationsConnectionManager(temp_db)
 
@@ -253,6 +273,7 @@ class TestEvaluationsConnectionManager:
             manager.shutdown()
 
     def test_manager_operations(self, temp_db):
+
         """Test database operations through manager."""
         manager = EvaluationsConnectionManager(temp_db)
 
@@ -286,6 +307,7 @@ class TestGlobalFunctions:
     """Test global convenience functions."""
 
     def test_global_connection_access(self, monkeypatch):
+
         """Test global connection access functions."""
         # Mock the global connection manager
         mock_health = {"status": "healthy", "health_score": 100}
@@ -307,11 +329,13 @@ class TestConnectionPoolIntegration:
     """Integration tests for connection pool."""
 
     def test_concurrent_access(self, connection_pool):
+
         """Test concurrent access from multiple threads."""
         results = []
         errors = []
 
         def worker():
+
             try:
                 with connection_pool.get_connection() as conn:
                     cursor = conn.execute("SELECT 1")
@@ -337,6 +361,7 @@ class TestConnectionPoolIntegration:
         assert all(r == 1 for r in results)
 
     def test_connection_configuration(self, temp_db):
+
         """Test connection configuration options."""
         pool = ConnectionPool(
             db_path=temp_db,
@@ -358,6 +383,7 @@ class TestConnectionPoolIntegration:
             pool.shutdown()
 
     def test_pool_metrics_integration(self, connection_pool):
+
         """Test metrics integration if available."""
         # Perform some operations to generate metrics
         for _ in range(5):

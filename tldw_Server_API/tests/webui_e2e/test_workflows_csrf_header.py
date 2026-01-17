@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 
 
@@ -10,9 +12,10 @@ def test_workflow_posts_include_csrf_header(page, server_url):
     page.evaluate("() => window.apiClient.get('/api/v1/workflows')")
     page.wait_for_timeout(200)
 
+    run_suffix = uuid.uuid4().hex
     definition = {
-        "name": "playwright-csrf-check",
-        "version": 1,
+        "name": f"playwright-csrf-check-{run_suffix}",
+        "version": int(run_suffix[:8], 16),
         "steps": [
             {
                 "id": "s1",

@@ -83,6 +83,7 @@ class AuthNZTestBase(unittest.TestCase):
         cls.test_users = []
 
     def setUp(self):
+
         """Set up test database for each test"""
         if self.backend_type == "sqlite":
             self.temp_dir = tempfile.mkdtemp()
@@ -94,6 +95,7 @@ class AuthNZTestBase(unittest.TestCase):
         self.test_users = []  # Track users created in this test
 
     def tearDown(self):
+
         """Clean up after each test"""
         # Clean up test users
         if self.user_db and self.test_users:
@@ -154,6 +156,7 @@ class TestUserCRUD(AuthNZTestBase):
     """Test user CRUD operations"""
 
     def test_create_user_success(self):
+
         """Test successful user creation"""
         user_data = self.create_test_user("crud_create")
 
@@ -167,6 +170,7 @@ class TestUserCRUD(AuthNZTestBase):
         self.assertEqual(user["email"], user_data["email"])
 
     def test_create_user_duplicate_username(self):
+
         """Test duplicate username prevention"""
         user_data = self.create_test_user("crud_dup")
 
@@ -179,6 +183,7 @@ class TestUserCRUD(AuthNZTestBase):
             )
 
     def test_create_user_duplicate_email(self):
+
         """Test duplicate email prevention"""
         user_data = self.create_test_user("crud_email")
 
@@ -191,6 +196,7 @@ class TestUserCRUD(AuthNZTestBase):
             )
 
     def test_read_user_by_id(self):
+
         """Test reading user by ID"""
         user_data = self.create_test_user("crud_read")
 
@@ -203,6 +209,7 @@ class TestUserCRUD(AuthNZTestBase):
         self.assertIn("user", user["roles"])
 
     def test_read_user_by_username(self):
+
         """Test reading user by username"""
         user_data = self.create_test_user("crud_username")
 
@@ -213,6 +220,7 @@ class TestUserCRUD(AuthNZTestBase):
         self.assertEqual(user["username"], user_data["username"])
 
     def test_read_nonexistent_user(self):
+
         """Test reading non-existent user returns None"""
         user = self.user_db.get_user(user_id=999999)
         self.assertIsNone(user)
@@ -221,6 +229,7 @@ class TestUserCRUD(AuthNZTestBase):
         self.assertIsNone(user)
 
     def test_update_user_success(self):
+
         """Test successful user update"""
         user_data = self.create_test_user("crud_update")
 
@@ -240,6 +249,7 @@ class TestUserCRUD(AuthNZTestBase):
         self.assertEqual(user["metadata"]["number"], 42)
 
     def test_update_nonexistent_user(self):
+
         """Test updating non-existent user"""
         success = self.user_db.update_user(
             999999,
@@ -249,6 +259,7 @@ class TestUserCRUD(AuthNZTestBase):
         self.assertFalse(success)
 
     def test_delete_user_soft(self):
+
         """Test soft delete (deactivation)"""
         user_data = self.create_test_user("crud_delete")
 
@@ -263,6 +274,7 @@ class TestUserCRUD(AuthNZTestBase):
         self.assertFalse(user["is_active"])
 
     def test_delete_nonexistent_user(self):
+
         """Test deleting non-existent user"""
         success = self.user_db.delete_user(999999)
         self.assertFalse(success)
@@ -275,6 +287,7 @@ class TestRBAC(AuthNZTestBase):
     """Test Role-Based Access Control functionality"""
 
     def test_assign_role(self):
+
         """Test role assignment"""
         user_data = self.create_test_user("rbac_assign")
 
@@ -288,6 +301,7 @@ class TestRBAC(AuthNZTestBase):
         self.assertIn("user", roles)  # Original role
 
     def test_assign_invalid_role(self):
+
         """Test assigning non-existent role"""
         user_data = self.create_test_user("rbac_invalid")
 
@@ -296,6 +310,7 @@ class TestRBAC(AuthNZTestBase):
         self.assertFalse(success)
 
     def test_revoke_role(self):
+
         """Test role revocation"""
         user_data = self.create_test_user("rbac_revoke")
 
@@ -311,6 +326,7 @@ class TestRBAC(AuthNZTestBase):
         self.assertIn("user", roles)  # Original role remains
 
     def test_permissions_inheritance(self):
+
         """Test permission inheritance from roles"""
         user_data = self.create_test_user("rbac_perms")
 
@@ -331,6 +347,7 @@ class TestRBAC(AuthNZTestBase):
         self.assertIn("users.manage_roles", admin_perms)
 
     def test_custom_role(self):
+
         """Test custom role with no default permissions"""
         user_data = self.create_test_user("rbac_custom")
 
@@ -346,6 +363,7 @@ class TestRBAC(AuthNZTestBase):
         self.assertEqual(len(perms), 0)
 
     def test_permission_helpers(self):
+
         """Test permission checking helpers"""
         user_data = self.create_test_user("rbac_helpers")
 
@@ -365,6 +383,7 @@ class TestRegistrationCodes(AuthNZTestBase):
     """Test registration code functionality"""
 
     def test_create_registration_code(self):
+
         """Test creating registration code"""
         code = self.user_db.create_registration_code(
             created_by=None,
@@ -384,6 +403,7 @@ class TestRegistrationCodes(AuthNZTestBase):
         self.assertEqual(code_info["role_name"], "viewer")
 
     def test_use_registration_code(self):
+
         """Test using registration code"""
         # Create code
         code = self.user_db.create_registration_code(
@@ -409,6 +429,7 @@ class TestRegistrationCodes(AuthNZTestBase):
         self.assertEqual(code_info["times_used"], 1)
 
     def test_registration_code_max_uses(self):
+
         """Test registration code max uses enforcement"""
         # Create code with 1 use
         code = self.user_db.create_registration_code(
@@ -431,6 +452,7 @@ class TestRegistrationCodes(AuthNZTestBase):
             self.assertGreaterEqual(code_info["times_used"], code_info["max_uses"])
 
     def test_expired_registration_code(self):
+
         """Test expired registration code"""
         # Create code that expires immediately
         code = self.user_db.create_registration_code(
@@ -457,6 +479,7 @@ class TestAuthentication(AuthNZTestBase):
     """Test authentication tracking functionality"""
 
     def test_record_login(self):
+
         """Test recording successful login"""
         user_data = self.create_test_user("auth_login")
 
@@ -474,6 +497,7 @@ class TestAuthentication(AuthNZTestBase):
         self.assertEqual(user["failed_login_attempts"], 0)
 
     def test_record_failed_login(self):
+
         """Test recording failed login attempts"""
         user_data = self.create_test_user("auth_failed")
 
@@ -490,6 +514,7 @@ class TestAuthentication(AuthNZTestBase):
         self.assertEqual(user["failed_login_attempts"], 3)
 
     def test_account_lockout(self):
+
         """Test account lockout after max failed attempts"""
         user_data = self.create_test_user("auth_lockout")
 
@@ -507,6 +532,7 @@ class TestAuthentication(AuthNZTestBase):
         self.assertIsNotNone(user.get("locked_until"))
 
     def test_reset_failed_attempts_on_success(self):
+
         """Test that failed attempts reset on successful login"""
         user_data = self.create_test_user("auth_reset")
 
@@ -529,6 +555,7 @@ class TestEdgeCases(AuthNZTestBase):
     """Test edge cases and error handling"""
 
     def test_empty_username(self):
+
         """Test creating user with empty username"""
         with self.assertRaises((ValueError, UserDatabaseError)):
             self.user_db.create_user(
@@ -538,6 +565,7 @@ class TestEdgeCases(AuthNZTestBase):
             )
 
     def test_invalid_email_format(self):
+
         """Test creating user with invalid email"""
         # This might be handled at schema level or return error
         try:
@@ -556,6 +584,7 @@ class TestEdgeCases(AuthNZTestBase):
             pass
 
     def test_very_long_username(self):
+
         """Test creating user with very long username"""
         long_username = "u" * 1000  # 1000 characters
 
@@ -575,6 +604,7 @@ class TestEdgeCases(AuthNZTestBase):
             pass
 
     def test_none_values(self):
+
         """Test handling of None values"""
         user = self.user_db.get_user(user_id=None)
         self.assertIsNone(user)
@@ -588,13 +618,16 @@ class TestEdgeCases(AuthNZTestBase):
         success = self.user_db.delete_user(None)
         self.assertFalse(success)
 
+
 class TestAuthDatabaseConfigDetection(unittest.TestCase):
     """Validate AuthDatabaseConfig handles edge-case URLs and settings refresh."""
 
     def setUp(self):
+
         self._env_backup: Dict[str, Optional[str]] = {}
 
     def tearDown(self):
+
         for key, original in self._env_backup.items():
             if original is None:
                 os.environ.pop(key, None)
@@ -612,6 +645,7 @@ class TestAuthDatabaseConfigDetection(unittest.TestCase):
             os.environ[key] = value
 
     def test_detects_postgres_with_driver_suffix(self):
+
         """Driver-qualified PostgreSQL URLs should map to postgres backend."""
         self._set_env("AUTH_MODE", "multi_user")
         self._set_env("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost/testdb")
@@ -626,6 +660,7 @@ class TestAuthDatabaseConfigDetection(unittest.TestCase):
         self.assertEqual(db_config.backend_type, BackendType.POSTGRESQL)
 
     def test_sqlite_memory_url_remains_in_memory(self):
+
         """sqlite:///:memory: must not be coerced into a filesystem path."""
         self._set_env("AUTH_MODE", "single_user")
         self._set_env("DATABASE_URL", "sqlite:///:memory:")
@@ -640,6 +675,7 @@ class TestAuthDatabaseConfigDetection(unittest.TestCase):
         self.assertEqual(db_config.sqlite_path, ":memory:")
 
     def test_reset_reflects_updated_database_url(self):
+
         """Calling reset() after reset_settings() must pick up new DATABASE_URL values."""
         self._set_env("AUTH_MODE", "single_user")
         self._set_env("TLDW_USER_DB_BACKEND", None)
@@ -667,8 +703,14 @@ def create_test_suite(backend_type: str) -> unittest.TestSuite:
     suite = unittest.TestSuite()
 
     # Set backend type for all test classes
-    for test_class in [TestUserCRUD, TestRBAC, TestRegistrationCodes,
-                       TestAuthentication, TestEdgeCases, TestAuthDatabaseConfigDetection]:
+    for test_class in [
+        TestUserCRUD,
+        TestRBAC,
+        TestRegistrationCodes,
+        TestAuthentication,
+        TestEdgeCases,
+        TestAuthDatabaseConfigDetection,
+    ]:
         test_class.backend_type = backend_type
         suite.addTests(unittest.TestLoader().loadTestsFromTestCase(test_class))
 
@@ -679,6 +721,7 @@ def create_test_suite(backend_type: str) -> unittest.TestSuite:
 ########################################################################################################################
 
 def main():
+
     """Main test runner"""
     parser = argparse.ArgumentParser(
         description="Improved test suite for AuthNZ system"

@@ -8,6 +8,8 @@ from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
 
 
 def test_rag_pipeline_schema_normalization():
+
+
     spec = EvaluationSpec(
         sub_type="rag_pipeline",
         rag_pipeline=RAGPipelineEvalSpec(
@@ -36,6 +38,7 @@ async def test_rag_pipeline_runner_basic(monkeypatch):
             return True
 
         def store_run_results(self, *args, **kwargs):
+
             self.last = (args, kwargs)
             return True
 

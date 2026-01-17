@@ -15,7 +15,11 @@ from pydantic import ConfigDict
 from loguru import logger
 import tiktoken
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    get_request_user,
+    User,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -34,6 +38,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
     create_from_settings_for_user,
 )
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 import pathlib
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 import asyncio
@@ -293,7 +298,10 @@ async def create_vector_store(
     await adapter.initialize()
 
     # Enforce unique names per-user using meta DB, but ignore stale entries (no backing collection)
-    uid = str(getattr(current_user, 'id', '1'))
+    uid = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
     name_lower = (payload.name or "").strip().lower()
     if payload.name and payload.name.strip():
         try:
@@ -330,7 +338,7 @@ async def create_vector_store(
         "created_at": created,
         "embedding_model": payload.embedding_model or "",
         "embedding_dimension": payload.dimensions,
-        "owner": str(getattr(current_user, 'id', '1')),
+        "owner": uid,
     })
     # Create the underlying collection; fall back to manager if adapter
     # does not provide a direct creation method (used by test fakes).
@@ -353,7 +361,7 @@ async def create_vector_store(
 
     # Register in meta DB
     try:
-        meta_register_store(str(getattr(current_user,'id','1')), store_id, name)
+        meta_register_store(uid, store_id, name)
     except Exception as _e:
         logger.warning(f"Failed to register vector store in meta DB: {_e}")
 
@@ -384,7 +392,10 @@ async def list_vector_stores(
 ):
     """List vector stores for the current user."""
     # Prefer meta DB for performance and trusted names
-    uid = str(getattr(current_user,'id','1'))
+    uid = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
     stores = []
     used_ids = set()
     try:
@@ -446,14 +457,18 @@ async def list_vector_stores(
     ],
 )
 async def list_vector_store_users(current_user: User = Depends(get_request_user)):
-    base_dir: pathlib.Path = settings.get("USER_DB_BASE_DIR")
+    base_dir: pathlib.Path = DatabasePaths.get_user_db_base_dir()
     users = []
     try:
         for entry in base_dir.iterdir():
             if not entry.is_dir():
                 continue
             uid = entry.name
-            vec_dir = entry / 'vector_store'
+            try:
+                user_dir = DatabasePaths.get_user_base_directory(uid)
+            except Exception:
+                user_dir = entry
+            vec_dir = user_dir / DatabasePaths.VECTOR_STORE_SUBDIR
             has_vec_dir = vec_dir.exists()
             store_count = 0
             batch_count = 0
@@ -513,7 +528,10 @@ async def update_vector_store(
     # Enforce unique name per-user using meta DB first
     if payload.name and payload.name.strip():
         try:
-            uid = str(getattr(current_user,'id','1'))
+            uid = resolve_user_id_for_request(
+                current_user,
+                error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
             init_meta_db(uid)
             existing = meta_find_store_by_name(uid, payload.name)
             if existing and existing.get('id') != store_id:
@@ -554,7 +572,10 @@ async def update_vector_store(
     # Update meta DB on rename: if not present, register; else rename
     try:
         if payload.name and payload.name.strip():
-            uid_str = str(getattr(current_user,'id','1'))
+            uid_str = resolve_user_id_for_request(
+                current_user,
+                error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
             init_meta_db(uid_str)
             rows = meta_list_stores(uid_str)
             if any(r.get('id') == store_id for r in rows):
@@ -583,7 +604,13 @@ async def delete_vector_store(
     await adapter.initialize()
     await adapter.delete_collection(store_id)
     try:
-        meta_delete_store(str(getattr(current_user,'id','1')), store_id)
+        meta_delete_store(
+            resolve_user_id_for_request(
+                current_user,
+                error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ),
+            store_id,
+        )
     except Exception as _e:
         logger.warning(f"Failed to delete store from meta DB: {_e}")
     # Remove from in-memory registry
@@ -788,7 +815,10 @@ async def duplicate_vector_store(
     payload: DuplicateStoreRequest = Body(...),
     current_user: User = Depends(get_request_user)
 ):
-    uid = str(getattr(current_user,'id','1'))
+    uid = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
     if not payload.new_name or not payload.new_name.strip():
         raise HTTPException(400, detail="new_name is required")
     # Uniqueness via meta DB
@@ -1180,7 +1210,10 @@ async def delete_vector(
     current_user: User = Depends(get_request_user)
 ):
     # Validate store via meta DB
-    uid = str(getattr(current_user,'id','1'))
+    uid = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
     try:
         init_meta_db(uid)
         rows = meta_list_stores(uid)
@@ -1348,7 +1381,11 @@ async def upsert_vectors_batch(
     _BATCH_STATUS[batch_id] = {"id": batch_id, "status": "processing", "upserted": 0, "error": None}
     # Persist creation
     try:
-        uid = str(getattr(current_user, 'id', '1'))
+        uid = resolve_user_id_for_request(
+            current_user,
+            allow_none=True,
+            error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
         init_batches_db(uid)
         db_create_batch(
             batch_id=batch_id,
@@ -1364,20 +1401,20 @@ async def upsert_vectors_batch(
         upserted = res.get("upserted", 0)
         _BATCH_STATUS[batch_id].update({"status": "completed", "upserted": upserted})
         try:
-            db_update_batch(batch_id, user_id=str(getattr(current_user,'id','1')), status='completed', upserted=upserted)
+            db_update_batch(batch_id, user_id=uid, status='completed', upserted=upserted)
         except Exception as _e:
             logger.warning(f"Failed to persist batch completion: {_e}")
     except HTTPException as e:
         _BATCH_STATUS[batch_id].update({"status": "failed", "error": e.detail})
         try:
-            db_update_batch(batch_id, user_id=str(getattr(current_user,'id','1')), status='failed', error=str(e.detail))
+            db_update_batch(batch_id, user_id=uid, status='failed', error=str(e.detail))
         except Exception as _e:
             logger.warning(f"Failed to persist batch failure: {_e}")
         raise
     except Exception as e:
         _BATCH_STATUS[batch_id].update({"status": "failed", "error": str(e)})
         try:
-            db_update_batch(batch_id, user_id=str(getattr(current_user,'id','1')), status='failed', error=str(e))
+            db_update_batch(batch_id, user_id=uid, status='failed', error=str(e))
         except Exception as _e:
             logger.warning(f"Failed to persist batch failure: {_e}")
         raise
@@ -1393,7 +1430,13 @@ async def get_batch_status(
     if batch_id in _BATCH_STATUS:
         return _BATCH_STATUS[batch_id]
     # Fallback to persisted status
-    rec = db_get_batch(batch_id, user_id=str(getattr(current_user,'id','1')))
+    rec = db_get_batch(
+        batch_id,
+        user_id=resolve_user_id_for_request(
+            current_user,
+            error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ),
+    )
     if not rec:
         raise HTTPException(404, detail="Batch not found")
     return {
@@ -1420,7 +1463,10 @@ async def list_vector_batches(
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
-    requested_user_id = str(getattr(current_user, "id", "1"))
+    requested_user_id = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
     if user_id is not None and user_id != requested_user_id:
         if not principal.is_admin:
             raise HTTPException(
@@ -1539,7 +1585,10 @@ async def create_store_from_media(
         created_store_id = vs.id
 
     # Create a batch record (for both paths) and initialize adapter
-    uid = str(getattr(current_user,'id','1'))
+    uid = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
     batch_id = f"vsb_{uuid.uuid4().hex[:20]}"
     try:
         init_batches_db(uid)
@@ -1553,7 +1602,7 @@ async def create_store_from_media(
 
     # If using existing embeddings, copy directly and return (skip chunking)
     if getattr(payload, 'use_existing_embeddings', False):
-        source_collection_name = f"user_{str(getattr(current_user,'id','1'))}_media_embeddings"
+        source_collection_name = f"user_{uid}_media_embeddings"
         try:
             source_col = adapter.manager.get_or_create_collection(source_collection_name)
         except Exception as e:
@@ -1681,7 +1730,7 @@ async def create_store_from_media(
             embed_fn = _get_embeddings_fn()
             vecs = await loop.run_in_executor(None, embed_fn, subtexts, app_config, model_id)
         except Exception as e:
-            db_update_batch(batch_id, user_id=str(getattr(current_user,'id','1')), status='failed', error=str(e))
+            db_update_batch(batch_id, user_id=uid, status='failed', error=str(e))
             raise HTTPException(500, detail=f"Embedding failed: {e}")
         # Prepare corresponding slice metadata
         slice_ids = ids[start:start+step]
@@ -1694,11 +1743,11 @@ async def create_store_from_media(
         await adapter.upsert_vectors(created_store_id, ids=slice_ids, vectors=vecs, documents=slice_docs, metadatas=slice_meta)
         upserted_total += len(vecs)
         try:
-            db_update_batch(batch_id, user_id=str(getattr(current_user,'id','1')), upserted=upserted_total)
+            db_update_batch(batch_id, user_id=uid, upserted=upserted_total)
         except Exception:
             pass
 
-    db_update_batch(batch_id, user_id=str(getattr(current_user,'id','1')), status='completed', upserted=upserted_total)
+    db_update_batch(batch_id, user_id=uid, status='completed', upserted=upserted_total)
     return {"store_id": created_store_id, "batch_id": batch_id, "upserted": upserted_total}
 
 
@@ -1721,7 +1770,10 @@ async def get_vector_store(
     md = stats.get("metadata", {}) or {}
     # Prefer meta DB name if available (do not gate existence on meta DB)
     try:
-        uid = str(getattr(current_user, 'id', '1'))
+        uid = resolve_user_id_for_request(
+            current_user,
+            error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
         init_meta_db(uid)
         rows = meta_list_stores(uid)
         for r in rows:

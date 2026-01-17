@@ -24,20 +24,23 @@ from tldw_Server_API.app.core.Chunking import (
 from tldw_Server_API.app.core.Chunking.strategies.json_xml import XMLChunkingStrategy
 import tldw_Server_API.app.core.config as _cfg_mod
 
+
 # Keep regex ops snappy across all tests via config.txt loader; avoid env toggles
 @pytest.fixture(autouse=True)
 def _patch_chunking_regex_policy(monkeypatch):
     class _DummyCfg:
         def has_section(self, name):
-            return name == 'Chunking'
+            return name == "Chunking"
+
         def get(self, section, key, fallback=None):
             mapping = {
-                'regex_timeout_seconds': '0.5',
-                'regex_disable_multiprocessing': '1',
-                'regex_simple_only': '1',
+                "regex_timeout_seconds": "0.5",
+                "regex_disable_multiprocessing": "1",
+                "regex_simple_only": "1",
             }
             return mapping.get(key, fallback)
-    monkeypatch.setattr(_cfg_mod, 'load_comprehensive_config', lambda: _DummyCfg())
+
+    monkeypatch.setattr(_cfg_mod, "load_comprehensive_config", lambda: _DummyCfg())
 
 
 class TestXXEProtection:
@@ -155,10 +158,10 @@ class TestReDoSProtection:
 
         # Potentially dangerous regex patterns (catastrophic backtracking)
         evil_patterns = [
-            r"(a+)+b",           # Nested quantifiers
-            r"(a*)*b",           # Nested quantifiers with *
-            r"((a+)+)+b",        # Deeply nested
-            r"(a+){2,}b",        # Exponential with range
+            r"(a+)+b",  # Nested quantifiers
+            r"(a*)*b",  # Nested quantifiers with *
+            r"((a+)+)+b",  # Deeply nested
+            r"(a+){2,}b",  # Exponential with range
         ]
 
         for evil_pattern in evil_patterns:
@@ -174,11 +177,7 @@ class TestReDoSProtection:
             # This should either be rejected during validation or timeout quickly
             try:
                 result = chunker.chunk_text(
-                    text,
-                    method='ebook_chapters',
-                    custom_chapter_pattern=evil_pattern,
-                    max_size=100,
-                    overlap=0
+                    text, method="ebook_chapters", custom_chapter_pattern=evil_pattern, max_size=100, overlap=0
                 )
 
                 # If it doesn't raise, it should at least complete quickly
@@ -190,8 +189,9 @@ class TestReDoSProtection:
                 elapsed_time = time.time() - start_time
                 assert elapsed_time < 3.0, f"Pattern rejection took too long ({elapsed_time:.2f}s)"
                 # Verify it was rejected for the right reason
-                assert any(keyword in str(e).lower() for keyword in
-                          ['dangerous', 'regex', 'timeout', 'complexity', 'pattern'])
+                assert any(
+                    keyword in str(e).lower() for keyword in ["dangerous", "regex", "timeout", "complexity", "pattern"]
+                )
             except Exception as e:
                 # Unexpected error
                 elapsed_time = time.time() - start_time
@@ -206,10 +206,10 @@ class TestReDoSProtection:
 
         # Nested quantifiers that should be detected as dangerous
         complex_patterns = [
-            r"((a*)*)*b",      # Triple nested quantifiers
-            r"(a+)+$",         # Nested quantifiers with anchor
-            r"(.*){10,}",      # Large repetition range with wildcard
-            r"(a+)+(b+)+",     # Multiple nested groups
+            r"((a*)*)*b",  # Triple nested quantifiers
+            r"(a+)+$",  # Nested quantifiers with anchor
+            r"(.*){10,}",  # Large repetition range with wildcard
+            r"(a+)+(b+)+",  # Multiple nested groups
         ]
 
         text = "Sample text for testing regex patterns"
@@ -219,11 +219,7 @@ class TestReDoSProtection:
             try:
                 start_time = time.time()
                 result = chunker.chunk_text(
-                    text,
-                    method='ebook_chapters',
-                    custom_chapter_pattern=pattern,
-                    max_size=100,
-                    overlap=0
+                    text, method="ebook_chapters", custom_chapter_pattern=pattern, max_size=100, overlap=0
                 )
 
                 elapsed_time = time.time() - start_time
@@ -233,8 +229,7 @@ class TestReDoSProtection:
 
             except (InvalidInputError, ChunkingError) as e:
                 # Expected - pattern was rejected
-                assert any(keyword in str(e).lower() for keyword in
-                          ['dangerous', 'regex', 'complexity', 'invalid'])
+                assert any(keyword in str(e).lower() for keyword in ["dangerous", "regex", "complexity", "invalid"])
 
     def test_safe_patterns_work(self):
         """Test that safe regex patterns work correctly."""
@@ -242,10 +237,10 @@ class TestReDoSProtection:
 
         # Safe patterns that should work
         safe_patterns = [
-            r"Chapter \d+",              # Simple literal with digit
-            r"^Chapter [IVX]+$",         # Roman numerals
-            r"Section \w+",              # Word characters
-            r"Part [A-Z]",               # Character class
+            r"Chapter \d+",  # Simple literal with digit
+            r"^Chapter [IVX]+$",  # Roman numerals
+            r"Section \w+",  # Word characters
+            r"Part [A-Z]",  # Character class
         ]
 
         text = "Chapter 1\nSome content\nChapter 2\nMore content"
@@ -253,11 +248,7 @@ class TestReDoSProtection:
         for pattern in safe_patterns:
             try:
                 result = chunker.chunk_text(
-                    text,
-                    method='ebook_chapters',
-                    custom_chapter_pattern=pattern,
-                    max_size=100,
-                    overlap=0
+                    text, method="ebook_chapters", custom_chapter_pattern=pattern, max_size=100, overlap=0
                 )
                 assert isinstance(result, list)
                 assert len(result) > 0
@@ -276,12 +267,12 @@ class TestInputSanitization:
         malicious_text = "Normal text\x00<script>alert('xss')</script>"
 
         # Should handle null bytes safely
-        result = chunker.chunk_text(malicious_text, method='words', max_size=10)
+        result = chunker.chunk_text(malicious_text, method="words", max_size=10)
 
         # Null bytes should be handled (removed or escaped)
         for chunk in result:
             # Either null bytes are removed or preserved safely
-            assert '\x00' not in chunk or chunk.count('\x00') == malicious_text.count('\x00')
+            assert "\x00" not in chunk or chunk.count("\x00") == malicious_text.count("\x00")
 
     def test_unicode_normalization(self):
         """Test that unicode is properly normalized to prevent bypasses."""
@@ -295,7 +286,7 @@ class TestInputSanitization:
 
         results = []
         for text in text_variations:
-            result = chunker.chunk_text(text, method='words', max_size=10)
+            result = chunker.chunk_text(text, method="words", max_size=10)
             results.append(result)
 
         # Both should produce consistent results
@@ -305,6 +296,7 @@ class TestInputSanitization:
         """Test that oversized inputs are rejected to prevent DoS."""
         # Use a small max_text_size to avoid generating massive inputs
         from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
+
         chunker = Chunker(config=ChunkerConfig(max_text_size=1024))
 
         # Minimal oversize to trigger the check without heavy CPU/memory
@@ -316,6 +308,7 @@ class TestInputSanitization:
     def test_deeply_nested_json_limited(self):
         """Test that deeply nested JSON has depth limits."""
         from tldw_Server_API.app.core.Chunking.strategies.json_xml import JSONChunkingStrategy
+
         strategy = JSONChunkingStrategy()
 
         # Create deeply nested JSON
@@ -356,7 +349,7 @@ class TestResourceLimits:
         large_text = "word " * 200_000  # ~1MB
 
         # Should process without issue
-        result = chunker.chunk_text(large_text, method='words', max_size=1000)
+        result = chunker.chunk_text(large_text, method="words", max_size=1000)
         assert len(result) > 0
 
     @pytest.mark.asyncio
@@ -372,7 +365,7 @@ class TestResourceLimits:
         tasks = []
         for i in range(10):  # Reduced from 100
             text = f"Test text {i} " * 100
-            task = chunker.chunk_text(text, method='words', max_size=10)
+            task = chunker.chunk_text(text, method="words", max_size=10)
             tasks.append(task)
 
         # Should handle all requests

@@ -10,7 +10,9 @@ from uuid import uuid4
 
 
 def _client(monkeypatch) -> TestClient:
-    # Ensure quick WS polling and deterministic behavior
+
+
+     # Ensure quick WS polling and deterministic behavior
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("SANDBOX_WS_POLL_TIMEOUT_SEC", "1")
@@ -28,10 +30,14 @@ def _client(monkeypatch) -> TestClient:
 
 
 def _new_run_id() -> str:
+
+
     return f"run-{uuid4()}"
 
 
 def test_ws_multi_subscribers_burst_identical_ordering(monkeypatch) -> None:
+
+
     with _client(monkeypatch) as client:
         run_id = _new_run_id()
         hub = get_hub()
@@ -39,7 +45,6 @@ def test_ws_multi_subscribers_burst_identical_ordering(monkeypatch) -> None:
         # Connect two subscribers
         with client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws1, \
              client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws2:
-
             def _publisher() -> None:
                 # Let exceptions surface to fail the test if publishing breaks
                 hub.publish_event(run_id, "start", {"source": "stress-multi"})
@@ -52,6 +57,7 @@ def test_ws_multi_subscribers_burst_identical_ordering(monkeypatch) -> None:
             t.start()
 
             def _drain(ws) -> Tuple[List[Dict[str, Any]], int]:
+
                 frames: List[Dict[str, Any]] = []
                 end_seen = 0
                 # Cap reads to avoid hangs; should break on 'end'

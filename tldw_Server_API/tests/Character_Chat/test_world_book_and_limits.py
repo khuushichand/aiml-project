@@ -20,8 +20,10 @@ async def test_world_book_entries_and_attach_flow():
     original_user_db = os.environ.get("USER_DB_BASE_DIR")
     os.environ["USER_DB_BASE_DIR"] = tmpdir
     from tldw_Server_API.app.core.config import clear_config_cache
+
     clear_config_cache()
     import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+
     crl._rate_limiter = None
     try:
         from tldw_Server_API.app.main import app
@@ -33,19 +35,29 @@ async def test_world_book_entries_and_attach_flow():
             # Pick default character
             r = await client.get("/api/v1/characters/", headers=headers)
             assert r.status_code == 200
-            chars = r.json(); assert isinstance(chars, list) and len(chars) >= 1
+            chars = r.json()
+            assert isinstance(chars, list) and len(chars) >= 1
             character_id = chars[0]["id"]
 
             # Create world book
             wb_name = f"WB {_uuid.uuid4()}"
-            wb_create = {"name": wb_name, "description": "desc", "scan_depth": 3, "token_budget": 500, "recursive_scanning": False, "enabled": True}
+            wb_create = {
+                "name": wb_name,
+                "description": "desc",
+                "scan_depth": 3,
+                "token_budget": 500,
+                "recursive_scanning": False,
+                "enabled": True,
+            }
             r = await client.post("/api/v1/characters/world-books", headers=headers, json=wb_create)
             assert r.status_code == 201
             wb_id = r.json()["id"]
 
             # Add an entry
             entry_payload = {"keywords": ["alpha"], "content": "Alpha content", "priority": 1, "enabled": True}
-            r = await client.post(f"/api/v1/characters/world-books/{wb_id}/entries", headers=headers, json=entry_payload)
+            r = await client.post(
+                f"/api/v1/characters/world-books/{wb_id}/entries", headers=headers, json=entry_payload
+            )
             assert r.status_code == 201
             entry_id = r.json()["id"]
 
@@ -56,7 +68,9 @@ async def test_world_book_entries_and_attach_flow():
             assert any(e.get("id") == entry_id for e in entries)
 
             # Attach to character
-            r = await client.post(f"/api/v1/characters/{character_id}/world-books", headers=headers, json={"world_book_id": wb_id})
+            r = await client.post(
+                f"/api/v1/characters/{character_id}/world-books", headers=headers, json={"world_book_id": wb_id}
+            )
             assert r.status_code == 200
 
             # Verify attached list
@@ -89,6 +103,8 @@ async def test_world_book_entries_and_attach_flow():
 
 @pytest.mark.asyncio
 async def test_legacy_complete_endpoint_rate_limit():
+    if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+        pytest.skip("Character chat rate limits are enforced by Resource Governor when enabled.")
     tmpdir = tempfile.mkdtemp(prefix="chacha_rate_")
     env_overrides = {
         "USER_DB_BASE_DIR": tmpdir,
@@ -97,8 +113,10 @@ async def test_legacy_complete_endpoint_rate_limit():
     original_env = {key: os.environ.get(key) for key in env_overrides}
     os.environ.update(env_overrides)
     from tldw_Server_API.app.core.config import clear_config_cache
+
     clear_config_cache()
     import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+
     crl._rate_limiter = None
     original_max_chats = os.environ.get("MAX_CHATS_PER_USER")
     try:
@@ -136,7 +154,9 @@ async def test_legacy_complete_endpoint_rate_limit():
             # In test mode, global limiter is skipped, but CharacterRateLimiter is active; send > max_message_sends_per_minute should 429.
             hits = []
             for i in range(0, 15):
-                resp = await client.post(f"/api/v1/chats/{chat_id}/messages", headers=headers, json={"role": "user", "content": f"msg {i}"})
+                resp = await client.post(
+                    f"/api/v1/chats/{chat_id}/messages", headers=headers, json={"role": "user", "content": f"msg {i}"}
+                )
                 hits.append(resp.status_code)
                 if resp.status_code == 429:
                     break

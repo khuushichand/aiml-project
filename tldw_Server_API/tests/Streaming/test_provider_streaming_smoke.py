@@ -20,9 +20,11 @@ class _FakeResp:
         self.status_code = 200
 
     def raise_for_status(self):
+
         return None
 
     def iter_lines(self):
+
         for l in self._lines:
             yield l
 
@@ -32,9 +34,11 @@ class _FakeStreamCtx:
         self._r = resp
 
     def __enter__(self):
+
         return self._r
 
     def __exit__(self, exc_type, exc, tb):
+
         return False
 
 
@@ -45,15 +49,18 @@ class _FakeClient:
         self._raise_after_first = raise_after_first
 
     def __enter__(self):
+
         return self
 
     def __exit__(self, exc_type, exc, tb):
+
         return False
 
     def post(self, *args, **kwargs):  # pragma: no cover - not used in these tests
         return _FakeResp([])
 
     def stream(self, *args, **kwargs):
+
         if self._calls is not None:
             self._calls["n"] = self._calls.get("n", 0) + 1
 
@@ -64,9 +71,11 @@ class _FakeClient:
             status_code = 200
 
             def raise_for_status(self):
+
                 return None
 
             def iter_lines(_self):
+
                 it = iter(self._lines)
                 first = next(it, None)
                 if first is not None:
@@ -87,10 +96,11 @@ async def test_openai_stream_smoke(monkeypatch):
     ]
     monkeypatch.setattr(openai_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openai_async
 
     it = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openai_api": {"api_base_url": "https://api.openai.com/v1"}},
@@ -117,10 +127,11 @@ async def test_openai_stream_no_retry_after_first_byte(monkeypatch):
         lambda *a, **k: _FakeClient(lines=lines, calls=calls, raise_after_first=SentinelError("boom")),
     )
 
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openai_async
 
     it = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "x"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openai_api": {"api_base_url": "https://api.openai.com/v1"}},
@@ -147,10 +158,11 @@ async def test_groq_stream_smoke(monkeypatch):
     ]
     monkeypatch.setattr(groq_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_groq_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_groq_async
 
     it = await chat_with_groq_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"groq_api": {"api_base_url": "https://api.groq.com/openai/v1"}},
@@ -176,10 +188,11 @@ async def test_groq_stream_no_retry_after_first_byte(monkeypatch):
         lambda *a, **k: _FakeClient(lines=lines, calls=calls, raise_after_first=SentinelError("boom")),
     )
 
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_groq_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_groq_async
 
     it = await chat_with_groq_async(
         input_data=[{"role": "user", "content": "x"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"groq_api": {"api_base_url": "https://api.groq.com/openai/v1"}},
@@ -204,10 +217,11 @@ async def test_openrouter_stream_smoke(monkeypatch):
     ]
     monkeypatch.setattr(or_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openrouter_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openrouter_async
 
     it = await chat_with_openrouter_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openrouter_api": {"api_base_url": "https://openrouter.ai/api/v1"}},
@@ -233,10 +247,11 @@ async def test_openrouter_stream_no_retry_after_first_byte(monkeypatch):
         lambda *a, **k: _FakeClient(lines=lines, calls=calls, raise_after_first=SentinelError("boom")),
     )
 
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openrouter_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openrouter_async
 
     it = await chat_with_openrouter_async(
         input_data=[{"role": "user", "content": "x"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openrouter_api": {"api_base_url": "https://openrouter.ai/api/v1"}},
@@ -261,10 +276,11 @@ async def test_anthropic_stream_smoke(monkeypatch):
     ]
     monkeypatch.setattr(ant_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_anthropic_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_anthropic_async
 
     it = await chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"anthropic_api": {"api_base_url": "https://api.anthropic.com/v1"}},
@@ -285,10 +301,11 @@ async def test_anthropic_stream_no_retry_after_first_byte(monkeypatch):
     lines = ['data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"one"}}']
     monkeypatch.setattr(ant_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines, calls={"n": 0}, raise_after_first=SentinelError("boom")))
 
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_anthropic_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_anthropic_async
 
     it = await chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "x"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"anthropic_api": {"api_base_url": "https://api.anthropic.com/v1"}},
@@ -318,7 +335,7 @@ async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn
     Confirms DONE ordering and no retry after first byte by counting client.stream invocations.
     """
     from importlib import import_module
-    from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as llm_api
+    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm_api
 
     calls = {"n": 0}
 
@@ -333,6 +350,7 @@ async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn
     chat_fn = getattr(llm_api, fn_name)
     it = await chat_fn(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={config_key: {"api_base_url": base_url}},
@@ -352,6 +370,7 @@ async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn
 
     it2 = await chat_fn(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={config_key: {"api_base_url": base_url}},
@@ -374,7 +393,7 @@ async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn
 async def test_combined_anthropic_smoke_and_cancel(monkeypatch):
     """Anthropic combined smoke: DONE ordering and cancellation propagation, no retry after first byte."""
     import tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter as ant_mod
-    from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as llm_api
+    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm_api
 
     calls = {"n": 0}
     lines = [
@@ -386,6 +405,7 @@ async def test_combined_anthropic_smoke_and_cancel(monkeypatch):
 
     it = await llm_api.chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"anthropic_api": {"api_base_url": "https://api.anthropic.com/v1"}},
@@ -397,6 +417,7 @@ async def test_combined_anthropic_smoke_and_cancel(monkeypatch):
     calls["n"] = 0
     it2 = await llm_api.chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"anthropic_api": {"api_base_url": "https://api.anthropic.com/v1"}},
@@ -419,7 +440,7 @@ async def test_combined_anthropic_smoke_and_cancel(monkeypatch):
 async def test_multi_chunk_done_ordering_under_load(monkeypatch):
     """Stress: many small chunks; ensure a single final [DONE] and proper ordering (shimless OpenAI)."""
     import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
-    from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as llm_api
+    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm_api
 
     # Build many small chunks
     lines = []
@@ -434,6 +455,7 @@ async def test_multi_chunk_done_ordering_under_load(monkeypatch):
 
     it = await llm_api.chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi"}],
+        model="test-model",
         api_key="x",
         streaming=True,
         app_config={"openai_api": {"api_base_url": "https://api.openai.com/v1"}},

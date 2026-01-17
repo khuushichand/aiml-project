@@ -21,6 +21,33 @@ except Exception:
     load_comprehensive_config = None  # Fallback if import graph changes
     core_settings = None
 
+SECURE_KEY_INIT_COMMAND = "python -m tldw_Server_API.app.core.AuthNZ.initialize"
+SECURE_KEY_GUIDANCE = f"Generate a secure key via:\n  {SECURE_KEY_INIT_COMMAND}"
+SINGLE_USER_KEY_MISSING = (
+    "SINGLE_USER_API_KEY is required for single-user mode but is not configured.\n"
+    f"{SECURE_KEY_GUIDANCE}\n"
+    "and follow the prompts (option \"Generate secure keys\").\n"
+    "Then set SINGLE_USER_API_KEY in your environment or .env file."
+)
+SINGLE_USER_KEY_DEFAULT = (
+    "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
+    f"{SECURE_KEY_GUIDANCE}"
+)
+SINGLE_USER_KEY_TOO_SHORT = (
+    "SINGLE_USER_API_KEY must be at least 16 characters.\n"
+    f"{SECURE_KEY_GUIDANCE}"
+)
+SINGLE_USER_KEY_PRODUCTION_FORMAT = (
+    "In production (tldw_production=true), SINGLE_USER_API_KEY must use the "
+    "server-generated format (tldw_<kid>.<secret>). "
+    f"{SECURE_KEY_GUIDANCE}\n"
+    "or set TLDW_ALLOW_LEGACY_SINGLE_USER_KEY=true to temporarily bypass."
+)
+SINGLE_USER_KEY_PRODUCTION_WEAK = (
+    "In production (tldw_production=true), SINGLE_USER_API_KEY must be set to a secure value (>=24 chars) "
+    f"and must not use defaults.\n{SECURE_KEY_GUIDANCE}"
+)
+
 #######################################################################################################################
 #
 # Settings Class
@@ -141,6 +168,16 @@ class Settings(BaseSettings):
     REQUIRE_REGISTRATION_CODE: bool = Field(
         default=True,
         description="Require registration code for new users"
+    )
+
+    ENABLE_ORG_SCOPED_REGISTRATION_CODES: bool = Field(
+        default=False,
+        description="Allow registration codes to auto-assign org/team membership"
+    )
+
+    ORG_INVITE_ALLOW_MISSING_EMAIL: bool = Field(
+        default=False,
+        description="Allow org invite redemption when user email is missing"
     )
 
     MAX_LOGIN_ATTEMPTS: int = Field(
@@ -677,13 +714,7 @@ class Settings(BaseSettings):
                     self.SINGLE_USER_API_KEY = test_key
                     logger.debug("Using SINGLE_USER_TEST_API_KEY for deterministic test context")
                 else:
-                    raise ValueError(
-                        "SINGLE_USER_API_KEY is required for single-user mode but is not configured.\n"
-                        "Generate a secure key by running:\n"
-                        "  python -m tldw_Server_API.app.core.AuthNZ.initialize\n"
-                        "and follow the prompts (option \"Generate secure keys\").\n"
-                        "Then set SINGLE_USER_API_KEY in your environment or .env file."
-                    )
+                    raise ValueError(SINGLE_USER_KEY_MISSING)
             # In test contexts, normalize known placeholder keys to a deterministic test key
             elif in_test_context and (
                 self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}
@@ -693,23 +724,32 @@ class Settings(BaseSettings):
                     self.SINGLE_USER_API_KEY = test_key
                     logger.debug("Normalized SINGLE_USER_API_KEY to SINGLE_USER_TEST_API_KEY for pytest context")
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
-                raise ValueError(
-                    "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
-                    "Example:\n"
-                    "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
-                )
+                raise ValueError(SINGLE_USER_KEY_DEFAULT)
             elif len(self.SINGLE_USER_API_KEY) < 16:
                 # Allow short keys in explicit test contexts to avoid brittle fixtures
                 if in_test_context:
                     return
-                raise ValueError(
-                    "SINGLE_USER_API_KEY must be at least 16 characters.\n"
-                    "Set it via environment or .env. Example:\n"
-                    "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
-                )
+                raise ValueError(SINGLE_USER_KEY_TOO_SHORT)
 
             # Hard fail in production if key is missing/weak/default
             prod_flag = os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+            allow_legacy = os.getenv("TLDW_ALLOW_LEGACY_SINGLE_USER_KEY", "").lower() in {"true", "1", "yes", "y", "on"}
+            if not in_test_context:
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.api_key_crypto import parse_api_key
+
+                    is_new_format = parse_api_key(self.SINGLE_USER_API_KEY) is not None
+                except (ImportError, AttributeError):
+                    logger.debug("Could not import parse_api_key; treating key as legacy format")
+                    is_new_format = False
+
+                if not is_new_format and not allow_legacy:
+                    if prod_flag:
+                        raise ValueError(SINGLE_USER_KEY_PRODUCTION_FORMAT)
+                    logger.warning(
+                        "SINGLE_USER_API_KEY uses a legacy format; "
+                        "generate a new server-generated key for improved security."
+                    )
             if prod_flag:
                 weak = (
                     not self.SINGLE_USER_API_KEY
@@ -717,11 +757,7 @@ class Settings(BaseSettings):
                     or len(self.SINGLE_USER_API_KEY) < 24
                 )
                 if weak:
-                    raise ValueError(
-                        "In production (tldw_production=true), SINGLE_USER_API_KEY must be set to a secure value (>=24 chars) "
-                        "and must not use defaults.\nSet it via environment or .env. Example:\n"
-                        "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
-                    )
+                    raise ValueError(SINGLE_USER_KEY_PRODUCTION_WEAK)
 
     @field_validator("JWT_SECRET_KEY")
     @classmethod
@@ -908,6 +944,16 @@ def _load_overrides_from_config() -> dict:
         maybe_set("ENABLE_REGISTRATION", "registration_enabled", _bool_from_str)
         maybe_set("REQUIRE_REGISTRATION_CODE", "require_registration_code", _bool_from_str)
         maybe_set("REQUIRE_REGISTRATION_CODE", "registration_require_code", _bool_from_str)
+        maybe_set(
+            "ENABLE_ORG_SCOPED_REGISTRATION_CODES",
+            "enable_org_scoped_registration_codes",
+            _bool_from_str,
+        )
+        maybe_set(
+            "ORG_INVITE_ALLOW_MISSING_EMAIL",
+            "org_invite_allow_missing_email",
+            _bool_from_str,
+        )
         maybe_set("RATE_LIMIT_ENABLED", "rate_limit_enabled", _bool_from_str)
         maybe_set("RATE_LIMIT_PER_MINUTE", "rate_limit_per_minute", lambda v: int(v))
         maybe_set("RATE_LIMIT_BURST", "rate_limit_burst", lambda v: int(v))
@@ -988,6 +1034,20 @@ def get_settings() -> Settings:
             # REGISTRATION_REQUIRE_CODE -> REQUIRE_REGISTRATION_CODE
             if _os.getenv("REGISTRATION_REQUIRE_CODE") is not None and "REQUIRE_REGISTRATION_CODE" not in overrides:
                 overrides["REQUIRE_REGISTRATION_CODE"] = _alias_bool("REGISTRATION_REQUIRE_CODE")
+            if (
+                _os.getenv("ENABLE_ORG_SCOPED_REGISTRATION_CODES") is not None
+                and "ENABLE_ORG_SCOPED_REGISTRATION_CODES" not in overrides
+            ):
+                overrides["ENABLE_ORG_SCOPED_REGISTRATION_CODES"] = _alias_bool(
+                    "ENABLE_ORG_SCOPED_REGISTRATION_CODES"
+                )
+            if (
+                _os.getenv("ORG_INVITE_ALLOW_MISSING_EMAIL") is not None
+                and "ORG_INVITE_ALLOW_MISSING_EMAIL" not in overrides
+            ):
+                overrides["ORG_INVITE_ALLOW_MISSING_EMAIL"] = _alias_bool(
+                    "ORG_INVITE_ALLOW_MISSING_EMAIL"
+                )
         except Exception:
             pass
         _settings = Settings(**overrides)

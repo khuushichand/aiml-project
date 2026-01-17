@@ -4,6 +4,7 @@ from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator
 
 
 def test_load_migrations_includes_sql_baseline(tmp_path):
+
     project_root = Path(__file__).resolve().parents[2]
     migrations_dir = project_root / "app" / "core" / "DB_Management" / "migrations"
 

@@ -14,6 +14,14 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
+from tldw_Server_API.app.core.exceptions import (
+    InvalidBackupIdError,
+    InvalidBackupPathError,
+    InvalidBackupUserIdError,
+    InvalidRetentionPolicyError,
+    InvalidRetentionRangeError,
+    UnknownBackupDatasetError,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Backups import (
     create_backup,
     create_incremental_backup,
@@ -30,6 +38,7 @@ from tldw_Server_API.app.core.AuthNZ.retention_policies import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
+from tldw_Server_API.app.core.Utils.path_utils import safe_join
 
 
 @dataclass(frozen=True)
@@ -49,17 +58,51 @@ DATASET_DB_RESOLVERS = {
     "evaluations": DatabasePaths.get_evaluations_db_path,
     "audit": DatabasePaths.get_audit_db_path,
 }
+_BACKUP_DATASETS = frozenset([*DATASET_DB_RESOLVERS.keys(), "authnz"])
+_BACKUP_EXTENSIONS = (".db", ".sqlib", ".dump")
 
 
 def _backup_base_dir() -> str:
     return os.environ.get("TLDW_DB_BACKUP_PATH") or get_project_relative_path("tldw_DB_Backups")
 
 
+def _validate_backup_dataset(dataset: str) -> str:
+    name = str(dataset or "").strip().lower()
+    if name not in _BACKUP_DATASETS:
+        raise UnknownBackupDatasetError("unknown_dataset")
+    return name
+
+
+def _normalize_user_id(user_id: Optional[int]) -> Optional[int]:
+    if user_id is None:
+        return None
+    try:
+        value = int(user_id)
+    except (TypeError, ValueError) as exc:
+        raise InvalidBackupUserIdError("invalid_user_id") from exc
+    if value <= 0:
+        raise InvalidBackupUserIdError("invalid_user_id")
+    return value
+
+
+def _backup_path_error(_: Exception | None) -> InvalidBackupPathError:
+    return InvalidBackupPathError("invalid_backup_path")
+
+
+def _safe_join(base_dir: str, name: str) -> str:
+    resolved = safe_join(base_dir, name, error_factory=_backup_path_error)
+    if resolved is None:
+        raise InvalidBackupPathError("invalid_backup_path")
+    return resolved
+
+
 def _backup_dir_for_dataset(dataset: str, user_id: Optional[int]) -> str:
     base_dir = _backup_base_dir()
-    if user_id is not None:
-        base_dir = os.path.join(base_dir, f"user_{user_id}")
-    return os.path.join(base_dir, dataset)
+    dataset_name = _validate_backup_dataset(dataset)
+    safe_user_id = _normalize_user_id(user_id)
+    if safe_user_id is not None:
+        base_dir = _safe_join(base_dir, f"user_{safe_user_id}")
+    return _safe_join(base_dir, dataset_name)
 
 
 def _extract_backup_path(message: str) -> Optional[str]:
@@ -77,9 +120,9 @@ def _list_backup_files(dataset: str, user_id: Optional[int]) -> List[BackupFile]
         return []
     files = []
     for entry in os.scandir(backup_dir):
-        if not entry.is_file():
+        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
             continue
-        if not entry.name.endswith((".db", ".sqlib", ".dump")):
+        if not entry.name.endswith(_BACKUP_EXTENSIONS):
             continue
         stat = entry.stat()
         files.append(
@@ -103,11 +146,9 @@ def list_backup_items(
     limit: int,
     offset: int,
 ) -> Tuple[List[BackupFile], int]:
-    datasets = [dataset] if dataset else list(DATASET_DB_RESOLVERS.keys()) + ["authnz"]
+    datasets = [_validate_backup_dataset(dataset)] if dataset is not None else [*DATASET_DB_RESOLVERS.keys(), "authnz"]
     items: List[BackupFile] = []
     for key in datasets:
-        if key not in DATASET_DB_RESOLVERS and key != "authnz":
-            continue
         dataset_user_id = None if key == "authnz" else user_id
         items.extend(_list_backup_files(key, dataset_user_id))
     items.sort(key=lambda item: item.created_at, reverse=True)
@@ -116,7 +157,8 @@ def list_backup_items(
 
 
 def _resolve_dataset_db_path(dataset: str, user_id: Optional[int]) -> Tuple[str, Optional[int]]:
-    if dataset == "authnz":
+    dataset_name = _validate_backup_dataset(dataset)
+    if dataset_name == "authnz":
         settings = get_settings()
         url = settings.DATABASE_URL
         parsed = urlparse(url)
@@ -129,9 +171,7 @@ def _resolve_dataset_db_path(dataset: str, user_id: Optional[int]) -> Tuple[str,
             return fs_path, None
         return url, None
 
-    resolver = DATASET_DB_RESOLVERS.get(dataset)
-    if not resolver:
-        raise ValueError("unknown_dataset")
+    resolver = DATASET_DB_RESOLVERS.get(dataset_name)
     effective_user_id = user_id if user_id is not None else DatabasePaths.get_single_user_id()
     return str(resolver(effective_user_id)), effective_user_id
 
@@ -154,12 +194,31 @@ def _normalize_backup_filename(path: str) -> str:
     return os.path.basename(path)
 
 
+def _validate_backup_id(backup_id: str) -> str:
+    name = os.path.basename(str(backup_id or "").strip())
+    if not name:
+        raise InvalidBackupIdError("invalid_backup_id")
+    if name != backup_id:
+        raise InvalidBackupIdError("invalid_backup_id")
+    if name.startswith("-"):
+        raise InvalidBackupIdError("invalid_backup_id")
+    if not name.endswith(_BACKUP_EXTENSIONS):
+        raise InvalidBackupIdError("invalid_backup_id")
+    return name
+
+
 def _prune_backups(backup_dir: str, max_backups: int) -> int:
     if max_backups <= 0:
         return 0
     if not os.path.isdir(backup_dir):
         return 0
-    files = [entry for entry in os.scandir(backup_dir) if entry.is_file() and entry.name.endswith((".db", ".sqlib", ".dump"))]
+    files = [
+        entry
+        for entry in os.scandir(backup_dir)
+        if entry.is_file(follow_symlinks=False)
+        and not entry.is_symlink()
+        and entry.name.endswith(_BACKUP_EXTENSIONS)
+    ]
     files.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
     removed = 0
     for entry in files[max_backups:]:
@@ -221,12 +280,12 @@ def restore_backup_snapshot(
 ) -> str:
     db_path, effective_user_id = _resolve_dataset_db_path(dataset, user_id)
     backup_dir = _backup_dir_for_dataset(dataset, effective_user_id)
-    backup_name = os.path.basename(backup_id)
+    backup_name = _validate_backup_id(backup_id)
 
     if dataset == "authnz" and not str(db_path).startswith("sqlite") and str(db_path).startswith("postgres"):
         config = _config_from_postgres_url(db_path)
         backend = SimpleNamespace(backend_type=BackendType.POSTGRESQL, config=config)
-        backup_path = os.path.join(backup_dir, backup_name)
+        backup_path = _safe_join(backup_dir, backup_name)
         result = restore_postgres_backup(backend, backup_path, drop_first=True)
         if result != "ok":
             raise RuntimeError(result)
@@ -257,11 +316,11 @@ async def list_retention_policies() -> List[Dict[str, Any]]:
 async def update_retention_policy(policy_key: str, days: int) -> Dict[str, Any]:
     meta = RETENTION_POLICIES.get(policy_key)
     if not meta:
-        raise ValueError("unknown_policy")
+        raise InvalidRetentionPolicyError("unknown_policy")
     min_val = int(meta["min"])
     max_val = int(meta["max"])
     if days < min_val or days > max_val:
-        raise ValueError("invalid_range")
+        raise InvalidRetentionRangeError("invalid_range")
 
     settings = get_settings()
     effective_days = int(days)

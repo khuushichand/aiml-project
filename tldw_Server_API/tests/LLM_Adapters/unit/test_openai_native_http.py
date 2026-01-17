@@ -130,3 +130,40 @@ def test_openai_adapter_native_http_logprobs_forwarded(monkeypatch):
     payload = captured["client"].last_post["json"]
     assert payload.get("logprobs") is True
     assert payload.get("top_logprobs") == 4
+
+
+def test_openai_adapter_merges_extra_body_and_headers(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
+    import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
+
+    captured: Dict[str, Any] = {}
+
+    def _factory(*args, **kwargs):
+        client = _FakeClient(*args, **kwargs)
+        captured["client"] = client
+        return client
+
+    monkeypatch.setattr(openai_mod, "http_client_factory", _factory, raising=True)
+
+    adapter = OpenAIAdapter()
+    req = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "model": "gpt-4o-mini",
+        "api_key": "sk-test",
+        "temperature": 0.1,
+        "extra_body": {"temperature": 0.9, "x_extra": "y"},
+        "extra_headers": {
+            "X-Test": "1",
+            "Authorization": "Bearer override",
+            "content-type": "text/plain",
+        },
+    }
+    _ = adapter.chat(req)
+    payload = captured["client"].last_post["json"]
+    headers = captured["client"].last_post["headers"]
+    assert payload.get("temperature") == 0.1
+    assert payload.get("x_extra") == "y"
+    assert headers.get("Authorization") == "Bearer sk-test"
+    assert headers.get("Content-Type") == "application/json"
+    assert headers.get("X-Test") == "1"
+    assert "content-type" not in headers

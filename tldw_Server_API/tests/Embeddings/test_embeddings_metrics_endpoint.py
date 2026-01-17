@@ -16,7 +16,7 @@ def client():
 
 @pytest.mark.unit
 def test_metrics_endpoint_details_shape(client, admin_user):
-    # Make a simple request to increment counters
+     # Make a simple request to increment counters
     os.environ["TESTING"] = "true"
     try:
         r1 = client.post(

@@ -21,7 +21,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
     TTSRequest,
     TTSResponse,
     AudioFormat,
-    ProviderStatus
+    ProviderStatus,
 )
 from tldw_Server_API.app.core.TTS.circuit_breaker import CircuitBreaker, CircuitState
 from tldw_Server_API.app.core.TTS.audio_utils import AudioProcessor, process_voice_reference
@@ -55,24 +55,18 @@ class MockAdapter(TTSAdapter):
         target_format = request.format if isinstance(request.format, AudioFormat) else AudioFormat.MP3
 
         if request.stream:
+
             async def _stream():
                 for chunk in (b"mock ", b"stream ", b"data"):
                     yield chunk
 
-            return TTSResponse(
-                audio_stream=_stream(),
-                format=target_format,
-                provider=self.provider_id
-            )
+            return TTSResponse(audio_stream=_stream(), format=target_format, provider=self.provider_id)
 
-        return TTSResponse(
-            audio_data=b"mock audio data",
-            format=target_format,
-            provider=self.provider_id
-        )
+        return TTSResponse(audio_data=b"mock audio data", format=target_format, provider=self.provider_id)
 
     async def get_capabilities(self) -> TTSCapabilities:
         from tldw_Server_API.app.core.TTS.adapters.base import VoiceInfo, AudioFormat
+
         return TTSCapabilities(
             provider_name="mock",
             supports_streaming=True,
@@ -80,10 +74,7 @@ class MockAdapter(TTSAdapter):
             supported_languages={"en"},
             supported_formats={AudioFormat.MP3, AudioFormat.WAV},
             max_text_length=5000,
-            supported_voices=[
-                VoiceInfo(id="voice1", name="Voice 1"),
-                VoiceInfo(id="voice2", name="Voice 2")
-            ]
+            supported_voices=[VoiceInfo(id="voice1", name="Voice 1"), VoiceInfo(id="voice2", name="Voice 2")],
         )
 
     async def list_voices(self):
@@ -143,20 +134,13 @@ class TestTTSServiceV2:
     """Tests for TTSServiceV2"""
 
     import pytest_asyncio
+
     @pytest_asyncio.fixture
     async def service(self):
         """Create a test service instance"""
         config = {
-            "providers": {
-                "mock": {
-                    "enabled": True,
-                    "priority": 1
-                }
-            },
-            "fallback": {
-                "enabled": True,
-                "max_attempts": 2
-            }
+            "providers": {"mock": {"enabled": True, "priority": 1}},
+            "fallback": {"enabled": True, "max_attempts": 2},
         }
 
         # Create a mock factory
@@ -196,7 +180,7 @@ class TestTTSServiceV2:
     async def test_service_initialization(self, service):
         """Test service initializes properly"""
         assert service is not None
-        assert hasattr(service, 'factory')
+        assert hasattr(service, "factory")
         # Check that service is properly initialized
         assert service.factory is not None
 
@@ -204,12 +188,7 @@ class TestTTSServiceV2:
     async def test_generate_speech(self, service):
         """Test basic speech generation"""
         # Use OpenAISpeechRequest which the service expects
-        request = OpenAISpeechRequest(
-            input="Test text",
-            model="mock",
-            voice="voice1",
-            response_format="mp3"
-        )
+        request = OpenAISpeechRequest(input="Test text", model="mock", voice="voice1", response_format="mp3")
 
         request.stream = False
 
@@ -226,12 +205,7 @@ class TestTTSServiceV2:
     async def test_generate_stream(self, service):
         """Test streaming generation"""
         # Use OpenAISpeechRequest
-        request = OpenAISpeechRequest(
-            input="Test text",
-            model="mock",
-            voice="voice1",
-            response_format="mp3"
-        )
+        request = OpenAISpeechRequest(input="Test text", model="mock", voice="voice1", response_format="mp3")
 
         mock_adapter = MockAdapter({"name": "mock"})
         await mock_adapter.initialize()
@@ -248,9 +222,7 @@ class TestTTSServiceV2:
         mock_adapter = MockAdapter({"name": "mock"})
         await mock_adapter.initialize()
         mock_caps = await mock_adapter.get_capabilities()
-        service.factory.registry.get_all_capabilities = AsyncMock(return_value={
-            TTSProvider.MOCK: mock_caps
-        })
+        service.factory.registry.get_all_capabilities = AsyncMock(return_value={TTSProvider.MOCK: mock_caps})
 
         caps = await service.get_capabilities()
 
@@ -265,11 +237,7 @@ class TestTTSServiceV2:
     async def test_list_providers(self, service):
         """Test listing available providers"""
         # Mock the factory's get_status
-        service.factory.get_status = MagicMock(return_value={
-            "providers": {
-                "mock": "available"
-            }
-        })
+        service.factory.get_status = MagicMock(return_value={"providers": {"mock": "available"}})
 
         # The service may not have list_providers, check what it has
         status = service.factory.get_status()
@@ -282,20 +250,8 @@ class TestTTSServiceV2:
     async def test_fallback_mechanism(self):
         """Test fallback to another provider on failure"""
         config = {
-            "providers": {
-                "failing": {
-                    "enabled": True,
-                    "priority": 1
-                },
-                "working": {
-                    "enabled": True,
-                    "priority": 2
-                }
-            },
-            "fallback": {
-                "enabled": True,
-                "max_attempts": 3
-            }
+            "providers": {"failing": {"enabled": True, "priority": 1}, "working": {"enabled": True, "priority": 2}},
+            "fallback": {"enabled": True, "max_attempts": 3},
         }
 
         # Create failing adapter
@@ -306,18 +262,15 @@ class TestTTSServiceV2:
 
         # Create mock factory that returns appropriate adapters
         factory = MagicMock(spec=TTSAdapterFactory)
-        factory.create_adapter = AsyncMock(side_effect=lambda name, *args:
-                                          failing_adapter if name == "failing" else working_adapter)
-        factory.get_adapter = AsyncMock(side_effect=lambda name:
-                                       failing_adapter if name == "failing" else working_adapter)
+        factory.create_adapter = AsyncMock(
+            side_effect=lambda name, *args: failing_adapter if name == "failing" else working_adapter
+        )
+        factory.get_adapter = AsyncMock(
+            side_effect=lambda name: failing_adapter if name == "failing" else working_adapter
+        )
         factory.list_adapters = AsyncMock(return_value=["failing", "working"])
 
-        request = OpenAISpeechRequest(
-            input="Test text",
-            model="failing",
-            voice="voice1",
-            response_format="mp3"
-        )
+        request = OpenAISpeechRequest(input="Test text", model="failing", voice="voice1", response_format="mp3")
         request.stream = False
 
         failing_error = TTSProviderError("Provider failed", provider="failing")
@@ -359,7 +312,7 @@ class TestTTSServiceV2:
     async def test_circuit_breaker(self, service):
         """Test circuit breaker functionality"""
         # Get circuit breaker for mock provider
-        cb = service.circuit_manager.get_circuit("mock") if getattr(service, 'circuit_manager', None) else None
+        cb = service.circuit_manager.get_circuit("mock") if getattr(service, "circuit_manager", None) else None
 
         if cb:
             assert cb.state == CircuitState.CLOSED
@@ -463,7 +416,7 @@ class TestAudioUtils:
         # Create a simple WAV header (minimal valid WAV)
         wav_header = b'RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"V\x00\x00D\xac\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00'
         # Add some audio data (5 seconds worth at 22050Hz, 16-bit mono)
-        audio_data = b'\x00\x00' * (22050 * 5)
+        audio_data = b"\x00\x00" * (22050 * 5)
         valid_wav = wav_header + audio_data
 
         # Test validation for Higgs provider
@@ -476,15 +429,18 @@ class TestAudioUtils:
     def test_process_voice_reference(self):
         """Test voice reference processing"""
         # Create a base64 encoded simple audio
-        audio_data = b'RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"V\x00\x00D\xac\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00' + b'\x00\x00' * 1000
-        base64_audio = base64.b64encode(audio_data).decode('utf-8')
+        audio_data = (
+            b'RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"V\x00\x00D\xac\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00'
+            + b"\x00\x00" * 1000
+        )
+        base64_audio = base64.b64encode(audio_data).decode("utf-8")
 
         # Process
         processed, error = process_voice_reference(
             base64_audio,  # Pass base64 string, not raw bytes
             provider="higgs",
             validate=False,  # Skip validation for test
-            convert=False
+            convert=False,
         )
 
         # Check result
@@ -498,7 +454,7 @@ class TestAudioUtils:
         original_data = b"test audio data"
 
         # Encode
-        encoded = base64.b64encode(original_data).decode('utf-8')
+        encoded = base64.b64encode(original_data).decode("utf-8")
 
         # Decode
         decoded = base64.b64decode(encoded)
@@ -511,11 +467,7 @@ class TestCircuitBreaker:
 
     def test_circuit_breaker_initialization(self):
         """Test circuit breaker initialization"""
-        cb = CircuitBreaker(
-            provider_name="test",
-            failure_threshold=3,
-            recovery_timeout=10
-        )
+        cb = CircuitBreaker(provider_name="test", failure_threshold=3, recovery_timeout=10)
 
         assert cb.state == CircuitState.CLOSED
         # Check status instead of direct attribute
@@ -548,7 +500,7 @@ class TestCircuitBreaker:
             provider_name="test_provider",
             failure_threshold=2,
             recovery_timeout=0.1,  # 100ms for testing
-            success_threshold=2
+            success_threshold=2,
         )
 
         # Define functions for testing
@@ -581,11 +533,7 @@ class TestCircuitBreaker:
     @pytest.mark.asyncio
     async def test_circuit_reopens_on_failure_in_half_open(self):
         """Test circuit reopens if failure occurs in half-open state"""
-        cb = CircuitBreaker(
-            provider_name="test",
-            failure_threshold=2,
-            recovery_timeout=0.1
-        )
+        cb = CircuitBreaker(provider_name="test", failure_threshold=2, recovery_timeout=0.1)
 
         # Define a failing function
         async def failing_func():
@@ -616,12 +564,7 @@ class TestAdapterRegistry:
 
     def test_registry_initialization(self):
         """Test registry initialization"""
-        config = {
-            "providers": {
-                "openai": {"enabled": True},
-                "kokoro": {"enabled": False}
-            }
-        }
+        config = {"providers": {"openai": {"enabled": True}, "kokoro": {"enabled": False}}}
 
         registry = TTSAdapterRegistry(config)
         assert registry is not None
@@ -643,9 +586,7 @@ class TestAdapterRegistry:
     async def test_get_adapter(self):
         """Test getting an adapter"""
         # Create registry with mock config
-        config = {
-            "mock_enabled": True
-        }
+        config = {"mock_enabled": True}
         registry = TTSAdapterRegistry(config)
 
         # Register the MockAdapter class
@@ -661,10 +602,7 @@ class TestAdapterRegistry:
     @pytest.mark.asyncio
     async def test_list_adapters(self):
         """Test listing adapters"""
-        config = {
-            "mock_enabled": True,
-            "openai_enabled": False
-        }
+        config = {"mock_enabled": True, "openai_enabled": False}
         registry = TTSAdapterRegistry(config)
 
         # Register MockAdapter
@@ -688,11 +626,7 @@ class TestVoiceCloning:
         """Test voice reference field in request"""
         voice_data = base64.b64encode(b"audio data").decode()
 
-        request = TTSRequest(
-            text="Test with voice cloning",
-            voice="clone",
-            voice_reference=voice_data
-        )
+        request = TTSRequest(text="Test with voice cloning", voice="clone", voice_reference=voice_data)
 
         assert request.voice_reference == voice_data
         assert request.voice == "clone"

@@ -23,10 +23,12 @@ async def test_complete_v2_streaming_with_mock_openai():
     os.environ.setdefault("OPENAI_API_KEY", "test-mock-key")
 
     import tempfile, shutil
+
     tmpdir = tempfile.mkdtemp(prefix="chacha_stream_")
     os.environ["USER_DB_BASE_DIR"] = tmpdir
     try:
         from tldw_Server_API.app.main import app
+
         settings = get_settings()
         headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
         transport = httpx.ASGITransport(app=app)
@@ -41,13 +43,18 @@ async def test_complete_v2_streaming_with_mock_openai():
 
             # Streamed completion
             url = f"/api/v1/chats/{chat_id}/complete-v2"
-            async with client.stream("POST", url, headers=headers, json={
-                "provider": "openai",
-                "model": "gpt-4o-mini",
-                "append_user_message": "hello mock",
-                "save_to_db": False,
-                "stream": True
-            }) as response:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json={
+                    "provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "append_user_message": "hello mock",
+                    "save_to_db": False,
+                    "stream": True,
+                },
+            ) as response:
                 assert response.status_code in (200, 502)
                 if response.status_code == 200:
                     # Validate SSE-like chunks

@@ -17,7 +17,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _override_character_chat_rate_limits_for_chat(monkeypatch):
-    # Generous limits to avoid incidental 429s in tests
+     # Generous limits to avoid incidental 429s in tests
     monkeypatch.setenv("CHARACTER_RATE_LIMIT_ENABLED", "true")
     monkeypatch.setenv("CHARACTER_RATE_LIMIT_OPS", "1000000")
     monkeypatch.setenv("CHARACTER_RATE_LIMIT_WINDOW", "60")

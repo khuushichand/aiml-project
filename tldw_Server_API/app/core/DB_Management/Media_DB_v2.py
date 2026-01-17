@@ -1145,25 +1145,10 @@ class MediaDatabase:
         if resolved is not None:
             return resolved
 
-        # 4) Fallback to a local SQLite backend anchored to project root
-        try:
-            from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
-            _default_sqlite_path = str((Path(_gpr()) / "Databases" / "Media_DB_v2.db").resolve())
-        except Exception:
-            _default_sqlite_path = str((Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
-        # Emit a warning so callers can fix missing explicit paths
-        try:
-            logging.warning(
-                "MediaDatabase backend falling back to default SQLite path; pass an explicit db_path or configure content backend. path=%s",
-                _default_sqlite_path,
-            )
-        except Exception:
-            pass
-        default_config = DatabaseConfig(
-            backend_type=BackendType.SQLITE,
-            sqlite_path=_default_sqlite_path,
+        raise DatabaseError(
+            "MediaDatabase backend could not be resolved. "
+            "Pass an explicit db_path or configure the content backend."
         )
-        return DatabaseBackendFactory.create_backend(default_config)
 
     # --- Backend Statement Preparation Helpers ---
     def _prepare_backend_statement(
@@ -1322,6 +1307,10 @@ class MediaDatabase:
         # PostgreSQL: reuse a single persistent connection outside transactions
         if self._persistent_conn is None:
             self._persistent_conn = self.backend.get_pool().get_connection()
+        try:
+            self.backend.apply_scope(self._persistent_conn)
+        except Exception:
+            pass
         return self._persistent_conn
 
     def close_connection(self):
@@ -1395,26 +1384,36 @@ class MediaDatabase:
             try:
                 if eff_conn is None and not self.is_memory_db:
                     eph = sqlite3.connect(self.db_path_str, check_same_thread=False)
-                    eph.row_factory = sqlite3.Row
-                    self._apply_sqlite_connection_pragmas(eph)
-                    cur = eph.cursor()
-                    cur.execute(prepared_query, prepared_params or ())
-                    upper = prepared_query.strip().upper()
-                    is_select = upper.startswith("SELECT")
-                    has_returning = " RETURNING " in upper
-                    # Auto-commit DML/DDL when using ephemeral connection
-                    if commit or (not is_select and not has_returning):
+                    cur = None
+                    try:
+                        eph.row_factory = sqlite3.Row
+                        self._apply_sqlite_connection_pragmas(eph)
+                        cur = eph.cursor()
+                        cur.execute(prepared_query, prepared_params or ())
+                        upper = prepared_query.strip().upper()
+                        is_select = upper.startswith("SELECT")
+                        has_returning = " RETURNING " in upper
+                        rows = []
+                        if is_select or has_returning:
+                            rows = [dict(r) for r in cur.fetchall()]
+                        # Auto-commit DML/DDL when using ephemeral connection
+                        if commit or not is_select:
+                            try:
+                                eph.commit()
+                            except Exception:
+                                pass
+                        result = QueryResult(rows=rows, rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
+                        return BackendCursorAdapter(result)
+                    finally:
+                        if cur is not None:
+                            try:
+                                cur.close()
+                            except Exception:
+                                pass
                         try:
-                            eph.commit()
+                            eph.close()
                         except Exception:
                             pass
-                    rows = []
-                    if is_select or has_returning:
-                        rows = [dict(r) for r in cur.fetchall()]
-                    result = QueryResult(rows=rows, rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
-                    cur.close()
-                    eph.close()
-                    return BackendCursorAdapter(result)
                 else:
                     # Use transaction/persistent connection (required for :memory: databases)
                     conn_use = eff_conn or self.get_connection()
@@ -1443,19 +1442,7 @@ class MediaDatabase:
 
         try:
             if eff_conn is None:
-                raw = self.backend.get_pool().get_connection()
-                try:
-                    result = self.backend.execute(prepared_query, prepared_params, connection=raw)
-                    if commit:
-                        try:
-                            raw.commit()
-                        except Exception as exc:
-                            raise DatabaseError(f"Backend commit failed: {exc}") from exc
-                finally:
-                    try:
-                        self.backend.get_pool().return_connection(raw)
-                    except Exception:
-                        pass
+                result = self.backend.execute(prepared_query, prepared_params)
             else:
                 result = self.backend.execute(prepared_query, prepared_params, connection=eff_conn)
                 if commit:
@@ -1508,19 +1495,29 @@ class MediaDatabase:
             try:
                 if eff_conn is None and not self.is_memory_db:
                     eph = sqlite3.connect(self.db_path_str, check_same_thread=False)
-                    eph.row_factory = sqlite3.Row
-                    self._apply_sqlite_connection_pragmas(eph)
-                    cur = eph.cursor()
-                    cur.executemany(prepared_query, prepared_params_list)
-                    # executemany implies DML; commit when using ephemeral connection
+                    cur = None
                     try:
-                        eph.commit()
-                    except Exception:
-                        pass
-                    result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
-                    cur.close()
-                    eph.close()
-                    return BackendCursorAdapter(result)
+                        eph.row_factory = sqlite3.Row
+                        self._apply_sqlite_connection_pragmas(eph)
+                        cur = eph.cursor()
+                        cur.executemany(prepared_query, prepared_params_list)
+                        # executemany implies DML; commit when using ephemeral connection
+                        try:
+                            eph.commit()
+                        except Exception:
+                            pass
+                        result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
+                        return BackendCursorAdapter(result)
+                    finally:
+                        if cur is not None:
+                            try:
+                                cur.close()
+                            except Exception:
+                                pass
+                        try:
+                            eph.close()
+                        except Exception:
+                            pass
                 else:
                     conn_use = eff_conn or self.get_connection()
                     cur = conn_use.cursor()
@@ -1541,19 +1538,7 @@ class MediaDatabase:
 
         try:
             if eff_conn is None:
-                raw = self.backend.get_pool().get_connection()
-                try:
-                    result = self.backend.execute_many(prepared_query, prepared_params_list, connection=raw)
-                    if commit:
-                        try:
-                            raw.commit()
-                        except Exception as exc:
-                            raise DatabaseError(f"Backend batch commit failed: {exc}") from exc
-                finally:
-                    try:
-                        self.backend.get_pool().return_connection(raw)
-                    except Exception:
-                        pass
+                result = self.backend.execute_many(prepared_query, prepared_params_list)
             else:
                 result = self.backend.execute_many(prepared_query, prepared_params_list, connection=eff_conn)
                 if commit:
@@ -1993,6 +1978,15 @@ class MediaDatabase:
         try:
             if self.backend_type != BackendType.SQLITE:
                 return
+            existed = False
+            try:
+                cur = self.execute_query(
+                    "SELECT 1 AS exists_flag FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'unvectorized_chunks_fts'"
+                )
+                existed = cur.fetchone() is not None
+            except Exception:
+                existed = False
             ddl = (
                 "CREATE VIRTUAL TABLE IF NOT EXISTS unvectorized_chunks_fts "
                 "USING fts5(\n"
@@ -2002,6 +1996,14 @@ class MediaDatabase:
                 ")"
             )
             self.execute_query(ddl, commit=True)
+            if not existed:
+                try:
+                    self.execute_query(
+                        "INSERT INTO unvectorized_chunks_fts(unvectorized_chunks_fts) VALUES('rebuild')",
+                        commit=True,
+                    )
+                except Exception as e:
+                    logging.debug(f"ensure_chunk_fts rebuild skipped or failed: {e}")
         except Exception as e:
             logging.debug(f"ensure_chunk_fts skipped or failed: {e}")
 
@@ -2149,133 +2151,166 @@ class MediaDatabase:
         """Applies the full Version 1 schema, ensuring version update is part of the main script."""
         logging.info(f"Applying initial schema (Version 1) to DB: {self.db_path_str}...")
         try:
-            # --- Combine Core Schema + Version Update for one executescript call ---
-            # This ensures the version update is part of the same atomic operation block
-            # executed by executescript within the transaction.
-            core_schema_script_with_version_update = f"""
+            # --- Combine all schema DDL into a single executescript ---
+            # executescript wraps the script in a transaction on this connection,
+            # so keep everything together to avoid partial application.
+            full_schema_script = f"""
                 {self._TABLES_SQL_V1}
                 {self._INDICES_SQL_V1}
                 {self._TRIGGERS_SQL_V1}
                 {self._SCHEMA_UPDATE_VERSION_SQL_V1}
+                {self._CLAIMS_TABLE_SQL}
+                {self._MEDIA_FILES_TABLE_SQL}
+                CREATE TABLE IF NOT EXISTS output_templates (
+                    id INTEGER PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    format TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    description TEXT,
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
+
+                CREATE TABLE IF NOT EXISTS reading_highlights (
+                    id INTEGER PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    item_id INTEGER NOT NULL,
+                    quote TEXT NOT NULL,
+                    start_offset INTEGER,
+                    end_offset INTEGER,
+                    color TEXT,
+                    note TEXT,
+                    created_at TEXT NOT NULL,
+                    anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
+                    content_hash_ref TEXT,
+                    context_before TEXT,
+                    context_after TEXT,
+                    state TEXT NOT NULL DEFAULT 'active'
+                );
+                CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+
+                CREATE TABLE IF NOT EXISTS collection_tags (
+                    id INTEGER PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    UNIQUE (user_id, name)
+                );
+
+                CREATE TABLE IF NOT EXISTS content_items (
+                    id INTEGER PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    origin TEXT NOT NULL,
+                    origin_type TEXT,
+                    origin_id INTEGER,
+                    url TEXT,
+                    canonical_url TEXT,
+                    domain TEXT,
+                    title TEXT,
+                    summary TEXT,
+                    notes TEXT,
+                    content_hash TEXT,
+                    word_count INTEGER,
+                    published_at TEXT,
+                    status TEXT,
+                    favorite INTEGER NOT NULL DEFAULT 0,
+                    metadata_json TEXT,
+                    media_id INTEGER,
+                    job_id INTEGER,
+                    run_id INTEGER,
+                    source_id INTEGER,
+                    read_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_content_items_user_updated ON content_items(user_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_content_items_user_domain ON content_items(user_id, domain);
+                CREATE INDEX IF NOT EXISTS idx_content_items_job ON content_items(job_id);
+                CREATE INDEX IF NOT EXISTS idx_content_items_run ON content_items(run_id);
+
+                CREATE TABLE IF NOT EXISTS content_item_tags (
+                    item_id INTEGER NOT NULL,
+                    tag_id INTEGER NOT NULL,
+                    UNIQUE (item_id, tag_id)
+                );
+
+                CREATE VIRTUAL TABLE IF NOT EXISTS content_items_fts USING fts5(
+                    title,
+                    summary,
+                    metadata,
+                    content=''
+                );
             """  # Note the added UPDATE statement
 
-            # --- Transaction for Core Schema + Version Update ---
-            with self.transaction():  # Use the transaction context manager
-                logging.debug("[Schema V1] Applying Core Schema + Version Update...")
-                conn.executescript(core_schema_script_with_version_update)
-                logging.debug("[Schema V1] Core Schema script (incl. version update) executed.")
+            logging.debug("[Schema V1] Applying full schema script...")
+            conn.executescript(full_schema_script)
+            logging.debug("[Schema V1] Full schema script executed.")
 
-                # Ensure Claims table exists as part of base schema (additive)
-                try:
-                    conn.executescript(self._CLAIMS_TABLE_SQL)
-                    logging.debug("[Schema V1] Claims table and indices ensured.")
-                except sqlite3.Error as e:
-                    logging.error(f"[Schema V1] Failed creating Claims table: {e}", exc_info=True)
-                    raise
+            # --- Validation step (optional but good) - Check Media table ---
+            try:
+                cursor = conn.execute("PRAGMA table_info(Media)")
+                columns = {row['name'] for row in cursor.fetchall()}
+                # Update this set to match ALL columns defined in _TABLES_SQL_V1.Media
+                expected_cols = {
+                    'id',
+                    'url',
+                    'title',
+                    'type',
+                    'content',
+                    'author',
+                    'ingestion_date',
+                    'transcription_model',
+                    'is_trash',
+                    'trash_date',
+                    'vector_embedding',
+                    'chunking_status',
+                    'vector_processing',
+                    'content_hash',
+                    'source_hash',
+                    'uuid',
+                    'last_modified',
+                    'version',
+                    'org_id',
+                    'team_id',
+                    'visibility',
+                    'owner_user_id',
+                    'client_id',
+                    'deleted',
+                    'prev_version',
+                    'merge_parent_uuid',
+                }
+                if not expected_cols.issubset(columns):
+                    missing_cols = expected_cols - columns
+                    raise SchemaError(f"Validation Error: Media table is missing columns after creation: {missing_cols}")
+                logging.debug("[Schema V1] Media table structure validated successfully.")
+            except (sqlite3.Error, SchemaError) as val_err:
+                logging.error(f"[Schema V1] Validation failed after table creation: {val_err}", exc_info=True)
+                raise
 
-                # Ensure MediaFiles table exists for original file storage
-                try:
-                    conn.executescript(self._MEDIA_FILES_TABLE_SQL)
-                    logging.debug("[Schema V1] MediaFiles table and indices ensured.")
-                except sqlite3.Error as e:
-                    logging.error(f"[Schema V1] Failed creating MediaFiles table: {e}", exc_info=True)
-                    raise
+            # --- Explicitly check version after script ---
+            cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            version_in_db = cursor_check.fetchone()
+            if not version_in_db or version_in_db['version'] != self._CURRENT_SCHEMA_VERSION:
+                logging.error(
+                    "[Schema V1] Version check failed after schema script. Found: %s",
+                    version_in_db['version'] if version_in_db else 'None',
+                )
+                raise SchemaError("Schema version update did not take effect after schema script.")
+            logging.debug(
+                "[Schema V1] Version check confirmed version is %s.",
+                self._CURRENT_SCHEMA_VERSION,
+            )
 
-                # Ensure Collections tables exist (output_templates, reading_highlights)
-                try:
-                    conn.executescript(
-                        """
-                        CREATE TABLE IF NOT EXISTS output_templates (
-                            id INTEGER PRIMARY KEY,
-                            user_id TEXT NOT NULL,
-                            name TEXT NOT NULL,
-                            type TEXT NOT NULL,
-                            format TEXT NOT NULL,
-                            body TEXT NOT NULL,
-                            description TEXT,
-                            is_default INTEGER NOT NULL DEFAULT 0,
-                            created_at TEXT NOT NULL,
-                            updated_at TEXT NOT NULL
-                        );
-                        CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
-                        CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
-
-                        CREATE TABLE IF NOT EXISTS reading_highlights (
-                            id INTEGER PRIMARY KEY,
-                            user_id TEXT NOT NULL,
-                            item_id INTEGER NOT NULL,
-                            quote TEXT NOT NULL,
-                            start_offset INTEGER,
-                            end_offset INTEGER,
-                            color TEXT,
-                            note TEXT,
-                            created_at TEXT NOT NULL,
-                            anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
-                            content_hash_ref TEXT,
-                            context_before TEXT,
-                            context_after TEXT,
-                            state TEXT NOT NULL DEFAULT 'active'
-                        );
-                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
-                        """
-                    )
-                    logging.debug("[Schema V1] Collections tables ensured.")
-                except sqlite3.Error as e:
-                    logging.error(f"[Schema V1] Failed creating Collections tables: {e}", exc_info=True)
-                    raise
-
-                # --- Validation step (optional but good) - Check Media table ---
-                try:
-                    cursor = conn.execute("PRAGMA table_info(Media)")
-                    columns = {row['name'] for row in cursor.fetchall()}
-                    # Update this set to match ALL columns defined in _TABLES_SQL_V1.Media
-                    expected_cols = {
-                        'id',
-                        'url',
-                        'title',
-                        'type',
-                        'content',
-                        'author',
-                        'ingestion_date',
-                        'transcription_model',
-                        'is_trash',
-                        'trash_date',
-                        'vector_embedding',
-                        'chunking_status',
-                        'vector_processing',
-                        'content_hash',
-                        'source_hash',
-                        'uuid',
-                        'last_modified',
-                        'version',
-                        'org_id',
-                        'team_id',
-                        'visibility',
-                        'owner_user_id',
-                        'client_id',
-                        'deleted',
-                        'prev_version',
-                        'merge_parent_uuid',
-                    }
-                    if not expected_cols.issubset(columns):
-                        missing_cols = expected_cols - columns
-                        raise SchemaError(f"Validation Error: Media table is missing columns after creation: {missing_cols}")
-                    logging.debug("[Schema V1] Media table structure validated successfully.")
-                except (sqlite3.Error, SchemaError) as val_err:
-                    logging.error(f"[Schema V1] Validation failed after table creation: {val_err}", exc_info=True)
-                    raise  # Re-raise to trigger rollback
-
-                # --- Explicitly check version *inside* transaction AFTER script ---
-                # This helps debug if the update itself isn't working
-                cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
-                version_in_tx = cursor_check.fetchone()
-                if not version_in_tx or version_in_tx['version'] != self._CURRENT_SCHEMA_VERSION:
-                    logging.error(f"[Schema V1] Version check *inside* transaction failed. Found: {version_in_tx['version'] if version_in_tx else 'None'}")
-                    raise SchemaError("Schema version update did not take effect within the transaction.")
-                logging.debug(f"[Schema V1] Version check inside transaction confirmed version is {self._CURRENT_SCHEMA_VERSION}.")
-
-            # Transaction commits here if all steps above succeeded
-            logging.info(f"[Schema V1] Core Schema V1 (incl. version update) applied and committed successfully for DB: {self.db_path_str}.")
+            logging.info(
+                "[Schema V1] Core Schema V1 (incl. version update) applied successfully for DB: %s.",
+                self.db_path_str,
+            )
 
             # --- Create FTS Tables Separately (Remains the same) ---
             try:
@@ -2286,7 +2321,7 @@ class MediaDatabase:
                 logging.error(f"[Schema V1] Failed to create FTS tables: {fts_err}", exc_info=True)
 
         except sqlite3.Error as e:
-            logging.error(f"[Schema V1] Application failed during core transaction: {e}", exc_info=True)
+            logging.error(f"[Schema V1] Application failed during schema script: {e}", exc_info=True)
             raise DatabaseError(f"DB schema V1 setup failed: {e}") from e
         except Exception as e:
             logging.error(f"[Schema V1] Unexpected error during schema V1 application: {e}", exc_info=True)
@@ -2486,6 +2521,59 @@ class MediaDatabase:
 	                            state TEXT NOT NULL DEFAULT 'active'
 	                        );
 	                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+
+                        CREATE TABLE IF NOT EXISTS collection_tags (
+                            id INTEGER PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            name TEXT NOT NULL,
+                            UNIQUE (user_id, name)
+                        );
+
+                        CREATE TABLE IF NOT EXISTS content_items (
+                            id INTEGER PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            origin TEXT NOT NULL,
+                            origin_type TEXT,
+                            origin_id INTEGER,
+                            url TEXT,
+                            canonical_url TEXT,
+                            domain TEXT,
+                            title TEXT,
+                            summary TEXT,
+                            notes TEXT,
+                            content_hash TEXT,
+                            word_count INTEGER,
+                            published_at TEXT,
+                            status TEXT,
+                            favorite INTEGER NOT NULL DEFAULT 0,
+                            metadata_json TEXT,
+                            media_id INTEGER,
+                            job_id INTEGER,
+                            run_id INTEGER,
+                            source_id INTEGER,
+                            read_at TEXT,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
+                        CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL;
+                        CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL;
+                        CREATE INDEX IF NOT EXISTS idx_content_items_user_updated ON content_items(user_id, updated_at DESC);
+                        CREATE INDEX IF NOT EXISTS idx_content_items_user_domain ON content_items(user_id, domain);
+                        CREATE INDEX IF NOT EXISTS idx_content_items_job ON content_items(job_id);
+                        CREATE INDEX IF NOT EXISTS idx_content_items_run ON content_items(run_id);
+
+                        CREATE TABLE IF NOT EXISTS content_item_tags (
+                            item_id INTEGER NOT NULL,
+                            tag_id INTEGER NOT NULL,
+                            UNIQUE (item_id, tag_id)
+                        );
+
+                        CREATE VIRTUAL TABLE IF NOT EXISTS content_items_fts USING fts5(
+                            title,
+                            summary,
+                            metadata,
+                            content=''
+                        );
 	                        """
 	                    )
                     # Ensure visibility/owner columns and indexes exist on upgraded DBs
@@ -2594,6 +2682,59 @@ class MediaDatabase:
                                     state TEXT NOT NULL DEFAULT 'active'
                                 );
                                 CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+
+                                CREATE TABLE IF NOT EXISTS collection_tags (
+                                    id INTEGER PRIMARY KEY,
+                                    user_id TEXT NOT NULL,
+                                    name TEXT NOT NULL,
+                                    UNIQUE (user_id, name)
+                                );
+
+                                CREATE TABLE IF NOT EXISTS content_items (
+                                    id INTEGER PRIMARY KEY,
+                                    user_id TEXT NOT NULL,
+                                    origin TEXT NOT NULL,
+                                    origin_type TEXT,
+                                    origin_id INTEGER,
+                                    url TEXT,
+                                    canonical_url TEXT,
+                                    domain TEXT,
+                                    title TEXT,
+                                    summary TEXT,
+                                    notes TEXT,
+                                    content_hash TEXT,
+                                    word_count INTEGER,
+                                    published_at TEXT,
+                                    status TEXT,
+                                    favorite INTEGER NOT NULL DEFAULT 0,
+                                    metadata_json TEXT,
+                                    media_id INTEGER,
+                                    job_id INTEGER,
+                                    run_id INTEGER,
+                                    source_id INTEGER,
+                                    read_at TEXT,
+                                    created_at TEXT NOT NULL,
+                                    updated_at TEXT NOT NULL
+                                );
+                                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL;
+                                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL;
+                                CREATE INDEX IF NOT EXISTS idx_content_items_user_updated ON content_items(user_id, updated_at DESC);
+                                CREATE INDEX IF NOT EXISTS idx_content_items_user_domain ON content_items(user_id, domain);
+                                CREATE INDEX IF NOT EXISTS idx_content_items_job ON content_items(job_id);
+                                CREATE INDEX IF NOT EXISTS idx_content_items_run ON content_items(run_id);
+
+                                CREATE TABLE IF NOT EXISTS content_item_tags (
+                                    item_id INTEGER NOT NULL,
+                                    tag_id INTEGER NOT NULL,
+                                    UNIQUE (item_id, tag_id)
+                                );
+
+                                CREATE VIRTUAL TABLE IF NOT EXISTS content_items_fts USING fts5(
+                                    title,
+                                    summary,
+                                    metadata,
+                                    content=''
+                                );
                                 """
                             )
                             # Ensure visibility/owner columns and indexes exist on upgraded DBs
@@ -2649,6 +2790,63 @@ class MediaDatabase:
                         connection=conn,
                     )
                     backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS collection_tags ("
+                            "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, "
+                            "UNIQUE (user_id, name))"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS content_items ("
+                            "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, origin TEXT NOT NULL, origin_type TEXT, "
+                            "origin_id BIGINT, url TEXT, canonical_url TEXT, domain TEXT, title TEXT, summary TEXT, notes TEXT, "
+                            "content_hash TEXT, word_count INTEGER, published_at TEXT, status TEXT, favorite INTEGER NOT NULL DEFAULT 0, "
+                            "metadata_json TEXT, media_id BIGINT, job_id BIGINT, run_id BIGINT, source_id BIGINT, read_at TEXT, "
+                            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical "
+                        "ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash "
+                        "ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_user_updated "
+                        "ON content_items(user_id, updated_at DESC)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_user_domain "
+                        "ON content_items(user_id, domain)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_job "
+                        "ON content_items(job_id)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_run "
+                        "ON content_items(run_id)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS content_item_tags ("
+                            "item_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, "
+                            "UNIQUE (item_id, tag_id))"
+                        ),
+                        connection=conn,
+                    )
                 except Exception:
                     pass
                 self._ensure_postgres_source_hash_column(conn)
@@ -2704,6 +2902,63 @@ class MediaDatabase:
                         connection=conn,
                     )
                     backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS collection_tags ("
+                            "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, "
+                            "UNIQUE (user_id, name))"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS content_items ("
+                            "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, origin TEXT NOT NULL, origin_type TEXT, "
+                            "origin_id BIGINT, url TEXT, canonical_url TEXT, domain TEXT, title TEXT, summary TEXT, notes TEXT, "
+                            "content_hash TEXT, word_count INTEGER, published_at TEXT, status TEXT, favorite INTEGER NOT NULL DEFAULT 0, "
+                            "metadata_json TEXT, media_id BIGINT, job_id BIGINT, run_id BIGINT, source_id BIGINT, read_at TEXT, "
+                            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                        ),
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical "
+                        "ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash "
+                        "ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_user_updated "
+                        "ON content_items(user_id, updated_at DESC)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_user_domain "
+                        "ON content_items(user_id, domain)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_job "
+                        "ON content_items(job_id)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_content_items_run "
+                        "ON content_items(run_id)",
+                        connection=conn,
+                    )
+                    backend.execute(
+                        (
+                            "CREATE TABLE IF NOT EXISTS content_item_tags ("
+                            "item_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, "
+                            "UNIQUE (item_id, tag_id))"
+                        ),
+                        connection=conn,
+                    )
                 except Exception:
                     pass
                 self._ensure_postgres_source_hash_column(conn)
@@ -2739,6 +2994,63 @@ class MediaDatabase:
                     connection=conn,
                 )
                 backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
+                backend.execute(
+                    (
+                        "CREATE TABLE IF NOT EXISTS collection_tags ("
+                        "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, "
+                        "UNIQUE (user_id, name))"
+                    ),
+                    connection=conn,
+                )
+                backend.execute(
+                    (
+                        "CREATE TABLE IF NOT EXISTS content_items ("
+                        "id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, origin TEXT NOT NULL, origin_type TEXT, "
+                        "origin_id BIGINT, url TEXT, canonical_url TEXT, domain TEXT, title TEXT, summary TEXT, notes TEXT, "
+                        "content_hash TEXT, word_count INTEGER, published_at TEXT, status TEXT, favorite INTEGER NOT NULL DEFAULT 0, "
+                        "metadata_json TEXT, media_id BIGINT, job_id BIGINT, run_id BIGINT, source_id BIGINT, read_at TEXT, "
+                        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                    ),
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical "
+                    "ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash "
+                    "ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_content_items_user_updated "
+                    "ON content_items(user_id, updated_at DESC)",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_content_items_user_domain "
+                    "ON content_items(user_id, domain)",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_content_items_job "
+                    "ON content_items(job_id)",
+                    connection=conn,
+                )
+                backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_content_items_run "
+                    "ON content_items(run_id)",
+                    connection=conn,
+                )
+                backend.execute(
+                    (
+                        "CREATE TABLE IF NOT EXISTS content_item_tags ("
+                        "item_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, "
+                        "UNIQUE (item_id, tag_id))"
+                    ),
+                    connection=conn,
+                )
             except Exception:
                 pass
             self._ensure_postgres_source_hash_column(conn)
@@ -8367,11 +8679,29 @@ class MediaDatabase:
             mon = get_topic_monitoring_service()
             uid = str(client_id) if client_id is not None else None
             if title:
-                mon.evaluate_and_alert(user_id=uid, text=title, source="ingestion.media", scope_type="user", scope_id=uid)
+                mon.schedule_evaluate_and_alert(
+                    user_id=uid,
+                    text=title,
+                    source="ingestion.media",
+                    scope_type="user",
+                    scope_id=uid,
+                )
             if content:
-                mon.evaluate_and_alert(user_id=uid, text=content, source="ingestion.media", scope_type="user", scope_id=uid)
+                mon.schedule_evaluate_and_alert(
+                    user_id=uid,
+                    text=content,
+                    source="ingestion.media",
+                    scope_type="user",
+                    scope_id=uid,
+                )
             if analysis_content:
-                mon.evaluate_and_alert(user_id=uid, text=analysis_content, source="ingestion.media", scope_type="user", scope_id=uid)
+                mon.schedule_evaluate_and_alert(
+                    user_id=uid,
+                    text=analysis_content,
+                    source="ingestion.media",
+                    scope_type="user",
+                    scope_id=uid,
+                )
         except Exception:
             pass
 
@@ -10723,6 +11053,61 @@ class MediaDatabase:
             logging.error(f"Unexpected error during DB pagination: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error during DB pagination: {e}") from e
 
+    def get_paginated_trash_list(self, page: int = 1, results_per_page: int = 10) -> Tuple[
+        List[Dict[str, Any]], int, int, int]:
+        """
+        Fetches a paginated list of trashed media items (id, title, type, uuid).
+
+        Filters for items where deleted = 0 and is_trash = 1.
+        Returns data suitable for constructing MediaListItem objects.
+        """
+        if page < 1:
+            raise ValueError("Page number must be 1 or greater.")
+        if results_per_page < 1:
+            raise ValueError("Results per page must be 1 or greater.")
+
+        logging.debug(
+            f"DB: Fetching paginated trash list: page={page}, rpp={results_per_page} from {self.db_path_str}"
+        )
+        offset = (page - 1) * results_per_page
+
+        try:
+            count_cursor = self.execute_query(
+                "SELECT COUNT(*) AS total_items FROM Media WHERE deleted = 0 AND is_trash = 1"
+            )
+            count_row = count_cursor.fetchone()
+            total_items = count_row["total_items"] if count_row else 0
+
+            results_data: List[Dict[str, Any]] = []
+            if total_items > 0:
+                items_cursor = self.execute_query(
+                    """
+                    SELECT id, title, type, uuid
+                    FROM Media
+                    WHERE deleted = 0
+                      AND is_trash = 1
+                    ORDER BY trash_date DESC, last_modified DESC, id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (results_per_page, offset),
+                )
+                results_data = [dict(row) for row in items_cursor.fetchall()]
+
+            total_pages = ceil(total_items / results_per_page) if total_items > 0 else 0
+            if page > total_pages and total_pages == 0:
+                results_data = []
+
+            return results_data, total_pages, page, total_items
+
+        except DatabaseError:
+            raise
+        except sqlite3.Error as e:
+            logging.error(f"SQLite error during trash pagination: {e}", exc_info=True)
+            raise DatabaseError(f"Failed trash pagination query: {e}") from e
+        except Exception as e:
+            logging.error(f"Unexpected error during trash pagination: {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected error during trash pagination: {e}") from e
+
     def get_media_by_id(self, media_id: int, include_deleted=False, include_trash=False) -> Optional[Dict]:
         """
         Retrieves a single media item by its primary key (ID).
@@ -12505,7 +12890,28 @@ def get_latest_transcription(db_instance: MediaDatabase, media_id: int) -> Optio
         )
         with db_instance.transaction() as conn:
             result = db_instance._fetchone_with_connection(conn, query, (media_id,))
-        return (result or {}).get('transcription')
+        raw = (result or {}).get("transcription")
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            text_val = raw.get("text")
+            if text_val is None:
+                return ""
+            return text_val if isinstance(text_val, str) else str(text_val)
+        if isinstance(raw, str):
+            stripped = raw.lstrip()
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    return raw
+                if isinstance(data, dict):
+                    text_val = data.get("text")
+                    if text_val is None:
+                        return ""
+                    return text_val if isinstance(text_val, str) else str(text_val)
+            return raw
+        return str(raw)
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error get latest transcript {media_id} '{db_instance.db_path_str}': {e}")
         raise DatabaseError(f"Failed get latest transcript {media_id}") from e

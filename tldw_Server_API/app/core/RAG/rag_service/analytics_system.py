@@ -1,7 +1,7 @@
 # analytics_system.py
 """
 Analytics and feedback system for RAG with dual storage:
-1. Analytics.db - Server-side QA and anonymized metrics
+1. Databases/Analytics.db - Server-side QA and anonymized metrics
 2. ChaChaNotes_DB - User-specific feedback linked to conversations
 
 This module replaces the old feedback_system.py with proper separation
@@ -26,7 +26,7 @@ import numpy as np
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
-from .analytics_db import get_analytics_db, AnalyticsDatabase
+from .analytics_db import DEFAULT_ANALYTICS_DB_PATH, get_analytics_db, AnalyticsDatabase
 
 
 class FeedbackType(Enum):
@@ -80,6 +80,7 @@ class UserFeedback:
     chunk_ids: List[str]
     relevance_score: Optional[int]  # 1-5
     helpful: Optional[bool]
+    issues: List[str]
     user_notes: Optional[str]
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -93,6 +94,7 @@ class UserFeedback:
             "chunk_ids": json.dumps(self.chunk_ids),
             "relevance_score": self.relevance_score,
             "helpful": self.helpful,
+            "issues": json.dumps(self.issues),
             "user_notes": self.user_notes,
             "created_at": self.created_at.isoformat()
         }
@@ -105,7 +107,7 @@ class AnalyticsStore:
     Uses the new AnalyticsDatabase for storage.
     """
 
-    def __init__(self, db_path: str = "Analytics.db"):
+    def __init__(self, db_path: str = DEFAULT_ANALYTICS_DB_PATH):
         """
         Initialize analytics store.
 
@@ -153,38 +155,92 @@ class AnalyticsStore:
             logger.error(f"Failed to record feedback: {e}")
             return False
 
-    async def record_document_performance(self, doc_data: Dict[str, Any]) -> bool:
+    async def record_event(self, event: "AnalyticsEvent | Dict[str, Any]") -> bool:
         """
-        Record document performance metrics.
+        Record a generic analytics event.
 
         Args:
-            doc_data: Dictionary containing document metrics
+            event: AnalyticsEvent or dict payload
 
         Returns:
             Success status
         """
         try:
+            payload = event.to_dict() if hasattr(event, "to_dict") else dict(event)
             await asyncio.get_event_loop().run_in_executor(
-                None, self.db.record_document_performance, doc_data
+                None, self.db.record_event, payload
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to record analytics event: {e}")
+            return False
+
+    async def record_search_quality(self, *, query_hash: str, relevance_score: float, clicked: bool) -> bool:
+        """
+        Record search quality metrics as a feedback event.
+
+        Args:
+            query_hash: Hashed query value
+            relevance_score: Normalized relevance score (0-1)
+            clicked: Whether any chunks were clicked
+
+        Returns:
+            Success status
+        """
+        event = AnalyticsEvent(
+            event_type=AnalyticsEventType.FEEDBACK,
+            query_hash=query_hash,
+            metrics={
+                "quality_score": relevance_score,
+                "clicked": clicked,
+            },
+        )
+        return await self.record_event(event)
+
+    async def record_document_performance(
+        self,
+        doc_data: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> bool:
+        """
+        Record document performance metrics.
+
+        Args:
+            doc_data: Dictionary containing document metrics
+            kwargs: Alternate keyword payload when doc_data is omitted
+
+        Returns:
+            Success status
+        """
+        try:
+            payload = doc_data or kwargs
+            if not payload:
+                return False
+            await asyncio.get_event_loop().run_in_executor(
+                None, self.db.record_document_performance, payload
             )
             return True
         except Exception as e:
             logger.error(f"Failed to record document performance: {e}")
             return False
 
-    async def record_error(self, error_data: Dict[str, Any]) -> bool:
+    async def record_error(self, error_data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> bool:
         """
         Record error tracking information.
 
         Args:
             error_data: Dictionary containing error information
+            kwargs: Alternate keyword payload when error_data is omitted
 
         Returns:
             Success status
         """
         try:
+            payload = error_data or kwargs
+            if not payload:
+                return False
             await asyncio.get_event_loop().run_in_executor(
-                None, self.db.record_error, error_data
+                None, self.db.record_error, payload
             )
             return True
         except Exception as e:
@@ -278,6 +334,7 @@ class UserFeedbackStore:
                 chunk_ids TEXT,
                 relevance_score INTEGER CHECK(relevance_score BETWEEN 1 AND 5),
                 helpful INTEGER,
+                issues TEXT,
                 user_notes TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
@@ -298,6 +355,7 @@ class UserFeedbackStore:
                 chunk_ids TEXT,
                 relevance_score INTEGER CHECK(relevance_score BETWEEN 1 AND 5),
                 helpful BOOLEAN,
+                issues TEXT,
                 user_notes TEXT,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT fk_conversation
@@ -316,6 +374,17 @@ class UserFeedbackStore:
             with self.db.transaction() as conn:
                 for statement in statements:
                     conn.execute(statement)
+                try:
+                    if self.db.backend_type == BackendType.SQLITE:
+                        conn.execute("ALTER TABLE conversation_feedback ADD COLUMN issues TEXT")
+                    else:
+                        conn.execute("ALTER TABLE conversation_feedback ADD COLUMN IF NOT EXISTS issues TEXT")
+                except Exception as exc:  # noqa: BLE001
+                    msg = str(exc).lower()
+                    if self.db.backend_type == BackendType.SQLITE and "duplicate column" in msg:
+                        pass
+                    else:
+                        logger.debug(f"conversation_feedback: issues column add skipped: {exc}")
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Failed to initialize feedback schema: {exc}", exc_info=True)
 
@@ -327,6 +396,7 @@ class UserFeedbackStore:
         chunk_ids: List[str],
         relevance_score: Optional[int] = None,
         helpful: Optional[bool] = None,
+        issues: Optional[List[str]] = None,
         user_notes: Optional[str] = None,
         message_id: Optional[str] = None
     ) -> str:
@@ -347,11 +417,13 @@ class UserFeedbackStore:
         insert_sql = """
             INSERT INTO conversation_feedback
                 (id, conversation_id, message_id, query, document_ids, chunk_ids,
-                 relevance_score, helpful, user_notes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 relevance_score, helpful, issues, user_notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         if self.db.backend_type == BackendType.SQLITE:
             insert_sql = insert_sql.replace('%s', '?')
+
+        issues_payload = json.dumps(issues or [])
 
         try:
             with self.db.transaction() as conn:
@@ -366,6 +438,7 @@ class UserFeedbackStore:
                         json.dumps(chunk_ids),
                         relevance_score,
                         helpful_value,
+                        issues_payload,
                         user_notes,
                     ),
                 )
@@ -375,6 +448,79 @@ class UserFeedbackStore:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Failed to add feedback: {exc}")
             raise
+
+    async def merge_feedback_update(
+        self,
+        feedback_id: str,
+        issues: Optional[List[str]] = None,
+        user_notes: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Merge issues (union) and overwrite user_notes for an existing feedback row."""
+        if issues is None and user_notes is None:
+            return None
+
+        select_sql = "SELECT issues, user_notes FROM conversation_feedback WHERE id = %s"
+        if self.db.backend_type == BackendType.SQLITE:
+            select_sql = select_sql.replace('%s', '?')
+
+        try:
+            cursor = self.db.execute_query(select_sql, (feedback_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            if isinstance(row, dict):
+                record = dict(row)
+            else:
+                # Handle sqlite3.Row or tuple-like results
+                if hasattr(row, "keys"):
+                    record = dict(row)
+                elif cursor.description:
+                    columns = [col[0] for col in cursor.description]
+                    record = dict(zip(columns, row))
+                else:
+                    record = {}
+
+            raw_issues = record.get("issues")
+            existing_issues: List[str] = []
+            if raw_issues:
+                try:
+                    decoded = json.loads(raw_issues)
+                    if isinstance(decoded, list):
+                        existing_issues = [str(item) for item in decoded if str(item).strip()]
+                except Exception:
+                    existing_issues = []
+
+            def _merge_issues(existing: List[str], incoming: Optional[List[str]]) -> List[str]:
+                if not incoming:
+                    return list(existing)
+                merged: List[str] = []
+                seen = set()
+                for item in existing + [str(item) for item in incoming if str(item).strip()]:
+                    if item in seen:
+                        continue
+                    seen.add(item)
+                    merged.append(item)
+                return merged
+
+            updated_issues = _merge_issues(existing_issues, issues)
+            existing_notes = record.get("user_notes")
+            updated_notes = existing_notes if user_notes is None else user_notes
+
+            if updated_issues == existing_issues and updated_notes == existing_notes:
+                return {"issues": existing_issues, "user_notes": existing_notes}
+
+            update_sql = "UPDATE conversation_feedback SET issues = %s, user_notes = %s WHERE id = %s"
+            if self.db.backend_type == BackendType.SQLITE:
+                update_sql = update_sql.replace('%s', '?')
+
+            with self.db.transaction() as conn:
+                conn.execute(update_sql, (json.dumps(updated_issues), updated_notes, feedback_id))
+
+            return {"issues": updated_issues, "user_notes": updated_notes}
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Failed to merge feedback update: {exc}")
+            return None
 
     async def get_conversation_feedback(
         self,
@@ -397,6 +543,7 @@ class UserFeedbackStore:
                 fb = dict(row)
                 fb["document_ids"] = json.loads(fb["document_ids"]) if fb.get("document_ids") else []
                 fb["chunk_ids"] = json.loads(fb["chunk_ids"]) if fb.get("chunk_ids") else []
+                fb["issues"] = json.loads(fb["issues"]) if fb.get("issues") else []
                 helpful_value = fb.get("helpful")
                 fb["helpful"] = None if helpful_value is None else bool(helpful_value)
                 feedback.append(fb)
@@ -409,13 +556,13 @@ class UserFeedbackStore:
 class UnifiedFeedbackSystem:
     """
     Unified feedback system that manages both:
-    1. Analytics.db for server-side QA
+    1. Databases/Analytics.db for server-side QA
     2. ChaChaNotes_DB for user-specific feedback
     """
 
     def __init__(
         self,
-        analytics_db_path: str = "Analytics.db",
+        analytics_db_path: str = DEFAULT_ANALYTICS_DB_PATH,
         chacha_db = None,
         enable_analytics: bool = True
     ):
@@ -449,10 +596,14 @@ class UnifiedFeedbackSystem:
         query: str,
         document_ids: List[str],
         chunk_ids: List[str],
+        feedback_type: Optional[str] = None,
         relevance_score: Optional[int] = None,
         helpful: Optional[bool] = None,
+        issues: Optional[List[str]] = None,
         user_notes: Optional[str] = None,
-        user_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        _user_id: Optional[str] = None,  # Reserved for future use
+        message_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Submit feedback to both stores.
@@ -472,7 +623,9 @@ class UnifiedFeedbackSystem:
                     chunk_ids=chunk_ids,
                     relevance_score=relevance_score,
                     helpful=helpful,
-                    user_notes=user_notes
+                    issues=issues,
+                    user_notes=user_notes,
+                    message_id=message_id
                 )
                 result["feedback_id"] = feedback_id
                 result["success"] = True
@@ -485,6 +638,14 @@ class UnifiedFeedbackSystem:
             try:
                 # Hash query for privacy
                 query_hash = hashlib.sha256(query.encode()).hexdigest()
+                resolved_type = feedback_type
+                if not resolved_type:
+                    if relevance_score is not None:
+                        resolved_type = "relevance"
+                    elif helpful is not None:
+                        resolved_type = "helpful"
+                    elif issues or user_notes:
+                        resolved_type = "report"
 
                 # Record search quality
                 if relevance_score:
@@ -497,11 +658,37 @@ class UnifiedFeedbackSystem:
                 # Record document performance
                 for doc_id in document_ids:
                     await self.analytics.record_document_performance(
-                        document_id=doc_id,
-                        relevance_score=relevance_score / 5.0 if relevance_score else None,
-                        positive_feedback=helpful is True,
-                        negative_feedback=helpful is False
+                        {
+                            "document_id": doc_id,
+                            "relevance_score": relevance_score / 5.0 if relevance_score else None,
+                            "feedback": "positive" if helpful is True else "negative" if helpful is False else None,
+                        }
                     )
+
+                categories = issues or []
+                response_quality = None
+                if helpful is True:
+                    response_quality = "helpful"
+                elif helpful is False:
+                    response_quality = "not_helpful"
+
+                rating = relevance_score
+                if rating is None and helpful is not None:
+                    rating = 1 if helpful else 0
+
+                await self.analytics.record_feedback(
+                    {
+                        "session_id": session_id,
+                        "query": query,
+                        "feedback_type": resolved_type,
+                        "rating": rating,
+                        "response_quality": response_quality,
+                        "retrieval_accuracy": None,
+                        "response_time_acceptable": None,
+                        "categories": categories,
+                        "improvement_areas": categories,
+                    }
+                )
 
                 # Record feedback event
                 event = AnalyticsEvent(
@@ -511,7 +698,8 @@ class UnifiedFeedbackSystem:
                         "relevance": relevance_score,
                         "helpful": helpful,
                         "chunks_used": len(chunk_ids),
-                        "has_notes": bool(user_notes)
+                        "has_notes": bool(user_notes),
+                        "feedback_type": resolved_type,
                     }
                 )
                 await self.analytics.record_event(event)
@@ -530,6 +718,12 @@ class UnifiedFeedbackSystem:
         event_type: str,
         impression: Optional[List[str]] = None,
         corpus: Optional[str] = None,
+        chunk_ids: Optional[List[str]] = None,
+        rank: Optional[int] = None,
+        session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
     ) -> None:
         """Record a lightweight implicit signal (click/expand/copy).
 
@@ -540,26 +734,59 @@ class UnifiedFeedbackSystem:
             # Update per-user store (isolated per tenant)
             try:
                 from .user_personalization_store import UserPersonalizationStore  # lazy import
-                store = UserPersonalizationStore(user_id or "anon")
-                store.record_event(event_type=event_type, doc_id=doc_id, corpus=corpus, impression=impression or [])
+                store = UserPersonalizationStore(user_id)
+                store.record_event(
+                    event_type=event_type,
+                    doc_id=doc_id,
+                    corpus=corpus,
+                    impression=impression or [],
+                    chunk_ids=chunk_ids,
+                    rank=rank,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    dwell_ms=dwell_ms,
+                    query=query,
+                )
+            except ValueError as e:
+                logger.debug(f"Personalization store update skipped for user_id={user_id}: {e}")
             except Exception as e:
                 logger.debug(f"Personalization store update failed: {e}")
 
             # Emit anonymized analytics
             if self.enable_analytics and self.analytics:
+                def _hash_identifier(value: Optional[str]) -> Optional[str]:
+                    if not value:
+                        return None
+                    return hashlib.sha256(str(value).encode()).hexdigest()[:16]
+
                 qh = None
                 if query:
-                    import hashlib
                     qh = hashlib.sha256(query.encode()).hexdigest()
+                impression_list = impression or []
+                if len(impression_list) > 50:
+                    impression_list = impression_list[:50]
+                chunk_list = chunk_ids or []
+                if len(chunk_list) > 50:
+                    chunk_list = chunk_list[:50]
+                metrics = {
+                    "implicit": True,
+                    "type": event_type,
+                    "doc_id": doc_id,
+                    "chunk_ids": chunk_list,
+                    "rank": rank,
+                    "dwell_ms": dwell_ms,
+                    "corpus": corpus,
+                    "impression_list": impression_list,
+                    "session_hash": _hash_identifier(session_id),
+                    "conversation_hash": _hash_identifier(conversation_id),
+                    "message_hash": _hash_identifier(message_id),
+                }
+                metrics = {k: v for k, v in metrics.items() if v is not None}
                 evt = AnalyticsEvent(
                     event_type=AnalyticsEventType.FEEDBACK,
                     query_hash=qh,
-                    metrics={
-                        "implicit": True,
-                        "type": event_type,
-                        "doc_id": doc_id,
-                        "list_size": len(impression or []),
-                    },
+                    metrics=metrics,
                 )
                 await self.analytics.record_event(evt)
         except Exception as e:
@@ -675,7 +902,7 @@ _feedback_system: Optional[UnifiedFeedbackSystem] = None
 
 
 def get_feedback_system(
-    analytics_db_path: str = "Analytics.db",
+    analytics_db_path: str = DEFAULT_ANALYTICS_DB_PATH,
     chacha_db = None,
     enable_analytics: bool = True
 ) -> UnifiedFeedbackSystem:
@@ -711,10 +938,12 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
             query=context.query,
             document_ids=[doc.id for doc in context.documents],
             chunk_ids=[doc.id for doc in context.documents],  # Assuming doc.id is chunk_id
+            feedback_type=fb.get("feedback_type"),
             relevance_score=fb.get("relevance_score"),
             helpful=fb.get("helpful"),
             user_notes=fb.get("user_notes"),
-            user_id=fb.get("user_id")
+            session_id=fb.get("session_id"),
+            _user_id=fb.get("user_id")
         )
 
         context.metadata["feedback_result"] = result
@@ -737,8 +966,11 @@ async def apply_feedback_boost(context: Any, **kwargs) -> Any:
     try:
         user_id = context.config.get("user_id")
         from .user_personalization_store import UserPersonalizationStore
-        store = UserPersonalizationStore(user_id or "anon")
+        store = UserPersonalizationStore(user_id)
         context.documents = store.boost_documents(context.documents, corpus=context.config.get("index_namespace"))
+        return context
+    except ValueError as e:
+        logger.debug(f"Feedback boost skipped for user_id={user_id}: {e}")
         return context
     except Exception as e:
         logger.debug(f"Feedback boost failed: {e}")

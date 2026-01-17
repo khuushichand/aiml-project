@@ -138,6 +138,7 @@ async def test_hub_redis_no_duplicate_local_origin(monkeypatch: pytest.MonkeyPat
             return cls()
 
         def ping(self):
+
             return True
 
         def publish(self, channel: str, data: bytes):

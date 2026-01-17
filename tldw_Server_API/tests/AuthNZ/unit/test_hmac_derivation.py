@@ -70,6 +70,8 @@ def _svc_multi_user(secret: str, **overrides) -> JWTService:
 
 
 def test_hash_token_changes_with_pepper_or_secret():
+
+
     svc1 = _svc_multi_user(secret="A" * 32)
     svc2 = _svc_multi_user(secret="B" * 32)
     token = "example-token"
@@ -82,6 +84,8 @@ def test_hash_token_changes_with_pepper_or_secret():
 
 
 def test_hash_token_single_user_derives_from_api_key():
+
+
     svc1 = _svc_single_user(key="key-one-abcdef0123456789")
     svc2 = _svc_single_user(key="key-two-abcdef0123456789")
     token = "example-token"
@@ -89,6 +93,8 @@ def test_hash_token_single_user_derives_from_api_key():
 
 
 def test_hash_token_candidates_include_secondary_secret():
+
+
     token = "rotation-test-token"
     old_secret = "old-secret-value-1234567890abcdef123456"
     new_secret = "new-secret-value-fedcba0987654321123456"
@@ -102,6 +108,8 @@ def test_hash_token_candidates_include_secondary_secret():
 
 
 def test_session_manager_hash_candidates_include_secondary_secret():
+
+
     token = "session-rotation-token"
     old_secret = "session-old-secret-abcdef0123456789abcd"
     new_secret = "session-new-secret-9876543210fedcbaabcd"
@@ -121,6 +129,8 @@ def test_session_manager_hash_candidates_include_secondary_secret():
 
 
 def test_api_key_manager_hash_candidates_include_secondary_secret():
+
+
     api_key = "apikey-rotation-token"
     old_secret = "apikey-old-secret-abcdef0123456789abcd"
     new_secret = "apikey-new-secret-9876543210fedcbaabcd"

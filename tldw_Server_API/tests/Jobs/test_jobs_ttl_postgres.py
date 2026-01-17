@@ -29,6 +29,8 @@ def _backdate_pg_fields(dsn: str, job_id: int, *, created_delta_s: int = 0, runt
 
 
 def test_jobs_ttl_sweep_pg(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -78,6 +80,8 @@ def test_jobs_ttl_sweep_pg(monkeypatch, jobs_pg_dsn):
 
 
 def test_jobs_ttl_sweep_fail_pg(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)

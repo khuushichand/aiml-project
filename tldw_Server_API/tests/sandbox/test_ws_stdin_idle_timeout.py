@@ -13,6 +13,8 @@ pytestmark = pytest.mark.timeout(10)
 
 
 def _client(monkeypatch) -> TestClient:
+
+
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
     monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "true")
@@ -31,6 +33,8 @@ def _client(monkeypatch) -> TestClient:
 
 
 def test_ws_stdin_idle_timeout_emits_truncated_and_closes(ws_flush, monkeypatch) -> None:
+
+
     with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",

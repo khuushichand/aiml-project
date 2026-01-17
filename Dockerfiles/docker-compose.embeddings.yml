@@ -46,10 +46,7 @@ services:
     container_name: tldw-chunking-workers
     environment:
       - REDIS_URL=redis://redis:6379
-      - WORKER_TYPE=chunking
-      - NUM_WORKERS=2
-      - QUEUE_NAME=embeddings:chunking
-      - CONSUMER_GROUP=chunking-group
+      - EMBEDDINGS_REDIS_WORKERS_CHUNKING=2
       - LOG_LEVEL=INFO
     depends_on:
       redis:
@@ -58,7 +55,7 @@ services:
       - ../tldw_Server_API:/app
       - ../Config_Files:/app/Config_Files
       - ../Databases:/app/Databases
-    command: python -m tldw_Server_API.app.core.Embeddings.start_workers --type chunking
+    command: python -m tldw_Server_API.app.core.Embeddings.services.redis_worker --stage chunking
     restart: unless-stopped
     networks:
       - tldw-network
@@ -71,10 +68,7 @@ services:
     container_name: tldw-embedding-workers
     environment:
       - REDIS_URL=redis://redis:6379
-      - WORKER_TYPE=embedding
-      - NUM_WORKERS=2
-      - QUEUE_NAME=embeddings:embedding
-      - CONSUMER_GROUP=embedding-group
+      - EMBEDDINGS_REDIS_WORKERS_EMBEDDING=2
       - LOG_LEVEL=INFO
       - CUDA_VISIBLE_DEVICES=0  # For GPU support
     depends_on:
@@ -85,7 +79,7 @@ services:
       - ../Config_Files:/app/Config_Files
       - ../Databases:/app/Databases
       - ../models:/app/Models  # For model caching
-    command: python -m tldw_Server_API.app.core.Embeddings.start_workers --type embedding
+    command: python -m tldw_Server_API.app.core.Embeddings.services.redis_worker --stage embedding
     restart: unless-stopped
     networks:
       - tldw-network
@@ -105,10 +99,7 @@ services:
     container_name: tldw-storage-workers
     environment:
       - REDIS_URL=redis://redis:6379
-      - WORKER_TYPE=storage
-      - NUM_WORKERS=2
-      - QUEUE_NAME=embeddings:storage
-      - CONSUMER_GROUP=storage-group
+      - EMBEDDINGS_REDIS_WORKERS_STORAGE=2
       - LOG_LEVEL=INFO
     depends_on:
       redis:
@@ -117,21 +108,20 @@ services:
       - ../tldw_Server_API:/app
       - ../Config_Files:/app/Config_Files
       - ../Databases:/app/Databases
-    command: python -m tldw_Server_API.app.core.Embeddings.start_workers --type storage
+    command: python -m tldw_Server_API.app.core.Embeddings.services.redis_worker --stage storage
     restart: unless-stopped
     networks:
       - tldw-network
 
-  # Worker Orchestrator
-  worker-orchestrator:
+  # Content Embeddings Worker Pool
+  content-workers:
     build:
       context: ..
       dockerfile: Dockerfiles/Dockerfile.worker
-    container_name: tldw-worker-orchestrator
+    container_name: tldw-content-workers
     environment:
       - REDIS_URL=redis://redis:6379
-      - CONFIG_FILE=/app/Config_Files/embeddings_config.yaml
-      - PROMETHEUS_PORT=9090
+      - EMBEDDINGS_REDIS_WORKERS_CONTENT=1
       - LOG_LEVEL=INFO
     depends_on:
       redis:
@@ -140,10 +130,8 @@ services:
       - ../tldw_Server_API:/app
       - ../Config_Files:/app/Config_Files
       - ../Databases:/app/Databases
-    command: python -m tldw_Server_API.app.core.Embeddings.worker_orchestrator
+    command: python -m tldw_Server_API.app.core.Embeddings.services.redis_worker --stage content
     restart: unless-stopped
-    ports:
-      - "9090:9090"  # Prometheus metrics
     networks:
       - tldw-network
 
@@ -218,7 +206,7 @@ networks:
 #   docker-compose -f docker-compose.embeddings.yml --profile debug up -d
 #
 # Scale workers:
-#   docker-compose -f docker-compose.embeddings.yml up -d --scale chunking-workers=3
+#   docker-compose -f docker-compose.embeddings.yml up -d --scale chunking-workers=3 --scale embedding-workers=2 --scale storage-workers=1 --scale content-workers=1
 #
 # View logs:
 #   docker-compose -f docker-compose.embeddings.yml logs -f chunking-workers

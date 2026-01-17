@@ -20,6 +20,7 @@ def client(monkeypatch):
     # Clear cached TTS config if present
     try:
         from tldw_Server_API.app.core.TTS.tts_config import get_tts_config_manager
+
         mgr = get_tts_config_manager()
         mgr._config_cache = None  # type: ignore[attr-defined]
     except Exception:
@@ -33,7 +34,7 @@ def client(monkeypatch):
 def _small_wav_bytes(duration_sec: float = 0.2, sr: int = 16000) -> bytes:
     """Generate a tiny valid mono 16-bit WAV of silence using stdlib only."""
     buf = io.BytesIO()
-    with wave.open(buf, 'wb') as wf:
+    with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(sr)

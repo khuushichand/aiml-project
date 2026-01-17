@@ -18,6 +18,7 @@ def client(tmp_path, auth_headers):
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
 
     def override_db():
+
         return db
 
     app.dependency_overrides[get_request_user] = override_user

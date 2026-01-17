@@ -709,11 +709,13 @@ result = await unified_rag_pipeline(
     query="...",
     # Prefer per-user default Media DB path; override as needed
     media_db_path=str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())),
-    character_db_path="Databases/user_databases/<uid>/ChaChaNotes.db",
+    character_db_path="<USER_DB_BASE_DIR>/<uid>/ChaChaNotes.db",
     media_db=media_db_instance,       # required in production
     chacha_db=chacha_db_instance,     # required in production
 )
 ```
+
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 If no adapter is supplied in production, retrievers raise `RuntimeError` instead of using raw sqlite.
 
@@ -1356,7 +1358,7 @@ result = await unified_rag_pipeline(
 ```
 
 ### Privacy-Preserving Analytics
-The Analytics.db system ensures user privacy:
+The Databases/Analytics.db system ensures user privacy:
 - Query content is SHA256 hashed (16-char prefix)
 - No raw query text stored
 - User IDs are hashed
@@ -1434,7 +1436,7 @@ Integrated dual-database feedback system for both server QA and user experience:
 ```python
 result = await unified_rag_pipeline(
     query="Research question",
-    enable_analytics=True,  # Records to Analytics.db
+    enable_analytics=True,  # Records to Databases/Analytics.db
     enable_feedback_collection=True
 )
 

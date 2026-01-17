@@ -25,6 +25,7 @@ def test_validate_audio_file_prefers_ffprobe_sibling(monkeypatch, tmp_path):
     called = {}
 
     def _fake_run(cmd, *args, **kwargs):
+
         called["cmd"] = cmd
         return run_result
 

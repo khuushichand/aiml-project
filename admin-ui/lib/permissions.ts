@@ -1,13 +1,8 @@
+import { ROLE_RANK, getRoleRank } from './roles';
+
 export type OrgMembership = {
   org_id: number;
   role: string;
-};
-
-const roleRank: Record<string, number> = {
-  owner: 4,
-  super_admin: 5,
-  admin: 3,
-  member: 1,
 };
 
 export const canEditFromMemberships = (
@@ -33,8 +28,8 @@ export const canEditFromMemberships = (
   return sharedOrgs.some((orgId) => {
     const adminRole = adminByOrg.get(orgId) || '';
     const targetRole = targetByOrg.get(orgId) || '';
-    const adminRank = roleRank[adminRole] || 0;
-    const targetRank = roleRank[targetRole] || 0;
-    return adminRank >= roleRank.admin && adminRank >= targetRank;
+    const adminRank = getRoleRank(adminRole) ?? 0;
+    const targetRank = getRoleRank(targetRole) ?? 0;
+    return adminRank >= ROLE_RANK.admin && adminRank >= targetRank;
   });
 };

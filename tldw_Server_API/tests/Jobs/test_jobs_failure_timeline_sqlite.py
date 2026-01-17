@@ -4,6 +4,8 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _env(monkeypatch, tmp_path):
+
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
@@ -25,6 +27,8 @@ def _read_timeline_sqlite(job_id: int):
 
 
 def test_failure_timeline_append_and_cap_sqlite(monkeypatch, tmp_path):
+
+
     _env(monkeypatch, tmp_path)
     jm = JobManager()
 

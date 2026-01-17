@@ -21,7 +21,16 @@ class DummyAsyncPlaywright:
 
 
 def test_js_required_emits_fallback_metric(monkeypatch):
-    # stub robots allow
+    from tldw_Server_API.app.core.Security import egress as egress_module
+
+    monkeypatch.setattr(
+        egress_module,
+        "evaluate_url_policy",
+        lambda url: types.SimpleNamespace(allowed=True),
+    )
+
+
+     # stub robots allow
     monkeypatch.setattr(AEL, "is_allowed_by_robots_async", lambda *a, **k: asyncio.Future())
     f = asyncio.Future(); f.set_result(True)
     monkeypatch.setattr(AEL, "is_allowed_by_robots_async", lambda *a, **k: f)
@@ -34,9 +43,9 @@ def test_js_required_emits_fallback_metric(monkeypatch):
 
     # capture metrics
     calls = []
-    def _log_counter(name, labels=None):
+    def _increment_counter(name, value=1, labels=None):
         calls.append((name, dict(labels or {})))
-    monkeypatch.setattr(AEL, "log_counter", _log_counter)
+    monkeypatch.setattr(AEL, "increment_counter", _increment_counter)
 
     # run
     res = asyncio.get_event_loop().run_until_complete(AEL.scrape_article("https://example.com"))

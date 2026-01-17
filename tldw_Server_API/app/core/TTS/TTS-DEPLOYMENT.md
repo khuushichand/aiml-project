@@ -667,7 +667,8 @@ ffmpeg -i input.wav -ss 0 -t 10 -ar 24000 -ac 1 reference.wav
 3. **Test Voice Cloning**:
 ```python
 import base64
-import requests
+import json
+from urllib import request
 
 # Prepare reference
 with open("reference.wav", "rb") as f:
@@ -675,19 +676,22 @@ with open("reference.wav", "rb") as f:
 
 # Test with different providers
 for model in ["higgs", "chatterbox", "vibevoice"]:
-    response = requests.post(
+    payload = {
+        "model": model,
+        "input": "Testing voice cloning.",
+        "voice": "default",
+        "voice_reference": voice_ref,
+        "response_format": "mp3",
+    }
+    req = request.Request(
         "http://localhost:8000/api/v1/audio/speech",
-        json={
-            "model": model,
-            "input": "Testing voice cloning.",
-            "voice": "default",
-            "voice_reference": voice_ref,
-            "response_format": "mp3"
-        }
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
 
-    with open(f"clone_{model}.mp3", "wb") as f:
-        f.write(response.content)
+    with request.urlopen(req) as resp, open(f"clone_{model}.mp3", "wb") as f:
+        f.write(resp.read())
 ```
 
 ## Nginx Configuration
@@ -939,29 +943,32 @@ locust -f locustfile.py --host=http://localhost:8000 --users=100 --spawn-rate=10
 ### Integration Tests
 ```python
 # test_integration.py
-import pytest
-import httpx
-import asyncio
+import base64
+import json
+from urllib import request
 
-@pytest.mark.asyncio
-async def test_voice_cloning_workflow():
-    async with httpx.AsyncClient() as client:
-        # Upload voice reference
-        with open("test_voice.wav", "rb") as f:
-            voice_ref = base64.b64encode(f.read()).decode()
+def test_voice_cloning_workflow():
+    # Upload voice reference
+    with open("test_voice.wav", "rb") as f:
+        voice_ref = base64.b64encode(f.read()).decode()
 
-        # Test with each provider
-        for model in ["higgs", "chatterbox", "vibevoice"]:
-            response = await client.post(
-                "http://localhost:8000/api/v1/audio/speech",
-                json={
-                    "model": model,
-                    "input": "Test message",
-                    "voice_reference": voice_ref
-                }
-            )
-            assert response.status_code == 200
-            assert len(response.content) > 0
+    # Test with each provider
+    for model in ["higgs", "chatterbox", "vibevoice"]:
+        payload = {
+            "model": model,
+            "input": "Test message",
+            "voice_reference": voice_ref,
+        }
+        req = request.Request(
+            "http://localhost:8000/api/v1/audio/speech",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with request.urlopen(req) as resp:
+            body = resp.read()
+            assert resp.status == 200
+            assert len(body) > 0
 ```
 
 ## Troubleshooting

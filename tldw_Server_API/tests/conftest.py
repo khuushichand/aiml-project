@@ -4,12 +4,7 @@ Pytest configuration for the main test suite.
 Registers shared test plugins and provides common fixtures.
 """
 
-"""Local pytest configuration for tests subtree.
-
-Note: pytest>=8 discourages defining `pytest_plugins` outside top-level conftest
-files. We register shared plugins here to ensure discovery across the suite,
-and keep per-suite conftests focused on markers and env overrides.
-"""
+pytest_plugins = ["tldw_Server_API.tests._plugins.http_client_patch_guard"]
 
 import os
 from pathlib import Path
@@ -45,6 +40,11 @@ os.environ.pop("PROFILE", None)
 os.environ["DISABLE_AUTHNZ_SCHEDULER"] = "1"
 os.environ["AUTHNZ_SCHEDULER_DISABLED"] = "1"
 os.environ["WORKFLOWS_SCHEDULER_ENABLED"] = "false"
+# Ensure ingestion backpressure/tenant quotas don't leak from developer envs into tests.
+os.environ["EMBEDDINGS_TENANT_RPS"] = "0"
+os.environ["INGEST_TENANT_RPS"] = "0"
+os.environ["EMB_BACKPRESSURE_MAX_DEPTH"] = "999999999"
+os.environ["EMB_BACKPRESSURE_MAX_AGE_SECONDS"] = "999999999"
 # Relax webhook egress for test replay/egress simulations (no real network used in test short-circuit paths)
 os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
 os.environ.setdefault("WORKFLOWS_WEBHOOK_ALLOWLIST", "*")
@@ -94,9 +94,70 @@ _AUTH_ENV_BASELINE_KEYS = (
     # Route gating and backend knobs used by a handful of integration tests.
     "ROUTES_ENABLE",
     "TLDW_USER_DB_BACKEND",
+    # Privilege metadata validation can be toggled in tests/fixtures.
+    "PRIVILEGE_METADATA_VALIDATE_ON_STARTUP",
 )
 
 _AUTH_ENV_BASELINE = {k: os.environ.get(k) for k in _AUTH_ENV_BASELINE_KEYS}
+
+_RISKY_ENV_KEYS = (
+    "JOBS_DB_URL",
+    "JOBS_DB_PATH",
+    "JOBS_ALLOWED_QUEUES",
+    "JOBS_ALLOWED_QUEUES_AUDIO",
+    "JOBS_ALLOWED_QUEUES_EMBEDDINGS",
+    "JOBS_POLL_INTERVAL_SECONDS",
+    "JOBS_LEASE_SECONDS",
+    "JOBS_LEASE_MAX_SECONDS",
+    "JOBS_ENFORCE_LEASE_ACK",
+    "JOBS_DISABLE_LEASE_ENFORCEMENT",
+    "JOBS_REQUIRE_COMPLETION_TOKEN",
+    "JOBS_EVENTS_OUTBOX",
+    "JOBS_COUNTERS_ENABLED",
+    "JOBS_METRICS_GAUGES_ENABLED",
+    "JOBS_METRICS_RECONCILE_ENABLE",
+    "JOBS_WEBHOOKS_ENABLED",
+    "JOBS_SHUTDOWN_WAIT_FOR_LEASES_SEC",
+    "LOGURU_LEVEL",
+    "LOG_LEVEL",
+    "SYSTEM_LOG_LEVEL",
+    "LOG_STREAM",
+    "LOG_COLOR",
+    "FORCE_COLOR",
+    "PY_COLORS",
+    "EMB_BACKPRESSURE_MAX_DEPTH",
+    "EMB_BACKPRESSURE_MAX_AGE_SECONDS",
+    "EMBEDDINGS_TENANT_RPS",
+    "INGEST_TENANT_RPS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _restore_risky_env_and_logging():
+    """Reset noisy env/logging settings that can leak between tests."""
+    baseline = {k: os.environ.get(k) for k in _RISKY_ENV_KEYS}
+    yield
+
+    for key, baseline_value in baseline.items():
+        if baseline_value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = baseline_value
+
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+        JobManager.set_acquire_gate(False)
+        JobManager.clear_rls_context()
+    except Exception as exc:
+        logging.getLogger(__name__).debug("JobManager reset failed: %s", exc)
+
+    try:
+        from tldw_Server_API.app.core.Logging.system_log_buffer import ensure_system_log_buffer
+
+        ensure_system_log_buffer()
+    except Exception as exc:
+        logging.getLogger(__name__).debug("system_log_buffer reset failed: %s", exc)
 
 
 @pytest.fixture()
@@ -143,7 +204,27 @@ def _restore_auth_env_and_singletons():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _reset_character_chat_complete_windows():
+    """Ensure legacy /complete throttle cache is rebound per test loop."""
+    try:
+        from tldw_Server_API.app.api.v1.endpoints import character_chat_sessions as _chat_sessions
+
+        _chat_sessions.reset_complete_windows()
+    except Exception:
+        pass
+    yield
+    try:
+        from tldw_Server_API.app.api.v1.endpoints import character_chat_sessions as _chat_sessions
+
+        _chat_sessions.reset_complete_windows()
+    except Exception:
+        pass
+
+
 def _log_lingering_threads():
+
+
     try:
         import sys, traceback
 
@@ -311,19 +392,9 @@ try:
 except Exception as e:
     # Surface environment setup failures in test output
     _log.exception("Failed to apply test environment setup in conftest.py")
-import pytest
 from fastapi.testclient import TestClient
 import contextlib
 import asyncio
-
-# Register shared test plugins for the whole suite
-pytest_plugins = (
-    "tldw_Server_API.tests._plugins.e2e_fixtures",
-    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
-    "tldw_Server_API.tests._plugins.chat_fixtures",
-    "tldw_Server_API.tests._plugins.media_fixtures",
-    "tldw_Server_API.tests._plugins.postgres",
-)
 
 
 # Skip Jobs-marked tests by default unless explicitly enabled via RUN_JOBS.
@@ -383,6 +454,33 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
     """Log and relax any remaining non-daemon threads to avoid interpreter shutdown hangs."""
     try:
         import sys, traceback
+        def _run_cleanup(coro):
+            try:
+                loop = asyncio.get_event_loop_policy().get_event_loop()
+            except Exception:
+                loop = None
+            if loop is not None and not loop.is_closed():
+                try:
+                    if loop.is_running():
+                        return None
+                    return loop.run_until_complete(coro)
+                except Exception:
+                    return None
+            try:
+                return asyncio.run(coro)
+            except Exception:
+                return None
+
+        try:
+            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services
+            _run_cleanup(shutdown_all_audit_services())
+        except Exception:
+            pass
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
+            _run_cleanup(_reset_db_pool())
+        except Exception:
+            pass
         try:
             loop = asyncio.get_event_loop_policy().get_event_loop()
         except Exception:
@@ -400,13 +498,7 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
         current = threading.current_thread()
         threads = [t for t in threading.enumerate() if t is not current and not t.daemon]
         if threads:
-            summary = [(t.name, getattr(t, "_target", None)) for t in threads]
-            print(f"[pytest_sessionfinish] Non-daemon threads before exit: {summary}", file=sys.stderr)
             for t in threads:
-                stack = sys._current_frames().get(t.ident)
-                if stack:
-                    formatted_stack = "".join(traceback.format_stack(stack))
-                    print(f"[pytest_sessionfinish] Thread {t.name} target={getattr(t, '_target', None)} stack:\n{formatted_stack}", file=sys.stderr)
                 # Stop common offenders (e.g., aiosqlite worker threads) to avoid hangs
                 try:
                     import aiosqlite  # type: ignore
@@ -416,15 +508,28 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
                         except Exception:
                             pass
                         try:
-                            t.join(timeout=1.0)
+                            t.join(timeout=2.0)
                         except Exception:
                             pass
                 except Exception:
                     pass
-                try:
-                    t.daemon = True
-                except Exception:
-                    pass
+            # Re-check after stopping attempts; only log remaining threads
+            threads = [t for t in threading.enumerate() if t is not current and not t.daemon]
+            if threads:
+                summary = [(t.name, getattr(t, "_target", None)) for t in threads]
+                print(f"[pytest_sessionfinish] Non-daemon threads before exit: {summary}", file=sys.stderr)
+                for t in threads:
+                    stack = sys._current_frames().get(t.ident)
+                    if stack:
+                        formatted_stack = "".join(traceback.format_stack(stack))
+                        print(
+                            f"[pytest_sessionfinish] Thread {t.name} target={getattr(t, '_target', None)} stack:\n{formatted_stack}",
+                            file=sys.stderr,
+                        )
+                    try:
+                        t.daemon = True
+                    except Exception:
+                        pass
     except Exception:
         # Do not interfere with pytest shutdown on logging failures
         pass
@@ -453,6 +558,7 @@ class _TestUsageLogger:
         self.events = []
 
     def log_event(self, name, resource_id=None, tags=None, metadata=None):
+
         self.events.append((name, resource_id, tags, metadata))
 
 
@@ -478,6 +584,7 @@ def client_with_single_user(monkeypatch):
         return User(id=1, username="tester", email=None, is_active=True)
 
     def _override_logger():
+
         return usage_logger
 
     async def _override_principal(request=None):
@@ -583,12 +690,12 @@ def bypass_api_limits(monkeypatch):
     """Context manager to bypass ingress rate limiting for a given FastAPI app.
 
     Usage:
-        with bypass_api_limits(app, limiters=(audio_ep.limiter,)):
+        with bypass_api_limits(app):
             ... make requests ...
 
     - Sets TEST_MODE=true for deterministic behavior
     - Disables RGSimpleMiddleware by removing it from app.user_middleware
-    - Disables any provided SlowAPI limiter(s) during the context
+    - Disables any provided legacy limiter(s) during the context
     """
 
     @contextlib.contextmanager
@@ -609,7 +716,7 @@ def bypass_api_limits(monkeypatch):
         except Exception:
             pass
 
-        # Disable provided SlowAPI limiter(s)
+        # Disable provided legacy limiter(s)
         limiter_states = []
         for lim in limiters or ():
             try:

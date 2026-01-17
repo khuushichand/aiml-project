@@ -54,8 +54,10 @@ def test_admin_users_list(client_admin, tmp_path):
         register_store(uid, f"vs_{uid}_A", f"StoreA_{uid}")
         init_batches_db(uid)
         with batches_conn(uid) as conn:
-            conn.execute("INSERT OR REPLACE INTO vector_store_batches (id, store_id, user_id, status, upserted, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-                         (f"vsb_{uid}_1", f"vs_{uid}_A", uid, 'completed', 10, 0, 0))
+            conn.execute(
+                "INSERT OR REPLACE INTO vector_store_batches (id, store_id, user_id, status, upserted, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (f"vsb_{uid}_1", f"vs_{uid}_A", uid, 'completed', 10, 0, 0),
+            )
             conn.commit()
 
     r = client_admin.get('/api/v1/vector_stores/admin/users')

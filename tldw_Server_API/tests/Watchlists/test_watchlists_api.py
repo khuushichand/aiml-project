@@ -34,6 +34,8 @@ def client_with_user(monkeypatch, tmp_path):
 
 
 def test_sources_crud_and_tags(client_with_user):
+
+
     c = client_with_user
 
     # Create groups for source membership updates
@@ -99,7 +101,101 @@ def test_sources_crud_and_tags(client_with_user):
     assert r.status_code == 404
 
 
+def test_sources_test_endpoint(client_with_user, monkeypatch):
+
+    monkeypatch.setenv("TEST_MODE", "1")
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Example Site",
+            "url": "https://example.com/",
+            "source_type": "site",
+            "settings": {
+                "scrape_rules": {
+                    "list_url": "https://example.com/",
+                    "limit": 3,
+                }
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    sid = r.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/sources/{sid}/test", params={"limit": 2})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] >= 1
+    assert data["ingestable"] == data["total"]
+    assert data["filtered"] == 0
+    assert all(it["source_id"] == sid for it in data["items"])
+
+
+def test_source_group_validation_and_idempotent_create(client_with_user):
+
+
+    c = client_with_user
+
+    r = c.post("/api/v1/watchlists/groups", json={"name": "Group C", "description": "C"})
+    assert r.status_code == 200, r.text
+    group_c = r.json()
+    r = c.post("/api/v1/watchlists/groups", json={"name": "Group D", "description": "D"})
+    assert r.status_code == 200, r.text
+    group_d = r.json()
+
+    # Invalid group id on create should fail
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Bad Group Source",
+            "url": "https://example.com/invalid-group.xml",
+            "source_type": "rss",
+            "group_ids": [999999],
+        },
+    )
+    assert r.status_code == 400
+    assert "group_not_found" in r.text
+
+    # Create source in Group C
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Group Source",
+            "url": "https://example.com/group-source.xml",
+            "source_type": "rss",
+            "group_ids": [group_c["id"]],
+        },
+    )
+    assert r.status_code == 200, r.text
+    sid = r.json()["id"]
+
+    # Idempotent create should replace group membership when group_ids provided
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Group Source",
+            "url": "https://example.com/group-source.xml",
+            "source_type": "rss",
+            "group_ids": [group_d["id"]],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    db = WatchlistsDatabase.for_user(555)
+    in_group_d = db.list_sources_by_group_ids([int(group_d["id"])])
+    assert any(src.id == sid for src in in_group_d)
+    in_group_c = db.list_sources_by_group_ids([int(group_c["id"])])
+    assert not any(src.id == sid for src in in_group_c)
+
+    # Invalid group id on update should fail
+    r = c.patch(f"/api/v1/watchlists/sources/{sid}", json={"group_ids": [999998]})
+    assert r.status_code == 400
+    assert "group_not_found" in r.text
+
+
 def test_bulk_sources_and_groups_and_jobs(client_with_user):
+
+
     c = client_with_user
 
     # Bulk create two sources
@@ -131,7 +227,7 @@ def test_bulk_sources_and_groups_and_jobs(client_with_user):
         "name": "Morning Brief",
         "scope": {"tags": ["alpha", "beta"]},
         "schedule_expr": "0 8 * * *",
-        "timezone": "UTC+8",
+        "timezone": "UTC",
         "active": True,
     }
     r = c.post("/api/v1/watchlists/jobs", json=job_body)
@@ -160,7 +256,57 @@ def test_bulk_sources_and_groups_and_jobs(client_with_user):
     assert r.status_code == 200
 
 
+def test_forum_sources_feature_flag(client_with_user, monkeypatch):
+    c = client_with_user
+
+    monkeypatch.delenv("WATCHLIST_FORUMS_ENABLED", raising=False)
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "Forum Source", "url": "https://forum.example.com/", "source_type": "forum"},
+    )
+    assert r.status_code == 400
+    assert "forum_sources_disabled" in r.text
+
+    monkeypatch.setenv("WATCHLIST_FORUMS_ENABLED", "1")
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "Forum Source", "url": "https://forum.example.com/", "source_type": "forum"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_watchlists_run_stream_ws(client_with_user, tmp_path):
+    from tldw_Server_API.app.core.AuthNZ.jwt_service import create_access_token
+
+    db = WatchlistsDatabase.for_user(555)
+    job = db.create_job(
+        name="Job",
+        description=None,
+        scope_json=json.dumps({"sources": []}),
+        schedule_expr=None,
+        schedule_timezone=None,
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+    run = db.create_run(job_id=job.id, status="running")
+    log_path = tmp_path / "run.log"
+    log_path.write_text("first line\n", encoding="utf-8")
+    db.update_run(run.id, stats_json=json.dumps({"items_found": 1}), log_path=str(log_path))
+
+    token = create_access_token(555, "wluser", "admin")
+    with client_with_user.websocket_connect(f"/api/v1/watchlists/runs/{run.id}/stream?token={token}") as ws:
+        message = ws.receive_json()
+        assert message["type"] == "snapshot"
+        assert message["run"]["id"] == run.id
+        assert "log_tail" in message
+
+
 def test_items_and_outputs_flow(client_with_user, monkeypatch):
+
+
     c = client_with_user
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS", "0")
@@ -233,12 +379,19 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     expires_at = datetime.fromisoformat(output["expires_at"])
     assert expires_at > datetime.now(timezone.utc)
 
+    # Generate output with no expiry (retention_seconds=0)
+    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "retention_seconds": 0})
+    assert r.status_code == 200, r.text
+    no_expiry = r.json()
+    assert no_expiry["version"] == 2
+    assert no_expiry["expires_at"] is None
+
     # Generate a temporary output without specifying title to trigger default naming
     r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "temporary": True})
     assert r.status_code == 200, r.text
     temp_output = r.json()
-    assert temp_output["version"] == 2
-    assert temp_output["title"].startswith("Daily Digest-Output-2")
+    assert temp_output["version"] == 3
+    assert temp_output["title"].startswith("Daily Digest-Output-3")
     assert temp_output["expires_at"] is not None
 
     # Outputs listing (should include both)
@@ -258,6 +411,29 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     r = c.get(f"/api/v1/watchlists/outputs/{output_id}/download")
     assert r.status_code == 200, r.text
 
+    # Output templates (DB-backed)
+    db_template_name = f"db_daily_md_{run_id}"
+    db_template_payload = {
+        "name": db_template_name,
+        "type": "briefing_markdown",
+        "format": "md",
+        "body": "DB TEMPLATE {{ title }}",
+        "description": "DB-backed template",
+    }
+    r = c.post("/api/v1/outputs/templates", json=db_template_payload)
+    assert r.status_code == 200, r.text
+    db_template = r.json()
+    assert db_template["name"] == db_template_name
+
+    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": db_template_name, "temporary": True})
+    assert r.status_code == 200, r.text
+    db_output = r.json()
+    assert db_output["version"] == 4
+    assert db_output["metadata"].get("template_source") == "outputs_templates"
+    assert db_output["metadata"].get("template_id") == db_template["id"]
+    assert "DB TEMPLATE" in (db_output.get("content") or "")
+    r = c.delete(f"/api/v1/outputs/templates/{db_template['id']}")
+    assert r.status_code == 200, r.text
 
     # Template management
     template_payload = {
@@ -288,10 +464,11 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": "daily_md", "temporary": True})
     assert r.status_code == 200, r.text
     templated = r.json()
-    assert templated["version"] == 3
+    assert templated["version"] == 5
     assert templated["format"] == "md"
     assert templated["metadata"].get("template_name") == "daily_md"
-    assert templated["content"].startswith("Daily Digest-Output-3") or "Daily Digest" in templated["content"]
+    assert templated["metadata"].get("template_source") == "watchlists_templates"
+    assert templated["content"].startswith("Daily Digest-Output-5") or "Daily Digest" in templated["content"]
 
     # Delete template and confirm removal
     r = c.delete("/api/v1/watchlists/templates/daily_md")
@@ -302,7 +479,121 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     assert all(t["name"] != "daily_md" for t in r.json().get("items", []))
 
 
+def test_watchlists_outputs_variants_and_ingest(client_with_user, monkeypatch):
+
+
+    c = client_with_user
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    class DummyTTS:
+        async def generate_speech(self, req):  # noqa: ARG002 - signature used by TTS service
+            yield b"FAKEAUDIO"
+
+    async def _fake_get_tts_service_v2(*args, **kwargs):  # noqa: ARG002
+        return DummyTTS()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.tts_service_v2.get_tts_service_v2",
+        _fake_get_tts_service_v2,
+    )
+
+    # Create RSS source
+    src_body = {
+        "name": "Variants Feed",
+        "url": "https://example.com/variants-feed.xml",
+        "source_type": "rss",
+        "tags": ["variants"],
+    }
+    r = c.post("/api/v1/watchlists/sources", json=src_body)
+    assert r.status_code == 200, r.text
+    source_id = r.json()["id"]
+
+    # Job scoped to source
+    job_body = {
+        "name": "Variants Digest",
+        "scope": {"sources": [source_id]},
+        "schedule_expr": None,
+        "timezone": "UTC",
+        "active": True,
+    }
+    r = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+
+    # Trigger run
+    r = c.post(f"/api/v1/watchlists/jobs/{job_id}/run")
+    assert r.status_code == 200, r.text
+    run_id = r.json()["id"]
+
+    # Create variant templates
+    mece_name = f"mece_watchlists_{run_id}"
+    mece_payload = {
+        "name": mece_name,
+        "type": "mece_markdown",
+        "format": "md",
+        "body": "# MECE\\n{{ items|length }} items",
+        "description": "Watchlists MECE template",
+        "is_default": False,
+    }
+    r = c.post("/api/v1/outputs/templates", json=mece_payload)
+    assert r.status_code == 200, r.text
+    mece_id = r.json()["id"]
+
+    tts_name = f"tts_watchlists_{run_id}"
+    tts_payload = {
+        "name": tts_name,
+        "type": "tts_audio",
+        "format": "mp3",
+        "body": "Audio briefing for {{ items|length }} items.",
+        "description": "Watchlists TTS template",
+        "is_default": False,
+    }
+    r = c.post("/api/v1/outputs/templates", json=tts_payload)
+    assert r.status_code == 200, r.text
+    tts_id = r.json()["id"]
+
+    # Generate output variants + ingest
+    out_payload = {
+        "run_id": run_id,
+        "title": "Variants Briefing",
+        "format": "md",
+        "generate_mece": True,
+        "mece_template_name": mece_name,
+        "generate_tts": True,
+        "tts_template_name": tts_name,
+        "ingest_to_media_db": True,
+    }
+    r = c.post("/api/v1/watchlists/outputs", json=out_payload)
+    assert r.status_code == 200, r.text
+    base_output = r.json()
+    assert base_output["media_item_id"] is not None
+
+    r = c.get("/api/v1/watchlists/outputs", params={"run_id": run_id})
+    assert r.status_code == 200, r.text
+    outputs = r.json()["items"]
+    mece_outputs = [o for o in outputs if o.get("type") == "mece_markdown"]
+    tts_outputs = [o for o in outputs if o.get("type") == "tts_audio"]
+    assert mece_outputs
+    assert tts_outputs
+    assert all(o.get("media_item_id") for o in mece_outputs)
+    assert all(o.get("media_item_id") for o in tts_outputs)
+
+    tts_output = tts_outputs[0]
+    assert tts_output.get("format") == "mp3"
+    assert tts_output.get("storage_path")
+    r = c.get(f"/api/v1/watchlists/outputs/{tts_output['id']}/download")
+    assert r.status_code == 200, r.text
+
+    # Cleanup templates
+    r = c.delete(f"/api/v1/outputs/templates/{mece_id}")
+    assert r.status_code == 200, r.text
+    r = c.delete(f"/api/v1/outputs/templates/{tts_id}")
+    assert r.status_code == 200, r.text
+
+
 def test_preview_site_sources_returns_items(client_with_user, monkeypatch):
+
+
     c = client_with_user
     monkeypatch.delenv("TEST_MODE", raising=False)
 
@@ -342,6 +633,8 @@ def test_preview_site_sources_returns_items(client_with_user, monkeypatch):
 
 
 def test_output_deliveries_email_and_chatbook(client_with_user, monkeypatch, tmp_path):
+
+
     c = client_with_user
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("EMAIL_PROVIDER", "mock")

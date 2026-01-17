@@ -113,7 +113,7 @@ Stage 4 — Default Minimal Test Profile
 - Add pytest marker `evaluations`; a session fixture toggles env accordingly for marked tests.
 
 Stage 5 — TEST_MODE & Pool Sizing Harmonization
-- File: `tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py` and related deps
+- File: Resource Governor ingress middleware and policy loader wiring
   - Accept truthy `TEST_MODE` / `TLDW_TEST_MODE` variants.
 - File: `tldw_Server_API/app/core/Evaluations/connection_pool.py`
   - Use small pool sizes when `TEST_MODE` is truthy.

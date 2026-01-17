@@ -38,7 +38,7 @@ CORS & CSRF
  - Set CORS via env: `ALLOWED_ORIGINS=https://your.domain.com,https://admin.your.domain.com` or JSON array `ALLOWED_ORIGINS='["https://your.domain.com", "https://admin.your.domain.com"]'`.
 
 Rate Limiting & Abuse Prevention
-- Global rate limiter is enabled by default (SlowAPI) unless tests are detected.
+- Global rate limiter is enabled by default via RG when `RG_ENABLED=1` and tests are not detected.
 - Tune per-module rate limiters (Chat/RAG/Evals) via their respective settings.
 - Consider a network-level rate limit at the reverse proxy for additional protection.
 

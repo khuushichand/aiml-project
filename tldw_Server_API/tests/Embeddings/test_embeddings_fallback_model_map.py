@@ -28,6 +28,8 @@ def client():
 
 
 def _override_user():
+
+
     async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
@@ -36,7 +38,7 @@ def _override_user():
 
 @pytest.mark.unit
 def test_fallback_model_mapping_openai_to_hf(client, monkeypatch):
-    # Capture the model_id used for fallback call
+     # Capture the model_id used for fallback call
     calls = {"args": None}
 
     async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None, metadata=None):

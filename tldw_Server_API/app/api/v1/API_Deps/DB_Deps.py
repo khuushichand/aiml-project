@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 # Import the specific Database class
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, DatabaseError, SchemaError # Adjust import path
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
@@ -56,37 +57,56 @@ def _get_db_path_for_user(user_id: int) -> Path:
     Ensures the user's specific directory exists.
     Uses USER_DB_BASE_DIR assigned from settings.
     """
-    # user_id will be settings["SINGLE_USER_FIXED_ID"] in single-user mode
-    user_dir_name = str(user_id)
-    # Resolve base dir dynamically: prefer env override, then settings
     base_dir_env = os.environ.get("USER_DB_BASE_DIR")
     # Test-mode safety: isolate user DBs to a per-process temp dir unless explicitly overridden
     if not base_dir_env and str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
         try:
-            import tempfile, time
-            run_tag = f"pid{os.getpid()}"
-            # Use project Databases/user_databases_test/<run_tag> to keep nearby but isolated
+            import tempfile
+            run_tag = (
+                os.getenv("TLDW_TEST_RUN_ID")
+                or os.getenv("PYTEST_XDIST_WORKER")
+                or "default"
+            )
+            safe_run_tag = "".join(
+                ch if ch.isalnum() or ch in "-_." else "_"
+                for ch in str(run_tag)
+            )
+            # Use project Databases/user_databases_test/<run_tag> to keep nearby but stable across processes
             project_root = settings.get("PROJECT_ROOT")  # type: ignore[attr-defined]
             if project_root:
-                base_dir_env = str(Path(project_root) / "Databases" / "user_databases_test" / run_tag)
+                base_dir_env = str(
+                    Path(project_root) / "Databases" / "user_databases_test" / safe_run_tag
+                )
             else:
-                base_dir_env = tempfile.mkdtemp(prefix="user_databases_test_")
+                base_dir_env = str(
+                    Path(tempfile.gettempdir()) / "tldw_user_databases_test" / safe_run_tag
+                )
             # Set env so subsequent calls use the same directory
-            os.environ["USER_DB_BASE_DIR"] = base_dir_env
-        except Exception:
-            pass
-    base_dir = Path(base_dir_env) if base_dir_env else Path(settings["USER_DB_BASE_DIR"])  # type: ignore[index]
-    user_dir = base_dir / user_dir_name
-    db_file = user_dir / "Media_DB_v2.db" # Using standard Media_DB_v2.db naming
-
+            os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
+        except Exception as e:
+            logger.warning(
+                "TESTING mode: failed to derive project-root user DB dir; falling back to temp dir. Error: %s",
+                e,
+                exc_info=True,
+            )
+            run_tag = (
+                os.getenv("TLDW_TEST_RUN_ID")
+                or os.getenv("PYTEST_XDIST_WORKER")
+                or "default"
+            )
+            safe_run_tag = "".join(
+                ch if ch.isalnum() or ch in "-_." else "_"
+                for ch in str(run_tag)
+            )
+            base_dir_env = str(
+                Path(tempfile.gettempdir()) / "tldw_user_databases_test" / safe_run_tag
+            )
+            os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
     try:
-        user_dir.mkdir(parents=True, exist_ok=True)
-        # Optional: logging.debug(f"Ensured directory exists for user {user_id}: {user_dir}")
-    except OSError as e:
-        logger.error(f"Could not create database directory for user_id {user_id} at {user_dir}: {e}", exc_info=True)
-        # Raise a standard exception to be caught by the main dependency
+        return DatabasePaths.get_media_db_path(user_id)
+    except Exception as e:
+        logger.error(f"Could not resolve database directory for user_id {user_id}: {e}", exc_info=True)
         raise IOError(f"Could not initialize storage directory for user {user_id}.") from e
-    return db_file
 
 # --- Main Dependency Function ---
 
@@ -262,15 +282,18 @@ def reset_media_db_cache() -> None:
 
 
 async def try_get_media_db_for_user(
-    current_user: User = Depends(get_request_user)
+    request: Request,
+    current_user: User = Depends(get_request_user),
 ) -> Optional[MediaDatabase]:
     """
     Optional version of get_media_db_for_user for endpoints that can operate without DB.
     Returns None instead of raising on initialization failures.
     """
     try:
-        return await get_media_db_for_user(current_user=current_user)
+        return await get_media_db_for_user(request=request, current_user=current_user)
     except HTTPException as e:
+        if e.status_code in {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN}:
+            raise
         logger.warning(f"Optional Media DB unavailable for user {getattr(current_user, 'id', '?')}: {e.detail}")
         return None
     except Exception as e:

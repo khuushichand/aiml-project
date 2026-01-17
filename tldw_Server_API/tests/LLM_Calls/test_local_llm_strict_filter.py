@@ -12,12 +12,15 @@ class DummyResponse:
         self.status_code = 200
 
     def raise_for_status(self):
+
         return None
 
     def json(self):
+
         return {}
 
     def close(self):
+
         return None
 
 
@@ -36,17 +39,18 @@ def test_local_llm_strict_filter_drops_top_k_from_payload_non_streaming():
     captured_payload = {}
 
     def fake_post(url, headers=None, json=None, timeout=None):
-        # capture outgoing payload
+
+            # capture outgoing payload
         captured_payload.clear()
         if json:
             captured_payload.update(json)
         return DummyResponse({})
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.httpx.Client"
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters._hc_create_client"
     ) as mock_client_cls:
         mock_client = MagicMock()
         mock_client.post.side_effect = fake_post

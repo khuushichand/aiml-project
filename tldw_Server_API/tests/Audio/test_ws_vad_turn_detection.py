@@ -203,15 +203,19 @@ async def test_vad_auto_commit_records_latency_metric(monkeypatch):
 
 
 def test_silero_turn_detector_triggers_after_silence(monkeypatch):
+
+
     """SileroTurnDetector should fire once speech is followed by configured silence."""
     class _FakeVADIterator:
         def __init__(self, *args, **kwargs):
             self.calls = 0
 
         def reset_states(self):
+
             self.calls = 0
 
         def __call__(self, _audio_in, return_seconds=False, **_kwargs):
+
             self.calls += 1
             if self.calls == 1:
                 return {"speech_timestamps": [{"start": 0, "end": 100}]}
@@ -240,15 +244,19 @@ def test_silero_turn_detector_triggers_after_silence(monkeypatch):
 
 
 def test_silero_turn_detector_honors_min_utterance(monkeypatch):
+
+
     """Auto-commit should not fire when speech duration is below min_utterance_secs."""
     class _FakeVADIterator:
         def __init__(self, *args, **kwargs):
             self.calls = 0
 
         def reset_states(self):
+
             self.calls = 0
 
         def __call__(self, _audio_in, return_seconds=False, **_kwargs):
+
             self.calls += 1
             if self.calls == 1:
                 return {"speech_timestamps": [{"start": 0, "end": 20}]}
@@ -277,6 +285,8 @@ def test_silero_turn_detector_honors_min_utterance(monkeypatch):
 
 
 def test_silero_turn_detector_real_vad_end_to_end():
+
+
     """
     Exercise SileroTurnDetector with real Silero VAD (no stubs) on a sample WAV plus trailing silence.
 
@@ -327,6 +337,8 @@ def test_silero_turn_detector_real_vad_end_to_end():
 
 
 def test_silero_turn_detector_logs_fail_open(monkeypatch):
+
+
     """
     When Silero VAD cannot be initialized, we should log a warning and continue without auto-commit.
     """
@@ -334,12 +346,14 @@ def test_silero_turn_detector_logs_fail_open(monkeypatch):
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
 
     def _raise_import_error():
+
         raise ImportError("silero missing")
 
     monkeypatch.setattr(vlib, "_lazy_import_silero_vad", _raise_import_error)
     captured_warnings = []
 
     def _fake_warning(msg, *_args, **_kwargs):
+
         try:
             captured_warnings.append(msg.format(*_args))
         except (IndexError, KeyError, ValueError):

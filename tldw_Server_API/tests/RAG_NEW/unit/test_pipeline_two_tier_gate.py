@@ -58,6 +58,7 @@ async def test_unified_pipeline_two_tier_gates_generation(monkeypatch):
         from tldw_Server_API.app.core.RAG.rag_service import advanced_reranking as ar
 
         def _fake_create(strategy, cfg, llm_client=None):
+
             if getattr(ar.RerankingStrategy, 'TWO_TIER') and strategy == ar.RerankingStrategy.TWO_TIER:
                 ce_map = {"d1": 0.20, "d2": 0.10, "sentinel:irrelevant": 0.02}
                 llm_map = {"d1": 0.40, "d2": 0.30, "sentinel:irrelevant": 0.05}
@@ -99,6 +100,7 @@ async def test_unified_pipeline_two_tier_request_overrides_gate(monkeypatch):
         from tldw_Server_API.app.core.RAG.rag_service import advanced_reranking as ar
 
         def _fake_create(strategy, cfg, llm_client=None):
+
             if getattr(ar.RerankingStrategy, 'TWO_TIER') and strategy == ar.RerankingStrategy.TWO_TIER:
                 ce_map = {"d1": 0.20, "d2": 0.10, "sentinel:irrelevant": 0.02}
                 llm_map = {"d1": 0.40, "d2": 0.30, "sentinel:irrelevant": 0.05}
@@ -127,6 +129,8 @@ async def test_unified_pipeline_two_tier_request_overrides_gate(monkeypatch):
 
 
         def _fake_create(strategy, cfg, llm_client=None):
+
+
             if strategy == ar.RerankingStrategy.TWO_TIER:
                 ce_map = {"d1": 0.20, "d2": 0.10, "sentinel:irrelevant": 0.02}
                 llm_map = {"d1": 0.40, "d2": 0.30, "sentinel:irrelevant": 0.05}

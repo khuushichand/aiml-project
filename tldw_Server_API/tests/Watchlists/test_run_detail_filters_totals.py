@@ -37,6 +37,8 @@ def client_with_user(monkeypatch):
 
 
 def test_run_detail_includes_filter_totals(client_with_user):
+
+
     c = client_with_user
 
     # Create a source and a job with a 'flag' rule that should match test item
@@ -96,6 +98,8 @@ def test_run_detail_includes_filter_totals(client_with_user):
 
 
 def test_run_detail_includes_include_and_exclude_totals(client_with_user):
+
+
     c = client_with_user
 
     # Create a source
@@ -180,6 +184,8 @@ def test_run_detail_includes_include_and_exclude_totals(client_with_user):
 
 
 def test_run_stats_exposes_filter_tallies_on_run(client_with_user):
+
+
     c = client_with_user
 
     # Create source and job with a simple include rule that matches

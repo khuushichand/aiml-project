@@ -7,6 +7,7 @@ import os
 import pytest
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
 import numpy as np
+
 #
 # Local Imports
 from tldw_Server_API.app.core.TTS.adapters.base import (
@@ -16,7 +17,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
     TTSResponse,
     AudioFormat,
     VoiceInfo,
-    ProviderStatus
+    ProviderStatus,
 )
 from tldw_Server_API.app.core.TTS.adapters.openai_adapter import OpenAIAdapter
 from tldw_Server_API.app.core.TTS.adapters.kokoro_adapter import KokoroAdapter
@@ -28,13 +29,9 @@ from tldw_Server_API.app.core.TTS.adapter_registry import (
     TTSAdapterFactory,
     TTSProvider,
     get_tts_factory,
-    close_tts_factory
+    close_tts_factory,
 )
-from tldw_Server_API.app.core.TTS.tts_service_v2 import (
-    TTSServiceV2,
-    get_tts_service_v2,
-    close_tts_service_v2
-)
+from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2, get_tts_service_v2, close_tts_service_v2
 
 
 REAL_OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -46,16 +43,20 @@ def clear_tts_env(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     return None
+
+
 #
 #######################################################################################################################
 #
 # Test Classes
+
 
 class TestTTSAdapterBase:
     """Test the base TTSAdapter class"""
 
     def test_adapter_initialization(self):
         """Test basic adapter initialization"""
+
         # Create a concrete implementation for testing
         class TestAdapter(TTSAdapter):
             async def initialize(self) -> bool:
@@ -71,7 +72,7 @@ class TestTTSAdapterBase:
                     supported_voices=[],
                     supported_formats={AudioFormat.WAV},
                     max_text_length=1000,
-                    supports_streaming=False
+                    supports_streaming=False,
                 )
 
         adapter = TestAdapter({"test_key": "test_value"})
@@ -82,6 +83,7 @@ class TestTTSAdapterBase:
     @pytest.mark.asyncio
     async def test_validate_request(self):
         """Test request validation"""
+
         class TestAdapter(TTSAdapter):
             async def initialize(self) -> bool:
                 return True
@@ -96,19 +98,14 @@ class TestTTSAdapterBase:
                     supported_voices=[],
                     supported_formats={AudioFormat.WAV, AudioFormat.MP3},
                     max_text_length=100,
-                    supports_streaming=True
+                    supports_streaming=True,
                 )
 
         adapter = TestAdapter()
         await adapter.ensure_initialized()
 
         # Valid request
-        request = TTSRequest(
-            text="Hello world",
-            language="en",
-            format=AudioFormat.WAV,
-            stream=True
-        )
+        request = TTSRequest(text="Hello world", language="en", format=AudioFormat.WAV, stream=True)
         is_valid, error = await adapter.validate_request(request)
         assert is_valid
         assert error is None
@@ -128,11 +125,14 @@ class TestTTSAdapterBase:
 
     def test_parse_dialogue(self):
         """Test dialogue parsing"""
+
         class TestAdapter(TTSAdapter):
             async def initialize(self) -> bool:
                 return True
+
             async def generate(self, request: TTSRequest) -> TTSResponse:
                 return TTSResponse()
+
             async def get_capabilities(self) -> TTSCapabilities:
                 return TTSCapabilities(
                     provider_name="Test",
@@ -140,7 +140,7 @@ class TestTTSAdapterBase:
                     supported_voices=[],
                     supported_formats={AudioFormat.WAV},
                     max_text_length=1000,
-                    supports_streaming=False
+                    supports_streaming=False,
                 )
 
         adapter = TestAdapter()
@@ -219,14 +219,12 @@ class TestKokoroAdapter:
 
     async def test_initialization_onnx(self):
         """Test ONNX initialization"""
-        adapter = KokoroAdapter({
-            "kokoro_use_onnx": True,
-            "kokoro_model_path": "test_model.onnx",
-            "kokoro_voices_json": "test_voices.json"
-        })
+        adapter = KokoroAdapter(
+            {"kokoro_use_onnx": True, "kokoro_model_path": "test_model.onnx", "kokoro_voices_json": "test_voices.json"}
+        )
 
         # Mock the kokoro_onnx import
-        with patch('tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.os.path.exists') as mock_exists:
+        with patch("tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.os.path.exists") as mock_exists:
             mock_exists.return_value = False  # Model files don't exist
 
             success = await adapter.initialize()
@@ -310,8 +308,10 @@ class TestAdapterRegistry:
         class CustomAdapter(TTSAdapter):
             async def initialize(self) -> bool:
                 return True
+
             async def generate(self, request: TTSRequest) -> TTSResponse:
                 return TTSResponse()
+
             async def get_capabilities(self) -> TTSCapabilities:
                 return TTSCapabilities(
                     provider_name="Custom",
@@ -319,7 +319,7 @@ class TestAdapterRegistry:
                     supported_voices=[],
                     supported_formats={AudioFormat.WAV},
                     max_text_length=1000,
-                    supports_streaming=False
+                    supports_streaming=False,
                 )
 
         # Register custom adapter
@@ -328,10 +328,7 @@ class TestAdapterRegistry:
 
     async def test_get_adapter_with_config(self):
         """Test getting adapter with configuration"""
-        config = {
-            "openai_api_key": "test-key",
-            "openai_enabled": True
-        }
+        config = {"openai_api_key": "test-key", "openai_enabled": True}
         registry = TTSAdapterRegistry(config)
 
         adapter = await registry.get_adapter(TTSProvider.OPENAI)
@@ -340,9 +337,7 @@ class TestAdapterRegistry:
 
     async def test_disabled_provider(self):
         """Test disabled provider"""
-        config = {
-            "openai_enabled": False
-        }
+        config = {"openai_enabled": False}
         registry = TTSAdapterRegistry(config)
 
         adapter = await registry.get_adapter(TTSProvider.OPENAI)
@@ -356,10 +351,7 @@ class TestAdapterRegistry:
         await registry.get_adapter(TTSProvider.OPENAI)
 
         # Find adapter for streaming
-        adapter = await registry.find_adapter_for_requirements(
-            supports_streaming=True,
-            format=AudioFormat.MP3
-        )
+        adapter = await registry.find_adapter_for_requirements(supports_streaming=True, format=AudioFormat.MP3)
         assert adapter is not None
         assert adapter.capabilities.supports_streaming
 
@@ -412,10 +404,7 @@ class TestTTSAdapterFactory:
         """Test getting best adapter for requirements"""
         factory = TTSAdapterFactory({"openai_api_key": "test"})
 
-        adapter = await factory.get_best_adapter(
-            language="en",
-            supports_streaming=True
-        )
+        adapter = await factory.get_best_adapter(language="en", supports_streaming=True)
         assert adapter is not None
 
     def test_get_status(self):
@@ -476,11 +465,7 @@ class TestTTSServiceV2:
         service = TTSServiceV2(factory)
 
         openai_request = OpenAISpeechRequest(
-            input="Hello world",
-            model="tts-1",
-            voice="alloy",
-            response_format="mp3",
-            speed=1.0
+            input="Hello world", model="tts-1", voice="alloy", response_format="mp3", speed=1.0
         )
 
         tts_request = service._convert_request(openai_request)
@@ -516,16 +501,13 @@ class TestIntegration:
         """Test backwards compatibility wrapper - requires real API key"""
         from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
         from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSService
+
         monkeypatch.setenv("OPENAI_API_KEY", REAL_OPENAI_API_KEY)
 
         # Create adapter (backwards compatible)
         adapter = TTSService()
 
-        request = OpenAISpeechRequest(
-            input="Test text",
-            model="tts-1",
-            voice="alloy"
-        )
+        request = OpenAISpeechRequest(input="Test text", model="tts-1", voice="alloy")
 
         # Test generation with real service (will use real API if key is available)
         chunks = []

@@ -1,7 +1,10 @@
+import asyncio
 import os
+from types import SimpleNamespace
 
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from fastapi.security import HTTPAuthorizationCredentials
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
@@ -43,6 +46,8 @@ def _build_app(with_scope_dep: bool) -> FastAPI:
 
 
 def _make_scoped_token() -> str:
+
+
     svc = JWTService(get_settings())
     return svc.create_access_token(
         user_id=1,
@@ -53,6 +58,8 @@ def _make_scoped_token() -> str:
 
 
 def test_scoped_token_requires_scope_dependency(monkeypatch):
+
+
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")
@@ -83,6 +90,8 @@ def test_scoped_token_requires_scope_dependency(monkeypatch):
 
 
 def test_scoped_token_allows_when_scope_dependency_present(monkeypatch):
+
+
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")
@@ -109,3 +118,45 @@ def test_scoped_token_allows_when_scope_dependency_present(monkeypatch):
     r = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json() == {"ok": True}
+
+
+def test_require_token_scope_enforces_bearer_api_key(monkeypatch):
+    class _StubAPIKeyManager:
+        async def validate_api_key(self, api_key: str, ip_address=None):
+            assert api_key == "tldw_test.key"
+            return {
+                "id": 1,
+                "user_id": 42,
+                "scope": "read",
+                "llm_allowed_endpoints": ["unit.api_key"],
+                "metadata": {
+                    "allowed_methods": ["POST"],
+                    "allowed_paths": ["/protected"],
+                },
+            }
+
+    async def _fake_get_api_key_manager():
+        return _StubAPIKeyManager()
+
+    monkeypatch.setattr(auth_deps, "get_api_key_manager", _fake_get_api_key_manager)
+
+    dep = require_token_scope(
+        "any",
+        require_if_present=True,
+        endpoint_id="unit.api_key",
+    )
+    req = SimpleNamespace(
+        method="GET",
+        headers={},
+        scope={"path": "/protected"},
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="tldw_test.key")
+
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(dep(request=req, credentials=creds, jwt_service=object(), db_pool=object()))
+    assert exc.value.status_code == 403
+    assert "method not permitted" in exc.value.detail.lower()

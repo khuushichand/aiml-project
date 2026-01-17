@@ -7,6 +7,7 @@ def command_after_cte(sql: str) -> str:
 
 
 def test_cte_command_detects_materialized_with_column_list():
+
     sql = """
     WITH data(id, value) AS MATERIALIZED (
         SELECT 1 AS id, 'value' AS value
@@ -17,6 +18,7 @@ def test_cte_command_detects_materialized_with_column_list():
 
 
 def test_cte_command_detects_not_materialized_with_column_list():
+
     sql = """
     WITH data(id, value) AS NOT MATERIALIZED (
         SELECT 1 AS id, 'value' AS value
@@ -27,6 +29,7 @@ def test_cte_command_detects_not_materialized_with_column_list():
 
 
 def test_cte_command_handles_multiple_ctes_with_materialized_markers():
+
     sql = """
     WITH
     cte_one(id) AS MATERIALIZED (SELECT 1),
@@ -37,22 +40,26 @@ def test_cte_command_handles_multiple_ctes_with_materialized_markers():
 
 
 def _make_backend() -> PostgreSQLBackend:
+
     return PostgreSQLBackend(DatabaseConfig(backend_type=BackendType.POSTGRESQL))
 
 
 def test_is_write_command_detects_insert_inside_cte():
+
     backend = _make_backend()
     sql = "WITH inserted AS (INSERT INTO demo VALUES (1)) SELECT * FROM inserted"
     assert backend._is_write_command("SELECT", sql)
 
 
 def test_is_write_command_detects_update_inside_cte():
+
     backend = _make_backend()
     sql = "WITH updated AS (UPDATE demo SET col = 1 RETURNING *) SELECT * FROM updated"
     assert backend._is_write_command("SELECT", sql)
 
 
 def test_is_write_command_false_for_readonly_cte():
+
     backend = _make_backend()
     sql = "WITH data AS (SELECT 1) SELECT * FROM data"
     assert backend._is_write_command("SELECT", sql) is False

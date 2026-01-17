@@ -10,7 +10,9 @@ pytestmark = pytest.mark.integration
 
 
 def test_admin_set_ef_search_is_noop_for_chroma(monkeypatch, admin_user, auth_headers):
-    # Force Chroma via factory settings and stub manager
+
+
+     # Force Chroma via factory settings and stub manager
     from tldw_Server_API.app.core.RAG.rag_service import vector_stores as _vs
     from tldw_Server_API.app.core.RAG.rag_service.vector_stores.chromadb_adapter import ChromaDBAdapter
 

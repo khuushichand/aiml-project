@@ -8,9 +8,6 @@ import json
 import os
 from unittest.mock import patch, MagicMock, call
 #
-# 3rd-Party Imports
-import requests
-#
 # Local Imports
 from tldw_Server_API.tests.MediaDB2.test_sqlite_db import get_entity_version
 from tldw_Server_API.app.core.Sync.Sync_Client import ClientSyncEngine
@@ -20,6 +17,12 @@ from tldw_Server_API.app.core.Sync.Sync_Client import ClientSyncEngine
 # Functions:
 
 # --- Fixtures specific to client engine testing ---
+
+class DummyHTTPStatusError(Exception):
+    def __init__(self, response):
+        super().__init__("HTTP error")
+        self.response = response
+
 
 @pytest.fixture
 def client_db(memory_db_factory):
@@ -74,6 +77,8 @@ class TestClientSyncEngineState:
 
 
     def test_state_load_existing_file(self, client_db, temp_state_file):
+
+
         """Test initialization with a pre-existing state file."""
         initial_state = {'last_local_log_id_sent': 10, 'last_server_log_id_processed': 25}
         with open(temp_state_file, 'w') as f:
@@ -84,6 +89,7 @@ class TestClientSyncEngineState:
         assert engine.last_server_log_id_processed == 25
 
     def test_state_save(self, sync_engine):
+
         """Test saving the state updates the file."""
         sync_engine.last_local_log_id_sent = 15
         sync_engine.last_server_log_id_processed = 30
@@ -94,29 +100,30 @@ class TestClientSyncEngineState:
             assert state == {'last_local_log_id_sent': 15, 'last_server_log_id_processed': 30}
 
     def test_state_load_corrupt_file(self, client_db, temp_state_file):
-         """Test handling of corrupt state file."""
-         with open(temp_state_file, 'w') as f:
-              f.write("this is not json")
-         engine = ClientSyncEngine(client_db, "http://mock", "c1", temp_state_file)
-         # Should default to 0 and log an error (check logs manually or capture logs)
-         assert engine.last_local_log_id_sent == 0
-         assert engine.last_server_log_id_processed == 0
-         # Check if file was overwritten with defaults
-         with open(temp_state_file, 'r') as f:
+
+        """Test handling of corrupt state file."""
+        with open(temp_state_file, 'w') as f:
+            f.write("this is not json")
+        engine = ClientSyncEngine(client_db, "http://mock", "c1", temp_state_file)
+        # Should default to 0 and log an error (check logs manually or capture logs)
+        assert engine.last_local_log_id_sent == 0
+        assert engine.last_server_log_id_processed == 0
+        # Check if file was overwritten with defaults
+        with open(temp_state_file, 'r') as f:
             state = json.load(f)
             assert state == {'last_local_log_id_sent': 0, 'last_server_log_id_processed': 0}
 
 
 class TestClientSyncEnginePush:
 
-    @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.post') # Mock the post method used in sync_client
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch') # Mock the fetch method used in sync_client
     def test_push_no_local_changes(self, mock_post, sync_engine):
         """Test push phase when there are no local changes."""
         sync_engine._push_local_changes()
         mock_post.assert_not_called() # Network call should not happen
         assert sync_engine.last_local_log_id_sent == 0 # State unchanged
 
-    @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.post')
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_push_successful(self, mock_post, sync_engine, client_db):
         """Test successful push of local changes."""
         # 1. Create local changes
@@ -144,15 +151,15 @@ class TestClientSyncEnginePush:
         # State should be updated
         assert sync_engine.last_local_log_id_sent == 1
 
-    @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.post')
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_push_http_error(self, mock_post, sync_engine, client_db):
         """Test push phase when server returns an HTTP error."""
         client_db.add_keyword("push_fail_kw")  # Log entry 1
 
-        mock_http_response = MagicMock(spec=requests.Response)  # Mock the actual response object
+        mock_http_response = MagicMock()
         mock_http_response.status_code = 500
         mock_http_response.text = "Internal Server Error Text"
-        mock_http_error = requests.exceptions.HTTPError("Server Error", response=mock_http_response)
+        mock_http_error = DummyHTTPStatusError(mock_http_response)
 
         # Configure the mock post *return value* (the response obj)
         # Then configure its raise_for_status method to raise the error we just created
@@ -170,7 +177,7 @@ class TestClientSyncEnginePush:
 
 class TestClientSyncEnginePullApply:
 
-    @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.get')
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_no_remote_changes(self, mock_get, sync_engine):
         """Test pull phase when server has no new changes."""
         # Configure mock response
@@ -188,7 +195,7 @@ class TestClientSyncEnginePullApply:
         # State should fast-forward to server's latest known ID
         assert sync_engine.last_server_log_id_processed == 50
 
-    @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.get')
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_and_apply_create_success(self, mock_get, sync_engine, client_db):
         """Test pulling and applying a 'create' change successfully."""
         kw_uuid = "uuid-from-server-create"
@@ -223,7 +230,7 @@ class TestClientSyncEnginePullApply:
         # Verify state update
         assert sync_engine.last_server_log_id_processed == 101
 
-    @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.get')
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_and_apply_update_success(self, mock_get, sync_engine, client_db):
         """Test pulling and applying an 'update' change successfully."""
         # 1. Setup initial state locally
@@ -259,7 +266,7 @@ class TestClientSyncEnginePullApply:
         assert row['last_modified'] == "2023-10-28T11:00:00Z"
         assert sync_engine.last_server_log_id_processed == 102
 
-    @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.get')
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_and_apply_delete_success(self, mock_get, sync_engine, client_db):
         """Test pulling and applying a 'delete' change successfully."""
         # 1. Setup initial state locally
@@ -292,7 +299,7 @@ class TestClientSyncEnginePullApply:
         assert row['last_modified'] == "2023-10-28T12:00:00Z"
         assert sync_engine.last_server_log_id_processed == 103
 
-    @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.get')
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_apply_idempotency(self, mock_get, sync_engine, client_db):
         """Test that applying the same change twice has no adverse effect."""
         # 1. Apply a change once
@@ -320,7 +327,7 @@ class TestClientSyncEnginePullApply:
         assert sync_engine.last_server_log_id_processed == 101 # Should not advance
 
 
-    @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.get')
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_apply_old_change(self, mock_get, sync_engine, client_db):
         """Test that applying a change older than local state is skipped."""
         # 1. Setup local state (V2)
@@ -333,7 +340,7 @@ class TestClientSyncEnginePullApply:
                                 commit=True)
         assert get_entity_version(client_db, "Keywords", kw_uuid) == 2
 
-         # 2. Prepare server change (representing V1 state)
+        # 2. Prepare server change (representing V1 state)
         server_change_v1 = create_mock_log_entry(101, "Keywords", kw_uuid, "update", "other", 1, {"keyword":"v1_server"}, "ts_old")
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
@@ -354,96 +361,96 @@ class TestClientSyncEnginePullApply:
 
 class TestClientSyncEngineConflict:
 
-     @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.get')
-     def test_conflict_detected_and_remote_wins_lww(self, mock_get, sync_engine, client_db):
-          """Test conflict where remote change wins based on LWW timestamp."""
-          # 1. Setup initial synced state (V1)
-          kw_uuid = "uuid-conflict-remote-wins"
-          client_db.add_keyword("synced_v1")
-          kw_uuid = client_db.execute_query("SELECT uuid FROM Keywords WHERE keyword=?", ("synced_v1",)).fetchone()['uuid']
-          ts_v1 = client_db.execute_query("SELECT last_modified FROM Keywords WHERE uuid=?", (kw_uuid,)).fetchone()[0]
-          assert get_entity_version(client_db, "Keywords", kw_uuid) == 1
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_conflict_detected_and_remote_wins_lww(self, mock_get, sync_engine, client_db):
+        """Test conflict where remote change wins based on LWW timestamp."""
+        # 1. Setup initial synced state (V1)
+        kw_uuid = "uuid-conflict-remote-wins"
+        client_db.add_keyword("synced_v1")
+        kw_uuid = client_db.execute_query("SELECT uuid FROM Keywords WHERE keyword=?", ("synced_v1",)).fetchone()['uuid']
+        ts_v1 = client_db.execute_query("SELECT last_modified FROM Keywords WHERE uuid=?", (kw_uuid,)).fetchone()[0]
+        assert get_entity_version(client_db, "Keywords", kw_uuid) == 1
 
-          # 2. Simulate local concurrent change (V2 - Local)
-          ts_local_v2 = (datetime.fromisoformat(ts_v1.replace("Z","+00:00")) + timedelta(seconds=10)).strftime('%Y-%m-%dT%H:%M:%SZ')
-          client_db.execute_query(
+        # 2. Simulate local concurrent change (V2 - Local)
+        ts_local_v2 = (datetime.fromisoformat(ts_v1.replace("Z","+00:00")) + timedelta(seconds=10)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        client_db.execute_query(
                "UPDATE Keywords SET keyword='local_v2', version=2, last_modified=?, client_id=? WHERE uuid=?",
                (ts_local_v2, sync_engine.client_id, kw_uuid), commit=True
           )
-          assert get_entity_version(client_db, "Keywords", kw_uuid) == 2
+        assert get_entity_version(client_db, "Keywords", kw_uuid) == 2
 
-          # 3. Prepare conflicting server change (also V2, based on V1, but with later timestamp)
-          ts_server_v2 = (datetime.fromisoformat(ts_v1.replace("Z","+00:00")) + timedelta(seconds=20)).strftime('%Y-%m-%dT%H:%M:%SZ')
-          server_change = create_mock_log_entry(
+        # 3. Prepare conflicting server change (also V2, based on V1, but with later timestamp)
+        ts_server_v2 = (datetime.fromisoformat(ts_v1.replace("Z","+00:00")) + timedelta(seconds=20)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        server_change = create_mock_log_entry(
                change_id=102, entity="Keywords", uuid=kw_uuid, op="update",
                client="other_client", version=2, # Based on V1
                payload_dict={"keyword": "server_v2_wins"},
                ts=ts_server_v2 # Server's authoritative timestamp > local timestamp
           )
-          mock_response = MagicMock()
-          mock_response.raise_for_status.return_value = None
-          mock_response.json.return_value = {"changes": [server_change], "latest_change_id": 102}
-          mock_get.return_value = mock_response
-          sync_engine.last_server_log_id_processed = 101 # Assume V1 was processed
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"changes": [server_change], "latest_change_id": 102}
+        mock_get.return_value = mock_response
+        sync_engine.last_server_log_id_processed = 101 # Assume V1 was processed
 
-          # 4. Run pull & apply
-          sync_engine._pull_and_apply_remote_changes()
+        # 4. Run pull & apply
+        sync_engine._pull_and_apply_remote_changes()
 
-          # 5. Assertions
-          # Conflict should be detected, LWW resolution should apply server change
-          cursor = client_db.execute_query("SELECT keyword, version, last_modified FROM Keywords WHERE uuid = ?",
+        # 5. Assertions
+        # Conflict should be detected, LWW resolution should apply server change
+        cursor = client_db.execute_query("SELECT keyword, version, last_modified FROM Keywords WHERE uuid = ?",
                                            (kw_uuid,))
-          row = cursor.fetchone()
-          assert row['keyword'] == "server_v2_wins"  # Server change applied
-          # assert row['version'] == 2 # OLD Assertion: Expects version to stay 2
-          assert row['version'] == 3  # NEW Assertion: Expects version to be incremented by force_apply logic
-          assert row['last_modified'] == ts_server_v2  # Server timestamp applied
-          assert sync_engine.last_server_log_id_processed == 102
+        row = cursor.fetchone()
+        assert row['keyword'] == "server_v2_wins"  # Server change applied
+        # assert row['version'] == 2 # OLD Assertion: Expects version to stay 2
+        assert row['version'] == 3  # NEW Assertion: Expects version to be incremented by force_apply logic
+        assert row['last_modified'] == ts_server_v2  # Server timestamp applied
+        assert sync_engine.last_server_log_id_processed == 102
 
 
-     @patch('tldw_Server_API.app.core.Sync.Sync_Client.requests.get')
-     def test_conflict_detected_and_local_wins_lww(self, mock_get, sync_engine, client_db):
-           """Test conflict where local change wins based on LWW timestamp."""
-           # 1. Setup initial synced state (V1)
-           kw_uuid = "uuid-conflict-local-wins"
-           client_db.add_keyword("synced_v1_lw")
-           kw_uuid = client_db.execute_query("SELECT uuid FROM Keywords WHERE keyword=?", ("synced_v1_lw",)).fetchone()['uuid']
-           ts_v1 = client_db.execute_query("SELECT last_modified FROM Keywords WHERE uuid=?", (kw_uuid,)).fetchone()[0]
-           assert get_entity_version(client_db, "Keywords", kw_uuid) == 1
+    @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
+    def test_conflict_detected_and_local_wins_lww(self, mock_get, sync_engine, client_db):
+        """Test conflict where local change wins based on LWW timestamp."""
+        # 1. Setup initial synced state (V1)
+        kw_uuid = "uuid-conflict-local-wins"
+        client_db.add_keyword("synced_v1_lw")
+        kw_uuid = client_db.execute_query("SELECT uuid FROM Keywords WHERE keyword=?", ("synced_v1_lw",)).fetchone()['uuid']
+        ts_v1 = client_db.execute_query("SELECT last_modified FROM Keywords WHERE uuid=?", (kw_uuid,)).fetchone()[0]
+        assert get_entity_version(client_db, "Keywords", kw_uuid) == 1
 
-           # 2. Simulate local concurrent change (V2 - Local) with later timestamp
-           ts_local_v2 = (datetime.fromisoformat(ts_v1.replace("Z","+00:00")) + timedelta(seconds=30)).strftime('%Y-%m-%dT%H:%M:%SZ')
-           client_db.execute_query(
+        # 2. Simulate local concurrent change (V2 - Local) with later timestamp
+        ts_local_v2 = (datetime.fromisoformat(ts_v1.replace("Z","+00:00")) + timedelta(seconds=30)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        client_db.execute_query(
                "UPDATE Keywords SET keyword='local_v2_wins', version=2, last_modified=?, client_id=? WHERE uuid=?",
                (ts_local_v2, sync_engine.client_id, kw_uuid), commit=True
            )
-           assert get_entity_version(client_db, "Keywords", kw_uuid) == 2
+        assert get_entity_version(client_db, "Keywords", kw_uuid) == 2
 
-           # 3. Prepare conflicting server change (also V2, based on V1, but with earlier timestamp)
-           ts_server_v2 = (datetime.fromisoformat(ts_v1.replace("Z","+00:00")) + timedelta(seconds=5)).strftime('%Y-%m-%dT%H:%M:%SZ')
-           server_change = create_mock_log_entry(
+        # 3. Prepare conflicting server change (also V2, based on V1, but with earlier timestamp)
+        ts_server_v2 = (datetime.fromisoformat(ts_v1.replace("Z","+00:00")) + timedelta(seconds=5)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        server_change = create_mock_log_entry(
                change_id=102, entity="Keywords", uuid=kw_uuid, op="update",
                client="other_client", version=2, # Based on V1
                payload_dict={"keyword": "server_v2_loses"},
                ts=ts_server_v2 # Server's authoritative timestamp < local timestamp
            )
-           mock_response = MagicMock()
-           mock_response.raise_for_status.return_value = None
-           mock_response.json.return_value = {"changes": [server_change], "latest_change_id": 102}
-           mock_get.return_value = mock_response
-           sync_engine.last_server_log_id_processed = 101 # Assume V1 was processed
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"changes": [server_change], "latest_change_id": 102}
+        mock_get.return_value = mock_response
+        sync_engine.last_server_log_id_processed = 101 # Assume V1 was processed
 
-           # 4. Run pull & apply
-           sync_engine._pull_and_apply_remote_changes()
+        # 4. Run pull & apply
+        sync_engine._pull_and_apply_remote_changes()
 
-           # 5. Assertions
-           # Conflict should be detected, LWW resolution should *skip* server change
-           cursor = client_db.execute_query("SELECT keyword, version, last_modified FROM Keywords WHERE uuid = ?", (kw_uuid,))
-           row = cursor.fetchone()
-           assert row['keyword'] == "local_v2_wins" # Local change retained
-           assert row['version'] == 2
-           assert row['last_modified'] == ts_local_v2 # Local timestamp retained
-           assert sync_engine.last_server_log_id_processed == 102 # State still advances
+        # 5. Assertions
+        # Conflict should be detected, LWW resolution should *skip* server change
+        cursor = client_db.execute_query("SELECT keyword, version, last_modified FROM Keywords WHERE uuid = ?", (kw_uuid,))
+        row = cursor.fetchone()
+        assert row['keyword'] == "local_v2_wins" # Local change retained
+        assert row['version'] == 2
+        assert row['last_modified'] == ts_local_v2 # Local timestamp retained
+        assert sync_engine.last_server_log_id_processed == 102 # State still advances
 
 #
 # End of test_sync_client.py

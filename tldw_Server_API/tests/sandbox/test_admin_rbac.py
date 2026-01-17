@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 
 def _client(monkeypatch) -> TestClient:
+
+
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     # Ensure AuthNZ settings re-read after env change
@@ -28,6 +30,8 @@ def _client(monkeypatch) -> TestClient:
 
 
 def _non_admin_dep():
+
+
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
     return User(id=2, username="user", roles=["user"], is_admin=False)
 

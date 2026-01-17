@@ -10,6 +10,8 @@ from playwright.sync_api import sync_playwright
 
 
 def _find_free_port():
+
+
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         s.bind(('', 0))
         return s.getsockname()[1]

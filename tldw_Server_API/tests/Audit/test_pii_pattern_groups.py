@@ -2,12 +2,16 @@ import pytest
 
 
 def _sample_api_key():
-    # 34+ chars to satisfy pattern, prefixed by sk_
+
+
+     # 34+ chars to satisfy pattern, prefixed by sk_
     return "sk_abcdefghijklmnopqrstuvwxyzABCDEF1234567890"
 
 
 def _sample_iban():
-    # Valid IBAN-like string matching pattern (example GB format)
+
+
+     # Valid IBAN-like string matching pattern (example GB format)
     return "GB82WEST12345698765432"
 
 
@@ -28,6 +32,7 @@ class TestPIIPatternGroups:
         assert "[API_KEY_REDACTED]" in red
 
     def test_iban_detection_returns_full_match(self):
+
         from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
 
         iban = _sample_iban()
@@ -43,6 +48,7 @@ class TestPIIPatternGroups:
         assert "[IBAN_REDACTED]" in red
 
     def test_email_regex_tightened(self):
+
         from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
 
         det = PIIDetector()
@@ -70,7 +76,8 @@ class TestRiskTuning:
         assert score >= 80
 
     def test_action_bonus_overrides_from_settings(self, monkeypatch):
-        # Ensure settings-driven overrides are applied by RiskScorer
+
+             # Ensure settings-driven overrides are applied by RiskScorer
         from tldw_Server_API.app.core.config import settings
         from tldw_Server_API.app.core.Audit.unified_audit_service import RiskScorer, AuditEvent, AuditEventType
 

@@ -204,17 +204,16 @@ class RAGHealthChecker:
         start = time.time()
 
         try:
-            # Check if embedding worker is available
-            from ...Embeddings.workers.embedding_worker import EmbeddingWorker
+            # Check if embeddings jobs worker module is available
+            from ...Embeddings.services import jobs_worker  # noqa: F401
 
-            # This is a simple availability check
-            # In production, you'd check if the service can actually generate embeddings
+            # This is a simple availability check; production should probe provider health.
             response_time = time.time() - start
 
             return ComponentHealth(
                 name="embeddings",
                 status=HealthStatus.HEALTHY,
-                message="Embedding service available",
+                message="Embeddings jobs worker available",
                 response_time=response_time,
                 last_check=time.time()
             )

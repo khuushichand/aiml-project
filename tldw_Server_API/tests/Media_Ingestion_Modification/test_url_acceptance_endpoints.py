@@ -1,72 +1,57 @@
-import asyncio
 from pathlib import Path
 from typing import Dict, Tuple
+from urllib.parse import urlparse
 
 import pytest
-from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app as fastapi_app_instance, app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, _single_user_instance
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+_STUB_TABLE: Dict[str, Tuple[str, Dict[str, str], bytes]] = {}
 
 
-class AsyncResponseStub:
+class _URLStub:
+    def __init__(self, url: str):
+        self._url = url
+        try:
+            self.path = urlparse(url).path
+        except Exception:
+            self.path = url
+
+    def __str__(self):
+
+        return self._url
+
+
+class FakeResponse:
     def __init__(self, final_url: str, headers: Dict[str, str], content: bytes):
-        # Simulate httpx.URL on attribute access
-        class _URL:
-            def __init__(self, url: str):
-                self._url = url
-                self.path = Path(url).name if "/" in url else url
-
-            def __str__(self):
-                return self._url
-
-        self.url = _URL(final_url)
-        self.headers = headers or {}
+        self.url = _URLStub(final_url)
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
         self._content = content or b""
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
+        self.status_code = 200
 
     def raise_for_status(self):
-        return None
+
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
 
     async def aiter_bytes(self, chunk_size: int = 8192):
         yield self._content
 
 
-class AsyncClientFake:
-    TABLE: Dict[str, Tuple[str, Dict[str, str], bytes]] = {}
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    # stream("GET", url, follow_redirects=True, timeout=...)
-    def stream(self, method: str, url: str, **kwargs):
-        if method != "GET":
-            raise AssertionError("AsyncClientFake supports only GET in tests")
-        if url not in self.TABLE:
-            raise AssertionError(f"No stub configured for URL: {url}")
-        final_url, headers, content = self.TABLE[url]
-        return AsyncResponseStub(final_url, headers, content)
-
-
 @pytest.fixture(autouse=True)
-def patch_httpx_asyncclient(monkeypatch):
-    # Patch the AsyncClient used by endpoints module only
-    import tldw_Server_API.app.api.v1.endpoints.media as media_endpoints
-    monkeypatch.setattr(media_endpoints.httpx, "AsyncClient", AsyncClientFake)
+def patch_http_fetch(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils as download_utils
+
+    async def fake_afetch(*args, **kwargs):
+        url = kwargs.get("url")
+        if url is None and len(args) > 1:
+            url = args[1]
+        if url not in _STUB_TABLE:
+            raise AssertionError(f"No stub configured for URL: {url}")
+        final_url, headers, content = _STUB_TABLE[url]
+        return FakeResponse(final_url, headers, content)
+
+    monkeypatch.setattr(download_utils, "_m_afetch", fake_afetch)
     yield
-    AsyncClientFake.TABLE = {}
+    _STUB_TABLE.clear()
 
 
 @pytest.fixture()
@@ -84,7 +69,7 @@ def dummy_headers():
 
 
 def _stub_url(url: str, *, final: str = None, headers: Dict[str, str] = None, body: bytes = None):
-    AsyncClientFake.TABLE[url] = (final or url, headers or {}, body or b"TEST")
+    _STUB_TABLE[url] = (final or url, headers or {}, body or b"TEST")
 
 
 ########################
@@ -129,6 +114,7 @@ def test_ebooks_url_acceptance(desc, url, final, headers, expect_status, expect_
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib as books
 
     def fake_process_epub(**kwargs):
+
         return {
             "status": "Success",
             "input_ref": kwargs.get("file_path"),
@@ -160,7 +146,7 @@ def test_ebooks_url_acceptance(desc, url, final, headers, expect_status, expect_
         assert any("Error" == r.get("status") for r in data.get("results", []))
         # check the error message mentions allowed extension
         assert any(expect_error in (r.get("error") or "") for r in data["results"]) \
-            or any(expect_error in e for e in data.get("errors", []))
+        or any(expect_error in e for e in data.get("errors", []))
     else:
         assert resp.status_code in (200, 207)
         data = resp.json()
@@ -217,7 +203,7 @@ def test_pdfs_url_acceptance(desc, url, final, headers, expect_error, client, du
         data = resp.json()
         assert any("Error" == r.get("status") for r in data.get("results", []))
         assert any("allowed extension" in (r.get("error") or "") for r in data["results"]) \
-            or any("allowed extension" in e for e in data.get("errors", []))
+        or any("allowed extension" in e for e in data.get("errors", []))
     else:
         assert resp.status_code in (200, 207)
         data = resp.json()
@@ -248,6 +234,7 @@ def test_documents_url_acceptance(desc, url, final, headers, expect_error, clien
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
 
     def fake_process_document_content(**kwargs):
+
         return {
             "status": "Success",
             "input_ref": str(kwargs.get("doc_path")),
@@ -277,7 +264,7 @@ def test_documents_url_acceptance(desc, url, final, headers, expect_error, clien
         data = resp.json()
         assert any("Error" == r.get("status") for r in data.get("results", []))
         assert any("allowed extension" in (r.get("error") or "") for r in data["results"]) \
-            or any("allowed extension" in e for e in data.get("errors", []))
+        or any("allowed extension" in e for e in data.get("errors", []))
     else:
         assert resp.status_code in (200, 207)
         data = resp.json()
@@ -310,7 +297,7 @@ def test_code_url_acceptance(desc, url, final, headers, expect_error, client, du
         data = resp.json()
         assert any("Error" == r.get("status") for r in data.get("results", []))
         assert any("allowed extension" in (r.get("error") or "") for r in data["results"]) \
-            or any("allowed extension" in e for e in data.get("errors", []))
+        or any("allowed extension" in e for e in data.get("errors", []))
     else:
         assert resp.status_code in (200, 207)
         data = resp.json()
@@ -318,6 +305,8 @@ def test_code_url_acceptance(desc, url, final, headers, expect_error, client, du
 
 
 def test_code_url_acceptance_redirect_final_suffix(client, dummy_headers):
+
+
     url = "http://t/dl"
     final = "http://t/file.rs"
     _stub_url(url, final=final, headers={}, body=b"fn main() {}\n")
@@ -332,6 +321,8 @@ def test_code_url_acceptance_redirect_final_suffix(client, dummy_headers):
 
 
 def test_code_mixed_urls_multi_status(client, dummy_headers):
+
+
     ok_url = "http://t/good.py"
     bad_url = "http://t/unknown"
     _stub_url(ok_url, headers={}, body=b"def x():\n    return 1\n")
@@ -353,6 +344,7 @@ def test_code_mixed_urls_multi_status(client, dummy_headers):
 ########################
 
 def test_ebooks_url_acceptance_redirect_final_suffix(client, dummy_headers, monkeypatch):
+
     url = "http://t/dl"
     final = "http://t/file.epub"
     _stub_url(url, final=final, headers={})
@@ -360,6 +352,7 @@ def test_ebooks_url_acceptance_redirect_final_suffix(client, dummy_headers, monk
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib as books
 
     def fake_process_epub(**kwargs):
+
         return {"status": "Success", "input_ref": kwargs.get("file_path"), "processing_source": kwargs.get("file_path"), "media_type": "ebook", "content": "ok", "metadata": {}, "chunks": [], "analysis": None, "keywords": [], "warnings": None, "error": None, "analysis_details": {}}
 
     monkeypatch.setattr(books, "process_epub", fake_process_epub)
@@ -374,6 +367,8 @@ def test_ebooks_url_acceptance_redirect_final_suffix(client, dummy_headers, monk
 
 
 def test_pdfs_url_acceptance_redirect_final_suffix(client, dummy_headers, monkeypatch):
+
+
     url = "http://t/dl"
     final = "http://t/file.pdf"
     _stub_url(url, final=final, headers={}, body=b"%PDF-1.4\n...")
@@ -395,6 +390,8 @@ def test_pdfs_url_acceptance_redirect_final_suffix(client, dummy_headers, monkey
 
 
 def test_documents_url_acceptance_redirect_final_suffix(client, dummy_headers, monkeypatch):
+
+
     url = "http://t/dl"
     final = "http://t/file.html"
     _stub_url(url, final=final, headers={}, body=b"<html>ok</html>")
@@ -402,6 +399,7 @@ def test_documents_url_acceptance_redirect_final_suffix(client, dummy_headers, m
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
 
     def fake_process_document_content(**kwargs):
+
         p = str(kwargs.get("doc_path"))
         return {"status": "Success", "input_ref": p, "processing_source": p, "media_type": "document", "source_format": Path(p).suffix.lstrip("."), "content": "ok", "metadata": {}, "chunks": [], "analysis": None, "analysis_details": {}, "keywords": [], "error": None, "warnings": None}
 
@@ -421,6 +419,7 @@ def test_documents_url_acceptance_redirect_final_suffix(client, dummy_headers, m
 ########################
 
 def test_ebooks_mixed_urls_multi_status(client, dummy_headers, monkeypatch):
+
     ok_url = "http://t/book"
     bad_url = "http://t/unknown"
     _stub_url(ok_url, headers={"content-disposition": 'attachment; filename="a.epub"'})
@@ -429,6 +428,7 @@ def test_ebooks_mixed_urls_multi_status(client, dummy_headers, monkeypatch):
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib as books
 
     def fake_process_epub(**kwargs):
+
         return {"status": "Success", "input_ref": kwargs.get("file_path"), "processing_source": kwargs.get("file_path"), "media_type": "ebook", "content": "ok", "metadata": {}, "chunks": [], "analysis": None, "keywords": [], "warnings": None, "error": None, "analysis_details": {}}
 
     monkeypatch.setattr(books, "process_epub", fake_process_epub)
@@ -445,6 +445,8 @@ def test_ebooks_mixed_urls_multi_status(client, dummy_headers, monkeypatch):
 
 
 def test_pdfs_mixed_urls_multi_status(client, dummy_headers, monkeypatch):
+
+
     ok_url = "http://t/x.pdf"
     bad_url = "http://t/unknown"
     _stub_url(ok_url, headers={"content-type": "application/pdf"}, body=b"%PDF-1.4\n...")
@@ -469,6 +471,8 @@ def test_pdfs_mixed_urls_multi_status(client, dummy_headers, monkeypatch):
 
 
 def test_documents_mixed_urls_multi_status(client, dummy_headers, monkeypatch):
+
+
     ok_url = "http://t/page"
     bad_url = "http://t/unknown"
     _stub_url(ok_url, headers={"content-type": "text/html"}, body=b"<html>ok</html>")
@@ -477,6 +481,7 @@ def test_documents_mixed_urls_multi_status(client, dummy_headers, monkeypatch):
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
 
     def fake_process_document_content(**kwargs):
+
         p = str(kwargs.get("doc_path"))
         return {"status": "Success", "input_ref": p, "processing_source": p, "media_type": "document", "source_format": Path(p).suffix.lstrip("."), "content": "ok", "metadata": {}, "chunks": [], "analysis": None, "analysis_details": {}, "keywords": [], "error": None, "warnings": None}
 

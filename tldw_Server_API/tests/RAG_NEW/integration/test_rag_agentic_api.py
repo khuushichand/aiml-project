@@ -16,7 +16,9 @@ def _set_test_mode_env(monkeypatch):
 
 
 def test_rag_capabilities_agentic_features(auth_headers):
-    # Basic smoke: capabilities exposes agentic feature block
+
+
+     # Basic smoke: capabilities exposes agentic feature block
     with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
@@ -43,7 +45,9 @@ def test_rag_capabilities_agentic_features(auth_headers):
 
 
 def test_rag_capabilities_agentic_new_knobs(auth_headers):
-    # Verify new agentic knobs are advertised
+
+
+     # Verify new agentic knobs are advertised
     with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
@@ -67,7 +71,9 @@ def test_rag_capabilities_agentic_new_knobs(auth_headers):
 
 
 def test_rag_capabilities_quick_start_multihop_vlm(auth_headers):
-    # Ensure capabilities advertises the multi-hop agentic with VLM quick-start
+
+
+     # Ensure capabilities advertises the multi-hop agentic with VLM quick-start
     with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
@@ -77,6 +83,8 @@ def test_rag_capabilities_quick_start_multihop_vlm(auth_headers):
 
 
 def test_rag_capabilities_quick_start_explain(auth_headers):
+
+
     with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
@@ -86,7 +94,9 @@ def test_rag_capabilities_quick_start_explain(auth_headers):
 
 
 def test_rag_agentic_streaming_plan_spans_then_delta(client_with_agentic_overrides, monkeypatch):
-    # Patch retriever for agentic assembly
+
+
+     # Patch retriever for agentic assembly
     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 
     class FakeRetriever:
@@ -150,7 +160,7 @@ def test_rag_agentic_streaming_plan_spans_then_delta(client_with_agentic_overrid
 
 @pytest.fixture()
 def client_with_agentic_overrides(monkeypatch, auth_headers):
-    # Override auth dependencies: accept any test user; disable rate limits
+     # Override auth dependencies: accept any test user; disable rate limits
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
@@ -192,6 +202,8 @@ def client_with_agentic_overrides(monkeypatch, auth_headers):
 
 
 def test_rag_agentic_search_smoke_api(client_with_agentic_overrides, monkeypatch):
+
+
     client = client_with_agentic_overrides
 
     # Patch retriever used inside agentic pipeline to return a single simple doc
@@ -242,6 +254,8 @@ def test_rag_agentic_search_smoke_api(client_with_agentic_overrides, monkeypatch
 
 
 def test_rag_agentic_search_verification_flags(client_with_agentic_overrides, monkeypatch):
+
+
     client = client_with_agentic_overrides
 
     # Patch retriever inside agentic_chunker to return a numeric-bearing doc

@@ -29,6 +29,8 @@ def client_with_user(monkeypatch):
 
 
 def test_opml_edge_cases(client_with_user):
+
+
     c = client_with_user
 
     # Duplicate URLs and htmlUrl-only outlines should be handled

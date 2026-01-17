@@ -6,19 +6,21 @@ import json
 import pickle
 import hashlib
 import threading
+import builtins
+import io
 from typing import Dict, Any, Optional, List, Tuple, Union, Callable
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from collections import OrderedDict
 from datetime import datetime, timedelta
 import mmap
-import redis
 import asyncio
 import functools
 
 from loguru import logger
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 
 
 @dataclass
@@ -42,6 +44,39 @@ class CacheEntry:
         """Update access statistics"""
         self.last_accessed = time.time()
         self.access_count += 1
+
+
+class _SafeUnpickler(pickle.Unpickler):
+    """Restrictive unpickler for cache values."""
+
+    _SAFE_BUILTINS = {
+        "dict",
+        "list",
+        "set",
+        "tuple",
+        "str",
+        "bytes",
+        "int",
+        "float",
+        "bool",
+    }
+
+    def find_class(self, module, name):  # type: ignore[override]
+        if module == "builtins" and name in self._SAFE_BUILTINS:
+            return getattr(builtins, name)
+        if module == "collections" and name == "OrderedDict":
+            return OrderedDict
+        raise pickle.UnpicklingError(f"Disallowed type: {module}.{name}")
+
+
+def _safe_pickle_load(file_obj) -> Any:
+    """Safely unpickle from a file-like object."""
+    return _SafeUnpickler(file_obj).load()
+
+
+def _safe_pickle_loads(data: bytes) -> Any:
+    """Safely unpickle from bytes."""
+    return _SafeUnpickler(io.BytesIO(data)).load()
 
 
 class L1MemoryCache:
@@ -250,7 +285,7 @@ class L2DiskCache:
 
             try:
                 with open(file_path, 'rb') as f:
-                    value = pickle.load(f)
+                    value = _safe_pickle_load(f)
 
                 # Update access time
                 entry_info['last_accessed'] = time.time()
@@ -483,15 +518,18 @@ class L3RemoteCache:
 
         # Try to connect to Redis
         try:
-            self.redis_client = redis.Redis(
-                host=redis_host,
-                port=redis_port,
-                db=redis_db,
-                decode_responses=False
+            preferred_url = f"redis://{redis_host}:{int(redis_port)}/{int(redis_db)}"
+            self.redis_client = create_sync_redis_client(
+                preferred_url=preferred_url,
+                context="embeddings_l3_cache",
+                fallback_to_fake=True,
+                decode_responses=False,
             )
-            self.redis_client.ping()
             self.enabled = True
-            logger.info(f"L3 Remote cache connected to Redis at {redis_host}:{redis_port}")
+            if getattr(self.redis_client, "_tldw_is_stub", False):
+                logger.info("L3 Remote cache using in-memory stub (Redis unavailable)")
+            else:
+                logger.info(f"L3 Remote cache connected to Redis at {redis_host}:{redis_port}")
         except Exception as e:
             logger.warning(f"L3 Remote cache disabled, Redis not available: {e}")
             try:
@@ -525,7 +563,7 @@ class L3RemoteCache:
                 self.metrics.log_cache_miss("L3")
                 return None
 
-            value = pickle.loads(data)
+            value = _safe_pickle_loads(data)
             self.stats['hits'] += 1
             self.metrics.log_cache_hit("L3")
 

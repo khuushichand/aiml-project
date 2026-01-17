@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Trash2 } from 'lucide-react';
 import { api, ApiError } from '@/lib/api-client';
+import { formatDateTime } from '@/lib/format';
 import { canEditFromMemberships } from '@/lib/permissions';
 import { User } from '@/types';
 import Link from 'next/link';
@@ -66,6 +67,8 @@ const isForbiddenError = (err: unknown): boolean => {
   }
   return false;
 };
+
+const formatDate = (dateStr?: string) => formatDateTime(dateStr, { fallback: 'Never' });
 
 export default function UserDetailPage() {
   const params = useParams();
@@ -283,11 +286,6 @@ export default function UserDetailPage() {
     }
   };
 
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return 'Never';
-    return new Date(dateStr).toLocaleString();
-  };
-
   const formatStorage = (usedMb: number, quotaMb: number) => {
     const percentage = quotaMb > 0 ? (usedMb / quotaMb) * 100 : 0;
     return {
@@ -297,59 +295,44 @@ export default function UserDetailPage() {
     };
   };
 
-  if (loading) {
-    return (
-      <ProtectedRoute>
-        <ResponsiveLayout>
-          <div className="p-4 lg:p-8">
-            <div className="text-center text-muted-foreground py-8">Loading user...</div>
-          </div>
-        </ResponsiveLayout>
-      </ProtectedRoute>
-    );
-  }
+  let content: JSX.Element = <></>;
 
-  if (!user) {
+  if (loading) {
+    content = (
+      <div className="p-4 lg:p-8">
+        <div className="text-center text-muted-foreground py-8">Loading user...</div>
+      </div>
+    );
+  } else if (!user) {
     if (!isAuthorized) {
-      return (
-        <ProtectedRoute>
-          <ResponsiveLayout>
-            <div className="p-4 lg:p-8">
-              <Alert variant="destructive">
-                <AlertDescription>You are not authorized to view this user.</AlertDescription>
-              </Alert>
-              <Button onClick={() => router.push('/users')} className="mt-4">
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back to Users
-              </Button>
-            </div>
-          </ResponsiveLayout>
-        </ProtectedRoute>
+      content = (
+        <div className="p-4 lg:p-8">
+          <Alert variant="destructive">
+            <AlertDescription>You are not authorized to view this user.</AlertDescription>
+          </Alert>
+          <Button onClick={() => router.push('/users')} className="mt-4">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Users
+          </Button>
+        </div>
+      );
+    } else {
+      content = (
+        <div className="p-4 lg:p-8">
+          <Alert variant="destructive">
+            <AlertDescription>User not found</AlertDescription>
+          </Alert>
+          <Button onClick={() => router.push('/users')} className="mt-4">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Users
+          </Button>
+        </div>
       );
     }
-    return (
-      <ProtectedRoute>
-        <ResponsiveLayout>
-          <div className="p-4 lg:p-8">
-            <Alert variant="destructive">
-              <AlertDescription>User not found</AlertDescription>
-            </Alert>
-            <Button onClick={() => router.push('/users')} className="mt-4">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Users
-            </Button>
-          </div>
-        </ResponsiveLayout>
-      </ProtectedRoute>
-    );
-  }
-
-  const storage = formatStorage(user.storage_used_mb || 0, user.storage_quota_mb || 0);
-
-  return (
-    <ProtectedRoute>
-      <ResponsiveLayout>
-          <div className="p-4 lg:p-8">
+  } else {
+    const storage = formatStorage(user.storage_used_mb || 0, user.storage_quota_mb || 0);
+    content = (
+      <div className="p-4 lg:p-8">
             {/* Header */}
             <div className="mb-8 flex items-center justify-between">
               <div className="flex items-center gap-4">
@@ -686,7 +669,14 @@ export default function UserDetailPage() {
               </Card>
             </div>
           </div>
+    );
+  }
+
+  return (
+    <PermissionGuard variant="route" requireAuth role="admin">
+      <ResponsiveLayout>
+        {content}
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

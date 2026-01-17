@@ -149,11 +149,17 @@ GET `/api/v1/rag/features`
 
 Returns a categorized list of features and their parameter names (query expansion, caching, security, citations, generation, reranking, feedback, monitoring, table/VLM processing, enhanced chunking, batch, resilience).
 
+### Explicit Feedback (shared)
+
+POST `/api/v1/feedback/explicit`
+
+Shared endpoint for chat + RAG feedback. Key fields: `feedback_type`, `helpful`, `relevance_score`, `issues`, `user_notes`, and optional `document_ids`/`chunk_ids` for source-level feedback. For chat feedback, include `message_id` (query can be derived). For RAG-only feedback (no `message_id`), `query` is required. When `feedback_type=helpful`, `helpful` is required; when `feedback_type=relevance`, `relevance_score` is required. Returns `{ "ok": true, "feedback_id": "..." }`.
+
 ### Implicit Feedback
 
 POST `/api/v1/rag/feedback/implicit`
 
-Records user interaction signals from the WebUI for learning-to-rank and personalization. Body matches `ImplicitFeedbackEvent` (event_type: click|expand|copy; optional `query`, `doc_id`, `rank`, `impression_list`, `corpus`, `user_id`, `session_id`).
+Records user interaction signals from the WebUI for learning-to-rank and personalization. Body matches `ImplicitFeedbackEvent` (event_type: click|expand|copy|dwell_time|citation_used; optional `query`, `doc_id`, `chunk_ids`, `rank`, `impression_list`, `corpus`, `session_id`, `conversation_id`, `message_id`; `dwell_ms` is required when event_type=dwell_time). Implicit events can be disabled via `IMPLICIT_FEEDBACK_ENABLED=false`.
 
 ### Health & Ops
 

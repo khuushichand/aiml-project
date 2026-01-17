@@ -34,6 +34,8 @@ postgresql:/
 # Allow frontend source lib directories.
 !admin-ui/lib/
 !admin-ui/lib/**
+!tldw-frontend/lib/
+!tldw-frontend/lib/**
 
 # PyInstaller
 *.manifest
@@ -324,3 +326,12 @@ Config_Files/session_encryption.key
 /tmp_dir
 /tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/models
 /tmp_chroma_test
+IMPLEMENTATION_PLAN.md
+wizard.log
+/tldw_Server_API/Config_Files/acp_runner_home/Library/Caches/go-build
+/tldw_Server_API/Config_Files/acp_runner_home/Library
+/Config_Files/acp_runner_home/Library/Caches/go-build
+/Config_Files/acp_runner_home/Library
+/tldw_Server_API/Config_Files/acp_runner_home/go
+/tldw_Server_API/Config_Files/acp_runner_home
+/Demo

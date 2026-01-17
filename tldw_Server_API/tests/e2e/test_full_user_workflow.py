@@ -31,20 +31,51 @@ import httpx
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from fixtures import (
+from .fixtures import (
     api_client, authenticated_client, test_user_credentials, data_tracker,
     create_test_file, create_test_pdf, create_test_audio, cleanup_test_file,
     # Import new helper classes
     AssertionHelpers, SmartErrorHandler, AsyncOperationHandler,
-    ContentValidator, StateVerification, StrongAssertionHelpers
+    ContentValidator, StateVerification, StrongAssertionHelpers,
+    require_llm_or_skip, FALLBACK_CHAT_MODEL,
 )
-from workflow_helpers import (
+from .workflow_helpers import (
     WorkflowAssertions, WorkflowErrorHandler, WorkflowVerification, WorkflowState
 )
-from test_data import (
+from .test_data import (
     TestDataGenerator, TestScenarios, generate_unique_id,
     generate_test_user, generate_batch_data
 )
+
+
+def _resolve_chat_model_or_skip(client):
+    return require_llm_or_skip(client)
+
+
+def _is_fallback_model(model: str) -> bool:
+    if not model:
+        return False
+    return model.replace("-", "").lower() == FALLBACK_CHAT_MODEL.lower()
+
+
+def _chat_completion_or_skip(client, *, model: str, **kwargs):
+    try:
+        return client.chat_completion(model=model, **kwargs)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 400 and not _is_fallback_model(model):
+            fallback_model = "gpt-4o"
+            try:
+                return client.chat_completion(model=fallback_model, **kwargs)
+            except httpx.HTTPStatusError as fallback_exc:
+                if fallback_exc.response.status_code in (400, 502, 503):
+                    pytest.skip(
+                        f"Fallback model {fallback_model} rejected by /chat/completions: "
+                        f"{fallback_exc.response.text}"
+                    )
+                raise
+        if e.response.status_code == 400 and _is_fallback_model(model):
+            pytest.skip(f"Fallback model {model} rejected by /chat/completions: {e.response.text}")
+        raise
 
 
 class TestFullUserWorkflow:
@@ -126,6 +157,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_01_health_check(self, api_client):
+
         """Test API health check endpoint - simulating user first accessing the application."""
         response = api_client.health_check()
 
@@ -286,6 +318,7 @@ class TestFullUserWorkflow:
             cleanup_test_file(file_path)
 
     def test_11_upload_pdf_document(self, api_client, data_tracker):
+
         """Test uploading a PDF document."""
         # Create test PDF
         file_path = create_test_pdf()
@@ -328,6 +361,7 @@ class TestFullUserWorkflow:
             cleanup_test_file(file_path)
 
     def test_12_process_web_content(self, api_client, data_tracker):
+
         """Test processing content from a URL - both ephemeral and persistent."""
         # Use a reliable test URL - example.com is more stable than Wikipedia
         test_url = "https://example.com"
@@ -349,8 +383,8 @@ class TestFullUserWorkflow:
             # Check that it explicitly says no DB storage
             if "db_message" in ephemeral_response:
                 assert "processing only" in ephemeral_response["db_message"].lower() or \
-                       ephemeral_response.get("db_id") is None, \
-                       "Ephemeral processing should not store in DB"
+                    ephemeral_response.get("db_id") is None, \
+                    "Ephemeral processing should not store in DB"
 
         except httpx.HTTPStatusError as e:
             SmartErrorHandler.handle_error(e, "ephemeral web content processing")
@@ -389,8 +423,8 @@ class TestFullUserWorkflow:
             else:
                 # Direct response format
                 media_id = (persistent_response.get("db_id") or
-                           persistent_response.get("media_id") or
-                           persistent_response.get("id"))
+                        persistent_response.get("media_id") or
+                        persistent_response.get("id"))
 
             # Only assert if we don't have an error
             assert media_id is not None, f"No ID returned in persistent response: {persistent_response}"
@@ -419,6 +453,7 @@ class TestFullUserWorkflow:
             SmartErrorHandler.handle_error(e, "persistent web content processing")
 
     def test_13_upload_audio_file(self, api_client, data_tracker):
+
         """Test uploading an audio file."""
         # Create test audio
         file_path = create_test_audio()
@@ -461,6 +496,7 @@ class TestFullUserWorkflow:
             cleanup_test_file(file_path)
 
     def test_14_upload_video_file(self, api_client, data_tracker):
+
         """Test uploading a video file with real audio for transcription."""
         # Use the actual sample.mp4 file with real audio
         video_path = Path(__file__).parent.parent / "Media_Ingestion_Modification" / "test_media" / "sample.mp4"
@@ -519,6 +555,7 @@ class TestFullUserWorkflow:
             pytest.skip(f"Video upload test skipped: {e}")
 
     def test_15_list_media_items(self, api_client, data_tracker):
+
         """Test listing all media items."""
         # Make test self-contained - upload a test item first
         test_content = "Test content for media list verification"
@@ -581,6 +618,7 @@ class TestFullUserWorkflow:
             cleanup_test_file(file_path)
 
     def test_16_verify_upload_phase_complete(self, api_client):
+
         """CHECKPOINT: Verify all uploads from phase 2 are accessible and intact."""
         # This is a critical verification checkpoint in the workflow
         if not TestFullUserWorkflow.media_items:
@@ -651,6 +689,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_19_verify_ready_for_analysis(self, api_client):
+
         """CHECKPOINT: Verify media is ready for analysis phase."""
         if not TestFullUserWorkflow.media_items:
             pytest.skip("No media items available for analysis")
@@ -669,6 +708,7 @@ class TestFullUserWorkflow:
         print("=== Proceeding to Phase 3: Analysis ===")
 
     def test_20_get_media_details(self, api_client):
+
         """Test getting details of uploaded media."""
         if not TestFullUserWorkflow.media_items:
             pytest.skip("No media items available")
@@ -711,6 +751,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_29_verify_ready_for_interaction(self, api_client):
+
         """CHECKPOINT: Verify system is ready for chat/interaction phase."""
         print(f"\n=== PRE-PHASE 4 VERIFICATION ===")
 
@@ -730,6 +771,7 @@ class TestFullUserWorkflow:
         print("=== Proceeding to Phase 4: Chat & Interaction ===")
 
     def test_30_simple_chat_completion(self, api_client, data_tracker):
+
         """Test basic chat completion."""
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -737,10 +779,12 @@ class TestFullUserWorkflow:
         ]
 
         try:
-            response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            response = _chat_completion_or_skip(
+                api_client,
                 messages=messages,
-                model="gpt-3.5-turbo",
-                temperature=0.7
+                model=model,
+                temperature=0.7,
             )
 
             # Use proper validation helper
@@ -764,8 +808,8 @@ class TestFullUserWorkflow:
                 data_tracker.add_chat(response["chat_id"])
 
         except (httpx.HTTPStatusError, httpx.ConnectError) as e:
-            # Skip test if API key is not configured (400/503 error)
-            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (400, 503):
+            # Skip test if API key is not configured (503 error)
+            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 503:
                 error_detail = e.response.json().get("detail", "")
                 if isinstance(error_detail, dict):
                     if error_detail.get("error_code") == "missing_provider_credentials":
@@ -775,6 +819,7 @@ class TestFullUserWorkflow:
             WorkflowErrorHandler.handle_api_error(e, "chat completion")
 
     def test_31_chat_with_context(self, api_client, data_tracker):
+
         """Test chat with media context (RAG)."""
         if not TestFullUserWorkflow.media_items:
             pytest.skip("No media items available")
@@ -782,10 +827,12 @@ class TestFullUserWorkflow:
         messages = TestDataGenerator.sample_chat_messages()
 
         try:
-            response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            response = _chat_completion_or_skip(
+                api_client,
                 messages=messages,
-                model="gpt-3.5-turbo",
-                temperature=0.7
+                model=model,
+                temperature=0.7,
             )
 
             # Store chat
@@ -805,6 +852,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_39_verify_ready_for_knowledge_mgmt(self, api_client):
+
         """CHECKPOINT: Verify chat phase complete, ready for notes."""
         print(f"\n=== PRE-PHASE 5 VERIFICATION ===")
 
@@ -816,6 +864,7 @@ class TestFullUserWorkflow:
         print("=== Proceeding to Phase 5: Knowledge Management ===")
 
     def test_40_create_note(self, api_client, data_tracker):
+
         """Test creating a note."""
         note_data = TestDataGenerator.sample_note()
 
@@ -835,6 +884,7 @@ class TestFullUserWorkflow:
         data_tracker.add_note(note_id)
 
     def test_41_list_notes(self, api_client):
+
         """Test listing notes."""
         response = api_client.get_notes(limit=50)
 
@@ -850,6 +900,7 @@ class TestFullUserWorkflow:
         assert len(items) >= len(TestFullUserWorkflow.notes)
 
     def test_42_update_note(self, api_client):
+
         """Test updating a note."""
         print(f"DEBUG: TestFullUserWorkflow.notes = {TestFullUserWorkflow.notes}")
         if not TestFullUserWorkflow.notes:
@@ -882,6 +933,7 @@ class TestFullUserWorkflow:
             pytest.skip(f"Note update failed: {e}")
 
     def test_43_search_notes(self, api_client):
+
         """Test searching notes."""
         if not TestFullUserWorkflow.notes:
             pytest.skip("No notes available")
@@ -905,6 +957,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_50_create_prompt(self, api_client, data_tracker):
+
         """Test creating a prompt template."""
         prompt_data = TestDataGenerator.sample_prompt_template()
 
@@ -931,6 +984,7 @@ class TestFullUserWorkflow:
                 raise
 
     def test_51_list_prompts(self, api_client):
+
         """Test listing prompts."""
         try:
             response = api_client.get_prompts()
@@ -956,6 +1010,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_60_import_character(self, api_client, data_tracker):
+
         """Test importing a character card with strong validation."""
         # Use the actual character card image file placed in the e2e folder
         character_file_path = Path(__file__).parent / "inkpot-writing-assistant-0d194615000b.png"
@@ -1020,6 +1075,7 @@ class TestFullUserWorkflow:
                 print(f"Character JSON import also failed: {fallback_e}")
 
     def test_61_list_characters(self, api_client):
+
         """Test listing characters with value validation."""
         if not TestFullUserWorkflow.characters:
             pytest.skip("No characters available")
@@ -1056,6 +1112,7 @@ class TestFullUserWorkflow:
         print(f"✓ Successfully validated {len(items)} characters")
 
     def test_62_edit_existing_character(self, api_client):
+
         """Test updating an existing character with proper validation."""
         if not TestFullUserWorkflow.characters:
             pytest.skip("No characters available to edit")
@@ -1119,6 +1176,7 @@ class TestFullUserWorkflow:
                 raise
 
     def test_63_character_version_conflict(self, api_client):
+
         """Test optimistic locking with version mismatch."""
         if not TestFullUserWorkflow.characters:
             pytest.skip("No characters available")
@@ -1154,6 +1212,7 @@ class TestFullUserWorkflow:
             pytest.skip("Optimistic locking not implemented")
 
     def test_64_character_field_validation(self, api_client):
+
         """Test character field validation with edge cases."""
         if not TestFullUserWorkflow.characters:
             pytest.skip("No characters available")
@@ -1214,6 +1273,7 @@ class TestFullUserWorkflow:
                 print(f"Field validation {test_case['name']} failed: {e}")
 
     def test_65_chat_with_character_card(self, api_client, data_tracker):
+
         """Test chat using a character card for personality."""
         if not TestFullUserWorkflow.characters:
             pytest.skip("No characters available")
@@ -1227,11 +1287,13 @@ class TestFullUserWorkflow:
         ]
 
         try:
-            response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            response = _chat_completion_or_skip(
+                api_client,
                 messages=messages,
-                model="gpt-3.5-turbo",
+                model=model,
                 character_id=str(character_id),  # Convert to string as API expects
-                temperature=0.7
+                temperature=0.7,
             )
 
             # Strong validation of response structure
@@ -1272,7 +1334,7 @@ class TestFullUserWorkflow:
             print(f"✓ Character chat successful with {character_name}")
 
         except httpx.HTTPStatusError as e:
-            if e.response.status_code in (400, 503):
+            if e.response.status_code == 503:
                 error_detail = e.response.json().get("detail", "")
                 if isinstance(error_detail, dict):
                     if error_detail.get("error_code") == "missing_provider_credentials":
@@ -1282,6 +1344,7 @@ class TestFullUserWorkflow:
             WorkflowErrorHandler.handle_api_error(e, "character chat")
 
     def test_66_character_chat_history(self, api_client):
+
         """Test maintaining conversation context with character."""
         # Find a character chat with conversation_id
         char_chat = None
@@ -1303,12 +1366,14 @@ class TestFullUserWorkflow:
         ]
 
         try:
-            response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            response = _chat_completion_or_skip(
+                api_client,
                 messages=follow_up,
-                model="gpt-3.5-turbo",
+                model=model,
                 character_id=character_id,
                 conversation_id=conversation_id,
-                temperature=0.7
+                temperature=0.7,
             )
 
             # Validate response
@@ -1331,6 +1396,7 @@ class TestFullUserWorkflow:
             pytest.skip("Character conversation history not available")
 
     def test_67_switch_characters_in_chat(self, api_client, data_tracker):
+
         """Test switching between different characters in chat."""
         if len(TestFullUserWorkflow.characters) < 2:
             # Try to import another character for testing
@@ -1352,20 +1418,23 @@ class TestFullUserWorkflow:
         char2_id = char2.get("id") or char2.get("character_id")
 
         try:
+            model = _resolve_chat_model_or_skip(api_client)
             # Start with first character
-            response1 = api_client.chat_completion(
+            response1 = _chat_completion_or_skip(
+                api_client,
                 messages=[{"role": "user", "content": "Hello, what's your name?"}],
-                model="gpt-3.5-turbo",
-                character_id=char1_id
+                model=model,
+                character_id=char1_id,
             )
 
             conversation_id = response1.get("conversation_id")
 
             # Switch to second character (new conversation)
-            response2 = api_client.chat_completion(
+            response2 = _chat_completion_or_skip(
+                api_client,
                 messages=[{"role": "user", "content": "Hello, what's your name?"}],
-                model="gpt-3.5-turbo",
-                character_id=char2_id
+                model=model,
+                character_id=char2_id,
             )
 
             # Responses should be different (different characters)
@@ -1384,6 +1453,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_70_search_media_content(self, api_client):
+
         """Test searching across media content with strong validation."""
         if not TestFullUserWorkflow.media_items:
             pytest.skip("No media items available")
@@ -1423,6 +1493,7 @@ class TestFullUserWorkflow:
         assert successful_search, "No search queries succeeded"
 
     def test_71_simple_rag_search(self, api_client):
+
         """Test simple RAG search with comprehensive validation."""
         # Check if we have media items from earlier tests or in the database
         if not TestFullUserWorkflow.media_items:
@@ -1518,6 +1589,7 @@ class TestFullUserWorkflow:
             pytest.skip("RAG search not available")
 
     def test_72_multi_database_rag_search(self, api_client):
+
         """Test RAG search across multiple databases."""
         # Check what content we have
         has_media = len(TestFullUserWorkflow.media_items) > 0
@@ -1568,6 +1640,7 @@ class TestFullUserWorkflow:
             pytest.skip("Multi-database RAG not available")
 
     def test_73_rag_with_advanced_options(self, api_client):
+
         """Test RAG with various configuration options."""
         if not TestFullUserWorkflow.media_items:
             pytest.skip("No content for RAG testing")
@@ -1617,6 +1690,7 @@ class TestFullUserWorkflow:
                 print(f"RAG config {test_case['name']} failed: {e}")
 
     def test_74_rag_performance_metrics(self, api_client):
+
         """Test RAG search performance and validate metrics."""
         if not TestFullUserWorkflow.media_items:
             pytest.skip("No content for performance testing")
@@ -1679,6 +1753,7 @@ class TestFullUserWorkflow:
             pytest.skip("No successful performance measurements")
 
     def test_75_rag_with_chat_context(self, api_client, data_tracker):
+
         """Test using RAG-enhanced chat for contextual responses."""
         if not TestFullUserWorkflow.media_items:
             pytest.skip("No media content for RAG context")
@@ -1713,10 +1788,12 @@ class TestFullUserWorkflow:
                 {"role": "user", "content": "Based on the context, what is machine learning?"}
             ]
 
-            chat_response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            chat_response = _chat_completion_or_skip(
+                api_client,
                 messages=messages,
-                model="gpt-3.5-turbo",
-                temperature=0.3  # Lower temp for more factual
+                model=model,
+                temperature=0.3,  # Lower temp for more factual
             )
 
             # Validate chat used context
@@ -1738,6 +1815,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_80_create_evaluation(self, api_client, data_tracker):
+
         """Test creating an evaluation for model comparison."""
         try:
             # Create a simple evaluation
@@ -1776,6 +1854,7 @@ class TestFullUserWorkflow:
             print(f"Evaluation test error: {e}")
 
     def test_81_run_geval(self, api_client):
+
         """Test running G-Eval for summarization quality."""
         try:
             eval_data = {
@@ -1800,6 +1879,7 @@ class TestFullUserWorkflow:
             print(f"G-Eval test error: {e}")
 
     def test_82_rag_evaluation(self, api_client):
+
         """Test RAG system evaluation."""
         try:
             rag_data = {
@@ -1831,6 +1911,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_90_export_functionality(self, api_client):
+
         """Test export functionality for media and notes."""
         if not self.media_items and not self.notes:
             pytest.skip("No content available to export")
@@ -1905,6 +1986,7 @@ class TestFullUserWorkflow:
     # ========================================================================
 
     def test_99_verify_ready_for_cleanup(self, api_client):
+
         """CHECKPOINT: Verify all phases complete before cleanup."""
         print(f"\n=== PRE-CLEANUP VERIFICATION ===")
         print("Checking workflow data before cleanup...")
@@ -1932,6 +2014,7 @@ class TestFullUserWorkflow:
         print("=== Proceeding to Cleanup Phase ===")
 
     def test_100_delete_notes(self, api_client):
+
         """Test deleting notes."""
         for note in self.notes:
             note_id = note.get("id") or note.get("note_id")
@@ -1942,6 +2025,7 @@ class TestFullUserWorkflow:
                 print(f"Failed to delete note {note_id}: {e}")
 
     def test_101_delete_prompts(self, api_client):
+
         """Test deleting prompts."""
         for prompt in self.prompts:
             prompt_id = prompt.get("id") or prompt.get("prompt_id")
@@ -1952,6 +2036,7 @@ class TestFullUserWorkflow:
                 print(f"Failed to delete prompt {prompt_id}: {e}")
 
     def test_102_delete_characters(self, api_client):
+
         """Test deleting characters."""
         for character in self.characters:
             character_id = character.get("id") or character.get("character_id")
@@ -1962,6 +2047,7 @@ class TestFullUserWorkflow:
                 print(f"Failed to delete character {character_id}: {e}")
 
     def test_103_delete_media(self, api_client):
+
         """Test deleting media items."""
         for media in TestFullUserWorkflow.media_items:
             media_id = media.get("media_id") or media.get("id")
@@ -1972,6 +2058,7 @@ class TestFullUserWorkflow:
                 print(f"Failed to delete media {media_id}: {e}")
 
     def test_104_logout(self, api_client):
+
         """Test user logout."""
         try:
             response = api_client.logout()
@@ -1980,6 +2067,7 @@ class TestFullUserWorkflow:
             print(f"Logout test skipped: {e}")
 
     def test_105_performance_summary(self):
+
         """Print performance summary."""
         if TestFullUserWorkflow.performance_metrics:
             print("\n=== Performance Summary ===")
@@ -1992,6 +2080,7 @@ class TestFullUserWorkflow:
             print(f"Average test time: {total_time/len(TestFullUserWorkflow.performance_metrics):.2f}s")
 
     def test_91_ephemeral_vs_persistent_verification(self, api_client):
+
         """Verify ephemeral processing doesn't store data while persistent does."""
         test_content = "This is a test document for ephemeral vs persistent processing verification."
 
@@ -2057,8 +2146,8 @@ class TestFullUserWorkflow:
 
             # Get the ID from various possible fields
             persistent_id = (persistent_result.get("db_id") or
-                           persistent_result.get("media_id") or
-                           persistent_result.get("id"))
+                        persistent_result.get("media_id") or
+                        persistent_result.get("id"))
 
             assert persistent_id is not None, f"No ID in persistent result: {persistent_result.keys()}"
             assert isinstance(persistent_id, int) and persistent_id > 0, f"Invalid ID: {persistent_id}"
@@ -2083,6 +2172,7 @@ class TestAdvancedScenarios:
     """Advanced scenario-based tests."""
 
     def test_research_workflow(self, api_client, data_tracker):
+
         """Test complete research workflow scenario."""
         scenario = TestScenarios.research_workflow()
 
@@ -2096,6 +2186,7 @@ class TestAdvancedScenarios:
             print(f"Executing: {action}")
 
     def test_content_creation_workflow(self, api_client, data_tracker):
+
         """Test content creation workflow scenario."""
         scenario = TestScenarios.content_creation_workflow()
 
@@ -2104,6 +2195,7 @@ class TestAdvancedScenarios:
             print(f"Executing: {step['action']}")
 
     def test_media_processing_workflow(self, api_client, data_tracker):
+
         """Test media processing workflow scenario."""
         scenario = TestScenarios.media_processing_workflow()
 

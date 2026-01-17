@@ -9,5 +9,7 @@ def embeddings_abtest_scaffold():
 
 
 def test_embeddings_abtest_placeholder(embeddings_abtest_scaffold):
+
+
     """Placeholder to keep pytest discovery wired up."""
     pass

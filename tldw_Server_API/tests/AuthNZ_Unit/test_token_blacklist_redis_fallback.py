@@ -99,6 +99,7 @@ async def test_token_blacklist_falls_back_to_database(monkeypatch):
     pool = _FakePool()
 
     def failing_from_url(*_args, **_kwargs):
+
         raise RedisError("connection failed")
 
     monkeypatch.setattr(

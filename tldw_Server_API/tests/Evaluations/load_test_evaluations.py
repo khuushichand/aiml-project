@@ -34,6 +34,7 @@ class EvaluationUser(HttpUser):
     wait_time = between(1, 3)
 
     def on_start(self):
+
         """Initialize test data on user spawn"""
         self.sample_texts = [
             "Climate change is one of the most pressing issues of our time.",
@@ -200,6 +201,7 @@ class StressTestUser(HttpUser):
     wait_time = between(0.1, 0.5)
 
     def on_start(self):
+
         """Initialize with minimal data"""
         self.test_text = "This is a test text for stress testing."
         self.test_summary = "Test summary."

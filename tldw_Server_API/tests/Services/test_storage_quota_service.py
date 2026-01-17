@@ -34,6 +34,7 @@ class FakePool:
         self.fetchone_calls = 0
 
     def transaction(self):
+
         return _DummyTransCtx()
 
     async def fetchone(self, query: str, *args):

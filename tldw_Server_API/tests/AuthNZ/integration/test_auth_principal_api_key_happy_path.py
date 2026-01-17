@@ -86,15 +86,17 @@ def _attach_api_key_whoami_router(app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("header_name", ["X-API-KEY", "Authorization"])
 async def test_multi_user_api_key_happy_path_principal_matches_state(
     isolated_test_environment,
+    header_name: str,
 ) -> None:
     """
     Multi-user happy path for API key authentication:
 
     - Create a user and an API key via the real AuthNZ stack.
     - Call a protected endpoint that depends on both get_auth_principal and
-      get_current_user using X-API-KEY.
+      get_current_user using X-API-KEY or Authorization: Bearer.
     - Assert that the AuthPrincipal mirrors request.state and user data,
       especially api_key_id.
     """
@@ -140,10 +142,11 @@ async def test_multi_user_api_key_happy_path_principal_matches_state(
     key_rec = await mgr.create_api_key(user_id=user_id, name="api-key-happy")
     api_key = key_rec["key"]
 
-    # Hit the whoami endpoint with X-API-KEY
+    # Hit the whoami endpoint with API key headers
+    headers = {"X-API-KEY": api_key} if header_name == "X-API-KEY" else {"Authorization": f"Bearer {api_key}"}
     resp = client.get(
         "/api/v1/authnz/api-key-happy",
-        headers={"X-API-KEY": api_key},
+        headers=headers,
     )
     assert resp.status_code == 200, f"Unexpected status: {resp.status_code} body={resp.text}"
 
@@ -177,3 +180,104 @@ async def test_multi_user_api_key_happy_path_principal_matches_state(
     # Claims on AuthPrincipal, get_current_user, and get_request_user should be aligned
     assert principal["roles"] == user["roles"] == request_user["roles"]
     assert principal["permissions"] == user["permissions"] == request_user["permissions"]
+
+
+@pytest.mark.asyncio
+async def test_api_key_scopes_org_and_team_membership(
+    isolated_test_environment,
+) -> None:
+    client, _db_name = isolated_test_environment
+    assert isinstance(client, TestClient)
+
+    app = client.app
+    assert isinstance(app, FastAPI)
+
+    _attach_api_key_whoami_router(app)
+
+    from uuid import uuid4
+
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
+        add_org_member,
+        add_team_member,
+        create_organization,
+        create_team,
+    )
+    from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+
+    pool = await get_db_pool()
+
+    users_db = UsersDB(pool)
+    await users_db.initialize()
+    created_user = await users_db.create_user(
+        username="api-key-scope-user",
+        email="api-key-scope-user@example.com",
+        password_hash="x",
+        role="user",
+        is_active=True,
+        is_superuser=False,
+        storage_quota_mb=5120,
+        uuid_value=uuid4(),
+    )
+    user_id = int(created_user["id"])
+
+    org_a = await create_organization(name="Scoped Org A", owner_user_id=None)
+    org_b = await create_organization(name="Scoped Org B", owner_user_id=None)
+    await add_org_member(org_id=int(org_a["id"]), user_id=user_id, role="member")
+    await add_org_member(org_id=int(org_b["id"]), user_id=user_id, role="member")
+
+    team_a = await create_team(org_id=int(org_a["id"]), name="Scoped Team A")
+    team_b = await create_team(org_id=int(org_b["id"]), name="Scoped Team B")
+    await add_team_member(team_id=int(team_a["id"]), user_id=user_id, role="member")
+    await add_team_member(team_id=int(team_b["id"]), user_id=user_id, role="member")
+
+    mgr = APIKeyManager(pool)
+    await mgr.initialize()
+
+    key_org = await mgr.create_virtual_key(
+        user_id=user_id,
+        name="vk-org-scope",
+        org_id=int(org_a["id"]),
+    )
+    resp_org = client.get(
+        "/api/v1/authnz/api-key-happy",
+        headers={"X-API-KEY": key_org["key"]},
+    )
+    assert resp_org.status_code == 200, resp_org.text
+    payload_org = resp_org.json()
+
+    assert payload_org["principal"]["org_ids"] == [int(org_a["id"])]
+    assert payload_org["principal"]["team_ids"] == [int(team_a["id"])]
+    assert payload_org["state"]["org_ids"] == [int(org_a["id"])]
+    assert payload_org["state"]["team_ids"] == [int(team_a["id"])]
+    assert payload_org["state_auth_principal"]["org_ids"] == [int(org_a["id"])]
+    assert payload_org["state_auth_principal"]["team_ids"] == [int(team_a["id"])]
+
+    key_team = await mgr.create_virtual_key(
+        user_id=user_id,
+        name="vk-team-scope",
+        org_id=int(org_a["id"]),
+        team_id=int(team_a["id"]),
+    )
+    resp_team = client.get(
+        "/api/v1/authnz/api-key-happy",
+        headers={"X-API-KEY": key_team["key"]},
+    )
+    assert resp_team.status_code == 200, resp_team.text
+    payload_team = resp_team.json()
+
+    assert payload_team["principal"]["org_ids"] == [int(org_a["id"])]
+    assert payload_team["principal"]["team_ids"] == [int(team_a["id"])]
+
+    org_c = await create_organization(name="Scoped Org C", owner_user_id=None)
+    key_invalid = await mgr.create_virtual_key(
+        user_id=user_id,
+        name="vk-invalid-org",
+        org_id=int(org_c["id"]),
+    )
+    resp_invalid = client.get(
+        "/api/v1/authnz/api-key-happy",
+        headers={"X-API-KEY": key_invalid["key"]},
+    )
+    assert resp_invalid.status_code == 403, resp_invalid.text

@@ -68,6 +68,7 @@ async def test_generate_basic_wav(adapter, monkeypatch):
     infer_calls = []
 
     def fake_infer(spk_audio_prompt, text, output_path, **kwargs):
+
         infer_calls.append((spk_audio_prompt, text, output_path, kwargs))
         audio = np.ones((22050, 1), dtype=np.int16)
         return (22050, audio)
@@ -148,9 +149,11 @@ async def test_generate_streaming_wav(adapter, monkeypatch):
     ]
 
     def fake_infer(*args, **kwargs):
+
         assert kwargs.get("stream_return") is True
 
         def iterator():
+
             for chunk in chunks:
                 yield chunk
 
@@ -172,6 +175,7 @@ async def test_generate_streaming_wav(adapter, monkeypatch):
             return audio_data.tobytes()
 
         def close(self):
+
             pass
 
     monkeypatch.setattr(
@@ -199,5 +203,7 @@ async def test_generate_streaming_wav(adapter, monkeypatch):
 
 
 def test_registry_includes_index_tts_provider():
+
+
     registry = TTSAdapterRegistry(config={"index_tts_enabled": False})
     assert TTSProvider.INDEX_TTS in registry._adapter_specs

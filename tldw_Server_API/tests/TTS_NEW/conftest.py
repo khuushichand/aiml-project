@@ -41,6 +41,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 # =====================================================================
 
 def pytest_configure(config):
+
     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
@@ -380,7 +381,7 @@ def test_client(test_env_vars, bypass_api_limits):
 
     app.dependency_overrides[get_request_user] = _override_user
     try:
-        with bypass_api_limits(app, limiters=(audio_endpoints.limiter,)), TestClient(app) as client:
+        with bypass_api_limits(app), TestClient(app) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_request_user, None)

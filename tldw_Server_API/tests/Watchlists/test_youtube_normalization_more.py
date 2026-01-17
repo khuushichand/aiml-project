@@ -25,11 +25,13 @@ def client_with_user(monkeypatch, tmp_path):
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
 
-    # Ensure a clean per-user DB for user 777 (default path used by settings)
+    # Ensure a clean per-user DB for user 777 under the configured base dir
     try:
-        default_user_db = Path.cwd() / "Databases" / "user_databases" / "777" / "Media_DB_v2.db"
-        if default_user_db.exists():
-            default_user_db.unlink()
+        user_db_dir = base_dir / "777"
+        user_db_path = user_db_dir / "Media_DB_v2.db"
+        for path in (user_db_path, user_db_path.with_suffix(".db-wal"), user_db_path.with_suffix(".db-shm")):
+            if path.exists():
+                path.unlink()
     except Exception:
         pass
 

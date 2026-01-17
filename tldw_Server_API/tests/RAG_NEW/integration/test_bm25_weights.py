@@ -62,7 +62,7 @@ def _setup_sqlite_media_db(db_path: str):
 
 @pytest.mark.integration
 def test_bm25_title_vs_content_weights_flip_order(monkeypatch):
-    # Ensure raw SQL fallback is allowed (not production)
+     # Ensure raw SQL fallback is allowed (not production)
     os.environ["tldw_production"] = "false"
 
     with tempfile.TemporaryDirectory() as tmpdir:

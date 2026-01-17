@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
 # Helper Functions
 
 def check_vibevoice_model_exists():
+
     """Check if VibeVoice model files exist"""
     # Check for model files in common locations
     model_paths = [
@@ -52,6 +53,7 @@ def check_vibevoice_model_exists():
     return False, None, None
 
 def get_compute_capability():
+
     """Detect compute capabilities"""
     if platform.system() == "Darwin":
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():

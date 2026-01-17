@@ -8,6 +8,8 @@ pytestmark = pytest.mark.rate_limit
 
 
 def _reset_rg_state(app):
+
+
     for attr in ("rg_governor", "rg_policy_loader", "rg_policy_store", "rg_policy_version", "rg_policy_count"):
         try:
             if hasattr(app.state, attr):

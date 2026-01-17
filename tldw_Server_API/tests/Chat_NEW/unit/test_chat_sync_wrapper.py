@@ -24,6 +24,8 @@ async def test_run_coro_sync_inside_running_loop():
 
 
 def test_chat_wrapper_invokes_achat_in_sync_context(monkeypatch):
+
+
     """chat() should delegate to achat() when called from a plain sync context."""
 
     called: Dict[str, Any] = {"count": 0, "last_args": None}
@@ -52,6 +54,57 @@ def test_chat_wrapper_invokes_achat_in_sync_context(monkeypatch):
     assert resp == "from-achat"
     assert called["count"] == 1
     assert called["last_args"]["message"] == "hello"
+
+
+def test_chat_wrapper_async_only_flag_blocks_sync(monkeypatch):
+    """CHAT_COMMANDS_ASYNC_ONLY should prevent sync chat() usage."""
+
+    monkeypatch.setenv("CHAT_COMMANDS_ASYNC_ONLY", "1")
+
+    with pytest.raises(RuntimeError, match="CHAT_COMMANDS_ASYNC_ONLY"):
+        chat_orchestrator.chat(
+            message="blocked",
+            history=[],
+            media_content=None,
+            selected_parts=[],
+            api_endpoint="openai",
+            api_key=None,
+            custom_prompt=None,
+            temperature=0.2,
+            system_message=None,
+            streaming=False,
+            chatdict_entries=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_chat_wrapper_returns_future_in_running_loop(monkeypatch):
+    """chat() should return an awaitable when invoked inside a running loop."""
+
+    called: Dict[str, Any] = {"count": 0}
+
+    async def fake_achat(message: str, history: List[Dict[str, Any]], *args: Any, **kwargs: Any) -> str:
+        called["count"] += 1
+        return "ok-async"
+
+    monkeypatch.setattr(chat_orchestrator, "achat", fake_achat)
+
+    resp = await chat_orchestrator.chat(
+        message="inside-loop-direct",
+        history=[],
+        media_content=None,
+        selected_parts=[],
+        api_endpoint="openai",
+        api_key=None,
+        custom_prompt=None,
+        temperature=0.2,
+        system_message=None,
+        streaming=False,
+        chatdict_entries=None,
+    )
+
+    assert resp == "ok-async"
+    assert called["count"] == 1
 
 
 @pytest.mark.asyncio

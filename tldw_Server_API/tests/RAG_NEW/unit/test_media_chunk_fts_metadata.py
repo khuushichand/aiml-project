@@ -11,6 +11,7 @@ class _FakeCursor:
         self._rows = rows
 
     def fetchall(self):
+
         return self._rows
 
 
@@ -19,9 +20,11 @@ class _FakeMediaDB:
         self._rows = rows
 
     def execute_query(self, sql, params):
+
         return _FakeCursor(self._rows)
 
     def lookup_section_for_offset(self, media_id, start_char):
+
         return {
             "title": "Intro",
             "start_char": start_char - 5,

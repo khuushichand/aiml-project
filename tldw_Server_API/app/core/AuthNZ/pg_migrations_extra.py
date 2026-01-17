@@ -130,6 +130,61 @@ _CREATE_AUTHNZ_CORE_TABLES = [
         """,
         (),
     ),
+    # user profile config overrides
+    (
+        """
+        CREATE TABLE IF NOT EXISTS user_config_overrides (
+            user_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            created_by INTEGER,
+            updated_by INTEGER,
+            PRIMARY KEY (user_id, key),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_user_config_overrides_user_id ON user_config_overrides(user_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_user_config_overrides_key ON user_config_overrides(key)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_config_overrides (
+            org_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            created_by INTEGER,
+            updated_by INTEGER,
+            PRIMARY KEY (org_id, key),
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_org_config_overrides_org_id ON org_config_overrides(org_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_config_overrides_key ON org_config_overrides(key)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS team_config_overrides (
+            team_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            created_by INTEGER,
+            updated_by INTEGER,
+            PRIMARY KEY (team_id, key),
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_team_config_overrides_team_id ON team_config_overrides(team_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_team_config_overrides_key ON team_config_overrides(key)", ()),
     # sessions (core columns + additive columns/indexes)
     (
         """
@@ -188,6 +243,7 @@ _CREATE_AUTHNZ_CORE_TABLES = [
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS description TEXT", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS allowed_email_domain TEXT", ()),
+    ("ALTER TABLE IF EXISTS org_invites ADD COLUMN IF NOT EXISTS allowed_email_domain TEXT", ()),
     (
         """
         DO $$
@@ -353,6 +409,46 @@ _CREATE_AUTHNZ_CORE_TABLES = [
         (),
     ),
     ("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_invites (
+            id SERIAL PRIMARY KEY,
+            code TEXT UNIQUE NOT NULL,
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+            role_to_grant TEXT DEFAULT 'member',
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            max_uses INTEGER DEFAULT 1,
+            uses_count INTEGER DEFAULT 0,
+            is_active BOOLEAN DEFAULT TRUE,
+            allowed_email_domain TEXT,
+            description TEXT,
+            metadata JSONB
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_org_invites_code ON org_invites(code)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_invites_org_active ON org_invites(org_id, is_active)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_invites_expires ON org_invites(expires_at)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_invite_redemptions (
+            id SERIAL PRIMARY KEY,
+            invite_id INTEGER NOT NULL REFERENCES org_invites(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            redeemed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ip_address TEXT,
+            user_agent TEXT,
+            UNIQUE(invite_id, user_id)
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_invite_redemptions_invite ON org_invite_redemptions(invite_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_invite_redemptions_user ON org_invite_redemptions(user_id)", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS org_role VARCHAR(50)", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL", ()),
@@ -434,7 +530,8 @@ _CREATE_API_KEYS_TABLES = [
         CREATE TABLE IF NOT EXISTS api_keys (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            key_hash VARCHAR(64) UNIQUE NOT NULL,
+            key_hash TEXT UNIQUE NOT NULL,
+            key_id VARCHAR(32),
             key_prefix VARCHAR(16) NOT NULL,
             name VARCHAR(255),
             description TEXT,
@@ -459,6 +556,8 @@ _CREATE_API_KEYS_TABLES = [
     ),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS scope VARCHAR(50) DEFAULT 'read'", ()),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_id VARCHAR(32)", ()),
+    ("ALTER TABLE api_keys ALTER COLUMN key_hash TYPE TEXT", ()),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS metadata JSONB", ()),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rotated_from INTEGER REFERENCES api_keys(id)", ()),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rotated_to INTEGER REFERENCES api_keys(id)", ()),
@@ -480,6 +579,7 @@ _CREATE_API_KEYS_TABLES = [
     # Helpful indexes
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)", ()),
+    ("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)", ()),
@@ -515,6 +615,10 @@ _CREATE_USER_PROVIDER_SECRETS = [
             encrypted_blob TEXT NOT NULL,
             key_hint TEXT,
             metadata TEXT,
+            created_by INTEGER,
+            updated_by INTEGER,
+            revoked_by INTEGER,
+            revoked_at TIMESTAMP WITH TIME ZONE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             last_used_at TIMESTAMP WITH TIME ZONE,
@@ -526,6 +630,10 @@ _CREATE_USER_PROVIDER_SECRETS = [
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS encrypted_blob TEXT", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS key_hint TEXT", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS metadata TEXT", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS created_by INTEGER", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS updated_by INTEGER", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS revoked_by INTEGER", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP WITH TIME ZONE", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP WITH TIME ZONE", ()),
@@ -544,6 +652,10 @@ _CREATE_ORG_PROVIDER_SECRETS = [
             encrypted_blob TEXT NOT NULL,
             key_hint TEXT,
             metadata TEXT,
+            created_by INTEGER,
+            updated_by INTEGER,
+            revoked_by INTEGER,
+            revoked_at TIMESTAMP WITH TIME ZONE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             last_used_at TIMESTAMP WITH TIME ZONE,
@@ -555,6 +667,10 @@ _CREATE_ORG_PROVIDER_SECRETS = [
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS encrypted_blob TEXT", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS key_hint TEXT", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS metadata TEXT", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS created_by INTEGER", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS updated_by INTEGER", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS revoked_by INTEGER", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP WITH TIME ZONE", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP WITH TIME ZONE", ()),
@@ -664,6 +780,7 @@ _CREATE_USAGE_TABLES = [
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_key_ts ON llm_usage_log(key_id, ts)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_operation ON llm_usage_log(operation)", ()),
     (
         """
@@ -1020,7 +1137,11 @@ async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
             logger.debug(f"PG budgets normalize update failed for org_id={org_id}: {exc}")
 
 
-async def ensure_billing_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_billing_tables_pg(
+    pool: Optional[DatabasePool] = None,
+    *,
+    run_backfill: bool = True,
+) -> bool:
     """Ensure billing-related tables exist for PostgreSQL backends."""
     try:
         db_pool = pool or await get_db_pool()
@@ -1126,15 +1247,16 @@ async def ensure_billing_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
             except Exception as exc:
                 logger.debug(f"PG ensure billing seed failed: {exc}")
 
-        try:
-            await _backfill_org_budgets_pg(db_pool)
-        except Exception as exc:
-            logger.debug(f"PG budgets backfill skipped/failed: {exc}")
+        if run_backfill:
+            try:
+                await _backfill_org_budgets_pg(db_pool)
+            except Exception as exc:
+                logger.debug(f"PG budgets backfill skipped/failed: {exc}")
 
-        try:
-            await _normalize_org_budgets_pg(db_pool)
-        except Exception as exc:
-            logger.debug(f"PG budgets normalize skipped/failed: {exc}")
+            try:
+                await _normalize_org_budgets_pg(db_pool)
+            except Exception as exc:
+                logger.debug(f"PG budgets normalize skipped/failed: {exc}")
 
         logger.info("Ensured PostgreSQL billing tables (subscription_plans, org_subscriptions)")
         return True

@@ -10,6 +10,8 @@ class _SentinelError(Exception):
 
 
 def test_embeddings_server_rg_allows_and_skips_token_bucket(monkeypatch):
+
+
     """
     When ResourceGovernor is enabled and the governor allows, the
     TokenBucketLimiter wrapper should:
@@ -23,6 +25,7 @@ def test_embeddings_server_rg_allows_and_skips_token_bucket(monkeypatch):
     rg_calls = []
 
     def _dummy():
+
         calls.append("called")
         return "ok"
 
@@ -35,6 +38,7 @@ def test_embeddings_server_rg_allows_and_skips_token_bucket(monkeypatch):
     monkeypatch.setattr(limiter, "_acquire", _fail_acquire)
 
     def _fake_rg_sync():
+
         rg_calls.append(True)
         return {
             "allowed": True,
@@ -53,6 +57,8 @@ def test_embeddings_server_rg_allows_and_skips_token_bucket(monkeypatch):
 
 
 def test_embeddings_server_rg_unavailable_falls_back_to_token_bucket(monkeypatch):
+
+
     """
     When RG is enabled but the helper returns None (unavailable/misconfigured),
     the legacy token-bucket fallback is retired and the wrapper should fail
@@ -63,17 +69,20 @@ def test_embeddings_server_rg_unavailable_falls_back_to_token_bucket(monkeypatch
     calls = []
 
     def _dummy():
+
         calls.append("called")
         return "ok"
 
     limiter = EC.TokenBucketLimiter(capacity=1, period=60)
 
     def _fail_acquire():
+
         raise _SentinelError("TokenBucketLimiter._acquire should not be called when legacy fallback is retired")
 
     monkeypatch.setattr(limiter, "_acquire", _fail_acquire)
 
     def _fake_rg_sync_none():
+
         return None
 
     monkeypatch.setattr(EC, "_maybe_enforce_with_rg_embeddings_server_sync", _fake_rg_sync_none)

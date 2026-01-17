@@ -13,7 +13,7 @@ This document summarizes the background services in `tldw_server`, their respons
 ## Startup/Shutdown
 
 The app starts/stops service loops in `tldw_Server_API/app/main.py` (lifespan):
-- Chatbooks Core Jobs worker (if jobs backend is `core`): `tldw_Server_API/app/services/core_jobs_worker.py`
+- Chatbooks Core Jobs worker (if enabled): `tldw_Server_API/app/services/core_jobs_worker.py`
 - Jobs metrics gauges loop: `tldw_Server_API/app/services/jobs_metrics_service.py`
 - Claims rebuild loop (optional): `tldw_Server_API/app/core/Claims_Extraction/claims_rebuild_service.py`
 - Usage aggregators: `tldw_Server_API/app/services/usage_aggregator.py` and `llm_usage_aggregator.py`
@@ -45,7 +45,7 @@ Each loop supports graceful stop via an `asyncio.Event` and is gated by env flag
 - File: `tldw_Server_API/app/services/core_jobs_worker.py`
 - Purpose: Processes Chatbooks import/export jobs from the core jobs backend with lease renewal and cancellation checks; writes job result and updates per-user Chatbooks job records.
 - Env:
-  - `CHATBOOKS_JOBS_BACKEND` = `core` (default) to enable core backend
+  - `CHATBOOKS_JOBS_BACKEND` (core-only; overrides ignored)
   - `CHATBOOKS_CORE_WORKER_ENABLED` (true/false)
   - `JOBS_POLL_INTERVAL_SECONDS`, `JOBS_LEASE_SECONDS`, `JOBS_LEASE_RENEW_SECONDS`, `JOBS_LEASE_RENEW_JITTER_SECONDS`
 
@@ -89,7 +89,7 @@ Each loop supports graceful stop via an `asyncio.Event` and is gated by env flag
 
 ## Quick Reference (Env Flags)
 
-- Chatbooks jobs worker: `CHATBOOKS_JOBS_BACKEND`, `CHATBOOKS_CORE_WORKER_ENABLED`
+- Chatbooks jobs worker: `CHATBOOKS_CORE_WORKER_ENABLED` (`CHATBOOKS_JOBS_BACKEND` ignored)
 - Jobs metrics gauges: `JOBS_METRICS_GAUGES_ENABLED`, interval and TTL flags above
 - Aggregators: `DISABLE_USAGE_AGGREGATOR`, `DISABLE_LLM_USAGE_AGGREGATOR`
 - Claims rebuild: `CLAIMS_REBUILD_ENABLED`, `CLAIMS_REBUILD_INTERVAL_SEC`

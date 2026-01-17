@@ -24,6 +24,7 @@ def client_with_user(monkeypatch):
 
 
 def test_highlights_crud(client_with_user):
+
     client = client_with_user
     item_id = 99999
 

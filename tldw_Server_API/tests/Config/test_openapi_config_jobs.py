@@ -4,7 +4,9 @@ from tldw_Server_API.app.main import app
 
 
 def test_openapi_includes_config_jobs(monkeypatch):
-    # Ensure OpenAPI is enabled and heavy startup skipped
+
+
+     # Ensure OpenAPI is enabled and heavy startup skipped
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("ENABLE_OPENAPI", "true")
     monkeypatch.delenv("tldw_production", raising=False)
@@ -15,7 +17,12 @@ def test_openapi_includes_config_jobs(monkeypatch):
         spec = res.json()
         assert "paths" in spec
         assert "/api/v1/config/jobs" in spec["paths"], "config/jobs path missing from OpenAPI"
+        assert "/api/v1/admin/config/effective" in spec["paths"], "admin/config/effective path missing from OpenAPI"
 
         jobs_get = spec["paths"]["/api/v1/config/jobs"].get("get")
         assert jobs_get is not None, "GET operation missing for config/jobs"
         assert "tags" in jobs_get and "config" in jobs_get["tags"], "config/jobs not tagged as 'config'"
+
+        effective_get = spec["paths"]["/api/v1/admin/config/effective"].get("get")
+        assert effective_get is not None, "GET operation missing for admin/config/effective"
+        assert "tags" in effective_get and "config" in effective_get["tags"], "admin/config/effective not tagged as 'config'"

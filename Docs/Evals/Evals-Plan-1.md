@@ -442,7 +442,7 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(se
 
 ### Authentication Improvements
 - **Enhanced API Key Support**: Updated `verify_api_key` function to support:
-  - Single-user deployments must set `SINGLE_USER_API_KEY` (e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+  - Single-user deployments must set `SINGLE_USER_API_KEY` (generate via `python -m tldw_Server_API.app.core.AuthNZ.initialize`)
   - Environment variable configuration via `SINGLE_USER_API_KEY` or legacy `API_BEARER`
   - OpenAI-style `sk-` prefixed keys for compatibility
   - Proper error responses matching OpenAI format
@@ -472,7 +472,7 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(se
 - **27 test cases** covering all major functionality
 
 ### Rate Limiting Implementation
-- **Using slowapi** for FastAPI rate limiting
+- **Using Resource Governor (RG)** for ingress rate limiting
 - **Configured Limits**:
   - Create operations: 10/minute
   - Read operations: 100/minute

@@ -6,6 +6,8 @@ import pytest
 
 
 def _ensure_single_user_row():
+
+
     db_path = Path("Databases/users.db")
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as conn:
@@ -16,20 +18,63 @@ def _ensure_single_user_row():
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE,
-                email TEXT,
-                role TEXT DEFAULT 'admin',
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
                 is_active INTEGER DEFAULT 1,
-                is_verified INTEGER DEFAULT 1
+                is_superuser INTEGER DEFAULT 0,
+                is_verified INTEGER DEFAULT 0,
+                role TEXT DEFAULT 'admin',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP,
+                email_verified INTEGER DEFAULT 0,
+                storage_quota_mb INTEGER DEFAULT 5120,
+                storage_used_mb INTEGER DEFAULT 0
             )
             """
         )
+        columns = {
+            row[1]: {"type": row[2], "notnull": row[3], "default": row[4]}
+            for row in conn.execute("PRAGMA table_info(users)")
+        }
         cur = conn.execute("SELECT id FROM users WHERE id = ?", (uid,))
         row = cur.fetchone()
         if not row:
+            insert_cols = []
+            insert_vals = []
+            def _add(col, val):
+                if col in columns:
+                    insert_cols.append(col)
+                    insert_vals.append(val)
+
+            _add("id", uid)
+            _add("username", "single_user")
+            _add("email", "single@example.com")
+            _add("password_hash", "x")
+            _add("role", "admin")
+            _add("is_active", 1)
+            _add("is_superuser", 1)
+            _add("is_verified", 1)
+            _add("email_verified", 1)
+
+            def _default_for_type(col_type: str):
+                t = (col_type or "").upper()
+                if "INT" in t:
+                    return 0
+                if "REAL" in t or "FLOA" in t or "DOUB" in t:
+                    return 0.0
+                return "x"
+
+            for name, meta in columns.items():
+                if meta["notnull"] and meta["default"] is None and name not in insert_cols:
+                    insert_cols.append(name)
+                    insert_vals.append(_default_for_type(meta["type"]))
+
+            placeholders = ", ".join("?" for _ in insert_cols)
             conn.execute(
-                "INSERT INTO users (id, username, email, role, is_active, is_verified) VALUES (?, 'single_user', 'single@example.com', 'admin', 1, 1)",
-                (uid,),
+                f"INSERT INTO users ({', '.join(insert_cols)}) VALUES ({placeholders})",
+                insert_vals,
             )
 
 
@@ -152,6 +197,8 @@ def _create_user(conn: sqlite3.Connection, username: str, email: str, role: str 
 
 
 def _get_db_path_from_env() -> Path:
+
+
     url = os.getenv("DATABASE_URL", "sqlite:///./Databases/users.db")
     # crude parse for sqlite file paths
     if url.startswith("sqlite:///"):
@@ -160,6 +207,8 @@ def _get_db_path_from_env() -> Path:
 
 
 def _ensure_tables_for_users():
+
+
     db_path = _get_db_path_from_env()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as conn:
@@ -168,12 +217,19 @@ def _ensure_tables_for_users():
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE,
-                email TEXT,
-                password_hash TEXT,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
                 role TEXT DEFAULT 'user',
                 is_active INTEGER DEFAULT 1,
-                is_verified INTEGER DEFAULT 1
+                is_superuser INTEGER DEFAULT 0,
+                is_verified INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP,
+                email_verified INTEGER DEFAULT 0,
+                storage_quota_mb INTEGER DEFAULT 5120,
+                storage_used_mb INTEGER DEFAULT 0
             )
             """
         )

@@ -87,6 +87,9 @@ def _open_safe_posix(
     if not relative_path.parts:
         logger.warning("Rejected empty relative path under base directory: %s", base_dir)
         return None
+    if relative_path.is_absolute() or os.pardir in relative_path.parts:
+        logger.warning("Rejected unsafe relative path for secure open: %s", relative_path)
+        return None
 
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     o_directory = getattr(os, "O_DIRECTORY", 0)

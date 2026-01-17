@@ -10,9 +10,10 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 
 
 @pytest.mark.unit
-def test_embeddings_endpoint_uses_adapter_when_enabled():
-    os.environ["LLM_EMBEDDINGS_ADAPTERS_ENABLED"] = "1"
-    os.environ["TEST_MODE"] = "1"
+def test_embeddings_endpoint_uses_adapter_when_enabled(monkeypatch):
+    monkeypatch.setenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
     # Provide a dummy user via dependency override
     test_user = User(id=1, username="tester", email="t@example.com", is_active=True)

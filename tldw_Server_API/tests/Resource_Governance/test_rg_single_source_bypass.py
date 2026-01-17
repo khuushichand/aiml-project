@@ -17,6 +17,7 @@ class _Loader:
         self._snap = _Snap(route_map)
 
     def get_snapshot(self):
+
         return self._snap
 
     def get_policy(self, _pid):  # pragma: no cover - not needed for these tests

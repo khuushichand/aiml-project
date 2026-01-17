@@ -17,6 +17,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionRequest
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+from tldw_Server_API.app.core.Utils.image_validation import estimate_decoded_size, get_max_base64_bytes
 
 #######################################################################################################################
 #
@@ -64,7 +65,10 @@ async def validate_request_payload(
     request_data: ChatCompletionRequest,
     max_messages: int = 1000,
     max_images: int = 10,
-    max_text_length: int = 400_000
+    max_text_length: int = 400_000,
+    *,
+    enforce_image_max_bytes: bool = False,
+    max_image_bytes: Optional[int] = None,
 ) -> Tuple[bool, Optional[str]]:
     """
     Validate the chat completion request payload.
@@ -74,6 +78,8 @@ async def validate_request_payload(
         max_messages: Maximum allowed messages
         max_images: Maximum allowed images
         max_text_length: Maximum text length per message
+        enforce_image_max_bytes: Whether to enforce decoded byte limits on data URI images
+        max_image_bytes: Optional max decoded bytes for data URI images (defaults to config)
 
     Returns:
         Tuple of (is_valid, error_message)
@@ -90,10 +96,20 @@ async def validate_request_payload(
     for msg_idx, msg_model in enumerate(request_data.messages):
         if isinstance(msg_model.content, list):
             for part_idx, part in enumerate(msg_model.content):
-                if getattr(part, 'type', None) == 'image_url':
+                part_type = getattr(part, 'type', None)
+                if part_type is None and isinstance(part, dict):
+                    part_type = part.get("type")
+                if part_type == 'image_url':
                     total_image_parts += 1
-                elif getattr(part, 'type', None) == 'text':
-                    text_content = getattr(part, 'text', None)
+                    if enforce_image_max_bytes:
+                        url_val = _extract_image_url(part)
+                        if not url_val:
+                            return False, f"Image at index {part_idx} in message {msg_idx} is missing a data URI."
+                        ok, error = _validate_image_size(url_val, max_image_bytes)
+                        if not ok:
+                            return False, f"Image at index {part_idx} in message {msg_idx} too large ({error})."
+                elif part_type == 'text':
+                    text_content = part.get("text") if isinstance(part, dict) else getattr(part, 'text', None)
                     if isinstance(text_content, str) and len(text_content) > max_text_length:
                         return False, f"Text part at index {part_idx} in message {msg_idx} too long."
         elif isinstance(msg_model.content, str):
@@ -104,6 +120,38 @@ async def validate_request_payload(
         return False, f"Too many images in request (max {max_images}, found {total_image_parts})."
 
     return True, None
+
+
+def _extract_image_url(part: Any) -> Optional[str]:
+    """Best-effort extraction of image_url.url from content parts."""
+    if part is None:
+        return None
+    image_url = None
+    if isinstance(part, dict):
+        image_url = part.get("image_url")
+    else:
+        image_url = getattr(part, "image_url", None)
+    if isinstance(image_url, dict):
+        return image_url.get("url")
+    return getattr(image_url, "url", None)
+
+
+def _validate_image_size(url_val: str, max_image_bytes: Optional[int]) -> Tuple[bool, str]:
+    """Validate data URI size using decoded-byte estimate."""
+    if not isinstance(url_val, str) or not url_val.startswith("data:image"):
+        return False, "invalid data URI"
+    header, sep, data = url_val.partition(",")
+    if not sep or "base64" not in header.lower():
+        return False, "invalid base64 data URI"
+    cleaned = "".join(data.split())
+    try:
+        estimated = estimate_decoded_size(cleaned)
+    except Exception:
+        return False, "unable to estimate size"
+    limit = int(max_image_bytes or get_max_base64_bytes())
+    if estimated > limit:
+        return False, f"max {limit} bytes"
+    return True, ""
 
 
 #######################################################################################################################
@@ -278,13 +326,14 @@ async def get_or_create_conversation(
                 raise TimeoutError(f"Conversation creation timed out after {overall_timeout}s")
 
             try:
-                # Use transaction context for atomic creation
-                from tldw_Server_API.app.core.DB_Management.transaction_utils import db_transaction
-                async with db_transaction(db, max_retries=1):
-                    conversation_id = await loop.run_in_executor(None, db.add_conversation, conv_data)
-                    was_created = True
-                    logger.info(f"Created new conversation '{conversation_id}' for character {character_id}")
-                    break
+                def _create_conversation_sync() -> Optional[str]:
+                    with db.transaction():
+                        return db.add_conversation(conv_data)
+
+                conversation_id = await loop.run_in_executor(None, _create_conversation_sync)
+                was_created = True
+                logger.info(f"Created new conversation '{conversation_id}' for character {character_id}")
+                break
             except Exception as e:
                 if attempt < max_retries - 1:
                     # Add small random delay to reduce collision probability
@@ -534,12 +583,13 @@ def validate_provider_configuration(
     Returns:
         Tuple of (is_valid, error_message)
     """
-    providers_requiring_keys = [
-        "openai", "anthropic", "cohere", "groq", "openrouter",
-        "deepseek", "mistral", "google", "huggingface"
-    ]
+    try:
+        from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+    except Exception:
+        def provider_requires_api_key(_provider: str) -> bool:  # type: ignore[misc]
+            return True
 
-    if provider in providers_requiring_keys:
+    if provider_requires_api_key(provider):
         api_key = api_keys.get(provider)
         if not api_key:
             return False, f"API key for provider '{provider}' is missing or not configured."

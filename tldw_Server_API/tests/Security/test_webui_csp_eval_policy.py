@@ -7,6 +7,8 @@ from tldw_Server_API.app.core.Security.webui_csp import WebUICSPMiddleware
 
 
 def _make_app():
+
+
     app = FastAPI()
     app.add_middleware(WebUICSPMiddleware)
 
@@ -68,7 +70,9 @@ def test_webui_csp_no_eval_env_falsy_enables_eval(monkeypatch, falsy):
 
 
 def test_webui_csp_default_prod_disables_eval(monkeypatch):
-    # Unset NO_EVAL; set prod env
+
+
+     # Unset NO_EVAL; set prod env
     monkeypatch.delenv("TLDW_WEBUI_NO_EVAL", raising=False)
     monkeypatch.setenv("ENVIRONMENT", "production")
     # Clear alternatives to avoid ambiguity
@@ -85,7 +89,9 @@ def test_webui_csp_default_prod_disables_eval(monkeypatch):
 
 
 def test_webui_csp_default_dev_enables_eval(monkeypatch):
-    # Unset NO_EVAL; set non-prod env
+
+
+     # Unset NO_EVAL; set non-prod env
     monkeypatch.delenv("TLDW_WEBUI_NO_EVAL", raising=False)
     monkeypatch.setenv("ENVIRONMENT", "development")
     for k in ("APP_ENV", "ENV"):
@@ -101,7 +107,9 @@ def test_webui_csp_default_dev_enables_eval(monkeypatch):
 
 
 def test_setup_csp_allows_inline_and_eval(monkeypatch):
-    # Regardless of env, /setup should allow both
+
+
+     # Regardless of env, /setup should allow both
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("TLDW_WEBUI_NO_EVAL", "1")  # would disable eval for /webui, but /setup stays permissive
 

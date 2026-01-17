@@ -1,4 +1,5 @@
 import json
+
 import pytest
 
 
@@ -14,6 +15,7 @@ class _FakeResp:
 
     def raise_for_status(self):
         import requests
+
         if self.status_code and int(self.status_code) >= 400:
             err = requests.exceptions.HTTPError("HTTP error")
             err.response = self
@@ -58,27 +60,30 @@ class _FakeClient:
 def test_dispatch_to_bedrock_adapter_non_stream(monkeypatch):
     # Patch adapter factory to avoid network
     from tldw_Server_API.app.core.LLM_Calls.providers import bedrock_adapter as mod
-    fake = _FakeClient(post_resp=_FakeResp(status_code=200, json_obj={"choices": [{"message": {"content": "ok"}}]}))
+
+    fake = _FakeClient(
+        post_resp=_FakeResp(status_code=200, json_obj={"choices": [{"message": {"content": "ok"}}]})
+    )
     monkeypatch.setattr(mod, "http_client_factory", lambda *a, **k: fake)
 
-    # Use provider dispatch handler
-    from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS
-    handler = API_CALL_HANDLERS['bedrock']
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 
-    resp = handler(
-        input_data=[{"role": "user", "content": "hi"}],
+    resp = perform_chat_api_call(
+        api_provider="bedrock",
+        messages=[{"role": "user", "content": "hi"}],
         model="meta.llama3-8b-instruct",
         api_key="key",
         streaming=False,
     )
     assert isinstance(fake.last_json, dict)
     assert fake.last_json.get("stream") is False
-    assert fake.last_url.endswith("/openai/v1/chat/completions")
+    assert fake.last_url.endswith("/v1/chat/completions")
 
 
 def test_dispatch_to_bedrock_adapter_stream(monkeypatch):
     # Patch adapter factory to provide streaming lines (no DONE marker)
     from tldw_Server_API.app.core.LLM_Calls.providers import bedrock_adapter as mod
+
     lines = [
         b'data: {"choices":[{"delta":{"content":"Hello"}}]}',
         b'data: {"choices":[{"delta":{"content":" Bedrock"}}]}',
@@ -86,16 +91,16 @@ def test_dispatch_to_bedrock_adapter_stream(monkeypatch):
     fake = _FakeClient(stream_lines=lines)
     monkeypatch.setattr(mod, "http_client_factory", lambda *a, **k: fake)
 
-    from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS
-    handler = API_CALL_HANDLERS['bedrock']
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 
-    gen = handler(
-        input_data=[{"role": "user", "content": "hi"}],
+    gen = perform_chat_api_call(
+        api_provider="bedrock",
+        messages=[{"role": "user", "content": "hi"}],
         model="meta.llama3-8b-instruct",
         api_key="key",
         streaming=True,
     )
     chunks = list(gen)
     assert len(chunks) >= 3  # two chunks + DONE
-    assert chunks[0].startswith('data: ')
-    assert chunks[-1].strip().endswith('[DONE]')
+    assert chunks[0].startswith("data: ")
+    assert chunks[-1].strip().endswith("[DONE]")

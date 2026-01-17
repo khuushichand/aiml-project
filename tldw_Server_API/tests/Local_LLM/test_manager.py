@@ -9,6 +9,7 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import Inferenc
 
 
 def test_manager_get_handler_unknown_backend():
+
     mgr = LLMInferenceManager(LLMManagerConfig(huggingface=HuggingFaceConfig(enabled=False)))
     with pytest.raises(InferenceError):
         mgr.get_handler("does-not-exist")

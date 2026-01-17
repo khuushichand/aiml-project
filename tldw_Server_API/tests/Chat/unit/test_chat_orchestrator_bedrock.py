@@ -6,18 +6,22 @@ pytestmark = pytest.mark.unit
 
 
 def test_orchestrator_maps_bedrock_extras(monkeypatch):
-    from tldw_Server_API.app.core.Chat import provider_config as pc
+
+
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
     captured = {}
 
-    def fake_bedrock_handler(**kwargs):
+    def fake_dispatch(**kwargs):
+
         # Capture kwargs for assertions
         captured.update(kwargs)
         return {"ok": True}
 
-    # Patch the handler mapping to our fake
-    monkeypatch.setitem(pc.API_CALL_HANDLERS, 'bedrock', fake_bedrock_handler)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Chat.chat_orchestrator.perform_chat_api_call",
+        fake_dispatch,
+    )
 
     # Prepare extras that should be forwarded
     extra_headers = {
@@ -39,9 +43,9 @@ def test_orchestrator_maps_bedrock_extras(monkeypatch):
         extra_body=extra_body,
     )
 
-    # Verify our fake was called and extras were mapped through
+    # Verify our fake was called and extras were forwarded
     assert resp == {"ok": True}
-    # bedrock maps messages_payload -> input_data; extras should pass through as-is
-    assert 'input_data' in captured
+    assert captured.get("api_endpoint") == "bedrock"
+    assert captured.get("messages_payload") == [{"role": "user", "content": "hello"}]
     assert captured.get('extra_headers') == extra_headers
     assert captured.get('extra_body') == extra_body

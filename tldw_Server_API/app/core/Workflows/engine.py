@@ -454,6 +454,8 @@ class WorkflowEngine:
                         except Exception:
                             pass
                         keep_secrets = True
+                        _finalize(True)
+                        finalized = True
                         return
                     if status_flag == "cancelled":
                         try:
@@ -1187,7 +1189,6 @@ class WorkflowEngine:
                     headers["X-Workflows-Signature"] = sig
                     # Also set a common alternate header for compatibility with tests/tools
                     headers["X-Hub-Signature-256"] = f"sha256={sig}"
-                import httpx
                 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
                 timeout = float(os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
                 # Trace webhook delivery as a child span

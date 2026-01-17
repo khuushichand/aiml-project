@@ -16,9 +16,7 @@ from unittest.mock import AsyncMock, patch
 @pytest.fixture(autouse=True)
 def disable_rate_limiting():
     """Disable rate limiting for all tests in this module"""
-    with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.limiter.limit',
-               lambda *args, **kwargs: lambda f: f):
-        yield
+    yield
 
 
 # Use the shared fixtures from conftest.py
@@ -309,6 +307,7 @@ class EmbeddingStateMachine(RuleBasedStateMachine):
     """Stateful testing for embeddings service"""
 
     def __init__(self):
+
         super().__init__()
         # Mock metrics to avoid issues
         from unittest.mock import MagicMock
@@ -349,6 +348,7 @@ class EmbeddingStateMachine(RuleBasedStateMachine):
         app.dependency_overrides[get_request_user] = override_user
 
     def __del__(self):
+
         try:
             if hasattr(self, 'client') and self.client is not None:
                 self.client.close()

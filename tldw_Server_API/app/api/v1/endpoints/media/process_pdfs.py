@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional
 import asyncio
 from pathlib import Path
 
-import httpx
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -162,21 +161,21 @@ async def process_pdfs_endpoint(
 
         # ---- Handle URL inputs via shared downloader ----
         if form_data.urls:
-            async with media_mod.httpx.AsyncClient(timeout=120) as client:
-                download_tasks = [
-                    media_mod._download_url_async(
-                        client=client,
-                        url=url,
-                        target_dir=temp_dir_path,
-                        allowed_extensions={".pdf"},
-                        check_extension=True,
-                    )
-                    for url in form_data.urls
-                ]
-                download_results = await asyncio.gather(
-                    *download_tasks,
-                    return_exceptions=True,
+            download_url_async = getattr(media_mod, "_download_url_async")
+            download_tasks = [
+                download_url_async(
+                    client=None,
+                    url=url,
+                    target_dir=temp_dir_path,
+                    allowed_extensions={".pdf"},
+                    check_extension=True,
                 )
+                for url in form_data.urls
+            ]
+            download_results = await asyncio.gather(
+                *download_tasks,
+                return_exceptions=True,
+            )
 
             for url, result in zip(form_data.urls, download_results):
                 if isinstance(result, Path):

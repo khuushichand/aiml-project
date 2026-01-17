@@ -3,6 +3,8 @@ import pytest
 
 
 def test_agglomerative_metric_fallback(monkeypatch):
+
+
     # Import module under test
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
@@ -85,6 +87,8 @@ def test_agglomerative_metric_fallback(monkeypatch):
 
 
 def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
+
+
     # Import module under test
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
 
@@ -136,6 +140,8 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
 
 
 def test_cluster_speakers_with_real_sklearn():
+
+
     # Skip if sklearn is not actually installed in the environment
     sklearn = pytest.importorskip("sklearn")
 
@@ -157,6 +163,8 @@ def test_cluster_speakers_with_real_sklearn():
 
 
 def test_detect_speech_fallback_full_span(monkeypatch):
+
+
     # Verify _detect_speech falls back to a full-span region when VAD load fails
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
@@ -174,6 +182,8 @@ def test_detect_speech_fallback_full_span(monkeypatch):
 
 
 def test_overlap_detection_label_mapping(monkeypatch):
+
+
     """Ensure overlap detection maps label -> center index correctly when labels are {2,4}."""
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
@@ -193,7 +203,7 @@ def test_overlap_detection_label_mapping(monkeypatch):
             numpy.ndarray: A 2×2 float32 similarity matrix where rows correspond to primary labels [2, 4]
             and columns correspond to labels [2, 4]. Matrix values are:
             [[0.65, 0.90],
-             [0.10, 0.95]]
+            [0.10, 0.95]]
         """
         return np.array([[0.65, 0.90], [0.10, 0.95]], dtype=np.float32)
 
@@ -330,6 +340,8 @@ async def test_streaming_diarizer_persists_without_soundfile(tmp_path, monkeypat
 
 
 def test_detect_speech_fallback_when_hub_disabled(monkeypatch):
+
+
     """When enable_torch_hub_fetch=False, VAD load fails fast and falls back to a full span."""
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 

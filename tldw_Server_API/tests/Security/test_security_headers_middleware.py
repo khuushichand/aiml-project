@@ -20,6 +20,8 @@ def app_with_security_headers():
 
 
 def test_security_headers_applied(app_with_security_headers):
+
+
     client = TestClient(app_with_security_headers)
     response = client.get("/ping")
 
@@ -36,6 +38,8 @@ def test_security_headers_applied(app_with_security_headers):
 
 
 def test_hsts_applied_when_https_forwarded(monkeypatch):
+
+
     monkeypatch.setenv("SECURITY_ENABLE_HSTS", "true")
 
     app = FastAPI()
@@ -51,6 +55,8 @@ def test_hsts_applied_when_https_forwarded(monkeypatch):
 
 
 def test_hsts_disabled_via_env(monkeypatch):
+
+
     monkeypatch.setenv("SECURITY_ENABLE_HSTS", "false")
 
     app = FastAPI()

@@ -7,17 +7,19 @@ from tldw_Server_API.app.core.config import settings
 
 
 def test_claims_rebuild_health_reads_persisted(monkeypatch, tmp_path):
+
+
     base_dir = tmp_path / "user_dbs"
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
-    monkeypatch.setenv("CLAIMS_MONITORING_SYSTEM_USER_ID", "0")
+    monkeypatch.setenv("CLAIMS_MONITORING_SYSTEM_USER_ID", "1")
     settings["USER_DB_BASE_DIR"] = str(base_dir)
-    settings["CLAIMS_MONITORING_SYSTEM_USER_ID"] = 0
+    settings["CLAIMS_MONITORING_SYSTEM_USER_ID"] = 1
 
-    db_path = get_user_media_db_path(0)
+    db_path = get_user_media_db_path(1)
     db = MediaDatabase(db_path=db_path, client_id="test")
     db.initialize_db()
     db.upsert_claims_monitoring_health(
-        user_id="0",
+        user_id="1",
         queue_size=7,
         worker_count=2,
         last_worker_heartbeat="2024-01-01T00:00:00.000Z",

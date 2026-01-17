@@ -36,14 +36,21 @@ async def test_webhooks_signed_and_cursor_resume(monkeypatch, tmp_path):
     # Prepare a mock transport that validates the signature and captures deliveries
     delivered = []
 
-    def _handler(request):
+    class _Resp:
+        status_code = 200
+        text = "ok"
+        async def aclose(self):
+            return None
+
+    async def _fake_afetch(*, method, url, headers=None, data=None, **kwargs):
+        assert method == "POST"
         # Validate headers
-        ts = request.headers.get("X-Jobs-Timestamp")
-        sig = request.headers.get("X-Jobs-Signature")
-        et = request.headers.get("X-Jobs-Event")
+        ts = headers.get("X-Jobs-Timestamp")
+        sig = headers.get("X-Jobs-Signature")
+        et = headers.get("X-Jobs-Event")
         assert et in {"job.completed", "job.failed"}
         assert sig and sig.startswith("v1=")
-        body = request.content
+        body = data or b""
         # Verify HMAC: HMAC(secret, f"{ts}.{body}")
         secret = "testsecret".encode("utf-8")
         expected = hmac.new(secret, (ts.encode("utf-8") + b"." + body), hashlib.sha256).hexdigest()
@@ -54,21 +61,10 @@ async def test_webhooks_signed_and_cursor_resume(monkeypatch, tmp_path):
             "event": et,
             "body": json.loads(body.decode("utf-8")),
         })
-        import httpx
-        return httpx.Response(200, text="ok")
+        return _Resp()
 
-    # Monkeypatch the async client factory to use MockTransport
-    import httpx
-    from tldw_Server_API.app.core import http_client as _hc
-
-    transport = httpx.MockTransport(_handler)
-    client = httpx.AsyncClient(transport=transport, timeout=1.0)
-
-    def _fake_create_async_client(**kwargs):
-        # Return a fresh client per invocation so context manager works
-        return httpx.AsyncClient(transport=transport, timeout=kwargs.get("timeout", 1.0))
-
-    monkeypatch.setattr(_hc, "create_async_client", _fake_create_async_client)
+    from tldw_Server_API.app.services import jobs_webhooks_service as svc
+    monkeypatch.setattr(svc, "afetch", _fake_afetch)
 
     # Create events: one completed now, one to be created after first run
     from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -81,10 +77,8 @@ async def test_webhooks_signed_and_cursor_resume(monkeypatch, tmp_path):
     assert ok1
 
     # Run worker for a short period to pick the first event
-    from tldw_Server_API.app.services.jobs_webhooks_service import run_jobs_webhooks_worker
-
     stop_event = asyncio.Event()
-    task = asyncio.create_task(run_jobs_webhooks_worker(stop_event=stop_event))
+    task = asyncio.create_task(svc.run_jobs_webhooks_worker(stop_event=stop_event))
     try:
         # Wait until at least one delivery is observed or timeout
         for _ in range(200):
@@ -117,7 +111,7 @@ async def test_webhooks_signed_and_cursor_resume(monkeypatch, tmp_path):
     # Clear deliveries and run worker again; it should resume from cursor and send only the new event
     delivered.clear()
     stop_event2 = asyncio.Event()
-    task2 = asyncio.create_task(run_jobs_webhooks_worker(stop_event=stop_event2))
+    task2 = asyncio.create_task(svc.run_jobs_webhooks_worker(stop_event=stop_event2))
     try:
         for _ in range(200):
             if delivered:

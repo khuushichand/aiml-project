@@ -11,6 +11,7 @@ import random
 from datetime import timedelta, timezone
 
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import ChatDictionaryService
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import InputError
 
 # ========================================================================
 # Dictionary Management Tests
@@ -282,6 +283,25 @@ class TestTextProcessing:
         assert "F" not in processed.replace("Fahrenheit", "")
 
     @pytest.mark.unit
+    def test_process_text_rejects_oversized_input(self, chat_dictionary_service, monkeypatch):
+        """Ensure oversized input is rejected before regex processing."""
+        from tldw_Server_API.app.core.Character_Chat import chat_dictionary as cd
+
+        monkeypatch.setattr(cd, "MAX_CHAT_DICTIONARY_TEXT_LENGTH", 10)
+
+        service = chat_dictionary_service
+        dict_id = service.create_dictionary(name="Limit Test")
+        service.add_entry(
+            dictionary_id=dict_id,
+            pattern="AI",
+            replacement="Artificial Intelligence",
+            type="literal",
+        )
+
+        with pytest.raises(InputError):
+            service.process_text("x" * 11, dict_id)
+
+    @pytest.mark.unit
     def test_case_sensitive_replacement(self, chat_dictionary_service):
         """Test case-sensitive replacement."""
         service = chat_dictionary_service
@@ -301,6 +321,28 @@ class TestTextProcessing:
         assert "Artificial Intelligence" in processed
         assert "ai" in processed  # Lowercase not replaced
         assert "Ai" in processed  # Different case not replaced
+
+    @pytest.mark.unit
+    def test_case_insensitive_literal_replacement(self, chat_dictionary_service):
+        """Ensure case-insensitive literals match before replacement."""
+        service = chat_dictionary_service
+
+        dict_id = service.create_dictionary(name="Case Insensitive Test")
+        service.add_entry(
+            dictionary_id=dict_id,
+            pattern="AI",
+            replacement="ZED",
+            type="literal",
+            case_sensitive=False,
+        )
+
+        text = "AI and ai and Ai should all change."
+        processed = service.process_text(text, dict_id)
+
+        assert processed.count("ZED") == 3
+        assert "AI" not in processed
+        assert "ai" not in processed
+        assert "Ai" not in processed
 
     @pytest.mark.unit
     def test_probability_replacement(self, chat_dictionary_service):
@@ -509,6 +551,22 @@ class TestImportExport:
         assert any(e['pattern'] == 'AI' for e in entries)
         slang_entry = next(e for e in entries if e['pattern'] == 'lol')
         assert slang_entry['probability'] == pytest.approx(0.5, rel=1e-6)
+
+    @pytest.mark.unit
+    def test_import_from_markdown_string_does_not_open_file(self, chat_dictionary_service, monkeypatch):
+        """Ensure string inputs are treated as content, not file paths."""
+        from tldw_Server_API.app.core.Character_Chat import chat_dictionary as cd
+        import builtins
+
+        def _fail_open(*_args, **_kwargs):
+
+            raise AssertionError("open should not be called for string content")
+
+        monkeypatch.setattr(builtins, "open", _fail_open)
+
+        service = chat_dictionary_service
+        dict_id = service.import_from_markdown("not_a_path", "String Content")
+        assert dict_id is not None
 
     @pytest.mark.unit
     def test_export_to_json(self, chat_dictionary_service, sample_dictionary):

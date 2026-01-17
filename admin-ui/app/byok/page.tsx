@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -235,7 +235,7 @@ export default function ByokDashboardPage() {
   }, [missingByOperation]);
 
   return (
-    <ProtectedRoute requiredRoles={['admin', 'super_admin', 'owner']}>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="space-y-6 p-4 lg:p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -407,6 +407,6 @@ export default function ByokDashboardPage() {
           </Card>
         </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

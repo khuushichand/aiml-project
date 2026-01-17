@@ -16,6 +16,8 @@ from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
     resolve_server_default_key,
+    resolve_byok_base_url_allowlist,
+    is_trusted_base_url_request,
     validate_credential_fields,
 )
 from tldw_Server_API.app.core.Metrics import increment_counter
@@ -71,6 +73,32 @@ def _should_touch(last_used_at: Optional[datetime]) -> bool:
 
 def _bool_label(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _can_use_base_url_override(provider: str, request: Optional[Any]) -> bool:
+    if not is_trusted_base_url_request(request):
+        return False
+    provider_norm = normalize_provider_name(provider)
+    return provider_norm in resolve_byok_base_url_allowlist()
+
+
+def _sanitize_credential_fields(
+    provider: str,
+    credential_fields_raw: Any,
+    *,
+    allow_base_url: bool,
+) -> Dict[str, Any]:
+    if credential_fields_raw is None:
+        return {}
+    if not isinstance(credential_fields_raw, dict):
+        raise ValueError("credential_fields must be an object")
+
+    cleaned = dict(credential_fields_raw)
+    if not allow_base_url and "base_url" in cleaned:
+        cleaned.pop("base_url", None)
+        logger.debug("BYOK base_url override ignored for provider={}", provider)
+
+    return validate_credential_fields(provider, cleaned, allow_base_url=allow_base_url)
 
 
 def _apply_active_scope(ids: list[int], active_id: Any) -> list[int]:
@@ -195,6 +223,18 @@ def _fallback_result(
     )
 
 
+def _invalid_byok_result(provider: str, *, source: str) -> ResolvedByokCredentials:
+    return ResolvedByokCredentials(
+        provider=provider,
+        api_key=None,
+        app_config=None,
+        credential_fields={},
+        source=source,
+        allowlisted=True,
+        _touch_cb=None,
+    )
+
+
 def _build_app_config(provider: str, credential_fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not credential_fields:
         return None
@@ -271,6 +311,7 @@ async def resolve_byok_credentials(
     provider_norm = normalize_provider_name(provider)
     byok_enabled = is_byok_enabled()
     allowlisted = is_provider_allowlisted(provider_norm)
+    allow_base_url = _can_use_base_url_override(provider_norm, request)
 
     if not byok_enabled or user_id is None or not allowlisted:
         return _finalize_resolution(
@@ -296,7 +337,23 @@ async def resolve_byok_credentials(
             api_key = payload.get("api_key")
             if api_key:
                 credential_fields_raw = payload.get("credential_fields") or {}
-                credential_fields = validate_credential_fields(provider_norm, credential_fields_raw)
+                try:
+                    credential_fields = _sanitize_credential_fields(
+                        provider_norm,
+                        credential_fields_raw,
+                        allow_base_url=allow_base_url,
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        "BYOK credential_fields invalid for user_id=%s provider=%s: %s",
+                        user_id,
+                        provider_norm,
+                        exc,
+                    )
+                    return _finalize_resolution(
+                        _invalid_byok_result(provider_norm, source="user"),
+                        byok_enabled=byok_enabled,
+                    )
                 last_used_at = _parse_last_used(user_row.get("last_used_at"))
                 return _finalize_resolution(
                     ResolvedByokCredentials(
@@ -384,7 +441,23 @@ async def resolve_byok_credentials(
             if not api_key:
                 continue
             credential_fields_raw = payload.get("credential_fields") or {}
-            credential_fields = validate_credential_fields(provider_norm, credential_fields_raw)
+            try:
+                credential_fields = _sanitize_credential_fields(
+                    provider_norm,
+                    credential_fields_raw,
+                    allow_base_url=allow_base_url,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "BYOK credential_fields invalid for team_id=%s provider=%s: %s",
+                    team_id,
+                    provider_norm,
+                    exc,
+                )
+                return _finalize_resolution(
+                    _invalid_byok_result(provider_norm, source="team"),
+                    byok_enabled=byok_enabled,
+                )
             last_used_at = _parse_last_used(row.get("last_used_at"))
             return _finalize_resolution(
                 ResolvedByokCredentials(
@@ -420,7 +493,23 @@ async def resolve_byok_credentials(
             if not api_key:
                 continue
             credential_fields_raw = payload.get("credential_fields") or {}
-            credential_fields = validate_credential_fields(provider_norm, credential_fields_raw)
+            try:
+                credential_fields = _sanitize_credential_fields(
+                    provider_norm,
+                    credential_fields_raw,
+                    allow_base_url=allow_base_url,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "BYOK credential_fields invalid for org_id=%s provider=%s: %s",
+                    org_id,
+                    provider_norm,
+                    exc,
+                )
+                return _finalize_resolution(
+                    _invalid_byok_result(provider_norm, source="org"),
+                    byok_enabled=byok_enabled,
+                )
             last_used_at = _parse_last_used(row.get("last_used_at"))
             return _finalize_resolution(
                 ResolvedByokCredentials(

@@ -14,17 +14,12 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     is_done_line,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 
 
 def _prefer_httpx_in_tests() -> bool:
-    try:
-        import httpx  # type: ignore
-        cls = getattr(httpx, "Client", None)
-        mod = getattr(cls, "__module__", "") or ""
-        name = getattr(cls, "__name__", "") or ""
-        return ("tests" in mod) or name.startswith("_Fake")
-    except Exception:
-        return False
+    return bool(os.getenv("PYTEST_CURRENT_TEST"))
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
@@ -49,10 +44,12 @@ class AnthropicAdapter(ChatProvider):
         import os
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_ANTHROPIC") or "").strip().lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        if v in {"1", "true", "yes", "on"}:
             return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_ANTHROPIC")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        return True
 
     def _anthropic_base_url(self) -> str:
         import os
@@ -60,6 +57,9 @@ class AnthropicAdapter(ChatProvider):
 
     def _resolve_base_url(self, request: Dict[str, Any]) -> str:
         """Resolve API base URL with precedence: app_config -> env -> default."""
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
         try:
             cfg = (request or {}).get("app_config") or {}
             anth_cfg = cfg.get("anthropic_api") or {}
@@ -175,8 +175,12 @@ class AnthropicAdapter(ChatProvider):
             payload["top_p"] = request.get("top_p")
         if request.get("top_k") is not None:
             payload["top_k"] = request.get("top_k")
-        if request.get("stop") is not None:
-            payload["stop_sequences"] = request.get("stop")
+        stop_val = request.get("stop")
+        if stop_val is not None:
+            if isinstance(stop_val, (list, tuple)):
+                payload["stop_sequences"] = list(stop_val)
+            else:
+                payload["stop_sequences"] = [stop_val]
         # Tools mapping (OpenAI-style → Anthropic)
         tool_choice = request.get("tool_choice")
         tools = request.get("tools")
@@ -281,15 +285,19 @@ class AnthropicAdapter(ChatProvider):
                 "completion_tokens": usage.get("output_tokens"),
                 "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0),
             }
+        shaped["provider_response"] = data
         return shaped
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
             url = f"{self._resolve_base_url(request).rstrip('/')}/messages"
             headers = self._headers(api_key)
             payload = self._build_payload(request)
             payload["stream"] = False
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
@@ -303,8 +311,15 @@ class AnthropicAdapter(ChatProvider):
         # delegating to legacy paths to avoid recursion and mixed behaviors.
         raise RuntimeError("AnthropicAdapter native HTTP disabled by configuration")
 
-    def _tool_delta_chunk(self, tool_index: int, tool_id: str, tool_name: Optional[str], arguments: str) -> str:
-        return sse_data({
+    def _tool_delta_chunk(
+        self,
+        tool_index: int,
+        tool_id: str,
+        tool_name: Optional[str],
+        arguments: str,
+        provider_response: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload = {
             "choices": [{
                 "index": 0,
                 "delta": {
@@ -316,15 +331,21 @@ class AnthropicAdapter(ChatProvider):
                     }]
                 },
             }]
-        })
+        }
+        if provider_response is not None:
+            payload["provider_response"] = provider_response
+        return sse_data(payload)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
             url = f"{self._resolve_base_url(request).rstrip('/')}/messages"
             headers = self._headers(api_key)
             payload = self._build_payload(request)
             payload["stream"] = True
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
@@ -371,19 +392,35 @@ class AnthropicAdapter(ChatProvider):
                                             buf = str(initial_input)
                                     tool_states[idx] = {"id": tool_id, "name": tool_name, "buffer": buf, "position": tool_counter}
                                     tool_counter += 1
-                                    yield self._tool_delta_chunk(tool_states[idx]["position"], tool_id, tool_name, buf)
+                                    yield self._tool_delta_chunk(
+                                        tool_states[idx]["position"],
+                                        tool_id,
+                                        tool_name,
+                                        buf,
+                                        provider_response=ev,
+                                    )
                             elif ev_type == "content_block_delta":
                                 delta = ev.get("delta", {})
                                 idx = int(ev.get("index", 0))
                                 dt = delta.get("type")
                                 if dt == "text_delta" and "text" in delta:
-                                    yield openai_delta_chunk(delta.get("text", ""))
+                                    text = delta.get("text") or ""
+                                    yield sse_data({
+                                        "choices": [{"delta": {"content": text}}],
+                                        "provider_response": ev,
+                                    })
                                 elif dt == "input_json_delta" and idx in tool_states:
                                     partial = delta.get("partial_json", "")
                                     if partial:
                                         st = tool_states[idx]
                                         st["buffer"] += partial
-                                        yield self._tool_delta_chunk(st["position"], st["id"], st["name"], st["buffer"])
+                                        yield self._tool_delta_chunk(
+                                            st["position"],
+                                            st["id"],
+                                            st["name"],
+                                            st["buffer"],
+                                            provider_response=ev,
+                                        )
                                 elif dt == "tool_use_delta" and idx in tool_states:
                                     st = tool_states[idx]
                                     if "name" in delta and delta["name"]:
@@ -393,13 +430,22 @@ class AnthropicAdapter(ChatProvider):
                                             st["buffer"] = __import__("json").dumps(delta["input"])
                                         except Exception:
                                             st["buffer"] = str(delta["input"])
-                                    yield self._tool_delta_chunk(st["position"], st["id"], st["name"], st["buffer"])
+                                    yield self._tool_delta_chunk(
+                                        st["position"],
+                                        st["id"],
+                                        st["name"],
+                                        st["buffer"],
+                                        provider_response=ev,
+                                    )
                             elif ev_type == "message_delta":
                                 stop_reason = (ev.get("delta") or {}).get("stop_reason")
                                 if stop_reason:
                                     fr_map = {"end_turn": "stop", "max_tokens": "length", "stop_sequence": "stop", "tool_use": "tool_calls"}
                                     finish_reason = fr_map.get(stop_reason, stop_reason)
-                                    yield sse_data({"choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]})
+                                    yield sse_data({
+                                        "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+                                        "provider_response": ev,
+                                    })
                         for tail in finalize_stream(response=resp, done_already=done_sent):
                             yield tail
                 return
@@ -450,11 +496,13 @@ class AnthropicAdapter(ChatProvider):
             stop_event.set()
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ( ))):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+            log_http_400_body,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -463,12 +511,13 @@ class AnthropicAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             detail = None
             # Anthropic returns {"error": {"type": "...", "message": "..."}}
             if isinstance(body, dict) and isinstance(body.get("error"), dict):
@@ -477,10 +526,7 @@ class AnthropicAdapter(ChatProvider):
                 typ = (eobj.get("type") or "").strip()
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):

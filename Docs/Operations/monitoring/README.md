@@ -1,6 +1,6 @@
-# Monitoring TLDW Embeddings Orchestrator
+# Monitoring TLDW Embeddings Jobs
 
-This folder contains a ready-to-import Grafana dashboard and basic guidance to scrape Prometheus metrics from both the API process and the worker orchestrator (if you run it as a separate process).
+This folder contains a ready-to-import Grafana dashboard and basic guidance to scrape Prometheus metrics from the API process. The embeddings Redis Streams worker does not expose a standalone Prometheus endpoint; root Jobs metrics and API counters are exported by the API process.
 
 ## Prometheus Scrape Setup
 
@@ -10,9 +10,7 @@ The API exposes Prometheus text metrics under `/metrics` (root) and also JSON/te
 - API JSON: `GET /api/v1/metrics/json`
 - API text: `GET /api/v1/metrics/text` (Prometheus format)
 
-The embeddings worker orchestrator process (started via `python -m tldw_Server_API.app.core.Embeddings.worker_orchestrator`) runs its own Prometheus exporter via `start_http_server(PORT)` when configured. In the provided compose, it listens on port 9090.
-
-Example `prometheus.yml` snippet to scrape both:
+Example `prometheus.yml` snippet:
 
 ```yaml
 scrape_configs:
@@ -23,29 +21,25 @@ scrape_configs:
     static_configs:
       - targets: ['api:8000']
 
-  # Embeddings worker orchestrator (separate process)
-  - job_name: 'tldw-worker-orchestrator'
-    static_configs:
-      - targets: ['worker-orchestrator:9090']
 ```
 
 Notes:
 - If you terminate SSL at a reverse proxy, ensure the metrics paths are reachable inside the cluster/VPC.
-- For local dev, you can scrape `http://127.0.0.1:8000/api/v1/metrics/text` and `http://127.0.0.1:9090/`.
+- For local dev, you can scrape `http://127.0.0.1:8000/api/v1/metrics/text`.
 
 ## Grafana
 
 Import the provided dashboards:
 
-- Embeddings Orchestrator: `monitoring/grafana_embeddings_orchestrator.json`
-- Workflows: `monitoring/grafana_workflows.json`
-- Service Overview: `monitoring/grafana_service_overview.json`
-- Tenant Overview: `monitoring/grafana_tenant_overview.json`
+- Embeddings Redis Streams (queue/depth panels driven by Redis + API metrics): `grafana_embeddings_orchestrator.json`
+- Workflows: `grafana_workflows.json`
+- Service Overview: `grafana_service_overview.json`
+- Tenant Overview: `grafana_tenant_overview.json`
   - Panels:
     - SSE Connections, Disconnects, Summary Failures
     - Queue Depth by queue
     - DLQ Depth by queue
-    - Queue Age p95 (10m window; from orchestrator histogram)
+    - Queue latency p95 (10m window; from `jobs.queue_latency_seconds`)
     - Stage processed/s and failed/s
     - Stage flags (paused/drain)
 
@@ -82,10 +76,10 @@ In Grafana:
 
 ## Alertmanager
 
-An example Alertmanager configuration is provided at `monitoring/alertmanager_example.yml` with Slack and PagerDuty receivers. Replace placeholders with your credentials/integration keys and point your Alertmanager to this file via its `--config.file` or mounted configmap.
+An example Alertmanager configuration is provided at `Docs/Operations/monitoring/alertmanager_example.yml` with Slack and PagerDuty receivers. Replace placeholders with your credentials/integration keys and point your Alertmanager to this file via its `--config.file` or mounted configmap.
 3. Select the correct Prometheus data source
 
-SLO alert rules for the embeddings pipeline are provided in `monitoring/alerts/embeddings_slos.yaml` and include:
+SLO alert rules for the embeddings pipeline are provided in `Docs/Operations/monitoring/alerts/embeddings_slos.yaml` and include:
 
 - Error budget burn (>0.5% failures over 1h)
 - Queue age p95 > 2 minutes per queue
@@ -95,30 +89,46 @@ Add the file to your Prometheus `rule_files` section, for example:
 
 ```yaml
 rule_files:
-  - monitoring/alerts/*.yaml
+  - Docs/Operations/monitoring/alerts/*.yaml
 ```
 
 Claims monitoring alert rules live in `Docs/Monitoring/claims_alerts_prometheus.yaml`. Add the file to your Prometheus `rule_files` list and keep the runbook (`Docs/Operations/Claims_Alerts_Runbook.md`) alongside Alertmanager receiver routing so on-call responders have clear remediation steps.
 
 ## Metrics Primer
 
-Key embeddings orchestrator metrics exported by the API process:
+Core Jobs metrics exported by the API process (filter by `domain="embeddings"`):
 
-- `orchestrator_sse_connections` (gauge): active SSE connections to `/api/v1/embeddings/orchestrator/events`
-- `orchestrator_sse_disconnects_total` (counter): total disconnect events observed
-- `orchestrator_summary_failures_total` (counter): number of summary fallbacks returned when Redis/orchestrator unavailable
-- `embedding_queue_age_current_seconds{queue_name}` (gauge): current oldest age per queue measured at time of summary build
-- `embedding_stage_flag{stage,flag}` (gauge): stage admin flags (`paused` and `drain`) exposed as 1/0
+- `jobs.queued` (gauge): queued jobs by domain/queue
+- `jobs.processing` (gauge): in-flight jobs by domain/queue
+- `jobs.backlog` (gauge): queued + scheduled
+- `jobs.queue_latency_seconds` (histogram): enqueue-to-start latency
+- `jobs.duration_seconds` (histogram): processing duration
+- `jobs.retries_total` (counter): retries by domain/job_type
+- `jobs.failures_total` (counter): failures by domain/job_type
 
-Worker orchestrator metrics (from `worker_orchestrator.py`):
+## Migration from Orchestrator Metrics
 
-- `embedding_queue_depth{queue_name}` (gauge)
-- `embedding_dlq_queue_depth{queue_name}` (gauge)
-- `embedding_queue_age_seconds_bucket` (histogram) - use histogram_quantile for p95
-- `embedding_stage_jobs_processed_total{stage}` (counter)
-- `embedding_stage_jobs_failed_total{stage}` (counter)
+If upgrading from a previous version that exposed orchestrator/worker metrics, update your dashboards and alerts to use Jobs metrics.
+
+Deprecated metrics:
+- `orchestrator.*` metrics -> use `jobs.*` metrics filtered by `domain="embeddings"`
+- `worker.*` metrics -> use `jobs.*` metrics filtered by `domain="embeddings"`
+
+Key replacements:
+- Queue age -> `jobs.queue_latency_seconds`
+- Processing count -> `jobs.processing`
+- Queue depth -> `jobs.queued`
+
+Behavior changes to note:
+- Metrics now come from the API process and reflect the Jobs DB state.
+- Latency histograms measure enqueue-to-start (`jobs.queue_latency_seconds`) and processing duration (`jobs.duration_seconds`) per domain/job_type.
+
+Action items:
+1. Update Prometheus alert rules to use the new metric names and labels.
+2. Re-import the Grafana dashboards listed above, since older panels will not resolve the new series.
+3. Verify the embeddings Redis worker is running; it no longer exposes a separate metrics endpoint.
 
 ## Troubleshooting
 
-- Zeroed summary (all empty maps) indicates Redis/unavailable orchestrator - the WebUI shows a small fallback badge; alert if sustained.
+- If Jobs metrics are empty, verify the Jobs DB is reachable and the embeddings Redis worker is running.
 - If metrics endpoints return 401/403, use admin credentials (single-user API key or admin JWT role).

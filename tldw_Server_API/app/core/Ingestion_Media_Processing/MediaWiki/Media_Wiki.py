@@ -25,7 +25,16 @@ import yaml
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.Utils import logging
+try:  # Optional embeddings dependencies
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        create_embeddings_batch,
+    )
+except Exception:  # pragma: no cover - embeddings optional
+    ChromaDBManager = None  # type: ignore
+    create_embeddings_batch = None  # type: ignore
 #
 #######################################################################################################################
 #
@@ -427,6 +436,202 @@ def optimized_chunking(text: str, chunk_options: Dict[str, Any]) -> List[Dict[st
     return chunks
 
 
+def _normalize_embedding_provider(provider: str) -> str:
+    mapping = {
+        "local": "local_api",
+        "local_api": "local_api",
+        "huggingface": "huggingface",
+        "hf": "huggingface",
+        "openai": "openai",
+        "onnx": "onnx",
+    }
+    return mapping.get(provider.strip().lower(), provider.strip().lower())
+
+
+def _build_mediawiki_embedding_config(
+    *,
+    api_name_vector_db: Optional[str],
+    api_key_vector_db: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    embeddings_cfg = media_wiki_import_config.get("embeddings", {}) or {}
+    provider = str(embeddings_cfg.get("provider") or "openai").strip()
+    model = str(embeddings_cfg.get("model") or "text-embedding-3-small").strip()
+    api_key = api_key_vector_db or embeddings_cfg.get("api_key")
+    api_url = embeddings_cfg.get("local_url") or embeddings_cfg.get("api_url")
+
+    if api_name_vector_db:
+        override = str(api_name_vector_db).strip()
+        if override:
+            override_lower = override.lower()
+            if override_lower in {"openai", "huggingface", "hf", "local", "local_api", "onnx"}:
+                provider = override
+            elif ":" in override:
+                provider_part, model_part = override.split(":", 1)
+                if provider_part.strip():
+                    provider = provider_part.strip()
+                if model_part.strip():
+                    model = model_part.strip()
+            else:
+                model = override
+
+    provider_norm = _normalize_embedding_provider(provider)
+    if not provider_norm:
+        logger.warning("MediaWiki embeddings provider not configured; skipping vector storage.")
+        return None
+
+    model_id = f"{provider_norm}:{model}"
+
+    if provider_norm == "openai":
+        model_cfg: Dict[str, Any] = {
+            "provider": "openai",
+            "model_name_or_path": model,
+        }
+        if api_key:
+            model_cfg["api_key"] = api_key
+    elif provider_norm == "local_api":
+        if not api_url:
+            logger.warning("Local embeddings provider configured without api_url; skipping vector storage.")
+            return None
+        model_cfg = {
+            "provider": "local_api",
+            "model_name_or_path": model,
+            "api_url": api_url,
+        }
+        if api_key:
+            model_cfg["api_key"] = api_key
+    elif provider_norm == "huggingface":
+        model_cfg = {
+            "provider": "huggingface",
+            "model_name_or_path": model,
+        }
+    elif provider_norm == "onnx":
+        model_cfg = {
+            "provider": "onnx",
+            "model_name_or_path": model,
+        }
+    else:
+        logger.warning(
+            "Unsupported embeddings provider '%s' for MediaWiki vector storage.",
+            provider_norm,
+        )
+        return None
+
+    return {
+        "default_model_id": model_id,
+        "models": {model_id: model_cfg},
+    }
+
+
+def _mediawiki_collection_name(wiki_name: str) -> str:
+    prefix = (
+        media_wiki_import_config.get("chromadb", {}) or {}
+    ).get("collection_prefix", "mediawiki_")
+    safe_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(prefix)).strip()
+    safe_wiki = sanitize_wiki_name(wiki_name)
+    if safe_prefix:
+        return f"{safe_prefix}{safe_wiki}"
+    return safe_wiki
+
+
+def _store_mediawiki_chunks_in_vector_db(
+    *,
+    chunks: List[Dict[str, Any]],
+    media_id: int,
+    title: str,
+    wiki_name: str,
+    page_id: Optional[int],
+    revision_id: Optional[int],
+    api_name_vector_db: Optional[str],
+    api_key_vector_db: Optional[str],
+) -> tuple[bool, str]:
+    if ChromaDBManager is None or create_embeddings_batch is None:
+        return False, "Embeddings dependencies unavailable."
+
+    embedding_config = _build_mediawiki_embedding_config(
+        api_name_vector_db=api_name_vector_db,
+        api_key_vector_db=api_key_vector_db,
+    )
+    if not embedding_config:
+        return False, "Embeddings configuration missing or invalid."
+
+    user_db_base_dir = settings.get("USER_DB_BASE_DIR")
+    if not user_db_base_dir:
+        return False, "USER_DB_BASE_DIR is not configured."
+
+    user_embedding_config: Dict[str, Any] = {
+        "USER_DB_BASE_DIR": user_db_base_dir,
+        "embedding_config": embedding_config,
+    }
+
+    vector_user_id = settings.get("SINGLE_USER_FIXED_ID", 1)
+    try:
+        manager = ChromaDBManager(
+            user_id=str(vector_user_id),
+            user_embedding_config=user_embedding_config,
+        )
+    except Exception as exc:
+        return False, f"Vector store init failed: {exc}"
+
+    indexed_chunks = [
+        (idx, ch)
+        for idx, ch in enumerate(chunks)
+        if isinstance(ch, dict) and str(ch.get("text") or "").strip()
+    ]
+    if not indexed_chunks:
+        return False, "No chunk text available for embeddings."
+
+    texts = [str(ch.get("text")) for _, ch in indexed_chunks]
+    model_id = embedding_config.get("default_model_id")
+    try:
+        embeddings = create_embeddings_batch(
+            texts=texts,
+            user_app_config=user_embedding_config,
+            model_id_override=model_id,
+        )
+    except Exception as exc:
+        return False, f"Embedding generation failed: {exc}"
+
+    if not embeddings:
+        return False, "Embedding generation returned no vectors."
+    if len(embeddings) != len(texts):
+        return False, "Embedding generation returned a mismatched vector count."
+
+    metadatas: List[Dict[str, Any]] = []
+    ids: List[str] = []
+    for idx, ch in indexed_chunks:
+        section = None
+        metadata = ch.get("metadata") if isinstance(ch.get("metadata"), dict) else {}
+        if isinstance(metadata, dict):
+            section = metadata.get("section")
+        metadatas.append(
+            {
+                "media_id": str(media_id),
+                "page_id": page_id,
+                "revision_id": revision_id,
+                "wiki_name": wiki_name,
+                "title": title,
+                "chunk_index": idx,
+                "section": section,
+            }
+        )
+        ids.append(f"mediawiki_{media_id}_chunk_{idx}")
+
+    collection_name = _mediawiki_collection_name(wiki_name)
+    try:
+        manager.store_in_chroma(
+            collection_name=collection_name,
+            texts=texts,
+            embeddings=embeddings,
+            ids=ids,
+            metadatas=metadatas,
+            embedding_model_id_for_dim_check=model_id,
+        )
+    except Exception as exc:
+        return False, f"Vector store write failed: {exc}"
+
+    return True, f"Stored {len(texts)} chunks in vector store '{collection_name}'."
+
+
 def process_single_item(
         content: str,
         title: str,
@@ -511,39 +716,37 @@ def process_single_item(
             processed_data["message"] = message
             logging.info(f"Media item DB result for '{title}': ID={media_id}, Msg='{message}'")
 
+        vector_store_error = None
         if store_to_vector_db and media_id:
-            if not api_name_vector_db:
-                logging.warning(f"Vector DB API name not provided for '{title}', skipping vector storage.")
-                processed_data["message"] += " Skipped vector storage (no API name)."
+            success, message = _store_mediawiki_chunks_in_vector_db(
+                chunks=chunks,
+                media_id=media_id,
+                title=title,
+                wiki_name=wiki_name,
+                page_id=item.get("page_id"),
+                revision_id=item.get("revision_id"),
+                api_name_vector_db=api_name_vector_db,
+                api_key_vector_db=api_key_vector_db,
+            )
+            if success:
+                processed_data["message"] += f" {message}"
             else:
-                for i, chunk_dict in enumerate(chunks):
-                    logging.debug(f"Storing chunk {i + 1}/{len(chunks)} for item: {title} to vector DB.")
-                    try:
-                        # process_and_store_content(content: str, collection_name: str, media_id: int, file_name: str,
-                        #                           create_embeddings: bool = False, create_summary: bool = False,
-                        #                           api_name: str = None, api_key: str = None):
-                        pass
-                        # FIXME
-                        # process_and_store_content(
-                        #     chunk_dict['text'],
-                        #     f"mediawiki_{wiki_name}",
-                        #     media_id,
-                        #     title,  # Use page title as file_name context for vector DB
-                        #     create_embeddings=True,
-                        #     create_summary=True,  # Set to True if you want summaries per chunk via LLM
-                        #     api_name=api_name_vector_db,
-                        #     api_key=api_key_vector_db  # Pass the API key
-                        # )
-                    except Exception as e_vec:
-                        logging.error(f"Failed to store chunk {i + 1} for '{title}' to vector DB: {e_vec}")
-                        processed_data["message"] += f" Error storing chunk {i + 1} to vector DB."
-                        # Decide if this makes the whole item an error or just a warning
+                vector_store_error = message
+                logging.warning(
+                    "Vector storage skipped for '%s': %s",
+                    title,
+                    message,
+                )
+                processed_data["message"] += f" Skipped vector storage ({message})."
         elif store_to_vector_db and not media_id:
             logging.warning(
                 f"Cannot store to vector DB for '{title}': media_id is missing (store_to_db may be False or failed).")
             processed_data["message"] += " Skipped vector storage (media_id missing)."
 
-        processed_data["status"] = "Success" if media_id or not store_to_db else "Error"
+        if media_id or not store_to_db:
+            processed_data["status"] = "Warning" if vector_store_error else "Success"
+        else:
+            processed_data["status"] = "Error"
         if media_id is None and store_to_db:  # If we intended to store but failed
             processed_data["message"] = processed_data.get("message", "") + " Failed to store media item to primary DB."
 

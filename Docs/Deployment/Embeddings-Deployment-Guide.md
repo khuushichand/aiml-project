@@ -27,12 +27,12 @@ The embeddings service is implemented as part of the FastAPI application and sup
 - Best for: Personal use, small teams, development
 
 ### Enterprise Architecture (≥5 concurrent users)
-- Implementation: Orchestrated workers (`core/Embeddings/worker_orchestrator.py` + `core/Embeddings/workers/*`)
-- Processing: Queue-based, distributed workers (chunking → embedding → storage)
-- Infra: Redis streams, orchestrator process, multiple worker tasks
+- Implementation: Redis Streams worker (`core/Embeddings/services/redis_worker.py`)
+- Processing: Queue-based Redis pipeline (chunking → embedding → storage + content) with Jobs as the root status/billing record
+- Infra: Redis + Jobs DB (SQLite/Postgres) and worker processes
 - Best for: Production, multi-tenant, high volume
 
-Note: The “mode” depends on which processes you run (API only vs API + orchestrator). There is no runtime flag that switches the API behavior; `EMBEDDINGS_MODE` is a deployment convention, not an API setting.
+Note: The “mode” depends on which processes you run (API only vs API + Redis worker). There is no runtime flag that switches the API behavior; `EMBEDDINGS_MODE` is a deployment convention, not an API setting.
 
 ---
 
@@ -86,11 +86,13 @@ export MISTRAL_API_KEY="..."
 export VOYAGE_API_KEY="..."
 
 # Optional: user DB base directory (default: Databases/user_databases)
-export USER_DB_BASE_DIR="$(pwd)/Databases/user_databases"
+export USER_DB_BASE_DIR="$(pwd)/Databases/user_databases"  # USER_DB_BASE is deprecated alias
 
 # Optional: enable endpoint rate limiting guard on embeddings
 export EMBEDDINGS_RATE_LIMIT=on   # Uses built-in limit in the API endpoint
 ```
+
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 ### Dockerfile (API)
 ```dockerfile
@@ -163,37 +165,34 @@ WantedBy=multi-user.target
 # Required packages (same as single-user)
 pip install -e .
 
-# Redis server (for queues)
-sudo apt-get install -y redis-server
-# OR
-docker run -d --name redis -p 6379:6379 redis:alpine
-
 # Optional: GPU support for HF models
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### Environment and Orchestrator
+### Environment and Redis Worker
 ```bash
+export JOBS_DB_URL="sqlite:///Databases/jobs.db"  # optional; set Postgres URL for shared Jobs DB
 export REDIS_URL="redis://localhost:6379"
-export PROMETHEUS_PORT=9090   # optional
 ```
 
-Use the orchestrator config at `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml` to control worker pool sizes, GPU allocation, and queues. Start the orchestrator (it manages worker tasks in-process):
+Start the Redis Streams worker (stage workers controlled via env vars):
 
 ```bash
-python -m tldw_Server_API.app.core.Embeddings.worker_orchestrator
+export EMBEDDINGS_REDIS_WORKERS_CHUNKING=2
+export EMBEDDINGS_REDIS_WORKERS_EMBEDDING=2
+export EMBEDDINGS_REDIS_WORKERS_STORAGE=1
+export EMBEDDINGS_REDIS_WORKERS_CONTENT=1
+python -m tldw_Server_API.app.core.Embeddings.services.redis_worker --stage all
 ```
 
-### Docker Compose (API + Orchestrator)
+### Docker Compose (API + Redis Worker)
 ```yaml
 version: '3.8'
 
 services:
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     ports: ["6379:6379"]
-    volumes: ["redis_data:/data"]
-    command: redis-server --appendonly yes
 
   api:
     build: .
@@ -203,26 +202,28 @@ services:
       - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - REDIS_URL=redis://redis:6379
-    depends_on: [redis]
     volumes:
       - ./Databases/user_databases:/app/Databases/user_databases
       - ./models/embedding_models_data:/app/models/embedding_models_data
 
-  orchestrator:
+  redis-worker:
     build: .
-    command: python -m tldw_Server_API.app.core.Embeddings.worker_orchestrator
+    command: python -m tldw_Server_API.app.core.Embeddings.services.redis_worker --stage all
     environment:
       - REDIS_URL=redis://redis:6379
-      - PROMETHEUS_PORT=9090
-    depends_on: [redis]
-    ports: ["9090:9090"]
-
-volumes:
-  redis_data:
+      - JOBS_DB_URL=sqlite:///Databases/jobs.db
+      - EMBEDDINGS_REDIS_WORKERS_CHUNKING=2
+      - EMBEDDINGS_REDIS_WORKERS_EMBEDDING=2
+      - EMBEDDINGS_REDIS_WORKERS_STORAGE=1
+      - EMBEDDINGS_REDIS_WORKERS_CONTENT=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./Databases:/app/Databases
+      - ./models/embedding_models_data:/app/models/embedding_models_data
 ```
 
 ### Kubernetes (example)
-Deploy API and orchestrator as separate Deployments, and a Redis Service. Health probes should use `GET /api/v1/embeddings/health` on the API.
+Deploy API and Redis worker as separate Deployments. Ensure Redis and the Jobs DB (SQLite volume or Postgres service) are reachable. Health probes should use `GET /api/v1/embeddings/health` on the API.
 
 ---
 
@@ -234,8 +235,10 @@ Most runtime behavior is configured via code defaults or YAML, not environment v
 - `SINGLE_USER_API_KEY` (single-user mode)
 - `JWT_SECRET_KEY` (multi-user mode)
 - Provider keys: `OPENAI_API_KEY`, `COHERE_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `VOYAGE_API_KEY`
-- `USER_DB_BASE_DIR` (optional; default `Databases/user_databases`)
+- `USER_DB_BASE_DIR` (optional; defined in `tldw_Server_API.app.core.config`, default `Databases/user_databases/` under the project root; override via environment variable or `Config_Files/config.txt`)
 - `EMBEDDINGS_RATE_LIMIT=on` enables the built-in rate limiter for the embeddings endpoint
+- `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES` allows media-embeddings jobs to succeed with zero vectors for types like `audio,video` (also configurable via `Config_Files/config.txt`).
+- Embeddings compactor: `COMPACTOR_USER_ID` (required in multi-user mode; defaults to `SINGLE_USER_FIXED_ID` in single-user), `EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS` (default: 1800), optional `MEDIA_DB_PATH` override.
 
 Advanced constants like batch size, cache TTL, and connection pool are code-level defaults in `embeddings_v5_production_enhanced.py`.
 
@@ -324,7 +327,7 @@ curl -X POST -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 Symptom: OOM or slow responses.
 Actions:
 - Prefer smaller models (e.g., `text-embedding-3-small`, `all-MiniLM-L6-v2`)
-- Reduce concurrent load; scale out using orchestrator
+- Reduce concurrent load; scale out using additional Redis workers
 - For HF models, unload inactive models sooner (see `model_unload_timeout` in YAML)
 
 ### 3) Slow Embeddings

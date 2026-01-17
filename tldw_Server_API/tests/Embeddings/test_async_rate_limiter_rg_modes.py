@@ -49,6 +49,7 @@ async def test_async_rate_limiter_uses_rg_when_enabled(monkeypatch):
     monkeypatch.setattr(rate_limiter, "_maybe_enforce_with_rg", _fake_rg)
 
     def _legacy_called(*args, **kwargs):
+
         raise AssertionError("legacy limiter should not be called when RG is enabled")
 
     monkeypatch.setattr(limiter, "check_rate_limit", _legacy_called)
@@ -56,3 +57,39 @@ async def test_async_rate_limiter_uses_rg_when_enabled(monkeypatch):
     allowed, retry_after = await async_limiter.check_rate_limit_async("user-2")
     assert allowed is False
     assert retry_after == 7
+
+
+@pytest.mark.asyncio
+async def test_async_rate_limiter_falls_back_when_rg_unavailable(monkeypatch):
+    limiter = rate_limiter.UserRateLimiter(
+        default_limit=1,
+        window_seconds=60,
+        premium_limit=1,
+    )
+    async_limiter = rate_limiter.AsyncRateLimiter(rate_limiter=limiter)
+    async_limiter.shadow_enabled = False
+
+    monkeypatch.setattr(rate_limiter, "_rg_embeddings_enabled", lambda: True)
+
+    async def _fake_rg(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(rate_limiter, "_maybe_enforce_with_rg", _fake_rg)
+
+    calls = []
+    original = limiter.check_rate_limit
+
+    def _wrapped(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(limiter, "check_rate_limit", _wrapped)
+
+    allowed, retry_after = await async_limiter.check_rate_limit_async("user-3")
+    assert allowed is True
+    assert retry_after is None
+
+    allowed, retry_after = await async_limiter.check_rate_limit_async("user-3")
+    assert allowed is False
+    assert retry_after is not None
+    assert len(calls) >= 2

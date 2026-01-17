@@ -9,9 +9,11 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
 
@@ -19,6 +21,7 @@ DEFAULT_QUESTION_TYPES = ["multiple_choice", "true_false", "fill_blank"]
 MAX_CONTENT_CHARS = 15000
 
 QUIZ_GENERATION_PROMPT = """You are a quiz generator. Based on the following content, generate {num_questions} quiz questions.
+
 
 Content:
 {content}
@@ -50,6 +53,21 @@ Important:
 - Make questions test understanding, not just memorization
 - Return ONLY valid JSON, no other text
 """
+
+
+def _resolve_model(provider: str, model: Optional[str], app_config: Dict[str, Any]) -> Optional[str]:
+    if model:
+        return model
+    key = f"{provider.replace('-', '_').replace('.', '_')}_api"
+    return (app_config.get(key) or {}).get("model")
+
+
+def _get_adapter(provider: str):
+    registry = get_registry()
+    adapter = registry.get_adapter(provider)
+    if adapter is None:
+        raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
+    return adapter
 
 
 def _normalize_question_type(value: Any) -> Optional[str]:
@@ -242,21 +260,28 @@ async def generate_quiz_from_media(
 
     provider = (DEFAULT_LLM_PROVIDER or "openai").strip().lower()
     api_key, _debug = resolve_provider_api_key(provider, prefer_module_keys_in_tests=True)
-    if PROVIDER_REQUIRES_KEY.get(provider, False) and not api_key:
+    if provider_requires_api_key(provider) and not api_key:
         raise ValueError(f"Provider '{provider}' requires an API key.")
 
     messages_payload = [{"role": "user", "content": prompt}]
     response_format = {"type": "json_object"}
 
     def _call_llm():
-        return chat_api_call(
-            api_endpoint=provider,
-            messages_payload=messages_payload,
-            api_key=api_key,
-            model=model,
-            temp=0.3,
-            max_tokens=2000,
-            response_format=response_format,
+        adapter = _get_adapter(provider)
+        app_config = load_and_log_configs() or {}
+        model_to_use = _resolve_model(provider, model, app_config)
+        if model_to_use is None:
+            raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+        return adapter.chat(
+            {
+                "messages": messages_payload,
+                "api_key": api_key,
+                "model": model_to_use,
+                "temperature": 0.3,
+                "max_tokens": 2000,
+                "response_format": response_format,
+                "app_config": app_config,
+            }
         )
 
     start = time.time()

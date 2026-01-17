@@ -27,6 +27,8 @@ def client_with_user(monkeypatch):
 
 
 def test_job_filters_crud(client_with_user):
+
+
     c = client_with_user
 
     # Create job

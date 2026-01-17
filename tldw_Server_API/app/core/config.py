@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any, Set
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 
+from tldw_Server_API.app.core.config_paths import resolve_config_file
 
 #
 # 3rd-party Libraries
@@ -28,6 +29,36 @@ def _safe_json_dict(raw: Optional[str]) -> dict:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _int_env_or_cfg(
+    env_value: Optional[object],
+    cfg_value: Optional[object],
+    default: int,
+) -> int:
+    def _clean(raw: Optional[object]) -> Optional[str]:
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        if not text or text.lower() in {"none", "null", "nil"}:
+            return None
+        return text
+
+    env_text = _clean(env_value)
+    if env_text is not None:
+        return int(env_text)
+    cfg_text = _clean(cfg_value)
+    if cfg_text is not None:
+        return int(cfg_text)
+    return default
+
+# Config.txt adapter cache + metadata
+_CONFIG_PARSER_CACHE: Optional[configparser.ConfigParser] = None
+_CONFIG_SOURCE_METADATA: dict[str, Any] = {
+    "source": "config",
+    "path": None,
+    "loaded": False,
+}
 
 # Guard logging during module import so Loguru does not enqueue records before
 # the import lock is released. Messages emitted before `_LOGGER_READY` flips to
@@ -101,6 +132,75 @@ def _load_env_files_early() -> None:
     except Exception:
         # Never fail early due to env file loading issues
         pass
+
+
+def _record_config_source(path: Optional[Path], loaded: bool) -> None:
+    _CONFIG_SOURCE_METADATA.update(
+        {
+            "source": "config",
+            "path": str(path) if path else None,
+            "loaded": loaded,
+        }
+    )
+
+
+def _load_config_parser(*, reload: bool = False) -> configparser.ConfigParser:
+    global _CONFIG_PARSER_CACHE
+    if _CONFIG_PARSER_CACHE is not None and not reload:
+        return _CONFIG_PARSER_CACHE
+
+    config_path_obj = resolve_config_file()
+    config_parser = configparser.ConfigParser()
+
+    if not config_path_obj.exists():
+        _log_warning(
+            f"Config file not found at {str(config_path_obj)}; using empty config"
+        )
+        _record_config_source(config_path_obj, loaded=False)
+        _CONFIG_PARSER_CACHE = config_parser
+        return config_parser
+
+    try:
+        config_parser.read(config_path_obj)
+    except configparser.Error as e:
+        _log_error(
+            f"Error parsing config file {str(config_path_obj)}: {e}",
+            exc_info=True,
+        )
+        raise
+
+    _record_config_source(config_path_obj, loaded=True)
+    _CONFIG_PARSER_CACHE = config_parser
+    return config_parser
+
+
+def get_config_section(section_name: str, *, reload: bool = False) -> Dict[str, str]:
+    """Return a config.txt section as a plain dict."""
+    if reload:
+        refresh_config_cache()
+    parser = _load_config_parser()
+    if not parser.has_section(section_name):
+        return {}
+    return dict(parser.items(section_name))
+
+
+def get_config_value(
+    section: str,
+    key: str,
+    default: Optional[str] = None,
+    *,
+    reload: bool = False,
+) -> Optional[str]:
+    """Return a config.txt value with a default fallback."""
+    if reload:
+        refresh_config_cache()
+    parser = _load_config_parser()
+    return parser.get(section, key, fallback=default)
+
+
+def get_config_source_metadata() -> Dict[str, Any]:
+    """Return cached config source metadata for logging/diagnostics."""
+    return dict(_CONFIG_SOURCE_METADATA)
 
 # Local Imports
 # Local Imports
@@ -588,12 +688,24 @@ def load_settings():
     else:
         redis_url = f"redis://{redis_host}:{redis_port}/{redis_db}"
 
-    # Base directory for all user-specific data: ACTUAL_PROJECT_ROOT/Databases/user_databases/
+    # Base directory for all user-specific data (USER_DB_BASE_DIR default): ACTUAL_PROJECT_ROOT/Databases/user_databases/
     default_user_data_base_dir = ACTUAL_PROJECT_ROOT / "Databases" / "user_databases"
-    user_data_base_dir_str = os.getenv("USER_DB_BASE_DIR", str(default_user_data_base_dir.resolve()))
+    config_user_db_base_dir = None
+    try:
+        config_user_db_base_dir = get_config_value("TTS-Settings", "USER_DB_BASE_DIR")
+    except Exception:
+        config_user_db_base_dir = None
+    if config_user_db_base_dir is not None:
+        config_user_db_base_dir = str(config_user_db_base_dir).strip() or None
+    env_user_db_base_dir = os.getenv("USER_DB_BASE_DIR")
+    user_data_base_dir_str = (
+        config_user_db_base_dir
+        or env_user_db_base_dir
+        or str(default_user_data_base_dir.resolve())
+    )
     user_data_base_dir = Path(user_data_base_dir_str)
 
-    # Main/central SQLite database: ACTUAL_PROJECT_ROOT/Databases/user_databases/databases/tldw.db
+    # Main/central SQLite database: ACTUAL_PROJECT_ROOT/Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db
     default_main_db_path = (ACTUAL_PROJECT_ROOT / "Databases" / "user_databases" / f"{single_user_fixed_id}" / "tldw.db").resolve()
     default_database_url = f"sqlite:///{default_main_db_path}"
     database_url = os.getenv("DATABASE_URL", default_database_url)
@@ -601,23 +713,81 @@ def load_settings():
     users_db_configured = os.getenv("USERS_DB_ENABLED", "false").lower() == "true"
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
-    # Audit export streaming threshold (env overrides config.txt [Audit])
+    # Audit settings (env overrides config.txt [Audit])
     audit_stream_env_raw = os.getenv("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS")
+    audit_storage_env_raw = os.getenv("AUDIT_STORAGE_MODE")
+    audit_shared_env_raw = os.getenv("AUDIT_SHARED_DB_PATH")
+    audit_rollback_env_raw = os.getenv("AUDIT_STORAGE_ROLLBACK")
+    audit_etl_subpath_env_raw = os.getenv("AUDIT_ETL_USER_SUBPATH")
+
     audit_stream_cfg_raw: Optional[str] = None
-    if audit_stream_env_raw is None:
+    audit_storage_cfg_raw: Optional[str] = None
+    audit_shared_cfg_raw: Optional[str] = None
+    audit_rollback_cfg_raw: Optional[str] = None
+    audit_etl_subpath_cfg_raw: Optional[str] = None
+    _audit_parser = None
+    if (
+        audit_stream_env_raw is None
+        or audit_storage_env_raw is None
+        or audit_shared_env_raw is None
+        or audit_rollback_env_raw is None
+        or audit_etl_subpath_env_raw is None
+    ):
         try:
             _audit_parser = load_comprehensive_config()
         except Exception:
             _audit_parser = None
-        if _audit_parser is not None:
-            try:
-                if hasattr(_audit_parser, "has_section") and _audit_parser.has_section("Audit"):
+    if _audit_parser is not None:
+        try:
+            if hasattr(_audit_parser, "has_section") and _audit_parser.has_section("Audit"):
+                if audit_stream_env_raw is None:
                     audit_stream_cfg_raw = _audit_parser.get("Audit", "export_stream_auto_max_rows", fallback=None)
-            except Exception:
-                audit_stream_cfg_raw = None
+                if audit_storage_env_raw is None:
+                    audit_storage_cfg_raw = _audit_parser.get("Audit", "storage_mode", fallback=None)
+                if audit_shared_env_raw is None:
+                    audit_shared_cfg_raw = _audit_parser.get("Audit", "shared_db_path", fallback=None)
+                if audit_rollback_env_raw is None:
+                    audit_rollback_cfg_raw = _audit_parser.get("Audit", "storage_rollback", fallback=None)
+                if audit_etl_subpath_env_raw is None:
+                    audit_etl_subpath_cfg_raw = _audit_parser.get("Audit", "etl_user_subpath", fallback=None)
+        except Exception:
+            audit_stream_cfg_raw = None
+            audit_storage_cfg_raw = None
+            audit_shared_cfg_raw = None
+            audit_rollback_cfg_raw = None
+            audit_etl_subpath_cfg_raw = None
+
     audit_stream_auto_max_rows = _safe_int(
         audit_stream_env_raw if audit_stream_env_raw is not None else audit_stream_cfg_raw,
         5000,
+    )
+
+    audit_storage_mode_raw = audit_storage_env_raw if audit_storage_env_raw is not None else audit_storage_cfg_raw
+    audit_storage_mode = str(audit_storage_mode_raw).strip().lower() if audit_storage_mode_raw else "per_user"
+    if audit_storage_mode not in {"per_user", "shared"}:
+        audit_storage_mode = "per_user"
+
+    audit_shared_db_path_raw = audit_shared_env_raw if audit_shared_env_raw is not None else audit_shared_cfg_raw
+    audit_shared_db_path = (
+        str(audit_shared_db_path_raw).strip()
+        if audit_shared_db_path_raw is not None and str(audit_shared_db_path_raw).strip()
+        else "Databases/audit_shared.db"
+    )
+
+    audit_storage_rollback_raw = (
+        audit_rollback_env_raw if audit_rollback_env_raw is not None else audit_rollback_cfg_raw
+    )
+    audit_storage_rollback = _to_bool(
+        str(audit_storage_rollback_raw) if audit_storage_rollback_raw is not None else None,
+        False,
+    )
+    audit_etl_subpath_raw = (
+        audit_etl_subpath_env_raw if audit_etl_subpath_env_raw is not None else audit_etl_subpath_cfg_raw
+    )
+    audit_etl_user_subpath = (
+        str(audit_etl_subpath_raw).strip()
+        if audit_etl_subpath_raw is not None and str(audit_etl_subpath_raw).strip()
+        else None
     )
 
     # Load comprehensive configurations (API keys, embedding settings, etc.)
@@ -654,6 +824,7 @@ def load_settings():
         # Optional chat-specific knobs if present
         _max_chats_per_user = _cc_int('MAX_CHATS_PER_USER', 100)
         _max_messages_per_chat = _cc_int('MAX_MESSAGES_PER_CHAT', 1000)
+        _max_messages_per_chat_soft = _cc_int('MAX_MESSAGES_PER_CHAT_SOFT', _max_messages_per_chat)
         _max_chat_completions_per_minute = _cc_int('MAX_CHAT_COMPLETIONS_PER_MINUTE', 20)
         _max_message_sends_per_minute = _cc_int('MAX_MESSAGE_SENDS_PER_MINUTE', 60)
         _has_char_rl_enabled, _char_rl_enabled_bool = _cc_bool_present('RATE_LIMIT_ENABLED')
@@ -664,6 +835,7 @@ def load_settings():
         _max_character_import_size_mb = 10
         _max_chats_per_user = 100
         _max_messages_per_chat = 1000
+        _max_messages_per_chat_soft = _max_messages_per_chat
         _max_chat_completions_per_minute = 20
         _max_message_sends_per_minute = 60
         _has_char_rl_enabled = False
@@ -824,6 +996,7 @@ def load_settings():
         "MAX_CHARACTER_IMPORT_SIZE_MB": _max_character_import_size_mb,
         "MAX_CHATS_PER_USER": _max_chats_per_user,
         "MAX_MESSAGES_PER_CHAT": _max_messages_per_chat,
+        "MAX_MESSAGES_PER_CHAT_SOFT": _max_messages_per_chat_soft,
         "MAX_CHAT_COMPLETIONS_PER_MINUTE": _max_chat_completions_per_minute,
         "MAX_MESSAGE_SENDS_PER_MINUTE": _max_message_sends_per_minute,
 
@@ -943,6 +1116,10 @@ def load_settings():
         "COMPREHENSIVE_CONFIG_RAW": comprehensive_config, # Store the raw one if needed elsewhere
         # Audit export streaming threshold (opt-in via env/config.txt)
         "AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS": audit_stream_auto_max_rows,
+        "AUDIT_STORAGE_MODE": audit_storage_mode,
+        "AUDIT_SHARED_DB_PATH": audit_shared_db_path,
+        "AUDIT_STORAGE_ROLLBACK": audit_storage_rollback,
+        "AUDIT_ETL_USER_SUBPATH": audit_etl_user_subpath,
 
         # Ephemeral cleanup worker (evals/rag pipeline ephemeral collections)
         "EPHEMERAL_CLEANUP_ENABLED": os.getenv("EPHEMERAL_CLEANUP_ENABLED", "false").lower() == "true",
@@ -1187,7 +1364,11 @@ def load_settings():
                     )
                 ),
                 "parent_max_tokens": (
-                    int(_envs.get("RAG_PARENT_MAX_TOKENS")) if _envs.get("RAG_PARENT_MAX_TOKENS") is not None else int(str(_cfg.get('parent_max_tokens', '1200')) or 1200)
+                    _int_env_or_cfg(
+                        _envs.get("RAG_PARENT_MAX_TOKENS"),
+                        _cfg.get("parent_max_tokens", "1200"),
+                        1200,
+                    )
                 ),
                 "include_sibling_chunks": (
                     (_envs.get("RAG_INCLUDE_SIBLING_CHUNKS").lower() == "true") if _envs.get("RAG_INCLUDE_SIBLING_CHUNKS") is not None else (
@@ -1195,7 +1376,11 @@ def load_settings():
                     )
                 ),
                 "sibling_window": (
-                    int(_envs.get("RAG_SIBLING_WINDOW")) if _envs.get("RAG_SIBLING_WINDOW") is not None else int(str(_cfg.get('sibling_window', '1')) or 1)
+                    _int_env_or_cfg(
+                        _envs.get("RAG_SIBLING_WINDOW"),
+                        _cfg.get("sibling_window", "1"),
+                        1,
+                    )
                 ),
             })(
                 {
@@ -1212,6 +1397,7 @@ def load_settings():
                 ))(load_comprehensive_config())
             )
         ))(),
+        "IMPLICIT_FEEDBACK_ENABLED": implicit_feedback_enabled(default=True),
 
         # RAG LLM reranker configuration (provider/model)
         "RAG_LLM_RERANKER_PROVIDER": (lambda _env, _cp: (
@@ -1525,12 +1711,17 @@ def load_comprehensive_config():
     project_root = current_file_path.parent.parent.parent
 
     # Load .env/.ENV files if they exist (API keys should be here)
-    # Support both lowercase and uppercase filenames and both project root and Config_Files directory.
+    # Support both lowercase and uppercase filenames in the project root, repo root, and Config_Files directories.
+    repo_root = project_root.parent
     candidate_env_paths = [
         project_root / '.env',
         project_root / '.ENV',
         project_root / 'Config_Files' / '.env',
         project_root / 'Config_Files' / '.ENV',
+        repo_root / '.env',
+        repo_root / '.ENV',
+        repo_root / 'Config_Files' / '.env',
+        repo_root / 'Config_Files' / '.ENV',
     ]
     loaded_any_env = False
     for p in candidate_env_paths:
@@ -1544,23 +1735,15 @@ def load_comprehensive_config():
             pass
     if not loaded_any_env:
         _log_info(
-            f"No .env/.ENV file found in {project_root} or {project_root / 'Config_Files'}; using config.txt and system env"
+            "No .env/.ENV file found in "
+            f"{project_root}, {project_root / 'Config_Files'}, {repo_root}, or {repo_root / 'Config_Files'}; "
+            "using config.txt and system env"
         )
 
-    config_path_obj = project_root / 'Config_Files' / 'config.txt'
-
+    config_path_obj = resolve_config_file()
     _log_info(f"Attempting to load comprehensive config from: {str(config_path_obj)}")
 
-    if not config_path_obj.exists():
-        _log_error(f"Config file not found at {str(config_path_obj)}")
-        raise FileNotFoundError(f"Config file not found at {str(config_path_obj)}")
-
-    config_parser = configparser.ConfigParser()
-    try:
-        config_parser.read(config_path_obj)  # configparser can read Path objects directly
-    except configparser.Error as e:
-        _log_error(f"Error parsing config file {str(config_path_obj)}: {e}", exc_info=True)
-        raise  # Re-raise the parsing error to be caught by load_and_log_configs
+    config_parser = _load_config_parser()
 
     _log_info(f"load_comprehensive_config(): Sections found in config: {config_parser.sections()}")
 
@@ -1603,6 +1786,10 @@ def load_comprehensive_config():
             _env_default(
                 'RAG_AGENTIC_CACHE_TTL_SEC',
                 config_parser.get('RAG', 'agentic_cache_ttl_sec', fallback='600')
+            )
+            _env_default(
+                'IMPLICIT_FEEDBACK_ENABLED',
+                str(implicit_feedback_enabled(default=True, config_parser=config_parser)).lower()
             )
     except Exception as _rag_env_err:
         _log_debug(f"RAG env propagation skipped: {_rag_env_err}")
@@ -1692,6 +1879,22 @@ def load_comprehensive_config():
             _env_default_http('HTTP_ALLOW_SCHEME_DOWNGRADE', 'allow_scheme_downgrade')
     except Exception as _http_env_err:
         _log_debug(f"HTTP env propagation skipped: {_http_env_err}")
+
+    # Propagate system log file settings from config.txt into env (if unset)
+    try:
+        if hasattr(config_parser, 'has_section') and config_parser.has_section('Logging'):
+            def _env_default_logging(name: str, opt: str):
+                try:
+                    v = config_parser.get('Logging', opt, fallback=None)
+                except Exception:
+                    v = None
+                if v is not None and os.getenv(name) is None:
+                    os.environ[name] = str(v)
+
+            _env_default_logging('SYSTEM_LOG_FILE_PATH', 'system_log_file_path')
+            _env_default_logging('SYSTEM_LOG_FILE_MAX_ENTRIES', 'system_log_file_max_entries')
+    except Exception as _log_env_err:
+        _log_debug(f"System log env propagation skipped: {_log_env_err}")
 
     # Propagate egress policy settings from config.txt into env (if unset)
     if hasattr(config_parser, 'has_section') and config_parser.has_section('Egress'):
@@ -1809,6 +2012,45 @@ def rag_agentic_cache_ttl_sec(default: int = 600) -> int:
         return max(1, int(str(v)))
     except Exception:
         return default
+
+
+def implicit_feedback_enabled(
+    default: bool = True,
+    config_parser: Optional[configparser.ConfigParser] = None,
+) -> bool:
+    """
+    Check if implicit feedback collection is enabled.
+
+    Resolution order:
+      1) Environment variable IMPLICIT_FEEDBACK_ENABLED
+      2) config.txt [RAG] section implicit_feedback_enabled key
+      3) Provided default (True unless overridden)
+
+    Returns:
+        bool: True if implicit feedback should be collected
+    """
+    v = os.getenv("IMPLICIT_FEEDBACK_ENABLED")
+    if v is None:
+        cp = config_parser
+        if cp is None:
+            try:
+                cp = load_comprehensive_config()
+            except (FileNotFoundError, configparser.Error) as exc:
+                _log_debug(
+                    f"implicit_feedback_enabled: config load failed, falling back to default={default}: {exc}"
+                )
+                cp = None
+        if cp is not None:
+            try:
+                v = cp.get("RAG", "implicit_feedback_enabled", fallback=str(default))
+            except (configparser.Error, AttributeError, TypeError, ValueError) as exc:
+                _log_debug(
+                    f"implicit_feedback_enabled: config read failed, falling back to default={default}: {exc}"
+                )
+                v = str(default)
+        else:
+            v = str(default)
+    return _as_bool(v, default)
 
 
 # ----------------------------
@@ -2025,24 +2267,64 @@ def rg_redis_fail_mode(default: str = "fallback_memory") -> str:
     return s if s in ("fail_closed", "fail_open", "fallback_memory") else default
 
 
+def rg_repo_root() -> Path:
+    """Return the repository root used for RG policy path resolution."""
+    return Path(__file__).resolve().parents[3]
+
+
+def resolve_repo_relative_path(path: str, base: Optional[Path] = None) -> str:
+    """
+    Resolve a path relative to the repository root when it is not absolute.
+
+    Falls back to the original path if resolution fails, logging a debug message.
+    """
+    try:
+        p = Path(path).expanduser()
+        if not p.is_absolute():
+            root = base or rg_repo_root()
+            p = (root / p).resolve()
+        return str(p)
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log_debug(f"resolve_repo_relative_path: failed to resolve '{path}': {exc}")
+        return path
+
+
 def rg_policy_path_default() -> str:
     try:
-        base = Path(__file__).resolve().parents[3]
-        return str(base / "Config_Files" / "resource_governor_policies.yaml")
-    except Exception:
+        base = rg_repo_root()
+        primary = base / "Config_Files" / "resource_governor_policies.yaml"
+        if primary.exists():
+            return str(primary)
+        fallback = base / "tldw_Server_API" / "Config_Files" / "resource_governor_policies.yaml"
+        return str(fallback)
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log_debug(f"rg_policy_path_default: failed to resolve default policy path: {exc}")
         return "resource_governor_policies.yaml"
 
 
 def rg_policy_path() -> str:
     v = os.getenv("RG_POLICY_PATH")
     if v:
-        return v
+        resolved = resolve_repo_relative_path(v)
+        try:
+            if not Path(resolved).exists():
+                _log_warning(f"rg_policy_path: policy file not found at {resolved}")
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            _log_debug(f"rg_policy_path: unable to check existence of {resolved}: {exc}")
+        return resolved
     try:
         cp = load_comprehensive_config()
         p = cp.get("ResourceGovernor", "policy_path", fallback=rg_policy_path_default()) if cp else rg_policy_path_default()
-        return p
-    except Exception:
-        return rg_policy_path_default()
+        resolved = resolve_repo_relative_path(p)
+        try:
+            if not Path(resolved).exists():
+                _log_warning(f"rg_policy_path: policy file not found at {resolved}")
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            _log_debug(f"rg_policy_path: unable to check existence of {resolved}: {exc}")
+        return resolved
+    except (FileNotFoundError, configparser.Error, OSError, RuntimeError, ValueError) as exc:
+        _log_debug(f"rg_policy_path: config load failed, using default: {exc}")
+        return resolve_repo_relative_path(rg_policy_path_default())
 
 
 @lru_cache(maxsize=1)
@@ -2400,6 +2682,7 @@ def load_and_log_configs():
         huggingface_use_router_url_format = config_parser_object.getboolean('API', 'huggingface_use_router_url_format', fallback=False)
         huggingface_router_base_url = config_parser_object.get('API', 'huggingface_router_base_url', fallback='https://router.huggingface.co/hf-inference')
         huggingface_api_base_url = config_parser_object.get('API', 'huggingface_api_base_url', fallback='https://router.huggingface.co/hf-inference/models')
+        huggingface_api_chat_path = config_parser_object.get('API', 'huggingface_api_chat_path', fallback='v1/chat/completions')
         huggingface_model = config_parser_object.get('API', 'huggingface_model', fallback='/Qwen/Qwen3-235B-A22B')
         huggingface_streaming = config_parser_object.get('API', 'huggingface_streaming', fallback='False')
         huggingface_temperature = config_parser_object.get('API', 'huggingface_temperature', fallback='0.7')
@@ -2554,7 +2837,7 @@ def load_and_log_configs():
         custom_openai_api_streaming = config_parser_object.get('API', 'custom_openai_api_streaming', fallback='False')
         custom_openai_api_temperature = config_parser_object.get('API', 'custom_openai_api_temperature', fallback='0.7')
         custom_openai_api_top_p = config_parser_object.get('API', 'custom_openai_api_top_p', fallback='0.95')
-        custom_openai_api_min_p = config_parser_object.get('API', 'custom_openai_api_top_k', fallback='100')
+        custom_openai_api_min_p = config_parser_object.get('API', 'custom_openai_api_min_p', fallback='0.05')
         custom_openai_api_max_tokens = config_parser_object.get('API', 'custom_openai_api_max_tokens', fallback='4096')
         custom_openai_api_timeout = config_parser_object.get('API', 'custom_openai_api_timeout', fallback='90')
         custom_openai_api_retries = config_parser_object.get('API', 'custom_openai_api_retry', fallback='3')
@@ -2567,7 +2850,7 @@ def load_and_log_configs():
         custom_openai2_api_streaming = config_parser_object.get('API', 'custom_openai2_api_streaming', fallback='False')
         custom_openai2_api_temperature = config_parser_object.get('API', 'custom_openai2_api_temperature', fallback='0.7')
         custom_openai2_api_top_p = config_parser_object.get('API', 'custom_openai_api2_top_p', fallback='0.95')
-        custom_openai2_api_min_p = config_parser_object.get('API', 'custom_openai_api2_top_k', fallback='100')
+        custom_openai2_api_min_p = config_parser_object.get('API', 'custom_openai2_api_min_p', fallback='0.05')
         custom_openai2_api_max_tokens = config_parser_object.get('API', 'custom_openai2_api_max_tokens', fallback='4096')
         custom_openai2_api_timeout = config_parser_object.get('API', 'custom_openai2_api_timeout', fallback='90')
         custom_openai2_api_retries = config_parser_object.get('API', 'custom_openai2_api_retry', fallback='3')
@@ -3053,6 +3336,29 @@ def load_and_log_configs():
         web_scraper_retry_count = config_parser_object.get('Web-Scraper', 'web_scraper_retry_count', fallback='3')
         web_scraper_retry_timeout = config_parser_object.get('Web-Scraper', 'web_scraper_retry_timeout', fallback='5')
         web_scraper_stealth_playwright = config_parser_object.get('Web-Scraper', 'web_scraper_stealth_playwright', fallback='False')
+        custom_scrapers_yaml_path = (
+            os.getenv('WEB_SCRAPER_CUSTOM_SCRAPERS_YAML_PATH')
+            or os.getenv('CUSTOM_SCRAPERS_YAML_PATH')
+            or config_parser_object.get(
+                'Web-Scraper',
+                'custom_scrapers_yaml_path',
+                fallback='tldw_Server_API/Config_Files/custom_scrapers.yaml',
+            )
+        )
+        web_scraper_default_backend = (
+            os.getenv('WEB_SCRAPER_HTTP_BACKEND')
+            or os.getenv('WEB_SCRAPER_DEFAULT_BACKEND')
+            or config_parser_object.get(
+            'Web-Scraper',
+            'web_scraper_default_backend',
+            fallback='auto',
+            )
+        )
+        web_scraper_ua_mode = os.getenv('WEB_SCRAPER_UA_MODE') or config_parser_object.get(
+            'Web-Scraper',
+            'web_scraper_ua_mode',
+            fallback='fixed',
+        )
 
         # Web Scraper crawl flags (env overrides config.txt)
         def _env_or_cfg(env_key: str, section: str, cfg_key: str, default: str) -> str:
@@ -3184,6 +3490,7 @@ def load_and_log_configs():
                 'huggingface_use_router_url_format': huggingface_use_router_url_format,
                 'huggingface_router_base_url': huggingface_router_base_url,
                 'api_base_url': huggingface_api_base_url,
+                'api_chat_path': huggingface_api_chat_path,
                 'api_key': huggingface_api_key,
                 'model': huggingface_model,
                 'streaming': huggingface_streaming,
@@ -3650,6 +3957,9 @@ def load_and_log_configs():
                 'web_scraper_retry_count': web_scraper_retry_count,
             'web_scraper_retry_timeout': web_scraper_retry_timeout,
             'web_scraper_stealth_playwright': web_scraper_stealth_playwright,
+            'custom_scrapers_yaml_path': custom_scrapers_yaml_path,
+            'web_scraper_default_backend': web_scraper_default_backend,
+            'web_scraper_ua_mode': web_scraper_ua_mode,
             # Crawl feature flags
             'web_crawl_strategy': web_crawl_strategy,
             'web_crawl_include_external': web_crawl_include_external,
@@ -3885,9 +4195,17 @@ _LOGGER_READY = True
 _flush_startup_logs()
 
 
+def refresh_config_cache() -> None:
+    """Refresh cached config.txt data (for tests or dynamic reloads)."""
+    global _CONFIG_PARSER_CACHE
+    _CONFIG_PARSER_CACHE = None
+    _CONFIG_SOURCE_METADATA.update({"path": None, "loaded": False})
+    load_comprehensive_config.cache_clear()
+
+
 def clear_config_cache() -> None:
     """Clear cached configuration loaders (for tests or dynamic reloads)."""
-    load_comprehensive_config.cache_clear()
+    refresh_config_cache()
     global default_api_endpoint
     default_api_endpoint = "openai"
     object.__setattr__(settings, "_data", None)

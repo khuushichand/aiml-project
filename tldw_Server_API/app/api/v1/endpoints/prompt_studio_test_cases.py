@@ -17,6 +17,7 @@ Security
 - Rate limits applied to generation endpoints
 """
 
+import os
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, UploadFile, File, Form
 from fastapi.encoders import jsonable_encoder
@@ -178,9 +179,10 @@ async def create_test_case(
         )
 
     except ConflictError as e:
+        logger.warning("Conflict creating test case: {}", e)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=str(e)
+            detail="Test case already exists"
         )
     except DatabaseError as e:
         logger.error(f"Database error creating test case: {e}")
@@ -384,9 +386,21 @@ async def list_test_cases(
 
     except DatabaseError as e:
         logger.error(f"Database error listing test cases: {e}")
+        detail = "Failed to list test cases"
+        if os.getenv("TEST_MODE", "").lower() == "true":
+            detail = f"{detail}: {e}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list test cases"
+            detail=detail,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Unexpected error listing test cases: {}", e)
+        detail = "Failed to list test cases"
+        if os.getenv("TEST_MODE", "").lower() == "true":
+            detail = f"{detail}: {e}"
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=detail,
         )
 
 @router.get("/get/{test_case_id}", response_model=StandardResponse, openapi_extra={
@@ -1045,9 +1059,10 @@ async def generate_test_cases(
         )
 
     except ValueError as e:
+        logger.warning("Invalid test case generation request: {}", e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail="Invalid test case generation request"
         )
     except Exception as e:
         logger.error(f"Error generating test cases: {e}")

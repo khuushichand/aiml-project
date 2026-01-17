@@ -10,6 +10,8 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def test_json_caps_payload_reject_and_truncate_postgres(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     # Force small limit
     monkeypatch.setenv("JOBS_MAX_JSON_BYTES", "128")
@@ -46,6 +48,8 @@ def test_json_caps_payload_reject_and_truncate_postgres(monkeypatch, jobs_pg_dsn
 
 
 def test_json_caps_result_reject_and_truncate_postgres(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     # Force small limit
     monkeypatch.setenv("JOBS_MAX_JSON_BYTES", "128")

@@ -19,6 +19,7 @@ def client_and_db(tmp_path, auth_headers):
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True, tenant_id="default")
 
     def override_db():
+
         return db
 
     app.dependency_overrides[get_request_user] = override_user
@@ -56,7 +57,9 @@ def _bootstrap_run_with_artifact(db: WorkflowsDatabase, tmpdir: Path):
 
 
 def test_artifact_download_with_range(monkeypatch, tmp_path, client_and_db):
-    # Enable permissive MIME
+
+
+     # Enable permissive MIME
     monkeypatch.setenv("WORKFLOWS_ARTIFACT_ALLOWED_MIME", "application/octet-stream")
     client, db = client_and_db
     run_id = _bootstrap_run_with_artifact(db, tmp_path)

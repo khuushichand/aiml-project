@@ -100,6 +100,7 @@ class AuthNZBackendTests:
         self.test_results = []
 
     def setup(self):
+
         """Set up test database"""
         print(f"\n{'='*60}")
         print(f"Setting up {self.backend_type.upper()} backend tests")
@@ -117,6 +118,7 @@ class AuthNZBackendTests:
         print(f"✓ Initialized UserDatabase")
 
     def teardown(self):
+
         """Clean up test database"""
         if self.backend_type == "postgresql":
             # Clean up test data
@@ -145,6 +147,7 @@ class AuthNZBackendTests:
             print(f"  ✗ {test_name}: {e}")
 
     def test_user_crud(self):
+
         """Test user CRUD operations"""
         print("\n🧪 Testing User CRUD Operations...")
 
@@ -221,6 +224,7 @@ class AuthNZBackendTests:
         self.run_test("Prevent duplicates", test_duplicate)
 
     def test_roles_permissions(self):
+
         """Test RBAC functionality"""
         print("\n🧪 Testing Roles & Permissions...")
 
@@ -279,6 +283,7 @@ class AuthNZBackendTests:
         self.run_test("Permission helpers", test_permission_helpers)
 
     def test_registration_codes(self):
+
         """Test registration code functionality"""
         print("\n🧪 Testing Registration Codes...")
 
@@ -332,6 +337,7 @@ class AuthNZBackendTests:
         self.run_test("Use registration code", test_use_code)
 
     def test_authentication(self):
+
         """Test authentication tracking"""
         print("\n🧪 Testing Authentication Features...")
 
@@ -374,6 +380,7 @@ class AuthNZBackendTests:
         self.run_test("Track failed logins", test_failed_login)
 
     def run_all_tests(self):
+
         """Run all tests"""
         self.setup()
 
@@ -410,6 +417,7 @@ class AuthNZBackendTests:
 ########################################################################################################################
 
 def main():
+
     """Main test runner"""
     parser = argparse.ArgumentParser(
         description="Test AuthNZ system with different database backends"

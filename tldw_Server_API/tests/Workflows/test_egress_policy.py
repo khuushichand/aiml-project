@@ -3,6 +3,8 @@ from tldw_Server_API.app.core.Security.egress import evaluate_url_policy, is_url
 
 
 def test_egress_profile_strict_requires_allow(tmp_path, monkeypatch):
+
+
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.delenv("WORKFLOWS_EGRESS_PROFILE", raising=False)
     monkeypatch.delenv("WORKFLOWS_EGRESS_ALLOWLIST", raising=False)
@@ -11,6 +13,8 @@ def test_egress_profile_strict_requires_allow(tmp_path, monkeypatch):
 
 
 def test_egress_global_allow_allows_public(monkeypatch):
+
+
     monkeypatch.setenv("WORKFLOWS_EGRESS_PROFILE", "strict")
     monkeypatch.setenv("WORKFLOWS_EGRESS_ALLOWLIST", "example.com")
     # Avoid DNS resolution in sandbox
@@ -20,6 +24,8 @@ def test_egress_global_allow_allows_public(monkeypatch):
 
 
 def test_egress_tenant_allow_overrides_union(monkeypatch):
+
+
     tenant = "acme"
     monkeypatch.setenv("WORKFLOWS_EGRESS_PROFILE", "strict")
     monkeypatch.setenv("WORKFLOWS_EGRESS_ALLOWLIST", "example.com")
@@ -31,6 +37,8 @@ def test_egress_tenant_allow_overrides_union(monkeypatch):
 
 
 def test_egress_deny_wins(monkeypatch):
+
+
     tenant = "acme"
     monkeypatch.setenv("WORKFLOWS_EGRESS_PROFILE", "permissive")
     monkeypatch.setenv("WORKFLOWS_EGRESS_DENYLIST", "blocked.com")

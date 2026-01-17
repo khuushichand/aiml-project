@@ -8,7 +8,9 @@ from tldw_Server_API.app.core.Sandbox.streams import get_hub
 
 
 def _client(monkeypatch) -> TestClient:
-    # Ensure quick WS polling and disable synthetic frames for deterministic assertions
+
+
+     # Ensure quick WS polling and disable synthetic frames for deterministic assertions
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("SANDBOX_WS_POLL_TIMEOUT_SEC", "1")
@@ -40,6 +42,8 @@ def _create_run(client: TestClient) -> str:
 
 
 def test_ws_multi_subscribers_receive_same_order(monkeypatch) -> None:
+
+
     with _client(monkeypatch) as client:
         run_id = _create_run(client)
         hub = get_hub()
@@ -68,6 +72,8 @@ def test_ws_multi_subscribers_receive_same_order(monkeypatch) -> None:
 
 
 def test_ws_reconnect_drain_buffer(monkeypatch) -> None:
+
+
     with _client(monkeypatch) as client:
         run_id = _create_run(client)
         hub = get_hub()
@@ -95,6 +101,8 @@ def test_ws_reconnect_drain_buffer(monkeypatch) -> None:
 
 
 def test_ws_multi_subs_live_stream(monkeypatch) -> None:
+
+
     """Two subscribers connected while frames are being published should observe identical ordering.
 
     This test simulates a small live stream by publishing frames from a background thread
@@ -105,11 +113,14 @@ def test_ws_multi_subs_live_stream(monkeypatch) -> None:
         hub = get_hub()
 
         # Connect two subscribers first
-        with client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws1, \
-             client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws2:
+        with (
+            client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws1,
+            client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws2,
+        ):
             import threading, time
 
             def _publisher():
+
                 try:
                     hub.publish_event(run_id, "start", {"source": "live"})
                     time.sleep(0.02)

@@ -6,19 +6,22 @@ These are separate from the org management endpoints in orgs.py.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, get_db_transaction
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgInvitePreviewResponse,
     OrgInviteRedeemRequest,
     OrgInviteRedeemResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.services.auth_service import fetch_active_user_by_id
 from tldw_Server_API.app.services.org_invite_service import get_invite_service
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+    get_or_create_audit_service_for_user_id,
+)
 
 
 router = APIRouter(
@@ -61,6 +64,7 @@ async def preview_invite(
         status=preview.get("status", "unknown"),
         message=preview.get("message"),
         expires_at=preview.get("expires_at"),
+        allowed_email_domain=preview.get("allowed_email_domain"),
     )
 
 
@@ -75,6 +79,7 @@ async def redeem_invite(
     body: OrgInviteRedeemRequest,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
 ):
     """
     Redeem an invite code to join an organization.
@@ -89,10 +94,17 @@ async def redeem_invite(
     # Extract client info for audit logging
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
+    user_record = await fetch_active_user_by_id(db, principal.user_id)
+    if not user_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
 
     result = await invite_service.redeem_invite(
         code=body.code,
         user_id=principal.user_id,
+        user_email=user_record.get("email"),
         ip_address=ip_address,
         user_agent=user_agent,
     )
@@ -127,6 +139,49 @@ async def redeem_invite(
             f"{f' team {result.team_id}' if result.team_id else ''} "
             f"with role {result.role}"
         )
+
+    async def _safe_audit_log_invite_redeem() -> None:
+        try:
+            if principal.user_id is None:
+                return
+            svc = await get_or_create_audit_service_for_user_id(int(principal.user_id))
+            correlation_id = (
+                request.headers.get("X-Correlation-ID")
+                or getattr(request.state, "correlation_id", None)
+            )
+            request_id = (
+                request.headers.get("X-Request-ID")
+                or getattr(request.state, "request_id", None)
+                or ""
+            )
+            audit_ctx = AuditContext(
+                user_id=str(principal.user_id),
+                correlation_id=correlation_id,
+                request_id=request_id,
+                ip_address=(request.client.host if request.client else None),
+                user_agent=request.headers.get("user-agent"),
+                endpoint=str(request.url.path),
+                method=request.method,
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                context=audit_ctx,
+                resource_type="org_invite",
+                resource_id=str(result.invite_id) if result.invite_id is not None else body.code[:8],
+                action="org_invite.redeem",
+                metadata={
+                    "org_id": result.org_id,
+                    "team_id": result.team_id,
+                    "role": result.role,
+                    "was_already_member": result.was_already_member,
+                    "invite_id": result.invite_id,
+                    "code_prefix": body.code[:8],
+                },
+            )
+        except Exception as exc:
+            logger.debug("Org invite audit failed: {}", exc)
+
+    await _safe_audit_log_invite_redeem()
 
     return OrgInviteRedeemResponse(
         success=result.success,

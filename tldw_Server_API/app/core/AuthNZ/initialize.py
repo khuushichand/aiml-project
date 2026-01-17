@@ -9,16 +9,19 @@
 # - Configuration validation
 #
 
+import argparse
 import asyncio
 import sys
 import os
 import secrets
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Iterable
 from getpass import getpass
 from urllib.parse import urlsplit
 from loguru import logger
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
+
+TEST_SETUP_API_KEY = "THIS-IS-NOT-A-SECURE-KEY-123-CHANGE-ME"
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
@@ -39,6 +42,7 @@ from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.scheduler import start_authnz_scheduler
 from tldw_Server_API.app.core.AuthNZ.monitoring import get_authnz_monitor
+from tldw_Server_API.app.core.AuthNZ.username_utils import normalize_admin_username
 
 #######################################################################################################################
 #
@@ -97,12 +101,192 @@ def _resolve_sqlite_db_path(db_url: str) -> Optional[Path]:
 
     return Path(fs_path)
 
+def _normalize_env_value(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "nil"}:
+        return None
+    return text
+
+
+def _resolve_env_locations() -> tuple[list[Path], list[Path], Path]:
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    cfg_dir = project_root / "Config_Files"
+    env_candidates = [
+        cfg_dir / ".env",
+        cfg_dir / ".ENV",
+        Path(".env").resolve(),
+        Path(".ENV").resolve(),
+    ]
+    template_candidates = [
+        cfg_dir / ".env.authnz.template",
+        cfg_dir / ".env.template",
+        Path(".env.authnz.template").resolve(),
+        Path(".env.template").resolve(),
+    ]
+    return env_candidates, template_candidates, cfg_dir
+
+
+def _create_env_from_template(target: Path, templates: Iterable[Path]) -> bool:
+    for template in templates:
+        if template.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+            return True
+    return False
+
+
+def _read_env_values(env_path: Optional[Path]) -> dict[str, str]:
+    if not env_path or not env_path.exists():
+        return {}
+    try:
+        raw = dotenv_values(str(env_path))
+    except Exception:
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if k}
+
+
+def _effective_env_value(key: str, env_values: dict[str, str]) -> Optional[str]:
+    return _normalize_env_value(os.getenv(key) or env_values.get(key))
+
+
+def _detect_env_issues(auth_mode: str, env_values: dict[str, str]) -> tuple[set[str], list[str]]:
+    missing_keys: set[str] = set()
+    issues: list[str] = []
+
+    mode = (auth_mode or "single_user").strip().lower()
+    if mode not in {"single_user", "multi_user"}:
+        issues.append(f"AUTH_MODE must be 'single_user' or 'multi_user' (found: {auth_mode})")
+        return missing_keys, issues
+
+    single_user_placeholders = {
+        "CHANGE_ME_TO_SECURE_API_KEY",
+        "default-secret-key-for-single-user",
+        "change-me-in-production",
+    }
+    jwt_placeholders = {
+        "CHANGE_ME_TO_SECURE_RANDOM_KEY_MIN_32_CHARS",
+    }
+
+    if mode == "single_user":
+        single_key = (
+            _effective_env_value("SINGLE_USER_API_KEY", env_values)
+            or _effective_env_value("API_KEY", env_values)
+        )
+        if not single_key:
+            missing_keys.add("SINGLE_USER_API_KEY")
+            issues.append("SINGLE_USER_API_KEY is required for single-user mode")
+        elif single_key in single_user_placeholders:
+            missing_keys.add("SINGLE_USER_API_KEY")
+            issues.append("SINGLE_USER_API_KEY still uses the default placeholder")
+        elif len(single_key) < 16:
+            missing_keys.add("SINGLE_USER_API_KEY")
+            issues.append("SINGLE_USER_API_KEY must be at least 16 characters")
+
+    if mode == "multi_user":
+        jwt_key = _effective_env_value("JWT_SECRET_KEY", env_values)
+        if not jwt_key:
+            missing_keys.add("JWT_SECRET_KEY")
+            issues.append("JWT_SECRET_KEY must be set for multi-user mode")
+        elif jwt_key in jwt_placeholders:
+            missing_keys.add("JWT_SECRET_KEY")
+            issues.append("JWT_SECRET_KEY still uses the default placeholder")
+        elif len(jwt_key) < 32:
+            missing_keys.add("JWT_SECRET_KEY")
+            issues.append("JWT_SECRET_KEY must be at least 32 characters")
+
+    return missing_keys, issues
+
+
+def _write_env_values(env_path: Path, values: dict[str, str]) -> None:
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = []
+
+    updated_keys: set[str] = set()
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        candidate = stripped
+        if candidate.startswith("export "):
+            candidate = candidate[7:]
+        key, sep, _value = candidate.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        if key in values:
+            lines[idx] = f"{key}={values[key]}"
+            updated_keys.add(key)
+
+    if updated_keys != set(values.keys()):
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append("# Added by AuthNZ initialize")
+        for key, value in values.items():
+            if key not in updated_keys:
+                lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _select_keys_to_write(
+    generated: dict[str, str],
+    required_keys: set[str],
+) -> dict[str, str]:
+    keys_to_write: dict[str, str] = {}
+    for key in required_keys:
+        value = generated.get(key)
+        if value:
+            keys_to_write[key] = value
+    return keys_to_write
+
+
+def _prompt_yes_no(prompt: str, default_yes: bool, non_interactive: bool) -> bool:
+    if non_interactive:
+        return default_yes
+    suffix = "Y/n" if default_yes else "y/N"
+    response = input(f"{prompt} ({suffix}): ").strip().lower()
+    if not response:
+        return default_yes
+    return response in {"y", "yes"}
+
+
+def _ensure_env_file() -> Path:
+    env_candidates, template_candidates, _ = _resolve_env_locations()
+    selected_env = next((p for p in env_candidates if p.exists()), None) or env_candidates[0]
+    if not selected_env.exists():
+        created = _create_env_from_template(selected_env, template_candidates)
+        if not created:
+            selected_env.parent.mkdir(parents=True, exist_ok=True)
+            selected_env.write_text("", encoding="utf-8")
+    return selected_env
+
+
+def _apply_test_setup_env() -> Path:
+    env_path = _ensure_env_file()
+    values = {
+        "AUTH_MODE": "single_user",
+        "SINGLE_USER_API_KEY": TEST_SETUP_API_KEY,
+    }
+    _write_env_values(env_path, values)
+    load_dotenv(dotenv_path=str(env_path), override=True)
+    reset_settings()
+    return env_path
+
+
+
 def print_banner():
     """Print initialization banner"""
     print("\n" + "=" * 60)
     print("       AuthNZ Module Initialization")
     print("=" * 60)
     print()
+
+
 
 def check_environment():
     """Check and validate environment configuration
@@ -114,37 +298,20 @@ def check_environment():
     """
     print("📋 Checking environment configuration...")
 
-    # Resolve project root (tldw_Server_API) and candidate .env paths
-    project_root = Path(__file__).resolve().parent.parent.parent.parent
-    cfg_env = project_root / "Config_Files" / ".env"
-    cfg_env_upper = project_root / "Config_Files" / ".ENV"
-    cwd_env = Path(".env").resolve()
-    cwd_env_upper = Path(".ENV").resolve()
-
-    selected_env: Optional[Path] = None
-    if cfg_env.exists():
-        selected_env = cfg_env
-    elif cfg_env_upper.exists():
-        selected_env = cfg_env_upper
-    elif cwd_env.exists():
-        selected_env = cwd_env
-    elif cwd_env_upper.exists():
-        selected_env = cwd_env_upper
+    env_candidates, template_candidates, _ = _resolve_env_locations()
+    selected_env: Optional[Path] = next((p for p in env_candidates if p.exists()), None)
 
     if selected_env is None:
-        # No .env found in preferred locations; fall back to legacy behavior
+        selected_env = env_candidates[0]
         print("❌ No .env file found in Config_Files/ or current directory!")
-        print("   Creating from template in current directory (if available)...")
-
-        template_file = Path(".env.authnz.template")
-        if template_file.exists():
-            Path(".env").write_text(template_file.read_text())
+        print(f"   Creating at: {selected_env}")
+        created = _create_env_from_template(selected_env, template_candidates)
+        if created:
             print("✅ Created .env file from template")
-            print("⚠️  Please edit .env and set secure values before continuing!")
-            return False
         else:
-            print("❌ Template file not found!")
-            return False
+            selected_env.parent.mkdir(parents=True, exist_ok=True)
+            selected_env.write_text("", encoding="utf-8")
+            print("⚠️  Template file not found; created empty .env")
 
     # Load the chosen .env without overriding any already-set environment vars
     try:
@@ -153,49 +320,76 @@ def check_environment():
     except Exception as e:
         print(f"⚠️  Failed to load .env at {selected_env}: {e}")
 
-    # Load settings
-    settings = get_settings()
-
-    # Validate critical settings
-    issues = []
-
-    if settings.AUTH_MODE == "multi_user":
-        if not settings.JWT_SECRET_KEY or len(settings.JWT_SECRET_KEY) < 32:
-            issues.append("JWT_SECRET_KEY must be set and at least 32 characters")
-
-        if settings.JWT_SECRET_KEY == "CHANGE_ME_TO_SECURE_RANDOM_KEY_MIN_32_CHARS":
-            issues.append("JWT_SECRET_KEY still has default value - must be changed!")
-
-    if settings.AUTH_MODE == "single_user":
-        if settings.SINGLE_USER_API_KEY == "CHANGE_ME_TO_SECURE_API_KEY":
-            issues.append("SINGLE_USER_API_KEY still has default value - must be changed!")
+    env_values = _read_env_values(selected_env)
+    auth_mode = _effective_env_value("AUTH_MODE", env_values) or "single_user"
+    missing_keys, issues = _detect_env_issues(auth_mode, env_values)
 
     if issues:
-        print("\n❌ Configuration issues found:")
+        print("\n⚠️  Configuration issues found:")
         for issue in issues:
             print(f"   - {issue}")
-        return False
+
+    if missing_keys:
+        return {
+            "ok": False,
+            "env_path": selected_env,
+            "missing_keys": missing_keys,
+            "issues": issues,
+            "auth_mode": auth_mode,
+        }
+
+    try:
+        settings = get_settings()
+    except Exception as exc:
+        print(f"\n❌ Configuration validation failed: {exc}")
+        return {
+            "ok": False,
+            "env_path": selected_env,
+            "missing_keys": set(),
+            "issues": [str(exc)],
+            "auth_mode": auth_mode,
+        }
 
     print("✅ Environment configuration valid")
     print(f"   Mode: {settings.AUTH_MODE}")
     db_url_safe = _sanitize_db_url(settings.DATABASE_URL)
     print(f"   Database: {db_url_safe}")
 
-    return True
+    return {
+        "ok": True,
+        "env_path": selected_env,
+        "missing_keys": set(),
+        "issues": [],
+        "auth_mode": settings.AUTH_MODE,
+    }
 
-def generate_secure_keys():
+def generate_secure_keys(requested_keys: Optional[Iterable[str]] = None):
     """Generate secure keys for configuration"""
     print("\n🔑 Generating secure keys...")
 
-    keys = {
-        'JWT_SECRET_KEY': secrets.token_urlsafe(32),
-        'SINGLE_USER_API_KEY': secrets.token_urlsafe(32),
-        'API_KEY_PEPPER': secrets.token_hex(32)
-    }
+    from tldw_Server_API.app.core.AuthNZ.api_key_crypto import (
+        format_api_key,
+        generate_api_key_id,
+        generate_api_key_secret,
+    )
 
-    # Generate Fernet key for session encryption
-    from cryptography.fernet import Fernet
-    keys['SESSION_ENCRYPTION_KEY'] = Fernet.generate_key().decode()
+    requested = set(requested_keys) if requested_keys else None
+    keys: dict[str, str] = {}
+
+    if requested is None or "JWT_SECRET_KEY" in requested:
+        keys['JWT_SECRET_KEY'] = secrets.token_urlsafe(32)
+    if requested is None or "SINGLE_USER_API_KEY" in requested:
+        keys['SINGLE_USER_API_KEY'] = format_api_key(
+            generate_api_key_id(),
+            generate_api_key_secret(),
+        )
+    if requested is None or "API_KEY_PEPPER" in requested:
+        keys['API_KEY_PEPPER'] = secrets.token_hex(32)
+    if requested is None or "SESSION_ENCRYPTION_KEY" in requested:
+        # Generate Fernet key for session encryption
+        from cryptography.fernet import Fernet
+
+        keys['SESSION_ENCRYPTION_KEY'] = Fernet.generate_key().decode()
 
     print("\n📝 Generated keys (save these in your .env file):")
     print("-" * 50)
@@ -696,13 +890,145 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                 logger.debug("Commit skipped or failed: {}", commit_err)
     except Exception as e:
         # Non-fatal but important for observability: surface failures at warning level
-        logger.opt(exception=True).warning(
-            "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
-            "(AUTH_MODE={}, db_url={}): {}",
-            settings.AUTH_MODE,
-            _sanitize_db_url(settings.DATABASE_URL),
-            e,
+            logger.opt(exception=True).warning(
+                "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
+                "(AUTH_MODE={}, db_url={}): {}",
+                settings.AUTH_MODE,
+                _sanitize_db_url(settings.DATABASE_URL),
+                e,
+            )
+
+
+def _coerce_row_int(row: object, key: str, index: int = 0) -> Optional[int]:
+    """Best-effort row value -> int for both sqlite rows and dict-like records."""
+    value = None
+    try:
+        if hasattr(row, "keys"):
+            value = row[key]  # type: ignore[index]
+        elif isinstance(row, dict):
+            value = row.get(key)
+        else:
+            value = row[index]  # type: ignore[index]
+    except Exception:
+        value = None
+    try:
+        return int(value) if value is not None else None
+    except Exception:
+        return None
+
+
+def _coerce_row_str(row: object, key: str, index: int = 0) -> Optional[str]:
+    """Best-effort row value -> str for both sqlite rows and dict-like records."""
+    value = None
+    try:
+        if hasattr(row, "keys"):
+            value = row[key]  # type: ignore[index]
+        elif isinstance(row, dict):
+            value = row.get(key)
+        else:
+            value = row[index]  # type: ignore[index]
+    except Exception:
+        value = None
+    if value is None:
+        return None
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
+async def _collect_single_user_invariant_errors(
+    pool: DatabasePool,
+    *,
+    expected_user_id: int,
+    expected_key_hash: Optional[str],
+    check_keys: bool,
+) -> list[str]:
+    """Return a list of invariant violations for single-user bootstrap."""
+    errors: list[str] = []
+    is_postgres = getattr(pool, "pool", None) is not None
+    active_clause = "is_active = TRUE" if is_postgres else "is_active = 1"
+
+    try:
+        active_rows = await pool.fetch(
+            f"SELECT id FROM users WHERE {active_clause}"
         )
+        active_ids = sorted(
+            {
+                _coerce_row_int(row, "id", 0)
+                for row in active_rows
+                if _coerce_row_int(row, "id", 0) is not None
+            }
+        )
+        if expected_user_id not in active_ids:
+            errors.append(
+                f"Single-user admin id={expected_user_id} is missing or inactive."
+            )
+        extra_active = [uid for uid in active_ids if uid != expected_user_id]
+        if extra_active:
+            errors.append(
+                "Multiple active users detected in single-user profile: "
+                + ", ".join(str(uid) for uid in extra_active)
+            )
+    except Exception as exc:
+        errors.append(f"Failed to verify active users: {exc}")
+
+    try:
+        admin_rows = await pool.fetch(
+            f"SELECT id FROM users WHERE role = ? AND {active_clause}",
+            "admin",
+        )
+        admin_ids = sorted(
+            {
+                _coerce_row_int(row, "id", 0)
+                for row in admin_rows
+                if _coerce_row_int(row, "id", 0) is not None
+            }
+        )
+        extra_admins = [uid for uid in admin_ids if uid != expected_user_id]
+        if extra_admins:
+            errors.append(
+                "Multiple admin users detected in single-user profile: "
+                + ", ".join(str(uid) for uid in extra_admins)
+            )
+    except Exception as exc:
+        errors.append(f"Failed to verify admin users: {exc}")
+
+    if check_keys and expected_key_hash:
+        virtual_clause = "is_virtual = FALSE" if is_postgres else "is_virtual = 0"
+        try:
+            key_rows = await pool.fetch(
+                f"""
+                SELECT id, key_hash FROM api_keys
+                WHERE user_id = ? AND status = ? AND {virtual_clause}
+                """,
+                expected_user_id,
+                "active",
+            )
+            key_ids = [
+                _coerce_row_int(row, "id", 0)
+                for row in key_rows
+                if _coerce_row_int(row, "id", 0) is not None
+            ]
+            if not key_ids:
+                errors.append(
+                    "No active non-virtual API key found for the single-user admin."
+                )
+            elif len(key_ids) > 1:
+                errors.append(
+                    "Multiple active non-virtual API keys found for the single-user admin: "
+                    + ", ".join(str(kid) for kid in key_ids)
+                )
+            else:
+                row_hash = _coerce_row_str(key_rows[0], "key_hash", 1)
+                if row_hash != expected_key_hash:
+                    errors.append(
+                        "Active primary API key does not match SINGLE_USER_API_KEY."
+                    )
+        except Exception as exc:
+            errors.append(f"Failed to verify single-user API key invariants: {exc}")
+
+    return errors
 
 async def create_admin_user():
     """Create initial admin user for multi-user mode"""
@@ -716,10 +1042,12 @@ async def create_admin_user():
 
     # Get user input
     while True:
-        username = input("   Admin username (default: admin): ").strip() or "admin"
-        if len(username) >= 3:
+        raw_username = input("   Admin username (default: tldw_admin): ").strip() or "tldw_admin"
+        try:
+            username = normalize_admin_username(raw_username)
             break
-        print("   Username must be at least 3 characters")
+        except ValueError as exc:
+            print(f"   {exc}")
 
     while True:
         email = input("   Admin email: ").strip()
@@ -809,8 +1137,25 @@ async def bootstrap_single_user_profile() -> bool:
     # The RBAC seed path may reset settings/DB pools; refresh settings to reflect
     # the current environment before reading SINGLE_USER_* values.
     settings = get_settings()
+    pool = await get_db_pool()
+    expected_user_id = settings.SINGLE_USER_FIXED_ID
     api_key_value = settings.SINGLE_USER_API_KEY or ""
     if not api_key_value or api_key_value == "CHANGE_ME_TO_SECURE_API_KEY":
+        errors = await _collect_single_user_invariant_errors(
+            pool,
+            expected_user_id=expected_user_id,
+            expected_key_hash=None,
+            check_keys=False,
+        )
+        if errors:
+            message = (
+                "Single-user bootstrap invariant check failed:\n - "
+                + "\n - ".join(errors)
+                + "\nResolve conflicts (deactivate extra users, revoke extra API keys) and re-run bootstrap."
+            )
+            print(f"❌ {message}")
+            logger.error(message)
+            return False
         print(
             "⚠️  SINGLE_USER_API_KEY is not set or uses the default placeholder; "
             "skipping primary API key bootstrap."
@@ -823,12 +1168,24 @@ async def bootstrap_single_user_profile() -> bool:
 
     try:
         # Use APIKeyManager to ensure tables and compute key hash
-        pool = await get_db_pool()
         manager = APIKeyManager(db_pool=pool)
         await manager.initialize()
 
         key_hash = manager.hash_api_key(api_key_value)
         key_prefix = (api_key_value[:10] + "...") if len(api_key_value) > 10 else api_key_value
+        key_identifier = None
+        try:
+            from tldw_Server_API.app.core.AuthNZ.api_key_crypto import parse_api_key
+
+            parsed = parse_api_key(api_key_value)
+            if parsed:
+                key_identifier, _secret = parsed
+        except Exception as exc:  # noqa: BLE001 - defensive: parsing failures must not block bootstrap
+            logger.opt(exception=True).debug(
+                "Failed to parse SINGLE_USER_API_KEY for identifier extraction: {}",
+                exc,
+            )
+            key_identifier = None
 
         from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
 
@@ -836,6 +1193,7 @@ async def bootstrap_single_user_profile() -> bool:
         await repo.upsert_primary_key(
             user_id=settings.SINGLE_USER_FIXED_ID,
             key_hash=key_hash,
+            key_identifier=key_identifier,
             key_prefix=key_prefix,
             name="single-user primary key",
             description="Primary API key for single-user profile",
@@ -845,6 +1203,21 @@ async def bootstrap_single_user_profile() -> bool:
 
         print("✅ Single-user primary API key ensured in AuthNZ store")
         logger.info("Single-user primary API key ensured in AuthNZ store")
+        errors = await _collect_single_user_invariant_errors(
+            pool,
+            expected_user_id=expected_user_id,
+            expected_key_hash=key_hash,
+            check_keys=True,
+        )
+        if errors:
+            message = (
+                "Single-user bootstrap invariant check failed:\n - "
+                + "\n - ".join(errors)
+                + "\nResolve conflicts (deactivate extra users, revoke extra API keys) and re-run bootstrap."
+            )
+            print(f"❌ {message}")
+            logger.error(message)
+            return False
         return True
     except Exception as e:
         print(f"⚠️  Failed to bootstrap single-user primary API key (continuing): {e}")
@@ -919,23 +1292,81 @@ async def start_services():
         print(f"❌ Failed to start services: {e}")
         return False
 
-async def main():
+async def main(*, non_interactive: bool = False, test_setup: bool = False):
     """Main initialization function"""
     print_banner()
 
+    generated_keys_written = False
+    if test_setup:
+        non_interactive = True
+        env_path = _apply_test_setup_env()
+        generated_keys_written = True
+        print(f"✅ Test setup .env prepared at: {env_path}")
+        print(f"⚠️  SINGLE_USER_API_KEY set to insecure test value: {TEST_SETUP_API_KEY}")
+
     # Step 1: Check environment
-    if not check_environment():
-        print("\n⚠️  Please configure your environment and run again.")
-        print("   1. Edit .env file with secure values")
-        print("   2. Run: python -m tldw_Server_API.app.core.AuthNZ.initialize")
-        sys.exit(1)
+    env_status = check_environment()
+
+    if not env_status.get("ok"):
+        missing_keys = env_status.get("missing_keys", set())
+        if missing_keys:
+            env_path = env_status.get("env_path")
+            prompt_path = env_path or Path(".env").resolve()
+            should_generate = _prompt_yes_no(
+                f"\n📝 Missing required keys. Generate and write to {prompt_path}?",
+                default_yes=True,
+                non_interactive=non_interactive,
+            )
+            if should_generate:
+                generated = generate_secure_keys(requested_keys=missing_keys)
+                keys_to_write = _select_keys_to_write(generated, set(missing_keys))
+                if env_path and keys_to_write:
+                    _write_env_values(env_path, keys_to_write)
+                    load_dotenv(dotenv_path=str(env_path), override=True)
+                    reset_settings()
+                    generated_keys_written = True
+                    print(f"✅ Wrote generated keys to: {env_path}")
+                else:
+                    print("\n⚠️  Could not write generated keys; update your .env manually.")
+                    sys.exit(1)
+            else:
+                print("\n⚠️  Please configure your environment and run again.")
+                print("   1. Edit .env file with secure values")
+                print("   2. Run: python -m tldw_Server_API.app.core.AuthNZ.initialize")
+                sys.exit(1)
+        else:
+            print("\n⚠️  Please configure your environment and run again.")
+            print("   1. Edit .env file with secure values")
+            print("   2. Run: python -m tldw_Server_API.app.core.AuthNZ.initialize")
+            sys.exit(1)
 
     # Step 2: Offer to generate keys if needed
-    response = input("\n📝 Generate new secure keys? (y/N): ").strip().lower()
-    if response == 'y':
-        generate_secure_keys()
-        print("\n⚠️  Update your .env file with these keys and run again.")
-        sys.exit(0)
+    if not generated_keys_written:
+        should_generate = _prompt_yes_no(
+            "\n📝 Generate new secure keys?",
+            default_yes=False,
+            non_interactive=non_interactive,
+        )
+        if should_generate:
+            generated = generate_secure_keys()
+            env_path = env_status.get("env_path")
+            if env_path:
+                should_write = _prompt_yes_no(
+                    f"\n📝 Write generated keys to {env_path}?",
+                    default_yes=False,
+                    non_interactive=non_interactive,
+                )
+                if should_write:
+                    _write_env_values(env_path, generated)
+                    load_dotenv(dotenv_path=str(env_path), override=True)
+                    reset_settings()
+                    print(f"✅ Wrote generated keys to: {env_path}")
+                else:
+                    print("\n⚠️  Update your .env file with these keys and run again.")
+                    sys.exit(0)
+            else:
+                print("\n⚠️  Update your .env file with these keys and run again.")
+                sys.exit(0)
 
     # Step 3: Setup database
     if not await setup_database():
@@ -951,17 +1382,31 @@ async def main():
             existing_users = await users_db.list_users(limit=1)
 
             if not existing_users:
-                response = input("\n📝 No users found. Create admin user? (Y/n): ").strip().lower()
-                if response != 'n':
-                    if not await create_admin_user():
-                        print("\n⚠️  Admin user creation failed")
+                if non_interactive:
+                    print("\n⚠️  No users found and --non-interactive is set; skipping admin user creation.")
+                else:
+                    should_create = _prompt_yes_no(
+                        "\n📝 No users found. Create admin user?",
+                        default_yes=True,
+                        non_interactive=non_interactive,
+                    )
+                    if should_create:
+                        if not await create_admin_user():
+                            print("\n⚠️  Admin user creation failed")
             else:
                 print(f"\n✅ Found {len(existing_users)} existing user(s)")
         except Exception as e:
             logger.warning(f"Could not check existing users: {e}")
-            response = input("\n📝 Create admin user? (Y/n): ").strip().lower()
-            if response != 'n':
-                await create_admin_user()
+            if non_interactive:
+                print("\n⚠️  --non-interactive is set; skipping admin user creation.")
+            else:
+                should_create = _prompt_yes_no(
+                    "\n📝 Create admin user?",
+                    default_yes=True,
+                    non_interactive=non_interactive,
+                )
+                if should_create:
+                    await create_admin_user()
     else:
         # Single-user profile: ensure bootstrap user + primary API key
         bootstrap_ok = await bootstrap_single_user_profile()
@@ -987,8 +1432,12 @@ async def main():
         print("\n⚠️  Authentication test failed")
 
     # Step 6: Start services (optional)
-    response = input("\n🚀 Start background services? (y/N): ").strip().lower()
-    if response == 'y':
+    should_start_services = test_setup or _prompt_yes_no(
+        "\n🚀 Start background services?",
+        default_yes=False,
+        non_interactive=non_interactive,
+    )
+    if should_start_services:
         await start_services()
 
     # Summary
@@ -1005,8 +1454,23 @@ async def main():
     print()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Initialize AuthNZ module")
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Run without prompts (uses defaults and auto-generates missing keys).",
+    )
+    parser.add_argument(
+        "--test-setup",
+        action="store_true",
+        help=(
+            "Prepare a rapid test environment (writes an insecure SINGLE_USER_API_KEY, "
+            "populates the .env file, and auto-starts background services)."
+        ),
+    )
     try:
-        asyncio.run(main())
+        args = parser.parse_args()
+        asyncio.run(main(non_interactive=args.non_interactive, test_setup=args.test_setup))
     except KeyboardInterrupt:
         print("\n\n⚠️  Initialization cancelled by user")
         sys.exit(0)

@@ -208,9 +208,14 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
     if not _is_truthy(os.getenv("JOBS_SLO_ENABLE")):
         return
     try:
+        from tldw_Server_API.app.core.Jobs.metrics import ensure_jobs_metrics_registered
         from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
     except Exception:
         return
+    try:
+        ensure_jobs_metrics_registered()
+    except Exception:
+        pass
     reg = get_metrics_registry()
     if not reg:
         return

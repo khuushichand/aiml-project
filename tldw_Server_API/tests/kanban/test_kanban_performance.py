@@ -10,7 +10,6 @@ These tests measure the performance of:
 
 Tests use pytest-benchmark when available, otherwise fall back to timing assertions.
 """
-import os
 import tempfile
 import time
 import uuid
@@ -20,6 +19,7 @@ import statistics
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 # Performance thresholds (in seconds)
@@ -31,11 +31,12 @@ BULK_OPERATION_THRESHOLD = 2.0  # Bulk operations
 
 
 @pytest.fixture
-def perf_db() -> Generator[KanbanDB, None, None]:
+def perf_db(monkeypatch: pytest.MonkeyPatch) -> Generator[KanbanDB, None, None]:
     """Create a KanbanDB instance for performance testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "perf_kanban.db")
-        db = KanbanDB(db_path=db_path, user_id="perf_test_user")
+        monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+        db_path = DatabasePaths.get_kanban_db_path("perf_test_user")
+        db = KanbanDB(db_path=str(db_path), user_id="perf_test_user")
         yield db
 
 
@@ -514,6 +515,7 @@ class TestBenchmarks:
         counter = [0]  # Use list to allow modification in closure
 
         def create_card():
+
             counter[0] += 1
             return perf_db.create_card(
                 list_id=list_id,

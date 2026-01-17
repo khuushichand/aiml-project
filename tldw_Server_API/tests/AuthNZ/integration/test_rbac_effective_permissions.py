@@ -13,6 +13,8 @@ pytestmark = pytest.mark.integration
 
 
 def _fresh_client() -> TestClient:
+
+
     """Create a TestClient against a fresh single-user SQLite auth DB.
 
     This avoids interacting with any existing local DB that may have partial migrations.

@@ -88,6 +88,49 @@
         <pre id="adminUserRegister_response">---</pre>
     </div>
 
+    <div class="endpoint-section" id="adminRegistrationSettings">
+        <h2>
+            <span class="endpoint-method get">GET/POST</span>
+            <span class="endpoint-path">/api/v1/admin/registration-settings - Registration Settings</span>
+        </h2>
+        <p>View and update registration policy and profile gating.</p>
+
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="regSettings_enable">Enable Registration:</label>
+                    <input type="checkbox" id="regSettings_enable" />
+                </div>
+                <div class="form-group">
+                    <label for="regSettings_requireCode">Require Registration Code:</label>
+                    <input type="checkbox" id="regSettings_requireCode" />
+                </div>
+            </div>
+            <div class="column">
+                <div class="form-group">
+                    <label>Auth Mode:</label>
+                    <div id="regSettings_authMode" class="code-input">---</div>
+                </div>
+                <div class="form-group">
+                    <label>Profile:</label>
+                    <div id="regSettings_profile" class="code-input">---</div>
+                </div>
+                <div class="form-group">
+                    <label>Self-Registration Allowed:</label>
+                    <div id="regSettings_selfAllowed" class="code-input">---</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="api-button" id="btnRegSettingsLoad">Load Settings</button>
+            <button class="api-button" id="btnRegSettingsSave">Save Settings</button>
+        </div>
+
+        <p id="regSettings_warning" class="muted"></p>
+        <pre id="adminRegSettings_result">---</pre>
+    </div>
+
 
 
     <div class="endpoint-section" id="adminRegistrationCodes">
@@ -101,7 +144,7 @@
             <div class="column">
                 <div class="form-group">
                     <label for="regCode_maxUses">Max Uses:</label>
-                    <input type="number" id="regCode_maxUses" value="1" min="1" />
+                    <input type="number" id="regCode_maxUses" value="1" min="1" max="100" />
                 </div>
                 <div class="form-group">
                     <label for="regCode_expires">Expires in (days):</label>
@@ -113,20 +156,50 @@
                     <label for="regCode_role">Role:</label>
                     <select id="regCode_role">
                         <option value="user" selected>user</option>
-                        <option value="moderator">moderator</option>
                         <option value="admin">admin</option>
+                        <option value="service">service</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="regCode_desc">Description:</label>
-                    <input type="text" id="regCode_desc" placeholder="Optional note" />
+                    <label for="regCode_allowedDomain">Allowed Email Domain (optional):</label>
+                    <input type="text" id="regCode_allowedDomain" placeholder="example.com" />
+                </div>
+                <div class="form-group">
+                    <label for="regCode_orgId">Org ID (optional):</label>
+                    <input type="number" id="regCode_orgId" min="1" />
+                </div>
+                <div class="form-group">
+                    <label for="regCode_orgRole">Org Role (optional):</label>
+                    <select id="regCode_orgRole">
+                        <option value="">(none)</option>
+                        <option value="member" selected>member</option>
+                        <option value="lead">lead</option>
+                        <option value="admin">admin</option>
+                        <option value="owner">owner</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="regCode_teamId">Team ID (optional):</label>
+                    <input type="number" id="regCode_teamId" min="1" />
                 </div>
             </div>
         </div>
 
+        <details>
+            <summary>Advanced metadata</summary>
+            <div class="form-group">
+                <label for="regCode_metadata">Metadata (JSON):</label>
+                <textarea id="regCode_metadata" class="code-input" rows="4" placeholder='{"source":"admin-ui"}'></textarea>
+            </div>
+        </details>
+
         <div class="btn-group">
             <button class="api-button" id="btnRegCodeCreate">Create Code</button>
             <button class="api-button" id="btnRegCodeList">List Codes</button>
+            <label style="display:flex;align-items:center;gap:0.4rem;">
+                <input type="checkbox" id="regCode_includeExpired" />
+                Include expired/inactive
+            </label>
         </div>
 
         <h3>Latest Result:</h3>
@@ -214,6 +287,7 @@
             <span class="endpoint-path">/api/v1/audit/export - Audit Logs Export</span>
         </h2>
         <p>Export audit logs (JSON or CSV). Admin-only. Use presets or custom filters.</p>
+        <div id="adminAuditStatus" class="text-muted" style="margin-bottom:8px;">Audit logging: checking...</div>
 
         <div class="columns">
             <div class="column">
@@ -264,7 +338,10 @@
             <button class="api-button" id="btnAdminAuditLast24h">Last 24h High-Risk (CSV)</button>
             <button class="api-button" id="btnAdminAuditApiEvents">API Events (CSV)</button>
             <button class="api-button" id="btnAdminAuditPreview">Preview JSON</button>
+            <button class="api-button" id="btnAdminAuditOrgInvites">Preset: Org Invites</button>
+            <button class="api-button" id="btnAdminAuditRegCodes">Preset: Registration Codes</button>
         </div>
+        <small class="text-muted">Org invites preset sets DATA_MODIFICATION + DATA_WRITE/DATA_UPDATE and last 24h window.</small>
 
         <h3>Preview:</h3>
         <pre id="adminAuditPreview">---</pre>
@@ -3795,6 +3872,72 @@ async function _ensurePermissionCategories() {
     </div>
     <h3>Result:</h3>
     <pre id="adminOrgsTeams_result">---</pre>
+    <!-- bindings via js/admin-advanced.js -->
+</div>
+
+<!-- ============ Admin: Organization Invites ============ -->
+<div class="endpoint-section" id="adminOrgInvites">
+    <h2>
+        <span class="endpoint-method get">GET/POST/DELETE</span>
+        <span class="endpoint-path">/api/v1/orgs/{org_id}/invites - Organization Invites</span>
+    </h2>
+    <p>Create, list, and revoke organization invite codes for memberships.</p>
+
+    <div class="columns">
+        <div class="column">
+            <div class="form-group">
+                <label for="orgInvite_orgId">Org ID:</label>
+                <input id="orgInvite_orgId" type="number" min="1" placeholder="1" />
+            </div>
+            <div class="form-group">
+                <label for="orgInvite_teamId">Team ID (optional):</label>
+                <input id="orgInvite_teamId" type="number" min="1" />
+            </div>
+            <div class="form-group">
+                <label for="orgInvite_role">Role:</label>
+                <select id="orgInvite_role">
+                    <option value="member" selected>member</option>
+                    <option value="lead">lead</option>
+                    <option value="admin">admin</option>
+                </select>
+            </div>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="orgInvite_maxUses">Max Uses:</label>
+                <input id="orgInvite_maxUses" type="number" value="1" min="1" max="1000" />
+            </div>
+            <div class="form-group">
+                <label for="orgInvite_expires">Expires in (days):</label>
+                <input id="orgInvite_expires" type="number" value="7" min="1" max="365" />
+            </div>
+            <div class="form-group">
+                <label for="orgInvite_allowedDomain">Allowed Email Domain (optional):</label>
+                <input id="orgInvite_allowedDomain" type="text" placeholder="example.com" />
+            </div>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="orgInvite_description">Description (optional):</label>
+                <input id="orgInvite_description" type="text" placeholder="Internal note" />
+            </div>
+        </div>
+    </div>
+
+    <div class="btn-group">
+        <button class="api-button" id="btnOrgInviteCreate">Create Invite</button>
+        <button class="api-button" id="btnOrgInviteList">List Invites</button>
+        <label style="display:flex;align-items:center;gap:0.4rem;">
+            <input type="checkbox" id="orgInvite_includeExpired" />
+            Include expired/inactive
+        </label>
+    </div>
+
+    <h3>Latest Result:</h3>
+    <pre id="adminOrgInvites_result">---</pre>
+
+    <h3>Invites:</h3>
+    <div id="adminOrgInvites_list"></div>
     <!-- bindings via js/admin-advanced.js -->
 </div>
 

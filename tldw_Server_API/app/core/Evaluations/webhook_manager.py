@@ -9,7 +9,6 @@ import json
 import hmac
 import hashlib
 import asyncio
-import aiohttp
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List, Tuple
@@ -33,17 +32,28 @@ from tldw_Server_API.app.core.Evaluations.db_adapter import (
 from tldw_Server_API.app.core.Evaluations.webhook_security import (
     webhook_validator,
     WebhookPermissionManager,
-    WebhookValidationResult
 )
 from tldw_Server_API.app.core.Evaluations.config_manager import get_config
 # Remove legacy audit event types; use unified audit adapter
 from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
-from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 #
 #
 #######################################################################################################################
 #
 # Functions:
+
+async def _close_response(resp: Any) -> None:
+    if resp is None:
+        return
+    close = getattr(resp, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(resp, "close", None)
+    if callable(close):
+        close()
+
 
 class WebhookEvent(Enum):
     """Webhook event types."""
@@ -234,10 +244,6 @@ class WebhookManager:
                     log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error="; ".join(error_messages))
                     raise ValueError(f"URL validation failed: {'; '.join(error_messages)}")
 
-            # Generate secret if not provided
-            if not secret:
-                secret = secrets.token_hex(32)
-
             # Convert events to JSON
             events_json = json.dumps([e.value for e in events])
 
@@ -258,20 +264,27 @@ class WebhookManager:
                     existing_secret = existing['secret']
                     existing_events = existing['events']
 
+                    # Preserve secret unless explicitly rotated
+                    if secret:
+                        secret_to_store = secret
+                    else:
+                        secret_to_store = existing_secret
+
                     # Update existing webhook
                     self.db_adapter.update("""
                         UPDATE webhook_registrations
-                        SET events = ?, active = 1, retry_count = ?, timeout_seconds = ?, updated_at = CURRENT_TIMESTAMP
+                        SET events = ?, active = 1, retry_count = ?, timeout_seconds = ?, secret = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
-                    """, (events_json, effective_retries, effective_timeout, webhook_id))
+                    """, (events_json, effective_retries, effective_timeout, secret_to_store, webhook_id))
 
-                    # Use existing secret if not provided
-                    if not secret:
-                        secret = existing_secret
+                    secret = secret_to_store
 
                     action = "Updated"
                     logger.info(f"Updated webhook {webhook_id} for user {user_id}")
                 else:
+                    # Generate secret if not provided for new registrations
+                    if not secret:
+                        secret = secrets.token_hex(32)
                     # Create new webhook
                     webhook_id = self.db_adapter.insert("""
                         INSERT INTO webhook_registrations (
@@ -534,8 +547,7 @@ class WebhookManager:
         from urllib.parse import urlparse
         import ipaddress
         import socket
-        # In tests, we both skip DNS validation and prefer aiohttp so that
-        # aioresponses can intercept requests deterministically.
+        # In tests, skip DNS validation to keep runs deterministic.
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
         testing_env = (_is_test_mode() or "PYTEST_CURRENT_TEST" in os.environ)
         skip_dns = testing_env
@@ -611,7 +623,12 @@ class WebhookManager:
 
         # Attempt delivery
         success = False
-        for attempt in range(webhook["retry_count"]):
+        error: Optional[str] = None
+        retry_count = int(webhook.get("retry_count") or 0)
+        retry_policy = RetryPolicy(attempts=1, retry_on_unsafe=False)
+        for attempt in range(retry_count):
+            status_code: Optional[int] = None
+            resp = None
             try:
                 headers = {
                     "Content-Type": "application/json",
@@ -621,24 +638,21 @@ class WebhookManager:
                 }
                 start_time = datetime.now()
 
-                # Prefer aiohttp for all deliveries; aioresponses in tests intercepts aiohttp
-                use_aiohttp = True
                 try:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(url)
-                    host = (parsed.hostname or "").lower()
-                    # Keep True for loopback explicitly (no change)
-                    if host in ("127.0.0.1", "localhost", "::1"):
-                        use_aiohttp = True
+                    timeout = min(5, int(webhook.get("timeout_seconds", 30)))
                 except Exception:
-                    pass
-
-                # Always use aiohttp for deliveries (test harness uses aioresponses)
-                timeout = aiohttp.ClientTimeout(total=min(5, int(webhook.get("timeout_seconds", 30))))
-                async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
-                    async with session.post(url, data=payload_json, headers=headers, allow_redirects=False) as resp:
-                        status_code = resp.status
-                        response_text = await resp.text()
+                    timeout = 5
+                resp = await afetch(
+                    method="POST",
+                    url=url,
+                    data=payload_json,
+                    headers=headers,
+                    timeout=timeout,
+                    allow_redirects=False,
+                    retry=retry_policy,
+                )
+                status_code = int(resp.status_code)
+                response_text = resp.text or ""
 
                 response_time = (datetime.now() - start_time).total_seconds() * 1000
                 if not isinstance(response_text, str):
@@ -657,59 +671,18 @@ class WebhookManager:
                     self._update_webhook_stats(webhook_id, success=True)
                     logger.info(f"Webhook delivered successfully: {delivery_id}")
                     break
-                else:
-                    logger.warning(f"Webhook delivery failed with status {status_code}: {delivery_id}")
-            except asyncio.TimeoutError:
-                error = "Request timeout"
-                logger.warning(f"Webhook delivery timeout: {delivery_id}")
-                # Fallback to aiohttp for test harness using aioresponses
-                try:
-                    timeout = aiohttp.ClientTimeout(total=webhook["timeout_seconds"])
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.post(url, data=payload_json, headers=headers, allow_redirects=False) as resp:
-                            response_time = (datetime.now() - start_time).total_seconds() * 1000
-                            response_text = await resp.text()
-                            self._update_delivery_record(
-                                delivery_id,
-                                status_code=resp.status,
-                                response_body=response_text[:1000],
-                                response_time_ms=int(response_time),
-                                delivered=resp.status < 400,
-                                retry_count=attempt
-                            )
-                            if resp.status < 400:
-                                success = True
-                                self._update_webhook_stats(webhook_id, success=True)
-                                logger.info(f"Webhook delivered successfully via fallback: {delivery_id}")
-                                break
-                except Exception:
-                    pass
+                error = f"status={status_code}"
             except Exception as e:
                 error = str(e)
                 logger.error(f"Webhook delivery error: {delivery_id} - {error}")
-                # Fallback to aiohttp for test harness using aioresponses
-                try:
-                    timeout = aiohttp.ClientTimeout(total=webhook["timeout_seconds"])
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.post(url, data=payload_json, headers=headers, allow_redirects=False) as resp:
-                            response_time = (datetime.now() - start_time).total_seconds() * 1000
-                            response_text = await resp.text()
-                            self._update_delivery_record(
-                                delivery_id,
-                                status_code=resp.status,
-                                response_body=response_text[:1000],
-                                response_time_ms=int(response_time),
-                                delivered=resp.status < 400,
-                                retry_count=attempt
-                            )
-                            if resp.status < 400:
-                                success = True
-                                self._update_webhook_stats(webhook_id, success=True)
-                                logger.info(f"Webhook delivered successfully via fallback: {delivery_id}")
-                                break
-                except Exception:
-                    pass
-            if attempt < webhook["retry_count"] - 1 and not success:
+            finally:
+                await _close_response(resp)
+            if not success:
+                if status_code is not None:
+                    logger.warning(f"Webhook delivery failed with status {status_code}: {delivery_id}")
+                else:
+                    logger.warning(f"Webhook delivery failed: {delivery_id}")
+            if attempt < retry_count - 1 and not success:
                 delay = self.retry_delays[min(attempt, len(self.retry_delays) - 1)]
                 await asyncio.sleep(delay)
 
@@ -718,10 +691,10 @@ class WebhookManager:
             self._update_delivery_record(
                 delivery_id,
                 delivered=False,
-                retry_count=webhook["retry_count"],
-                error_message=error if 'error' in locals() else "Max retries exceeded"
+                retry_count=retry_count,
+                error_message=error or "Max retries exceeded"
             )
-            self._update_webhook_stats(webhook_id, success=False, error=error if 'error' in locals() else None)
+            self._update_webhook_stats(webhook_id, success=False, error=error)
 
     def _generate_signature(self, payload: str, secret: str) -> str:
         """Generate HMAC signature for payload."""
@@ -995,45 +968,40 @@ class WebhookManager:
                 parsed_url.fragment
             ))
 
-            # Configure session to prevent SSRF
-            connector = aiohttp.TCPConnector(
-                force_close=True,
-                enable_cleanup_closed=True
-            )
+            payload_json = payload.to_json()
+            signature = self._generate_signature(payload_json, secret)
 
-            async with aiohttp.ClientSession(
-                connector=connector,
-                trust_env=False  # Disable automatic proxy detection
-            ) as session:
-                payload_json = payload.to_json()
-                signature = self._generate_signature(payload_json, secret)
+            headers = {
+                "Content-Type": "application/json",
+                "X-Webhook-Signature": signature,
+                "X-Webhook-Event": "test",
+                "X-Webhook-Test": "true",
+                "Host": hostname  # Add original hostname for virtual hosting
+            }
 
-                headers = {
-                    "Content-Type": "application/json",
-                    "X-Webhook-Signature": signature,
-                    "X-Webhook-Event": "test",
-                    "X-Webhook-Test": "true",
-                    "Host": hostname  # Add original hostname for virtual hosting
-                }
-
-                start_time = datetime.now()
-
-                async with session.post(
-                    ip_url,  # Use IP-based URL to prevent DNS rebinding
+            start_time = datetime.now()
+            resp = None
+            try:
+                resp = await afetch(
+                    method="POST",
+                    url=ip_url,  # Use IP-based URL to prevent DNS rebinding
                     data=payload_json,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                    allow_redirects=False  # Prevent SSRF via redirects
-                ) as response:
-                    response_time = (datetime.now() - start_time).total_seconds() * 1000
-                    response_body = await response.text()
+                    timeout=10,
+                    allow_redirects=False,
+                    retry=RetryPolicy(attempts=1, retry_on_unsafe=False),
+                )
+                response_time = (datetime.now() - start_time).total_seconds() * 1000
+                response_body = resp.text or ""
 
-                    return {
-                        "success": response.status < 400,
-                        "status_code": response.status,
-                        "response_time_ms": int(response_time),
-                        "response_body": response_body[:500]
-                    }
+                return {
+                    "success": int(resp.status_code) < 400,
+                    "status_code": int(resp.status_code),
+                    "response_time_ms": int(response_time),
+                    "response_body": response_body[:500]
+                }
+            finally:
+                await _close_response(resp)
 
         except asyncio.TimeoutError:
             return {

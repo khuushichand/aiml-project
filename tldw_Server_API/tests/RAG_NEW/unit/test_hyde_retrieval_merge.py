@@ -30,6 +30,8 @@ class _FakeVectorStore:
 
 
 def _vr(id, score, media_id, kind, parent_chunk_id=None):
+
+
     md = {"media_id": media_id, "kind": kind}
     if parent_chunk_id:
         md["parent_chunk_id"] = parent_chunk_id
@@ -44,7 +46,7 @@ def _vr(id, score, media_id, kind, parent_chunk_id=None):
 
 @pytest.mark.unit
 def test_hyde_merge_media_vs_chunk_level(monkeypatch, tmp_path):
-    # Patch settings flags
+     # Patch settings flags
     import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
     import tldw_Server_API.app.core.config as cfg_mod
 

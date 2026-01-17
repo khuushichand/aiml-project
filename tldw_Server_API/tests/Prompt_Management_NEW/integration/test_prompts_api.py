@@ -148,8 +148,51 @@ class TestVersionEndpoints:
     """Versioning endpoints are not available in current API."""
 
     @pytest.mark.integration
-    def test_versions_endpoints_skipped(self):
-        pytest.skip("Prompt version and restore endpoints not implemented in current API.")
+    def test_versions_endpoints(self, test_client, auth_headers):
+        """Test listing and restoring prompt versions via API."""
+        create_response = test_client.post(
+            "/api/v1/prompts",
+            json={
+                'name': 'Versioned Prompt',
+                'details': 'Initial version content',
+                'author': 'api_test'
+            },
+            headers=auth_headers
+        )
+        prompt = create_response.json()
+        prompt_id = prompt['id']
+
+        update_response = test_client.put(
+            f"/api/v1/prompts/{prompt_id}",
+            json={
+                'name': prompt['name'],
+                'author': prompt.get('author'),
+                'details': 'Updated version content',
+                'system_prompt': prompt.get('system_prompt'),
+                'user_prompt': prompt.get('user_prompt'),
+                'keywords': prompt.get('keywords', [])
+            },
+            headers=auth_headers
+        )
+        assert update_response.status_code == 200
+
+        versions_response = test_client.get(
+            f"/api/v1/prompts/{prompt_id}/versions",
+            headers=auth_headers
+        )
+        assert versions_response.status_code == 200
+        versions = versions_response.json()
+        assert len(versions) >= 2
+        version_numbers = [v['version'] for v in versions]
+        assert version_numbers == sorted(version_numbers)
+
+        restore_response = test_client.post(
+            f"/api/v1/prompts/{prompt_id}/versions/1/restore",
+            headers=auth_headers
+        )
+        assert restore_response.status_code == 200
+        restored = restore_response.json()
+        assert restored.get('details') == 'Initial version content'
 
 # ========================================================================
 # Search and Filter Endpoint Tests
@@ -242,8 +285,43 @@ class TestImportExportEndpoints:
         assert 'file_content_b64' in data
 
     @pytest.mark.integration
-    def test_import_endpoints_skipped(self):
-        pytest.skip("Prompts import endpoints not implemented in current API.")
+    def test_import_prompts_endpoint(self, test_client, auth_headers):
+        """Test importing prompts via API."""
+        payload = {
+            "prompts": [
+                {
+                    "name": "ImportPromptOne",
+                    "content": "Imported content one",
+                    "author": "import_test",
+                    "keywords": ["import"]
+                },
+                {
+                    "name": "ImportPromptTwo",
+                    "content": "Imported content two",
+                    "author": "import_test",
+                    "keywords": ["import", "two"]
+                }
+            ]
+        }
+        response = test_client.post(
+            "/api/v1/prompts/import",
+            json=payload,
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data['imported'] == 2
+        assert data['failed'] == 0
+        assert len(data['prompt_ids']) == 2
+
+        get_response = test_client.get(
+            "/api/v1/prompts/ImportPromptOne",
+            headers=auth_headers
+        )
+        assert get_response.status_code == 200
+        imported_prompt = get_response.json()
+        assert imported_prompt.get('details') == 'Imported content one'
 
 # ========================================================================
 # Template Processing Endpoint Tests
@@ -253,8 +331,31 @@ class TestTemplateEndpoints:
     """Template-specific endpoints are not available in current API."""
 
     @pytest.mark.integration
-    def test_template_endpoints_skipped(self):
-        pytest.skip("Template render/variable endpoints not implemented in current API.")
+    def test_template_endpoints(self, test_client, auth_headers):
+        """Test template variable extraction and rendering endpoints."""
+        variables_response = test_client.post(
+            "/api/v1/prompts/templates/variables",
+            json={"template": "Hello {{name}}, today is {{day}}."},
+            headers=auth_headers
+        )
+        assert variables_response.status_code == 200
+        variables = variables_response.json().get('variables', [])
+        assert 'name' in variables
+        assert 'day' in variables
+
+        render_response = test_client.post(
+            "/api/v1/prompts/templates/render",
+            json={
+                "template": "Hello {{name}}, today is {{day}}.",
+                "variables": {"name": "Ada", "day": "Monday"}
+            },
+            headers=auth_headers
+        )
+        assert render_response.status_code == 200
+        rendered = render_response.json().get('rendered')
+        assert "Ada" in rendered
+        assert "Monday" in rendered
+        assert "{{" not in rendered
 
 # ========================================================================
 # Bulk Operations Endpoint Tests
@@ -264,8 +365,57 @@ class TestBulkOperationsEndpoints:
     """Bulk endpoints not present in current API."""
 
     @pytest.mark.integration
-    def test_bulk_endpoints_skipped(self):
-        pytest.skip("Bulk delete/keyword endpoints not implemented in current API.")
+    def test_bulk_endpoints(self, test_client, auth_headers):
+        """Test bulk keyword update and delete endpoints."""
+        prompt_ids = []
+        for i in range(3):
+            response = test_client.post(
+                "/api/v1/prompts",
+                json={
+                    'name': f'Bulk Prompt {i}',
+                    'details': f'Bulk content {i}',
+                    'author': 'bulk_test'
+                },
+                headers=auth_headers
+            )
+            prompt_ids.append(response.json()['id'])
+
+        keywords_response = test_client.post(
+            "/api/v1/prompts/bulk/keywords",
+            json={
+                "prompt_ids": prompt_ids,
+                "add_keywords": ["bulk-tag"],
+                "remove_keywords": []
+            },
+            headers=auth_headers
+        )
+        assert keywords_response.status_code == 200
+        keywords_data = keywords_response.json()
+        assert keywords_data['updated'] == len(prompt_ids)
+        assert keywords_data['failed'] == 0
+
+        get_response = test_client.get(
+            f"/api/v1/prompts/{prompt_ids[0]}",
+            headers=auth_headers
+        )
+        assert get_response.status_code == 200
+        assert 'bulk-tag' in get_response.json().get('keywords', [])
+
+        delete_response = test_client.post(
+            "/api/v1/prompts/bulk/delete",
+            json={"prompt_ids": prompt_ids},
+            headers=auth_headers
+        )
+        assert delete_response.status_code == 200
+        delete_data = delete_response.json()
+        assert delete_data['deleted'] == len(prompt_ids)
+        assert delete_data['failed'] == 0
+
+        verify_response = test_client.get(
+            f"/api/v1/prompts/{prompt_ids[0]}",
+            headers=auth_headers
+        )
+        assert verify_response.status_code == 404
 
 # ========================================================================
 # Collection Management Endpoint Tests
@@ -449,5 +599,23 @@ class TestPaginationAndFiltering:
     @pytest.mark.integration
     def test_sorting_endpoint(self, test_client, auth_headers):
         """Test sorting in list endpoint."""
-        # Sorting is not implemented in current API list endpoint
-        pytest.skip("Sorting parameters not implemented in current list endpoint.")
+        name_a = "Sort Test A"
+        name_z = "Sort Test Z"
+        for name in (name_a, name_z):
+            test_client.post(
+                "/api/v1/prompts",
+                json={'name': name, 'author': 'sort_test', 'details': f'Details for {name}'},
+                headers=auth_headers
+            )
+
+        response = test_client.get(
+            "/api/v1/prompts",
+            params={'page': 1, 'per_page': 100, 'sort_by': 'name', 'sort_order': 'asc'},
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        names = [item['name'] for item in data.get('items', [])]
+        assert name_a in names and name_z in names
+        assert names.index(name_a) < names.index(name_z)

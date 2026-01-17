@@ -57,6 +57,7 @@ async def test_streaming_job_pumps_and_done():
     await q.start(num_workers=1)
 
     def streaming_proc():
+
         def gen():
             yield "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"
             yield "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n"
@@ -98,6 +99,7 @@ async def test_streaming_processor_error_emits_error_and_done():
     await q.start(num_workers=1)
 
     def failing_proc():
+
         raise RuntimeError("boom")
 
     ch: asyncio.Queue = asyncio.Queue(maxsize=10)
@@ -188,6 +190,7 @@ async def test_streaming_sequence_preserved():
     await q.start(num_workers=1)
 
     def gen():
+
         yield ": heartbeat 1\n\n"
         yield "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"
         yield ": heartbeat 2\n\n"

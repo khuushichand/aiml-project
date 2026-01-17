@@ -153,58 +153,35 @@ def get_categories() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
 
 def get_licenses() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
-        session = _mk_session()
-        r = session.get(f"{BASE_URL}/licenses", timeout=20)
-        r.raise_for_status()
-        return r.json(), None
+        data = fetch_json(method="GET", url=f"{BASE_URL}/licenses", timeout=20)
+        return data, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, f"Request to ChemRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, f"Request to ChemRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"ChemRxiv API Request Error: {str(e)}"
         return None, f"ChemRxiv error: {str(e)}"
 
 
 def get_version() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
-        session = _mk_session()
-        r = session.get(f"{BASE_URL}/version", timeout=20)
-        r.raise_for_status()
-        return r.json(), None
-    except requests.exceptions.Timeout:
-        return None, "Request to ChemRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"ChemRxiv API Request Error: {str(e)}"
+        data = fetch_json(method="GET", url=f"{BASE_URL}/version", timeout=20)
+        return data, None
     except Exception as e:
         return None, f"ChemRxiv error: {str(e)}"
 
 
 def oai_raw(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """Raw OAI-PMH passthrough. Returns (content, media_type, error)."""
+    r = None
     try:
-        session = _mk_session()
         url = f"{BASE_URL}/oai"
-        r = session.get(url, params=params, timeout=20)
-        r.raise_for_status()
+        r = fetch(method="GET", url=url, params=params, timeout=20)
+        if r.status_code >= 400:
+            return None, None, f"ChemRxiv HTTP error: {r.status_code}"
         ct = r.headers.get("content-type") or "application/xml"
         return r.content, ct.split(";")[0], None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, None, "Request to ChemRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, None, "Request to ChemRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, None, f"ChemRxiv API Request Error: {str(e)}"
         return None, None, f"ChemRxiv error: {str(e)}"
+    finally:
+        try:
+            if r is not None:
+                r.close()
+        except Exception:
+            pass

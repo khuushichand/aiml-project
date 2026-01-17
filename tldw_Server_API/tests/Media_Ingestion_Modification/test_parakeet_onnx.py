@@ -76,6 +76,7 @@ class TestParakeetONNX:
         tokenizer.id_to_token = {v: k for k, v in tokenizer.vocab.items()}
 
         def decode(token_ids):
+
             tokens = [tokenizer.id_to_token.get(tid, "<unk>") for tid in token_ids]
             text = " ".join(t for t in tokens if t not in ["<pad>", "<s>", "</s>", "<unk>"])
             return text
@@ -85,6 +86,7 @@ class TestParakeetONNX:
         return tokenizer
 
     def test_import_module(self):
+
         """Test that the ONNX module can be imported."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
@@ -158,11 +160,13 @@ class TestParakeetONNX:
         mock_onnx_session.run.assert_called()
 
     def test_preprocessing(self):
+
         """Test audio preprocessing functions."""
         # Skip this test as it tests private functions
         pytest.skip("_preprocess_audio is a private function and not exposed in the API")
 
     def test_tokenizer(self):
+
         """Test ParakeetONNXTokenizer functionality."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
             ParakeetONNXTokenizer
@@ -232,6 +236,7 @@ class TestParakeetONNX:
         assert len(chunk_callbacks) >= expected_chunks - 1
 
     def test_merge_algorithms(self):
+
         """Test different merge algorithms for chunked transcription."""
         # Skip this test as it tests private functions
         pytest.skip("_merge_chunks_middle and _merge_chunks_lcs are private functions")
@@ -280,6 +285,7 @@ class TestParakeetONNX:
         mock_load_model.assert_called_with(custom_path, 'cpu')
 
     def test_device_selection(self):
+
         """Test device selection for ONNX runtime."""
         # Skip this test as it tests private functions
         pytest.skip("_get_ort_providers is a private function")

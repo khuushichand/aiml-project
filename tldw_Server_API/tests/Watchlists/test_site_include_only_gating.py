@@ -32,6 +32,8 @@ def client_with_user(monkeypatch):
 
 
 def test_site_include_only_gating(client_with_user):
+
+
     c = client_with_user
 
     # Create a site source with basic scrape_rules; TEST_MODE produces synthetic items

@@ -19,6 +19,8 @@ from loguru import logger
 from spellchecker import SpellChecker
 import tiktoken
 
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+
 
 # 1. QUERY SPELL CHECKING
 class QuerySpellChecker:
@@ -546,6 +548,17 @@ class WebhookNotifier:
         self.default_timeout = default_timeout
         self.webhook_history = []
 
+    async def _close_response(self, resp: Any) -> None:
+        if resp is None:
+            return
+        close = getattr(resp, "aclose", None)
+        if callable(close):
+            await close()
+            return
+        close = getattr(resp, "close", None)
+        if callable(close):
+            close()
+
     async def send_notification(
         self,
         webhook_url: str,
@@ -565,40 +578,40 @@ class WebhookNotifier:
         Returns:
             Success status
         """
-        import aiohttp
-
         payload = {
             "event": event_type,
             "timestamp": datetime.now().isoformat(),
             "data": data
         }
 
+        resp = None
+        retry_policy = RetryPolicy(attempts=1, retry_on_unsafe=False)
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    webhook_url,
-                    json=payload,
-                    headers=headers or {},
-                    timeout=aiohttp.ClientTimeout(total=self.default_timeout)
-                ) as response:
-                    success = response.status < 400
+            resp = await afetch(
+                method="POST",
+                url=webhook_url,
+                json=payload,
+                headers=headers or {},
+                timeout=self.default_timeout,
+                retry=retry_policy,
+            )
+            success = int(resp.status_code) < 400
 
-                    # Log history
-                    self.webhook_history.append({
-                        "url": webhook_url,
-                        "event": event_type,
-                        "status": response.status,
-                        "timestamp": datetime.now(),
-                        "success": success
-                    })
+            # Log history
+            self.webhook_history.append({
+                "url": webhook_url,
+                "event": event_type,
+                "status": int(resp.status_code),
+                "timestamp": datetime.now(),
+                "success": success
+            })
 
-                    if success:
-                        logger.info(f"Webhook sent successfully to {webhook_url}")
-                    else:
-                        logger.warning(f"Webhook failed with status {response.status}")
+            if success:
+                logger.info(f"Webhook sent successfully to {webhook_url}")
+            else:
+                logger.warning(f"Webhook failed with status {resp.status_code}")
 
-                    return success
-
+            return success
         except Exception as e:
             logger.error(f"Webhook error: {e}")
 
@@ -611,6 +624,8 @@ class WebhookNotifier:
             })
 
             return False
+        finally:
+            await self._close_response(resp)
 
     async def notify_batch_complete(
         self,

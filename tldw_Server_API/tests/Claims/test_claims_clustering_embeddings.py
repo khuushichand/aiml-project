@@ -30,6 +30,8 @@ class _StubManager:
 
 
 def _seed_claims_db():
+
+
     tmpdir = tempfile.mkdtemp(prefix="claims_cluster_embed_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
@@ -83,6 +85,8 @@ def _seed_claims_db():
 
 
 def test_rebuild_claim_clusters_embeddings(monkeypatch):
+
+
     from tldw_Server_API.app.core.config import settings as app_settings
     from tldw_Server_API.app.core.Claims_Extraction import claims_clustering
 
@@ -146,6 +150,8 @@ def test_rebuild_claim_clusters_embeddings(monkeypatch):
 
 
 def test_rebuild_claim_clusters_embeddings_without_embeddings(monkeypatch):
+
+
     from tldw_Server_API.app.core.config import settings as app_settings
     from tldw_Server_API.app.core.Claims_Extraction import claims_clustering
 

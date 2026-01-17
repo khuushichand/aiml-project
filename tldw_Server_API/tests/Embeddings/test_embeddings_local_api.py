@@ -12,10 +12,12 @@ class _DummyResponse:
         self._payload = payload
 
     def raise_for_status(self):
+
         if self.status_code >= 400:
             raise RuntimeError("HTTP error")
 
     def json(self):
+
         return self._payload
 
 

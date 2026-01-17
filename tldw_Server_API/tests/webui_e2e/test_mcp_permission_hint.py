@@ -169,6 +169,8 @@ def test_mcp_tools_python_rest_flow():
 
 
 def _ensure_single_user_row():
+
+
     """Ensure users table has an entry for SINGLE_USER_FIXED_ID (default 1)."""
     try:
         db_path = Path("Databases/users.db")

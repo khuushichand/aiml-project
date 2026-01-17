@@ -1027,6 +1027,49 @@ class EvaluationsDatabase:
             rows = [dict(r) for r in cursor.fetchall()]
         return rows, total
 
+    def delete_abtest(self, test_id: str, *, delete_idempotency: bool = True) -> int:
+        """Delete an embeddings A/B test and related rows."""
+        deleted = 0
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("DELETE FROM embedding_abtest_results WHERE test_id = ?", (test_id,))
+                deleted += int(cursor.rowcount or 0)
+            except Exception:
+                pass
+            try:
+                cursor.execute("DELETE FROM embedding_abtest_queries WHERE test_id = ?", (test_id,))
+                deleted += int(cursor.rowcount or 0)
+            except Exception:
+                pass
+            try:
+                cursor.execute("DELETE FROM embedding_abtest_arms WHERE test_id = ?", (test_id,))
+                deleted += int(cursor.rowcount or 0)
+            except Exception:
+                pass
+            try:
+                cursor.execute("DELETE FROM embedding_abtests WHERE test_id = ?", (test_id,))
+                deleted += int(cursor.rowcount or 0)
+            except Exception:
+                pass
+            if delete_idempotency:
+                try:
+                    cursor.execute(
+                        """
+                        DELETE FROM idempotency_keys
+                        WHERE entity_type LIKE ? AND (entity_id = ? OR entity_id LIKE ?)
+                        """,
+                        ("emb_abtest%", test_id, f"{test_id}:%"),
+                    )
+                    deleted += int(cursor.rowcount or 0)
+                except Exception:
+                    pass
+            try:
+                conn.commit()
+            except Exception:
+                pass
+        return int(deleted)
+
     # ============= Idempotency Helpers =============
 
     def lookup_idempotency(self, entity_type: str, key: str, user_id: Optional[str]) -> Optional[str]:

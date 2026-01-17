@@ -15,6 +15,7 @@ This service provides:
 import asyncio
 import json
 import time
+import uuid
 from contextlib import suppress
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -1399,7 +1400,7 @@ class UnifiedEvaluationService:
         """Store evaluation result in database using unified approach"""
         try:
             # Generate evaluation ID
-            eval_id = f"eval_{evaluation_type}_{int(time.time() * 1000)}"
+            eval_id = f"eval_{evaluation_type}_{uuid.uuid4().hex[:12]}"
 
             # Store using unified method if available
             if hasattr(self.db, 'store_unified_evaluation'):

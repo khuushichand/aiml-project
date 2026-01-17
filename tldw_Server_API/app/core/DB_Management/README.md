@@ -34,7 +34,7 @@ Central data stores and database abstractions for content, prompts, notes, evalu
   - Content backend config: `content_backend.py` resolves `sqlite` vs `postgresql` via env/config and returns a shared backend for Postgres content mode; SQLite uses per-user file paths instead of a shared pool.
   - Factories: `DB_Manager.py` creates `MediaDatabase`, `CharactersRAGDB` (ChaCha), `PromptStudioDatabase`, `EvaluationsDatabase`, `WorkflowsDatabase`, wiring the right backend.
   - Scope: `scope_context.py` records per-request user/org/team scope for row-level filtering and Postgres RLS policies.
-  - Path management: `db_path_utils.py` centralizes per-user DB locations under `Databases/user_databases/<user_id>/...`.
+  - Path management: `db_path_utils.py` centralizes per-user DB locations under `<USER_DB_BASE_DIR>/<user_id>/...` (defaults to `Databases/user_databases` under repo root; `USER_DB_BASE` is a deprecated alias for rewrite cache resolution).
 - Key Classes/Modules:
   - `Media_DB_v2.MediaDatabase` — content store with schema versioning, FTS, chunking, claims, sync logs, soft deletes, and versioned entities.
   - `ChaChaNotes_DB.CharactersRAGDB` — notes/characters/messages with search and content helpers.
@@ -50,7 +50,7 @@ Central data stores and database abstractions for content, prompts, notes, evalu
   - Content backend selection: `TLDW_CONTENT_DB_BACKEND=sqlite|postgresql` (defaults to `sqlite`).
   - SQLite path: `TLDW_CONTENT_SQLITE_PATH` or `[Database].sqlite_path`; backups: `TLDW_DB_BACKUP_PATH` or `[Database].backup_path` (defaults to `./tldw_DB_Backups/`).
   - Postgres (content) envs: `TLDW_CONTENT_PG_DSN` (or `POSTGRES_TEST_DSN`), `TLDW_CONTENT_PG_HOST|PORT|DATABASE|USER|PASSWORD|SSLMODE` (fallback to `TLDW_PG_*` or `PG*`).
-  - Per-user base dir: `[settings].USER_DB_BASE_DIR` used by `db_path_utils.DatabasePaths` for media/notes/prompts/evals/workflows trees.
+  - Per-user base dir: `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`) used by `db_path_utils.DatabasePaths` for media/notes/prompts/evals/workflows trees; defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
   - General app config merges env + config files via `load_comprehensive_config`.
 - Concurrency & Performance:
   - SQLite: WAL mode, busy_timeout, thread-local pooled connections; memory DBs keep a persistent connection to retain state.

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from tldw_Server_API.app.core.config import get_stt_config
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 
 try:
     # Reuse the central model-name parser so HTTP/OpenAI-style model
@@ -28,6 +29,38 @@ except Exception:  # pragma: no cover - defensive fallback for minimal envs
         lowered = model_name.lower() or "whisper-1"
         # Default everything to Whisper when the real parser is unavailable.
         return "whisper", lowered, None
+
+
+_SUPPORTED_PARAKEET_VARIANTS = {"standard", "onnx", "mlx", "cuda"}
+
+
+def _normalize_parakeet_variant(raw: Optional[str]) -> str:
+    variant = (raw or "").strip().lower()
+    if not variant or variant not in _SUPPORTED_PARAKEET_VARIANTS:
+        return "standard"
+    return variant
+
+
+def _parakeet_model_name_for_variant(variant: str) -> str:
+    normalized = _normalize_parakeet_variant(variant)
+    return f"parakeet-{normalized}"
+
+
+def _resolve_default_model_for_provider(
+    provider: str,
+    stt_cfg: Dict[str, Any],
+) -> Tuple[str, Optional[str]]:
+    normalized = (provider or "").strip().lower()
+    if normalized == SttProviderName.PARAKEET.value:
+        variant = _normalize_parakeet_variant(stt_cfg.get("nemo_model_variant"))
+        return _parakeet_model_name_for_variant(variant), variant
+    if normalized == SttProviderName.CANARY.value:
+        return "nemo-canary-1b", "standard"
+    if normalized == SttProviderName.QWEN2AUDIO.value:
+        return "qwen2audio", None
+    if normalized == SttProviderName.EXTERNAL.value:
+        return "external:default", None
+    return "", None
 
 
 class SttProviderName(str, Enum):
@@ -147,9 +180,10 @@ class FasterWhisperAdapter(SttProviderAdapter):
         else:
             selected_lang = language or None
 
+        model_name = model or "distil-large-v3"
         result = fw_speech_to_text(
             audio_path,
-            whisper_model=model or "",
+            whisper_model=model_name,
             selected_source_lang=selected_lang,
             vad_filter=False,
             diarize=False,
@@ -157,6 +191,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
             return_language=True,
             initial_prompt=prompt,
             task=task,
+            base_dir=base_dir,
         )
 
         segments_list, detected_lang = result
@@ -176,7 +211,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
             "usage": {"duration_ms": None, "tokens": None},
             "metadata": {
                 "provider": self.name.value,
-                "model": model or "",
+                "model": model_name,
             },
         }
 
@@ -214,7 +249,16 @@ class ParakeetAdapter(SttProviderAdapter):
             speech_to_text,
         )
 
-        model_name = model or "parakeet-standard"
+        if model:
+            model_name = model
+        else:
+            try:
+                stt_cfg = get_stt_config() or {}
+            except Exception:
+                stt_cfg = {}
+            model_name, _ = _resolve_default_model_for_provider(self.name.value, stt_cfg)
+            if not model_name:
+                model_name = "parakeet-standard"
         segments_list, lang = speech_to_text(
             audio_path,
             whisper_model=model_name,
@@ -222,6 +266,7 @@ class ParakeetAdapter(SttProviderAdapter):
             vad_filter=False,
             diarize=False,
             return_language=True,
+            base_dir=base_dir,
         )
         text = " ".join(
             str(seg.get("Text", "")).strip()
@@ -274,10 +319,18 @@ class CanaryAdapter(SttProviderAdapter):
         import soundfile as sf  # type: ignore
         import numpy as np  # type: ignore
 
+        path_obj = Path(audio_path)
+        if base_dir is not None:
+            # Enforce that local audio paths stay within base_dir for path safety.
+            safe_path = resolve_safe_local_path(path_obj, base_dir)
+            if safe_path is None:
+                raise ValueError(f"Audio path rejected outside base_dir: {audio_path}")
+            path_obj = safe_path
+
         try:
-            audio_np, sample_rate = sf.read(audio_path)
+            audio_np, sample_rate = sf.read(str(path_obj))
         except Exception as e:
-            raise ValueError(f"Failed to read audio file {audio_path}: {e}") from e
+            raise ValueError(f"Failed to read audio file {path_obj}: {e}") from e
         if not isinstance(audio_np, np.ndarray):
             audio_np = np.array(audio_np, dtype="float32")
 
@@ -349,6 +402,7 @@ class Qwen2AudioAdapter(SttProviderAdapter):
             vad_filter=False,
             diarize=False,
             return_language=True,
+            base_dir=base_dir,
         )
         text = " ".join(
             str(seg.get("Text", "")).strip()
@@ -404,6 +458,7 @@ class ExternalAdapter(SttProviderAdapter):
         if model_id.startswith("external:"):
             provider_name = model_id.split(":", 1)[1] or "default"
 
+        # Pass base_dir so external providers validate local paths consistently.
         text = transcribe_with_external_provider(
             audio_path,
             provider_name=provider_name,
@@ -520,12 +575,18 @@ class SttProviderRegistry:
         a single mapping from model identifiers to providers. The provider
         name returned is normalized (e.g. 'faster-whisper').
         """
-        if not model_name:
-            # When no model is specified, just return the default provider and
-            # leave model/variant unspecified. Higher-level code can fill in
-            # model defaults (e.g. whisper alias mapping).
+        if not model_name or not str(model_name).strip():
+            # When no model is specified, return the default provider and a
+            # config-aware default model for non-Whisper backends. Whisper
+            # defaults are handled by higher-level callers so they can apply
+            # endpoint-specific alias mapping.
             provider = self.get_default_provider_name()
-            return provider, "", None
+            try:
+                stt_cfg = get_stt_config() or {}
+            except Exception:
+                stt_cfg = {}
+            model, variant = _resolve_default_model_for_provider(provider, stt_cfg)
+            return provider, model, variant
 
         try:
             normalized_name = (model_name or "").strip()
@@ -534,6 +595,9 @@ class SttProviderRegistry:
             if lowered == "qwen":
                 provider = SttProviderName.QWEN2AUDIO.value
                 return provider, "qwen2audio", None
+            if lowered.startswith("external:"):
+                provider = SttProviderName.EXTERNAL.value
+                return provider, normalized_name, None
 
             raw_provider, model, variant = parse_transcription_model(normalized_name)
         except Exception:
@@ -561,6 +625,28 @@ def get_stt_provider_registry() -> SttProviderRegistry:
     if _REGISTRY is None:
         _REGISTRY = SttProviderRegistry()
     return _REGISTRY
+
+
+def resolve_default_transcription_model(fallback_whisper_model: str) -> str:
+    """
+    Resolve a config-aware default transcription model string.
+
+    For non-Whisper providers, this returns a provider-specific default model
+    (e.g., "parakeet-mlx" when configured). For Whisper defaults, callers
+    supply the endpoint-specific fallback (e.g., "whisper-1" or a faster-whisper
+    model size).
+    """
+    registry = get_stt_provider_registry()
+    try:
+        stt_cfg = get_stt_config() or {}
+    except Exception:
+        stt_cfg = {}
+
+    provider = registry.get_default_provider_name()
+    model, _ = _resolve_default_model_for_provider(provider, stt_cfg)
+    if provider == SttProviderName.FASTER_WHISPER.value:
+        return fallback_whisper_model
+    return model or fallback_whisper_model
 
 
 def reset_stt_provider_registry() -> None:

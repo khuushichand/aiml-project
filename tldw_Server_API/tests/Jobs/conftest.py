@@ -1,11 +1,10 @@
 import os
-import socket
-import time
-import shutil
-import subprocess
 import pytest
 
-from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+try:
+    from tldw_Server_API.tests._plugins.postgres import *  # noqa: F401,F403
+except Exception:
+    pass
 
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
@@ -37,86 +36,6 @@ def _bootstrap_jobs_routes_env():
     os.environ.setdefault("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
 
 
-def _ensure_local_pg(pg_host: str, pg_port: int, user: str, password: str, database: str) -> None:
-    if pg_host not in {"127.0.0.1", "localhost", "::1"}:
-        raise RuntimeError("Local docker bootstrap only supported for localhost hosts")
-    if _truthy(os.getenv("TLDW_TEST_NO_DOCKER")):
-        raise RuntimeError("Docker bootstrap disabled via TLDW_TEST_NO_DOCKER")
-    docker_bin = shutil.which("docker")
-    if not docker_bin:
-        raise RuntimeError("Docker not found in PATH")
-    image = os.getenv("TLDW_TEST_PG_IMAGE", "postgres:15")
-    container = os.getenv("TLDW_TEST_PG_CONTAINER_NAME", "tldw_jobs_postgres_test")
-    # Remove any old container
-    subprocess.run([docker_bin, "rm", "-f", container], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    envs = [
-        "-e", f"POSTGRES_USER={user}",
-        "-e", f"POSTGRES_PASSWORD={password}",
-        "-e", f"POSTGRES_DB={database}",
-    ]
-    ports = ["-p", f"{pg_port}:5432"]
-    run_cmd = [docker_bin, "run", "-d", "--name", container, *envs, *ports, image]
-    subprocess.run(run_cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # Wait up to 30s
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        try:
-            with socket.create_connection((pg_host, int(pg_port)), timeout=1.0):
-                return
-        except Exception:
-            time.sleep(1)
-    raise RuntimeError("Postgres did not become reachable after docker start attempts")
-
-
-@pytest.fixture
-def jobs_pg(monkeypatch):
-    """Ensure Postgres for Jobs tests and set JOBS_DB_URL.
-
-    - Skips the test unless RUN_PG_JOBS_TESTS is truthy
-    - Resolves DSN using tests/helpers/pg_env precedence
-    - Attempts a quick TCP probe; if local and docker allowed, starts a container
-    - Sets JOBS_DB_URL (adds connect_timeout=2) and returns the DSN
-    - Ensures Jobs schema exists (idempotent)
-    """
-    if not _truthy(os.getenv("RUN_PG_JOBS_TESTS")):
-        pytest.skip("FIXME: Postgres outbox tests disabled by default; set RUN_PG_JOBS_TESTS=1 to enable")
-
-    # Minimal app footprint and router gating hints
-    monkeypatch.setenv("TEST_MODE", "true")
-    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("ROUTES_STABLE_ONLY", "0")
-    monkeypatch.setenv("ROUTES_ENABLE", ",".join(filter(None, [os.getenv("ROUTES_ENABLE", ""), "jobs"])))
-
-    # Quiet jobs background features
-    monkeypatch.setenv("JOBS_METRICS_GAUGES_ENABLED", "false")
-    monkeypatch.setenv("JOBS_METRICS_RECONCILE_ENABLE", "false")
-    monkeypatch.setenv("JOBS_WEBHOOKS_ENABLED", "false")
-
-    pg = get_pg_env()
-    # Reachability check
-    try:
-        with socket.create_connection((pg.host, int(pg.port)), timeout=1.5):
-            pass
-    except Exception:
-        try:
-            _ensure_local_pg(pg.host, int(pg.port), pg.user, pg.password, pg.database)
-        except Exception:
-            pytest.skip(f"Postgres not reachable at {pg.host}:{pg.port} and docker bootstrap failed/disabled")
-
-    dsn = pg.dsn
-    dsn_ct = dsn + ("&" if "?" in dsn else "?") + "connect_timeout=2"
-    monkeypatch.setenv("JOBS_DB_URL", dsn_ct)
-    # Ensure schema
-    try:
-        from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
-        ensure_jobs_tables_pg(dsn_ct)
-    except Exception:
-        # Best-effort; individual calls will surface issues
-        pass
-
-    return dsn_ct
-
-
 @pytest.fixture(autouse=True)
 def _jobs_minimal_env(monkeypatch):
     """Ensure a minimal, stable app environment for Jobs tests.
@@ -140,8 +59,8 @@ def _jobs_minimal_env(monkeypatch):
     monkeypatch.setenv("JOBS_METRICS_GAUGES_ENABLED", "false")
     monkeypatch.setenv("JOBS_METRICS_RECONCILE_ENABLE", "false")
     # Default to no lease enforcement in Jobs tests unless a test opts in
-    if os.getenv("JOBS_ENFORCE_LEASE_ACK") is None:
-        monkeypatch.setenv("JOBS_DISABLE_LEASE_ENFORCEMENT", "true")
+    monkeypatch.delenv("JOBS_ENFORCE_LEASE_ACK", raising=False)
+    monkeypatch.setenv("JOBS_DISABLE_LEASE_ENFORCEMENT", "true")
     # Disable counters and outbox by default for determinism; tests can opt-in
     if os.getenv("JOBS_COUNTERS_ENABLED") is None:
         monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "false")
@@ -156,13 +75,18 @@ def _jobs_minimal_env(monkeypatch):
 
     # Skip global privilege metadata validation for Jobs tests
     monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
-
-    # Stabilize acquisition priority for chatbooks domain
-    prev_desc = os.getenv("JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS", "")
-    domains = {d.strip() for d in prev_desc.split(",") if d.strip()}
-    if "chatbooks" not in domains:
-        domains.add("chatbooks")
-        monkeypatch.setenv("JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS", ",".join(sorted(domains)))
+    # Default to no domain-scoped RBAC unless a test opts in
+    monkeypatch.setenv("JOBS_DOMAIN_SCOPED_RBAC", "false")
+    monkeypatch.setenv("JOBS_REQUIRE_DOMAIN_FILTER", "false")
+    monkeypatch.setenv("JOBS_DOMAIN_RBAC_PRINCIPAL", "false")
+    # Disable Postgres RLS unless a test explicitly enables it
+    monkeypatch.setenv("JOBS_PG_RLS_ENABLE", "false")
+    # Avoid env leakage that could allow admin finalize on arbitrary domains
+    monkeypatch.setenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "chatbooks")
+    # Keep acquire ordering defaults deterministic across environments
+    monkeypatch.delenv("JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS", raising=False)
+    monkeypatch.delenv("JOBS_PG_ACQUIRE_PRIORITY_DESC_DOMAINS", raising=False)
+    monkeypatch.delenv("JOBS_POSTGRES_ACQUIRE_PRIORITY_DESC_DOMAINS", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -206,7 +130,7 @@ def route_debugger():
 
 
 @pytest.fixture(scope="function")
-def jobs_pg_dsn(request, monkeypatch):
+def jobs_pg_dsn(pg_temp_db, monkeypatch):
     """Function-scoped DSN for Jobs tests using a temp Postgres DB.
 
     - Allocates a per-test database via the unified pg_temp_db fixture.
@@ -223,11 +147,11 @@ def jobs_pg_dsn(request, monkeypatch):
         parts.append("jobs")
     monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
     # Resolve a fresh temp database
-    pg_temp = request.getfixturevalue("pg_temp_db")
-    dsn = str(pg_temp["dsn"])  # type: ignore[index]
+    dsn = str(pg_temp_db["dsn"])  # type: ignore[index]
     # Initialize Jobs schema
-    from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
+    from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg, ensure_job_counters_pg
     ensure_jobs_tables_pg(dsn)
+    ensure_job_counters_pg(dsn)
     # Ensure acquisitions are allowed for these tests
     try:
         from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -237,3 +161,21 @@ def jobs_pg_dsn(request, monkeypatch):
     # Bind to env for code under test
     monkeypatch.setenv("JOBS_DB_URL", dsn)
     return dsn
+
+
+@pytest.fixture(autouse=True)
+def _pg_jobs_db_url(request, pg_temp_db, monkeypatch):
+    """Provide JOBS_DB_URL for pg_jobs tests that don't request jobs_pg_dsn."""
+    try:
+        if "pg_jobs" not in request.keywords:
+            return
+    except Exception:
+        return
+    # Default to the per-test temp DB for pg_jobs, unless explicitly overridden.
+    if _truthy(os.getenv("JOBS_PG_USE_ENV_DB")) and os.getenv("JOBS_DB_URL", "").startswith("postgres"):
+        return
+    dsn = str(pg_temp_db["dsn"])  # type: ignore[index]
+    monkeypatch.setenv("JOBS_DB_URL", dsn)
+    from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg, ensure_job_counters_pg
+    ensure_jobs_tables_pg(dsn)
+    ensure_job_counters_pg(dsn)

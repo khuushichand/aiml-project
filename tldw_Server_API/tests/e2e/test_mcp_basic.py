@@ -12,6 +12,8 @@ from .fixtures import api_client
 
 
 def _maybe_import_websockets():
+
+
     try:
         import websockets  # type: ignore
         return websockets

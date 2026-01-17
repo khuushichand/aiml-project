@@ -53,6 +53,50 @@ async def test_authnz_api_keys_repo_fetch_key_limits_sqlite(isolated_test_enviro
 
 
 @pytest.mark.asyncio
+async def test_authnz_api_keys_repo_virtual_key_scope_alignment_sqlite(isolated_test_environment):
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+    _client, _db_name = isolated_test_environment
+    pool = await get_db_pool()
+
+    users_db = UsersDB(pool)
+    await users_db.initialize()
+    created_user = await users_db.create_user(
+        username="vk_scope_user",
+        email="vk_scope_user@example.com",
+        password_hash="hash",
+        role="user",
+        is_active=True,
+        is_superuser=False,
+        storage_quota_mb=5120,
+        uuid_value=uuid.uuid4(),
+    )
+    user_id = int(created_user["id"])
+
+    mgr = APIKeyManager(pool)
+    await mgr.initialize()
+    created = await mgr.create_virtual_key(
+        user_id=user_id,
+        name="vk-scope-check",
+        expires_in_days=1,
+    )
+    key_id = int(created["id"])
+
+    row = await pool.fetchrow(
+        "SELECT scope, status, expires_at, is_virtual, parent_key_id FROM api_keys WHERE id = ?",
+        key_id,
+    )
+    assert row is not None
+    assert row["scope"] == "read"
+    assert row["status"] == "active"
+    assert row["expires_at"] is not None
+    assert row["parent_key_id"] is None
+    assert bool(row["is_virtual"]) is True
+
+
+@pytest.mark.asyncio
 async def test_api_key_scope_list_serializes_and_normalizes_sqlite(isolated_test_environment):
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB

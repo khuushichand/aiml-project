@@ -53,15 +53,18 @@ class TestRAGComprehensive:
     """Comprehensive tests for the RAG pipeline."""
 
     def setup_method(self):
+
         """Setup test method."""
         self.uploaded_ids = []
 
     def teardown_method(self):
+
         """Cleanup after test."""
         # Could delete uploaded documents here if needed
         pass
 
     def test_full_rag_pipeline_with_indexing_wait(self, api_client):
+
         """Test complete RAG pipeline with proper indexing wait."""
 
         # Step 1: Upload documents with embedding generation
@@ -212,6 +215,7 @@ class TestRAGComprehensive:
         assert benchmark.stats['mean'] < 1.0, "Search too slow (>1s average)"
 
     def test_concurrent_searches(self, api_client):
+
         """Test concurrent search requests."""
         import concurrent.futures
 
@@ -245,6 +249,7 @@ class TestRAGComprehensive:
         print(f"✓ All {len(queries)} concurrent searches succeeded")
 
     def test_search_with_filters(self, api_client):
+
         """Test search with various filters."""
 
         # Test with keyword filter
@@ -273,6 +278,7 @@ class TestRAGComprehensive:
         print("✓ Keyword filtering works correctly")
 
     def test_empty_and_edge_cases(self, api_client):
+
         """Test edge cases and error handling."""
 
         # Test empty query

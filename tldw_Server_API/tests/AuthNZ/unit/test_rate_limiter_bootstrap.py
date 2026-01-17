@@ -30,6 +30,7 @@ class _StubPool:
         self._conn = _StubConn()
 
     def transaction(self):
+
         return _StubTransaction(self._conn)
 
     @property

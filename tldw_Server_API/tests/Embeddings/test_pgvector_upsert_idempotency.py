@@ -6,6 +6,8 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter imp
 
 
 def test_pg_upsert_idempotent(pgvector_dsn, monkeypatch):
+
+
     coll = 'idempotency_demo'
     dim = 8
     adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={'dsn': pgvector_dsn}, embedding_dim=dim, user_id='t'))

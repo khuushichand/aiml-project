@@ -8,9 +8,9 @@ from tldw_Server_API.app.core.Chunking import Chunker
 
 @pytest.fixture(autouse=True)
 def testing_env():
-    os.environ['TESTING'] = 'true'
+    os.environ["TESTING"] = "true"
     yield
-    os.environ.pop('TESTING', None)
+    os.environ.pop("TESTING", None)
 
 
 # ------------------------- helper generators -------------------------
@@ -31,6 +31,7 @@ def _join_en_tokens(tokens: list[str]) -> str:
 
 
 def _ja_token_strategy():
+
     # limited kana set + punctuation
     kana = "あいうえおかきくけこさしすせそたちつてとなにぬねのまみむめもやゆよらりるれろわをん"
     punct = "。！？"
@@ -44,6 +45,7 @@ def _join_ja_tokens(tokens: list[str]) -> str:
 
 
 def _th_token_strategy():
+
     # small Thai alphabet subset + punctuation
     thai = "กขคฆงจฉชซดตถทนบปผฝพฟมยรลวสหออะอิอึอือะเแโใไึ"
     punct = "!?"  # Thai uses these as well
@@ -56,11 +58,11 @@ def _join_th_tokens(tokens: list[str]) -> str:
 
 
 def _text_for_language(lang: str):
-    if lang == 'en':
+    if lang == "en":
         return st.lists(_EN_WORD, min_size=10, max_size=80).map(_join_en_tokens)
-    if lang == 'ja':
+    if lang == "ja":
         return _ja_token_strategy().map(_join_ja_tokens)
-    if lang == 'th':
+    if lang == "th":
         return _th_token_strategy().map(_join_th_tokens)
     # default English
     return st.lists(_EN_WORD, min_size=10, max_size=80).map(_join_en_tokens)
@@ -103,8 +105,8 @@ def test_chunk_with_metadata_re_slices_source(lang: str, method: str, max_size: 
 
     # Property: every chunk's text equals text[start:end], and bounds are valid
     for res in results or []:
-        s = getattr(res.metadata, 'start_char', None)
-        e = getattr(res.metadata, 'end_char', None)
+        s = getattr(res.metadata, "start_char", None)
+        e = getattr(res.metadata, "end_char", None)
         assert isinstance(s, int) and isinstance(e, int)
         assert 0 <= s <= e <= len(text)
         assert res.text == text[s:e]

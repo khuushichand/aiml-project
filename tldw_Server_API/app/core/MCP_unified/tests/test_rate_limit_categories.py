@@ -7,6 +7,7 @@ from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, Module
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
 from tldw_Server_API.app.core.MCP_unified.server import MCPServer
 from tldw_Server_API.app.core.MCP_unified.protocol import MCPRequest
+from tldw_Server_API.app.core.MCP_unified.auth.rate_limiter import RateLimitExceeded
 from tldw_Server_API.app.core.MCP_unified.config import get_config
 from fastapi import HTTPException
 
@@ -59,6 +60,19 @@ async def test_category_limits_ingestion_vs_read(monkeypatch):
         async def check_permission(self, *args, **kwargs):
             return True
     server.protocol.rbac_policy = _AllowAll()
+
+    class _StubLimiter:
+        def __init__(self):
+            self.ingestion_hits = 0
+
+        async def check_rate_limit(self, _key: str, *, category: str = "default") -> None:
+            if category != "ingestion":
+                return
+            self.ingestion_hits += 1
+            if self.ingestion_hits > 2:
+                raise RateLimitExceeded(1)
+
+    server.protocol.rate_limiter = _StubLimiter()
 
     # Register stub module
     reg = server.module_registry

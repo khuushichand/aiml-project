@@ -26,7 +26,7 @@ yarn dev -p 8080
 
 Open [http://localhost:8080](http://localhost:8080) with your browser.
 
- Unified streaming (dev)
+Unified streaming (dev)
  - To exercise the unified SSE/WS streaming in the backend, start the API with the dev overlay:
    `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build`
   and set `NEXT_PUBLIC_API_URL` to `http://127.0.0.1:8000`. If you serve assets from a different origin or path than the API, set `NEXT_PUBLIC_API_BASE_URL` to the origin hosting web assets (e.g., `https://your-domain.example`).
@@ -52,6 +52,48 @@ npm run smoke
 ```
 
 The script exercises providers, chat, RAG, audio voices, and connectors (optional). A 404 on connectors is expected if that module isn’t enabled on your server.
+
+## Auth Modes & Profile
+
+This WebUI supports both single-user API key mode and multi-user JWT mode:
+
+- In **single_user** mode, set `NEXT_PUBLIC_X_API_KEY` (and optionally `NEXT_PUBLIC_API_BEARER` for chat) and navigate directly to the app. Most flows (media, search, chat, audio) should work without logging in.
+- In **multi_user** mode, use the `/login` page to authenticate against `/api/v1/auth/login`. On success, the app will hydrate the current user from `/api/v1/users/me`.
+
+You can inspect the current user and roles via the `/profile` page:
+
+- Shows identity, usage counters, roles/permissions, and a debug panel with the raw `/users/me` JSON response to aid troubleshooting.
+
+## Linting, Tests & Build
+
+From `tldw-frontend/` (npm scripts live in `tldw-frontend/package.json`):
+
+- `npm run lint` – run ESLint against the codebase.
+- `npm run test` – run Vitest unit tests (for example, auth error mapping).
+- `npm run test:integration` – start the backend (optional) and run frontend tests + smoke checks (runs `Helper_Scripts/run-frontend-integration.sh` for flags and env).
+- `npm run build` – Next.js production build.
+
+## Integration Test Harness
+
+Run the full frontend + backend integration flow (from `tldw-frontend/`):
+
+```bash
+npm run test:integration
+```
+
+Common options:
+
+- `npm run test:integration -- --backend-docker` (start backend via Docker Compose)
+- `npm run test:integration -- --skip-backend` (assume backend already running)
+- `npm run test:integration -- --no-backend-tests` (skip `pytest -m integration`)
+
+Useful env overrides:
+
+- `TLDW_X_API_KEY=...` (single_user mode)
+- `TLDW_AUTH_MODE=multi_user TLDW_API_BEARER=...` (multi_user mode)
+- `TLDW_DOCKER_COMPOSE=...` (custom compose file)
+
+These commands should succeed before shipping changes to the frontend.
 
 ## Learn More
 

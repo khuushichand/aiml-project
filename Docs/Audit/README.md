@@ -7,11 +7,12 @@ This page documents the unified Audit module: event schema, categories, risk sco
 - Purpose: Provide consistent, durable audit logging across AuthNZ, RAG, Chat, Evals, and system components.
 - Module: `tldw_Server_API/app/core/Audit/unified_audit_service.py`
 - Dependency injection: `get_audit_service_for_user` in `tldw_Server_API/app/api/v1/API_Deps/Audit_DB_Deps.py`
-- Storage: SQLite (per-user by default), with WAL mode and background flush/cleanup tasks.
+- Storage: SQLite (per-user by default) with optional shared storage mode, WAL mode, and background flush/cleanup tasks.
 
 ## Event Schema (selected fields)
 
 - Core: `event_id`, `timestamp` (ISO8601), `category`, `event_type`, `severity`, `result`, `error_message`
+- Shared mode: `tenant_user_id` (reserved `system` tenant for anonymous/system events)
 - Context: `context_request_id`, `context_correlation_id`, `context_session_id`, `context_user_id`, `context_ip_address`, `context_user_agent`, `context_endpoint`, `context_method`
 - Details: `resource_type`, `resource_id`, `action`
 - Metrics: `duration_ms`, `tokens_used`, `estimated_cost`, `result_count`
@@ -47,6 +48,15 @@ Notes:
 - Optional `max_db_mb` parameter logs a warning if file size exceeds configured limit
 - Fallback durability: if repeated flush failures cause the buffer to overflow, dropped events are appended to a fallback JSONL file adjacent to the audit DB (per-user under the audit directory when using DI; `./Databases/` when using the default constructor)
 
+### Shared Storage Mode
+
+- Enable with `AUDIT_STORAGE_MODE=shared` (config/env); default is `per_user`.
+- Set shared DB path via `AUDIT_SHARED_DB_PATH` (default `Databases/audit_shared.db`).
+- Set `AUDIT_STORAGE_ROLLBACK=true` to force `per_user` behavior even when shared is configured.
+- Shared mode enforces `tenant_user_id` on writes; non-admin export/count requests are forced to their own tenant.
+- `tenant_user_id=system` is reserved for anonymous/system events and visible only to admins.
+- Per-user mode remains supported during the deprecation window; shared mode is recommended when ready.
+
 ### Indexes
 
 - Common filters: `timestamp`, `context_user_id`, `context_request_id`, `context_correlation_id`, `event_type`, `category`, `severity`, `risk_score`
@@ -66,9 +76,13 @@ Notes:
 
 ### Initialize (usually via DI)
 
+When using dependency injection (the recommended approach in multi-user production), the service is initialized with a per-user path under `<USER_DB_BASE_DIR>/<user_id>/audit/` unless `AUDIT_STORAGE_MODE=shared` is enabled. In shared mode, all audit events are written to the shared audit DB path and tagged with `tenant_user_id`.
+
+For single-user setups, development, or testing, you may instantiate the service directly:
+
 ```python
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
-svc = UnifiedAuditService(db_path="./Databases/unified_audit.db")
+svc = UnifiedAuditService(db_path="./Databases/unified_audit.db")  # Direct instantiation (non-DI)
 await svc.initialize()
 ```
 
@@ -117,6 +131,7 @@ rows = [svc.decode_row_fields(r) for r in rows]
 ### REST Endpoint
 
 - Path: `GET /api/v1/audit/export`
+- Permissions: `system.logs` (admin)
 - Query parameters:
   - `format`: `json` (default), `jsonl` (NDJSON), or `csv`
   - `start_time`, `end_time`: ISO8601 (accepts trailing `Z`)
@@ -124,8 +139,8 @@ rows = [svc.decode_row_fields(r) for r in rows]
   - `min_risk_score`, `user_id`, `request_id`, `correlation_id`
   - `ip_address`, `session_id`, `endpoint`, `method`: additional filters by context fields
   - `filename`: suggested download name (server sanitizes and normalizes extension)
-  - `stream`: `true` for JSON/JSONL streaming responses (CSV streaming returns 400)
-  - `max_rows`: hard cap on number of rows to export
+  - `stream`: `true` for JSON/JSONL/CSV streaming responses
+  - `max_rows`: hard cap on number of rows to export (streaming stops when reached)
 - CSV exports use a fixed header schema for consistent columns.
 - JSONL exports (NDJSON) are useful for very large datasets and simple line-by-line processing.
 
@@ -143,6 +158,10 @@ curl -H "X-API-KEY: $KEY" \
 # CSV (fixed headers)
 curl -H "X-API-KEY: $KEY" \
   "http://127.0.0.1:8000/api/v1/audit/export?format=csv&user_id=42" -OJ
+
+# JSONL (NDJSON)
+curl -H "X-API-KEY: $KEY" \
+  "http://127.0.0.1:8000/api/v1/audit/export?format=jsonl&stream=true&user_id=42" -OJ
 ```
 
 ### Programmatic Export
@@ -162,7 +181,7 @@ agen = await svc.export_events(user_id="42", format="json", stream=True, chunk_s
 async for chunk in agen:
     ...  # write to socket / file
 ```
-Note: HTTP streaming applies to JSON/JSONL only (CSV+stream returns 400). Programmatic CSV export streams when `file_path` is provided.
+Note: HTTP streaming applies to JSON/JSONL/CSV. Programmatic CSV export streams when `file_path` is provided.
 
 ## Configuration
 
@@ -174,15 +193,31 @@ Note: HTTP streaming applies to JSON/JSONL only (CSV+stream returns 400). Progra
 - Retention: `retention_days` (constructor) controls cleanup.
 - Flush/cleanup: `buffer_size`, `flush_interval` tune background activity.
 - Database location:
-  - When using DI (single or multi-user), the audit DB path is per-user under `Databases/user_databases/<user_id>/audit/unified_audit.db`.
-  - If you construct the service directly without DI, the default `db_path` is `./Databases/unified_audit.db`.
-- `USER_DB_BASE_DIR` (settings): per-user DB root directory; defaults to `Databases/user_databases/` under the project root.
+  - Per-user mode: `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db`.
+  - Shared mode: `AUDIT_SHARED_DB_PATH` (default `Databases/audit_shared.db`).
+  - If you construct the service directly without DI, the default `db_path` is `./Databases/unified_audit.db` (or shared path when `AUDIT_STORAGE_MODE=shared`).
+- `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): per-user DB root directory; defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
+- `AUDIT_ETL_USER_SUBPATH` (settings/env): optional subpath appended to `USER_DB_BASE_DIR` for migration discovery (e.g., `nested_users`).
+
+## Migration Utility
+
+Use the shared DB migration tool to merge per-user audit DBs (plus legacy `Databases/unified_audit.db`) into the shared DB:
+
+```bash
+python -m tldw_Server_API.app.core.Audit.audit_shared_migration \
+  --shared-db Databases/audit_shared.db \
+  --user-db-base Databases/user_databases \
+  --default-db Databases/unified_audit.db
+```
+
+Discovery scans `USER_DB_BASE_DIR/*/audit/unified_audit.db`, plus `USER_DB_BASE_DIR/<AUDIT_ETL_USER_SUBPATH>/*/audit/unified_audit.db` when configured, and `Databases/unified_audit.db` if present. The migration is idempotent (deduped by `event_id`), preserves timestamps and metadata, and resumes using per-source checkpoints stored in the shared DB. Locked/corrupt sources are skipped with warnings and reported in the summary logs.
 
 ## Operational Notes
 
 - Deterministic ordering with `timestamp DESC, event_id DESC` supports paginated UIs.
 - Fixed CSV headers simplify downstream ingestion.
 - Fallback queue (`audit_fallback_queue.jsonl`) is written adjacent to the audit DB and captures dropped events on persistent DB write failures.
+- Shared audit DB schema version is tracked via SQLite `PRAGMA user_version`.
 - PII scanning can be tuned centrally in future; currently Audit and RAG use separate detectors.
 - Shutdown: the service enforces owner-loop shutdown; DI helpers schedule safe cross-loop shutdown.
 
@@ -194,10 +229,3 @@ Note: HTTP streaming applies to JSON/JSONL only (CSV+stream returns 400). Progra
 ---
 
 For questions or contributions, see `README.md` and the tests under `tldw_Server_API/tests/Audit/` for example usage.
-
-### JSONL (NDJSON)
-
-```bash
-curl -H "X-API-KEY: $KEY" \
-  "http://127.0.0.1:8000/api/v1/audit/export?format=jsonl&stream=true&user_id=42" -OJ
-```

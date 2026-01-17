@@ -116,7 +116,8 @@ This doc maps current capabilities, gaps, proposed changes, code touchpoints, te
 - No multi-process/shared backend; no robust invalidation on document updates; no user scoping; ephemeral cache not aware of document version/content_hash.
 
 ### Proposal
-- Introduce a pluggable cache backend interface (Memory | SQLite | Redis). Default remains Memory; opt-in to SQLite file in `Databases/user_databases/<user_id>/Agentic_Cache/`.
+- Introduce a pluggable cache backend interface (Memory | SQLite | Redis). Default remains Memory; opt-in to SQLite file in `<USER_DB_BASE_DIR>/<user_id>/Agentic_Cache/`.
+  `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 - Cache key schema: `user:{user_id}:ver:{content_hash_or_version}:q:{sha(query)}` with TTL. Store small payload: chunk_text checksum, provenance spans.
 - Invalidation: on media updates/soft deletes, call cache.invalidate_prefix for the affected `ver:{...}` or `media_id:` prefix; wire invalidation path in MediaDatabase on writes and in sync_log consumer.
 

@@ -10,8 +10,37 @@ const confirmMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@/components/ProtectedRoute', () => ({
+const permissionUser = vi.hoisted(() => ({
+  id: 1,
+  uuid: 'user-1',
+  username: 'Alice',
+  email: 'alice@example.com',
+  role: 'admin',
+  is_active: true,
+  is_verified: true,
+  storage_quota_mb: 100,
+  storage_used_mb: 12,
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-01T00:00:00Z',
+}));
+
+vi.mock('@/components/PermissionGuard', () => ({
+  PermissionGuard: ({ children }: { children: ReactNode }) => <>{children}</>,
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
+  usePermissions: () => ({
+    user: permissionUser,
+    permissions: [],
+    permissionHints: [],
+    roles: ['admin'],
+    loading: false,
+    hasPermission: () => true,
+    hasRole: () => true,
+    hasAnyPermission: () => true,
+    hasAllPermissions: () => true,
+    isAdmin: () => true,
+    isSuperAdmin: () => false,
+    refresh: async () => {},
+  }),
 }));
 
 vi.mock('@/components/ResponsiveLayout', () => ({

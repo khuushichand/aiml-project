@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.Character_Chat.constants import (
 
 # Maximum allowed time (in milliseconds) for the validation test match
 MAX_REGEX_VALIDATE_TIME_MS = 50
+REGEX_SAFETY_TEST_FAILED_MSG = "Regex safety test failed: {error}"
 
 
 # =============================================================================
@@ -185,9 +186,8 @@ def validate_regex_safety(pattern: str) -> Tuple[bool, str]:
             return False, f"Pattern too slow: test match took {elapsed_ms:.2f}ms"
     except regex.error as e:
         return False, f"Invalid regex: {e}"
-        # Catch-all to avoid unexpected exceptions from breaking validation.
+    except (TypeError, AttributeError, ValueError) as e:
         logger.debug(f"Unexpected error during regex validation: {e}")
-    except Exception as e:
         return False, f"Regex validation error: {e}"
 
     return True, ""
@@ -197,7 +197,7 @@ def _safe_compile_regex_impl(
     pattern: str,
     flags: int = 0,
     timeout_ms: int = MAX_REGEX_COMPILE_TIME_MS
-) -> re.Pattern:
+) -> regex.Pattern:
     """Internal helper to compile a regex pattern with runtime safety checks.
 
     This function assumes basic validation has already been performed.
@@ -208,7 +208,7 @@ def _safe_compile_regex_impl(
         timeout_ms: Maximum time allowed for compilation (best-effort)
 
     Returns:
-        Compiled regex pattern
+        Compiled regex.Pattern with timeout support
 
     Raises:
         re.error: If pattern is invalid or potentially dangerous
@@ -220,10 +220,13 @@ def _safe_compile_regex_impl(
     if is_dangerous:
         raise re.error(f"Regex pattern rejected: {reason}")
 
-    # Attempt compilation with timing (best-effort since Python doesn't support compile timeouts)
+    # Attempt compilation with timing (best-effort since Python doesn't support compile timeouts).
+    # NOTE: We compile with standard `re` first to reject patterns that `regex` accepts but the
+    # stdlib `re` doesn't (callers may rely on stdlib-compatible syntax). We then compile with
+    # `regex` to enable timeout-safe matching; the `regex` pattern is what we return.
     start_time = _time_module.perf_counter()
     try:
-        compiled = re.compile(pattern, flags)
+        _ = re.compile(pattern, flags)
     except re.error:
         raise
 
@@ -242,9 +245,9 @@ def _safe_compile_regex_impl(
         raise re.error(
             f"Regex pattern too slow: exceeded {MAX_REGEX_VALIDATE_TIME_MS}ms validation timeout"
         )
-    except Exception as e:
-        # Log but don't fail - we primarily care about detecting slow patterns
-        logger.debug(f"Exception during regex test match for pattern '{pattern[:50]}...': {e}")
+    except (TypeError, AttributeError, ValueError) as e:
+        logger.warning(f"Regex test failed for pattern '{pattern[:50]}...': {e}")
+        raise re.error(REGEX_SAFETY_TEST_FAILED_MSG.format(error=e)) from e
     match_elapsed_ms = (_time_module.perf_counter() - match_start) * 1000
 
     if match_elapsed_ms > timeout_ms:
@@ -253,14 +256,14 @@ def _safe_compile_regex_impl(
             f"(threshold: {timeout_ms}ms)"
         )
 
-    return compiled
+    return safe_compiled
 
 
 def safe_compile_regex(
     pattern: str,
     flags: int = 0,
     timeout_ms: int = MAX_REGEX_COMPILE_TIME_MS,
-) -> re.Pattern:
+) -> regex.Pattern:
     """Compile a user-provided regex pattern with full safety checks to prevent ReDoS.
 
     This wrapper validates the pattern first and then performs a timed compile

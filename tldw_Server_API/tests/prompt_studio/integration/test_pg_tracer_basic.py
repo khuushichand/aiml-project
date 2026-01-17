@@ -12,9 +12,11 @@ class _StubTracingManager:
                 self.outer = outer
                 self.n = n
                 self.attrs = attrs or {}
+
             def __enter__(self):
                 self.outer.spans.append((self.n, dict(self.attrs)))
                 return object()
+
             def __exit__(self, exc_type, exc, tb):
                 return False
         return _Ctx(self, name, attributes)

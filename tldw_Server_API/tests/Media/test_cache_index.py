@@ -13,10 +13,12 @@ class _FakeRedis:
         self.kv[key] = value
 
     def get(self, key):
+
         self.calls.append(("get", key))
         return self.kv.get(key)
 
     def delete(self, *keys):
+
         self.calls.append(("delete", keys))
         deleted = 0
         for k in keys:
@@ -32,11 +34,13 @@ class _FakeRedis:
         self.sets.setdefault(key, set()).add(member)
 
     def smembers(self, key):
+
         self.calls.append(("smembers", key))
         # Redis returns set of bytes in many clients; emulate strings for simplicity
         return set(self.sets.get(key, set()))
 
     def expire(self, key, ttl):
+
         self.calls.append(("expire", key, ttl))
         return True
 
@@ -89,6 +93,7 @@ def test_invalidate_uses_scan_when_index_missing(monkeypatch):
             return set()
 
         def scan(self, cursor=0, match=None, count=None):
+
             # Return one matching key via SCAN on first call, then finish
             if cursor == 0:
                 # Create the key to be deleted in KV
@@ -152,6 +157,7 @@ def test_invalidate_uses_scan_when_index_missing_modular_mode(monkeypatch):
             return set()
 
         def scan(self, cursor=0, match=None, count=None):
+
             # Return one matching key via SCAN on first call, then finish
             if cursor == 0:
                 self.kv["cache:/api/v1/media/999:ghi999"] = "v"

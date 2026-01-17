@@ -31,6 +31,7 @@ import time as _time_module
 from loguru import logger
 import random
 import re
+import regex as _regex
 import warnings
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union, Any, Set, Tuple
@@ -52,8 +53,8 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 # Import shared constants and helpers
 from tldw_Server_API.app.core.Character_Chat.constants import (
-    MAX_REGEX_LENGTH,
-    MAX_REGEX_COMPILE_TIME_MS,
+    MAX_REGEX_MATCH_TIME_MS,
+    MAX_CHAT_DICTIONARY_TEXT_LENGTH,
     safe_parse_json_dict,
 )
 
@@ -118,6 +119,14 @@ def _escape_like_pattern(query: str) -> str:
     """
     # Escape backslash first, then the SQL LIKE special characters
     return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _regex_timeout_seconds() -> float:
+    return MAX_REGEX_MATCH_TIME_MS / 1000.0
+
+
+def _is_compiled_regex(obj: Any) -> bool:
+    return isinstance(obj, (re.Pattern, _regex.Pattern))
 
 
 class TokenBudgetExceededWarning(Warning):
@@ -207,7 +216,18 @@ class ChatDictionaryEntry:
         self.last_triggered: Optional[datetime] = None
         self.trigger_count = 0
 
-    def _compile_key(self, key_str: str) -> Union[re.Pattern, str]:
+    def _compile_regex_pattern(self, pattern: str) -> _regex.Pattern:
+        if not pattern:
+            raise re.error(f"Empty regex pattern from key '{self.raw_key}'")
+        safe_compiled = _safe_compile_regex(pattern, self.key_flags)
+        if isinstance(safe_compiled, _regex.Pattern):
+            return safe_compiled
+        try:
+            return _regex.compile(pattern, self.key_flags)
+        except _regex.error as exc:
+            raise re.error(str(exc)) from exc
+
+    def _compile_key(self, key_str: str) -> Union[re.Pattern, _regex.Pattern, str]:
         """
         Compile the key pattern, detecting regex format.
 
@@ -243,19 +263,30 @@ class ChatDictionaryEntry:
         self.key_pattern_str = pattern_to_compile
 
         if self.is_regex:
-            # Use safe compilation with ReDoS protection
-            if not pattern_to_compile:
-                raise re.error(f"Empty regex pattern from key '{self.raw_key}'")
-            return _safe_compile_regex(pattern_to_compile, self.key_flags)
+            # Validate and compile with a timeout-capable regex engine.
+            return self._compile_regex_pattern(pattern_to_compile)
         else:
             return key_str
 
     def matches(self, text: str) -> bool:
         """Check if this entry's pattern matches the given text."""
-        if self.is_regex and isinstance(self.key, re.Pattern):
-            return bool(self.key.search(text))
+        if self.is_regex and _is_compiled_regex(self.key):
+            try:
+                if isinstance(self.key, _regex.Pattern):
+                    return bool(self.key.search(text, timeout=_regex_timeout_seconds()))
+                return bool(self.key.search(text))
+            except _regex.TimeoutError:
+                preview = self.key_pattern_str
+                if len(preview) > 50:
+                    preview = preview[:50] + "..."
+                logger.warning(f"Regex match timed out for pattern '{preview}'")
+                return False
         elif not self.is_regex and isinstance(self.key, str):
-            return self.key in text
+            if not self.key:
+                return False
+            if self.case_sensitive:
+                return self.key in text
+            return self.key.casefold() in text.casefold()
         return False
 
     def should_apply(self) -> bool:
@@ -300,11 +331,26 @@ class ChatDictionaryEntry:
 
         replacement_count = 0
 
-        if self.is_regex and isinstance(self.key, re.Pattern):
+        if self.is_regex and _is_compiled_regex(self.key):
             # Use subn to support backreferences and count replacements
             max_count = max(0, int(self.max_replacements))
-            # re.subn with count=0 means replace all
-            text, replacement_count = self.key.subn(self.content, text, count=max_count)
+            # subn with count=0 means replace all
+            try:
+                if isinstance(self.key, _regex.Pattern):
+                    text, replacement_count = self.key.subn(
+                        self.content,
+                        text,
+                        count=max_count,
+                        timeout=_regex_timeout_seconds(),
+                    )
+                else:
+                    text, replacement_count = self.key.subn(self.content, text, count=max_count)
+            except _regex.TimeoutError:
+                preview = self.key_pattern_str
+                if len(preview) > 50:
+                    preview = preview[:50] + "..."
+                logger.warning(f"Regex replacement timed out for pattern '{preview}'")
+                return text, 0
         else:
             # Literal replacement; support case sensitivity
             max_count = max(0, int(self.max_replacements))
@@ -368,9 +414,9 @@ class ChatDictionaryEntry:
         # Respect persisted is_regex flag if present
         if "is_regex" in data:
             entry.is_regex = bool(data["is_regex"])
-            if entry.is_regex and not isinstance(entry.key, re.Pattern) and entry.raw_key:
+            if entry.is_regex and not _is_compiled_regex(entry.key) and entry.raw_key:
                 try:
-                    entry.key = _safe_compile_regex(entry.raw_key)
+                    entry.key = entry._compile_regex_pattern(entry.key_pattern_str)
                 except re.error:
                     # Leave as literal if invalid; caller may handle
                     logger.warning(f"Invalid or dangerous regex pattern in stored entry: {entry.raw_key[:50]}...")
@@ -842,11 +888,11 @@ class ChatDictionaryService:
                 # Override regex decision if type provided
                 if entry_type is not None:
                     entry.is_regex = entry_type == "regex"
-                    if entry.is_regex and not isinstance(entry.key, re.Pattern):
+                    if entry.is_regex and not _is_compiled_regex(entry.key):
                         # Use safe regex compilation to validate the pattern and protect against ReDoS.
                         # The compiled pattern is not stored on this transient instance; persistence
                         # relies on the `is_regex` flag and `from_dict` will recompile as needed.
-                        _safe_compile_regex(entry.raw_key, entry.key_flags)
+                        entry._compile_regex_pattern(entry.key_pattern_str)
             except re.error:
                 raise
 
@@ -1224,6 +1270,11 @@ class ChatDictionaryService:
         if token_budget is None and "max_tokens" in kwargs:
             token_budget = kwargs.get("max_tokens")
 
+        if len(text) > MAX_CHAT_DICTIONARY_TEXT_LENGTH:
+            raise InputError(
+                f"Input text exceeds maximum length ({len(text)} > {MAX_CHAT_DICTIONARY_TEXT_LENGTH})"
+            )
+
         # Get applicable entries as objects
         entries = self.get_entry_objects(dictionary_id, group, active_only=True)
 
@@ -1316,18 +1367,17 @@ class ChatDictionaryService:
         ```
 
         Args:
-            file_path: Path to markdown file
+            markdown_or_path: Markdown content or a Path to a markdown file
             dictionary_name: Name for the new dictionary
 
         Returns:
             Dictionary ID
         """
-        # Determine if argument is a file path or raw markdown content
+        # Determine if argument is a file path or raw markdown content.
+        # Strings are treated as content to avoid unsafe file reads.
         content: Optional[str] = None
-        if isinstance(markdown_or_path, Path) or (
-            isinstance(markdown_or_path, str) and "\n" not in markdown_or_path and Path(str(markdown_or_path)).exists()
-        ):
-            fp = Path(markdown_or_path)
+        if isinstance(markdown_or_path, Path):
+            fp = markdown_or_path
             with open(fp, "r", encoding="utf-8") as f:
                 content = f.read()
             if dictionary_name is None:
@@ -1401,13 +1451,13 @@ class ChatDictionaryService:
             self.delete_dictionary(dict_id, hard_delete=True)
             raise CharactersRAGDBError(f"Failed to import dictionary: {e}")
 
-    def export_to_markdown(self, dictionary_id: int, file_path: Optional[Union[str, Path]] = None) -> Union[bool, str]:
+    def export_to_markdown(self, dictionary_id: int, file_path: Optional[Path] = None) -> Union[bool, str]:
         """
         Export a dictionary to markdown format.
 
         Args:
             dictionary_id: Dictionary to export
-            file_path: Output file path
+            file_path: Output file path (Path object)
 
         Returns:
             True if exported successfully
@@ -1442,7 +1492,9 @@ class ChatDictionaryService:
         if file_path is None:
             return content
 
-        fp = Path(file_path)
+        if not isinstance(file_path, Path):
+            raise InputError("file_path must be a pathlib.Path to avoid unsafe file operations")
+        fp = file_path
         try:
             with open(fp, "w", encoding="utf-8") as f:
                 f.write(content)

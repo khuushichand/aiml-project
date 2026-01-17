@@ -20,6 +20,7 @@ app.include_router(health_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1/chat")
 
 def _make_test_db():
+
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
     db = CharactersRAGDB(db_path, "test_client")
@@ -43,6 +44,8 @@ def _post_with_csrf(client: TestClient, url: str, **kwargs):
 
 
 def _auth_headers(client):
+
+
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
     api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
@@ -93,6 +96,14 @@ class _EvalModerationService:
                 red = pat.sub(policy.redact_replacement, text)
                 return "redact", red, pat.pattern, None
         return "pass", None, None, None
+
+    def evaluate_action_with_match(self, text: str, policy: _StubPolicy, phase: str):
+        for pat in policy.block_patterns:
+            m = pat.search(text or "")
+            if m:
+                red = pat.sub(policy.redact_replacement, text)
+                return "redact", red, pat.pattern, None, m.span()
+        return "pass", None, None, None, None
 
     def redact_text(self, text: str, policy: _StubPolicy):
         red = text
@@ -190,14 +201,19 @@ def test_streaming_redaction_applied():
         policy = _StubPolicy(enabled=True, input_action='warn', output_action='redact', redact='[REDACTED]')
 
         def upstream_stream():
+
             chunk1 = {"choices": [{"delta": {"content": "leak: secret"}}]}
             chunk2 = {"choices": [{"delta": {"content": " appears"}}]}
             yield f"data: {json.dumps(chunk1)}\n\n"
             yield f"data: {json.dumps(chunk2)}\n\n"
             yield "data: [DONE]\n\n"
 
-        with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_moderation_service", return_value=_StubModerationService(policy)), \
-             patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=upstream_stream()):
+        with (
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.get_moderation_service",
+                  return_value=_StubModerationService(policy)),
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call",
+                  return_value=upstream_stream()),
+        ):
             with TestClient(app) as client:
                 resp = client.get("/api/v1/health")
                 client.csrf_token = resp.cookies.get("csrf_token", "")
@@ -240,6 +256,68 @@ def test_streaming_redaction_applied():
 
 
 @pytest.mark.unit
+def test_streaming_cross_chunk_redaction_output(monkeypatch):
+    db, db_path = _make_test_db()
+    try:
+        monkeypatch.setenv("STREAMS_UNIFIED", "0")
+        app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+        policy = _StubPolicy(enabled=True, input_action='warn', output_action='redact', redact='[REDACTED]')
+
+        def upstream_stream():
+            chunk1 = {"choices": [{"delta": {"content": "sec"}}]}
+            chunk2 = {"choices": [{"delta": {"content": "ret data"}}]}
+            yield f"data: {json.dumps(chunk1)}\n\n"
+            yield f"data: {json.dumps(chunk2)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        with (
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.get_moderation_service",
+                  return_value=_EvalModerationService(policy)),
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call",
+                  return_value=upstream_stream()),
+        ):
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/health")
+                client.csrf_token = resp.cookies.get("csrf_token", "")
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True
+                }
+                r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+                assert r.status_code == 200
+                content = r.text.splitlines()
+                chunks = []
+                for line in content:
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict) and obj.get("choices"):
+                        delta = obj["choices"][0].get("delta", {})
+                        text = delta.get("content")
+                        if text:
+                            chunks.append(text)
+                full = "".join(chunks)
+                assert "secret" not in full.lower()
+                assert "[REDACTED]" in full
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+        except Exception:
+            pass
+        app.dependency_overrides.pop(get_chacha_db_for_user, None)
+
+
+@pytest.mark.unit
 def test_streaming_block_emits_sse_error_and_finishes():
     db, db_path = _make_test_db()
     try:
@@ -248,6 +326,7 @@ def test_streaming_block_emits_sse_error_and_finishes():
         policy = _StubPolicy(enabled=True, input_action='warn', output_action='block', redact='[REDACTED]')
 
         def upstream_stream():
+
             chunk1 = {"choices": [{"delta": {"content": "this contains secret"}}]}
             chunk2 = {"choices": [{"delta": {"content": " should be blocked"}}]}
             yield f"data: {json.dumps(chunk1)}\n\n"
@@ -291,6 +370,7 @@ def test_streaming_cross_chunk_redaction_persisted(monkeypatch):
         policy = _StubPolicy(enabled=True, input_action='warn', output_action='redact', redact='[REDACTED]')
 
         def upstream_stream():
+
             chunk1 = {"choices": [{"delta": {"content": "sec"}}]}
             chunk2 = {"choices": [{"delta": {"content": "ret data"}}]}
             yield f"data: {json.dumps(chunk1)}\n\n"

@@ -17,10 +17,12 @@ class _CursorStub:
         self._rows = list(rows)
 
     def fetchall(self) -> List[Dict[str, Any]]:
+
         return list(self._rows)
 
 
 def _make_postgres_db() -> CharactersRAGDB:
+
     db = CharactersRAGDB.__new__(CharactersRAGDB)
     db.backend_type = BackendType.POSTGRESQL
     db.backend = MagicMock()
@@ -29,6 +31,7 @@ def _make_postgres_db() -> CharactersRAGDB:
 
 
 def test_rebuild_full_text_indexes_postgres_calls_backend():
+
     db = _make_postgres_db()
     db._FTS_CONFIG = [
         ("character_cards_fts", "character_cards", ["name"]),
@@ -56,6 +59,7 @@ def test_rebuild_full_text_indexes_postgres_calls_backend():
 
 
 def test_rebuild_full_text_indexes_sqlite_executes_rebuild():
+
     db = CharactersRAGDB.__new__(CharactersRAGDB)
     db.backend_type = BackendType.SQLITE
     db._FTS_CONFIG = [
@@ -112,6 +116,7 @@ def test_list_flashcards_postgres_translates_fts(monkeypatch: pytest.MonkeyPatch
 
 
 def test_manage_link_postgres_uses_on_conflict():
+
     db = _make_postgres_db()
     db.client_id = "pg-test"
     db._get_current_utc_timestamp_iso = lambda: "2025-01-01T00:00:00Z"  # type: ignore[assignment]
@@ -145,6 +150,7 @@ def test_manage_link_postgres_uses_on_conflict():
 
 
 def test_set_flashcard_tags_postgres_uses_on_conflict():
+
     db = _make_postgres_db()
     db.client_id = "pg-test"
     db._get_current_utc_timestamp_iso = lambda: "2025-01-01T00:00:00Z"  # type: ignore[assignment]
@@ -157,9 +163,11 @@ def test_set_flashcard_tags_postgres_uses_on_conflict():
             self.rowcount = rowcount
 
         def fetchone(self):
+
             return self._rows[0] if self._rows else None
 
         def fetchall(self):
+
             return list(self._rows)
 
     class _Conn:

@@ -9,11 +9,15 @@ client = TestClient(app)
 
 
 def _api_key():
+
+
     return os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID")
 
 
 def test_mcp_metrics_json_admin_only():
-    # Without auth -> 401
+
+
+     # Without auth -> 401
     r0 = client.get("/api/v1/mcp/metrics")
     assert r0.status_code in (401, 403)
 
@@ -26,7 +30,9 @@ def test_mcp_metrics_json_admin_only():
 
 
 def test_mcp_metrics_prometheus_requires_auth(monkeypatch):
-    # Default: gated; without auth -> 401/403 via require_permissions(SYSTEM_LOGS)
+
+
+     # Default: gated; without auth -> 401/403 via require_permissions(SYSTEM_LOGS)
     r0 = client.get("/api/v1/mcp/metrics/prometheus")
     assert r0.status_code in (401, 403)
 

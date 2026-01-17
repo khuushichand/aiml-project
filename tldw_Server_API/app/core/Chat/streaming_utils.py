@@ -292,10 +292,14 @@ class StreamingResponseHandler:
         self.text_transform = text_transform
         # Track whether a terminal [DONE] was already sent (directly or via transform-combined payload)
         self.done_sent = False
+        # Track upstream DONE so we can defer the terminal sentinel until after metadata.
+        self.upstream_done_received = False
         # Accumulate tool/function call deltas for persistence once the stream completes
         self.tool_call_accumulator: Dict[int, Dict[str, Any]] = {}
         self.tool_call_order: List[int] = []
         self.function_call_accumulator: Optional[Dict[str, Any]] = None
+        self.saved_message_id: Optional[str] = None
+        self.system_message_id: Optional[str] = None
         # Lock for thread-safe state modifications
         self._state_lock = asyncio.Lock()
 
@@ -467,7 +471,14 @@ class StreamingResponseHandler:
         """
         try:
             # Send initial metadata
-            yield f"event: stream_start\ndata: {json.dumps({'conversation_id': self.conversation_id, 'model': self.model_name, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
+            start_payload = {
+                "conversation_id": self.conversation_id,
+                "model": self.model_name,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            if self.system_message_id:
+                start_payload["tldw_system_message_id"] = self.system_message_id
+            yield f"event: stream_start\ndata: {json.dumps(start_payload)}\n\n"
             self.update_activity()
 
             def iter_logical_lines(raw_chunk: str) -> List[str]:
@@ -500,9 +511,8 @@ class StreamingResponseHandler:
                 if candidate.startswith("data:"):
                     payload_str = candidate[len("data:"):].strip()
                     if payload_str == "[DONE]":
-                        outputs.append("data: [DONE]\n\n")
-                        # Mark DONE as sent to avoid emitting a second terminal sentinel in cleanup
-                        self.done_sent = True
+                        # Defer terminal DONE until after stream_end metadata is emitted.
+                        self.upstream_done_received = True
                         self.update_activity()
                         return outputs, True
                     try:
@@ -731,23 +741,6 @@ class StreamingResponseHandler:
                             logger.debug(f"Finalize callback error after cancel: {finalize_err}")
                     return
 
-                if not self.is_cancelled:
-                    # Send completion marker(s). If error occurred, still send [DONE] for graceful finish.
-                    if not self.error_occurred:
-                        done_payload = {
-                            "id": f"chatcmpl-{datetime.now(timezone.utc).timestamp()}",
-                            "object": "chat.completion.chunk",
-                            "created": int(datetime.now(timezone.utc).timestamp()),
-                            "model": self.model_name,
-                            "choices": [{"delta": {}, "finish_reason": "stop", "index": 0}],
-                            "conversation_id": self.conversation_id
-                        }
-                        yield f"data: {json.dumps(done_payload)}\n\n"
-                    # Emit terminal DONE sentinel only if not already sent by upstream
-                    if not self.done_sent:
-                        yield "data: [DONE]\n\n"
-                        self.done_sent = True
-
                 # Save the full response/tool calls if callback provided (only when not cancelled)
                 has_output = self.has_accumulated_output()
                 if (
@@ -762,6 +755,7 @@ class StreamingResponseHandler:
                     try:
                         # Support flexible callback signatures (text only or extended)
                         maybe_result = None
+                        save_result = None
                         try:
                             maybe_result = save_callback(
                                 full_text,
@@ -771,7 +765,11 @@ class StreamingResponseHandler:
                         except TypeError:
                             maybe_result = save_callback(full_text)
                         if hasattr(maybe_result, "__await__"):
-                            await maybe_result
+                            save_result = await maybe_result
+                        else:
+                            save_result = maybe_result
+                        if isinstance(save_result, str) and save_result:
+                            self.saved_message_id = save_result
                         logger.info(
                             "Saved streaming response for %s (text_len=%d, tool_calls=%d, function_call=%s)",
                             self.conversation_id,
@@ -781,6 +779,22 @@ class StreamingResponseHandler:
                         )
                     except Exception as e:
                         logger.error(f"Failed to save streaming response for {self.conversation_id}: {e}")
+
+                # Send completion marker(s) after save so metadata includes IDs.
+                if not self.error_occurred:
+                    done_payload = {
+                        "id": f"chatcmpl-{datetime.now(timezone.utc).timestamp()}",
+                        "object": "chat.completion.chunk",
+                        "created": int(datetime.now(timezone.utc).timestamp()),
+                        "model": self.model_name,
+                        "choices": [{"delta": {}, "finish_reason": "stop", "index": 0}],
+                        "conversation_id": self.conversation_id,
+                    }
+                    if self.saved_message_id:
+                        done_payload["tldw_message_id"] = self.saved_message_id
+                    if self.system_message_id:
+                        done_payload["tldw_system_message_id"] = self.system_message_id
+                    yield f"data: {json.dumps(done_payload)}\n\n"
 
                 if finalize_callback and self.error_occurred:
                     try:
@@ -796,11 +810,25 @@ class StreamingResponseHandler:
 
                 # Send stream end event (only when not cancelled)
                 if not self.is_cancelled:
-                    yield f"event: stream_end\ndata: {json.dumps({'conversation_id': self.conversation_id, 'success': not self.error_occurred, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
-                    # Ensure final [DONE] sentinel for client compatibility (unless already sent)
-                    if not self.done_sent:
-                        yield "data: [DONE]\n\n"
-                        self.done_sent = True
+                    end_payload = {
+                        "conversation_id": self.conversation_id,
+                        "success": not self.error_occurred,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                    if self.saved_message_id:
+                        end_payload["tldw_message_id"] = self.saved_message_id
+                    if self.system_message_id:
+                        end_payload["tldw_system_message_id"] = self.system_message_id
+                    yield f"event: stream_end\ndata: {json.dumps(end_payload)}\n\n"
+                # Ensure final [DONE] sentinel for client compatibility (unless already sent).
+                # If upstream already sent [DONE], defer emission until after stream_end.
+                if self.upstream_done_received and not self.done_sent:
+                    yield "data: [DONE]\n\n"
+                    self.done_sent = True
+                elif not self.done_sent:
+                    yield "data: [DONE]\n\n"
+                    self.done_sent = True
+                self.upstream_done_received = False
 
             except Exception as e:
                 logger.error(f"Error in stream cleanup for {self.conversation_id}: {e}")
@@ -815,6 +843,7 @@ async def create_streaming_response_with_timeout(
     idle_timeout: int = STREAMING_IDLE_TIMEOUT,
     heartbeat_interval: int = HEARTBEAT_INTERVAL,
     text_transform: Optional[callable] = None,
+    system_message_id: Optional[str] = None,
 ) -> AsyncIterator[str]:
     """
     Create a streaming response with timeout and error handling.
@@ -827,6 +856,7 @@ async def create_streaming_response_with_timeout(
         finalize_callback: Optional callback invoked on error/cancel to finalize state
         idle_timeout: Timeout for idle connections
         heartbeat_interval: Interval for heartbeat messages
+        system_message_id: Optional system message ID to echo in stream_end payload
 
     Yields:
         SSE formatted messages
@@ -838,6 +868,7 @@ async def create_streaming_response_with_timeout(
         heartbeat_interval=heartbeat_interval,
         text_transform=text_transform,
     )
+    handler.system_message_id = system_message_id
 
     # Create tasks for streaming and optional heartbeat using persistent generator instances
     async def stream_with_heartbeat():

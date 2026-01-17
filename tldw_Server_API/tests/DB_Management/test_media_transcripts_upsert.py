@@ -37,6 +37,7 @@ def _insert_minimal_media(db: MediaDatabase) -> int:
 
 
 def test_sqlite_upsert_transcript_roundtrip(tmp_path):
+
     db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="unit-sqlite")
     media_id = _insert_minimal_media(db)
 
@@ -50,6 +51,7 @@ def test_sqlite_upsert_transcript_roundtrip(tmp_path):
 
     # Latest transcription should be updated
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_latest_transcription
+
     latest = get_latest_transcription(db, media_id)
     assert latest == "updated text"
 
@@ -79,6 +81,7 @@ def test_postgres_upsert_transcript_roundtrip_if_available(tmp_path, pg_eval_par
     assert p2["version"] == p1["version"] + 1
 
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_latest_transcription
+
     latest = get_latest_transcription(db, media_id)
     assert latest == "pg updated"
 

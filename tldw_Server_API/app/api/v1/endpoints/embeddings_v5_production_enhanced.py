@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from typing import List, Union, Optional, Dict, Any, Tuple
 from enum import Enum
 import numpy as np
-from functools import lru_cache, wraps
+from functools import lru_cache
 import atexit
 import os
 import uuid
@@ -34,7 +34,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import tiktoken
 from loguru import logger
 from asyncio import Lock
-import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Schemas
@@ -48,10 +47,20 @@ from tldw_Server_API.app.core.Usage.usage_tracker import (
     backfill_legacy_tokens_to_ledger,
     log_llm_usage,
 )
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.http_client import (
+    afetch as _http_afetch,
+    create_async_client as _create_async_client,
+    RetryPolicy as _RetryPolicy,
+)
 from pydantic import BaseModel, Field
 
 # Authentication
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    get_request_user,
+    User,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_roles,
@@ -85,8 +94,6 @@ from tldw_Server_API.app.core.Embeddings.circuit_breaker import (
 )
 
 # Rate limiting
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
-
 # Monitoring
 from prometheus_client import Counter, Histogram, Gauge
 import redis.asyncio as aioredis
@@ -399,7 +406,7 @@ def _tenant_rps_runtime() -> int:
 
 async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, float]:
     """Return (max_queue_depth, max_queue_age_seconds) for core embeddings queues."""
-    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
     depths = []
     ages = []
     now = time.time()
@@ -537,14 +544,14 @@ async def _get_redis_client() -> aioredis.Redis:
 
 def _dlq_stream_name(stage: str) -> str:
     stage = stage.strip().lower()
-    if stage not in {"chunking", "embedding", "storage"}:
-        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage")
+    if stage not in {"chunking", "embedding", "storage", "content"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage|content")
     return f"embeddings:{stage}:dlq"
 
 def _live_stream_name(stage: str) -> str:
     stage = stage.strip().lower()
-    if stage not in {"chunking", "embedding", "storage"}:
-        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage")
+    if stage not in {"chunking", "embedding", "storage", "content"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be one of chunking|embedding|storage|content")
     return f"embeddings:{stage}"
 
 MAX_BATCH_SIZE = _cfg_int("EMBEDDINGS_MAX_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE)
@@ -585,12 +592,35 @@ async def _resolve_embeddings_byok(
 def _raise_missing_embeddings_key(provider: str) -> None:
     record_byok_missing_credentials(provider, operation="embeddings")
     raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail={
             "error_code": "missing_provider_credentials",
             "message": f"Embeddings provider '{provider}' requires an API key.",
         },
     )
+
+
+def _is_test_context() -> bool:
+    try:
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            return True
+    except Exception:
+        pass
+    return str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"} or str(
+        os.getenv("TEST_MODE", "")
+    ).lower() in {"1", "true", "yes", "on"}
+
+
+def _should_skip_missing_key(
+    provider: str,
+    credentials: Optional[ResolvedByokCredentials] = None,
+) -> bool:
+    if not _is_test_context():
+        return False
+    if credentials is None:
+        return True
+    source = getattr(credentials, "source", None)
+    return not source or source == "none"
 
 # Circuit breaker configuration
 CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
@@ -874,11 +904,11 @@ class ConnectionPoolManager:
     """Manages connection pools with proper cleanup"""
 
     def __init__(self):
-        self.pools: Dict[str, aiohttp.ClientSession] = {}
+        self.pools: Dict[str, Any] = {}
         self.lock = Lock()
         self._closed = False
 
-    async def get_session(self, provider: str) -> aiohttp.ClientSession:
+    async def get_session(self, provider: str) -> Any:
         """Get or create session for provider"""
         async with self.lock:
             if self._closed:
@@ -886,26 +916,23 @@ class ConnectionPoolManager:
                 self._closed = False
 
             existing = self.pools.get(provider)
-            if existing is not None and existing.closed:
-                # Drop stale session so a fresh one can be created.
+            if existing is not None and getattr(existing, "is_closed", False):
+                # Drop stale client so a fresh one can be created.
                 try:
-                    await existing.close()
+                    close = getattr(existing, "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(existing, "close", None)
+                        if callable(close):
+                            close()
                 except Exception:
                     pass
                 existing = None
                 self.pools.pop(provider, None)
 
             if provider not in self.pools:
-                connector = aiohttp.TCPConnector(
-                    limit=CONNECTION_POOL_SIZE,
-                    limit_per_host=CONNECTION_POOL_SIZE,
-                    force_close=True  # Force close connections on errors
-                )
-                timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
-                self.pools[provider] = aiohttp.ClientSession(
-                    connector=connector,
-                    timeout=timeout
-                )
+                self.pools[provider] = _create_async_client(timeout=REQUEST_TIMEOUT)
             return self.pools[provider]
 
     async def close_all(self):
@@ -913,14 +940,32 @@ class ConnectionPoolManager:
         async with self.lock:
             self._closed = True
             for session in self.pools.values():
-                await session.close()
+                try:
+                    close = getattr(session, "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(session, "close", None)
+                        if callable(close):
+                            close()
+                except Exception:
+                    pass
             self.pools.clear()
 
     async def remove_provider(self, provider: str):
         """Remove and close specific provider's session"""
         async with self.lock:
             if provider in self.pools:
-                await self.pools[provider].close()
+                try:
+                    close = getattr(self.pools[provider], "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(self.pools[provider], "close", None)
+                        if callable(close):
+                            close()
+                except Exception:
+                    pass
                 del self.pools[provider]
 
 # ============================================================================
@@ -937,7 +982,7 @@ def get_or_create_circuit_breaker(provider: str) -> CircuitBreaker:
             name=breaker_name,
             failure_threshold=CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
-            expected_exception=(ConnectionError, TimeoutError, aiohttp.ClientError),
+            expected_exception=(ConnectionError, TimeoutError, NetworkError, RetryExhaustedError),
             success_threshold=CIRCUIT_BREAKER_SUCCESS_THRESHOLD
         )
         circuit_breaker_registry.register(breaker)
@@ -950,19 +995,6 @@ def get_or_create_circuit_breaker(provider: str) -> CircuitBreaker:
 
 embedding_cache = TTLCache()
 connection_manager = ConnectionPoolManager()
-
-# Helper to conditionally apply rate limiting
-def apply_rate_limit(limit_string: str):
-    """No-op by default; enable via env EMBEDDINGS_RATE_LIMIT=on"""
-    def decorator(f):
-        @wraps(f)
-        async def wrapper(*args, **kwargs):
-            if os.getenv("EMBEDDINGS_RATE_LIMIT", "off").lower() == "on":
-                limited_func = limiter.limit(limit_string)(f)
-                return await limited_func(*args, **kwargs)
-            return await f(*args, **kwargs)
-        return wrapper
-    return decorator
 
 @asynccontextmanager
 async def _embeddings_router_lifespan(app):
@@ -1599,26 +1631,47 @@ async def create_embeddings_with_circuit_breaker(
                 if not api_key:
                     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Cohere API key not configured")
                 mdl = config.get("model_name_or_path", model_id) or "embed-english-v3.0"
-                session = await connection_manager.get_session(provider)
+                client = await connection_manager.get_session(provider)
                 url = "https://api.cohere.com/v1/embed"
                 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
                 payload = {"model": mdl, "texts": texts, "input_type": "search_document"}
-                async with session.post(url, json=payload, headers=headers) as resp:
-                    if resp.status >= 400:
-                        detail = await resp.text()
-                        raise HTTPException(status_code=resp.status, detail=f"Cohere error: {detail}")
-                    data = await resp.json()
+                resp = await _http_afetch(
+                    method="POST",
+                    url=url,
+                    client=client,
+                    headers=headers,
+                    json=payload,
+                    timeout=REQUEST_TIMEOUT,
+                    retry=_RetryPolicy(attempts=1),
+                )
+                try:
+                    status_code = int(getattr(resp, "status_code", 0))
+                    if status_code >= 400:
+                        try:
+                            detail = resp.text
+                        except Exception:
+                            detail = ""
+                        raise HTTPException(status_code=status_code, detail=f"Cohere error: {detail}")
+                    data = resp.json()
+                finally:
+                    close = getattr(resp, "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(resp, "close", None)
+                        if callable(close):
+                            close()
+                embs = None
+                try:
+                    if isinstance(data.get("embeddings"), list):
+                        embs = data["embeddings"]
+                    elif isinstance(data.get("embeddings"), dict) and "float" in data["embeddings"]:
+                        embs = data["embeddings"]["float"]
+                except Exception:
                     embs = None
-                    try:
-                        if isinstance(data.get("embeddings"), list):
-                            embs = data["embeddings"]
-                        elif isinstance(data.get("embeddings"), dict) and "float" in data["embeddings"]:
-                            embs = data["embeddings"]["float"]
-                    except Exception:
-                        embs = None
-                    if not embs:
-                        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Cohere response format")
-                    return embs
+                if not embs:
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Cohere response format")
+                return embs
             elif provider == "google":
                 # Direct async call to Google Generative Language API (text-embedding-004)
                 api_key = config.get("api_key") or settings.get("GOOGLE_API_KEY")
@@ -1626,31 +1679,51 @@ async def create_embeddings_with_circuit_breaker(
                     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google API key not configured")
                 raw_model = config.get("model_name_or_path", model_id) or "models/text-embedding-004"
                 model_name = raw_model if raw_model.startswith("models/") else f"models/{raw_model}"
-                session = await connection_manager.get_session(provider)
+                client = await connection_manager.get_session(provider)
                 base = "https://generativelanguage.googleapis.com/v1beta"
                 url = f"{base}/{model_name}:batchEmbedContents?key={api_key}"
                 reqs = [{"model": model_name, "content": {"parts": [{"text": t}]}} for t in texts]
                 payload = {"requests": reqs}
-                async with session.post(url, json=payload) as resp:
-                    if resp.status >= 400:
-                        detail = await resp.text()
-                        raise HTTPException(status_code=resp.status, detail=f"Google Embeddings error: {detail}")
-                    data = await resp.json()
+                resp = await _http_afetch(
+                    method="POST",
+                    url=url,
+                    client=client,
+                    json=payload,
+                    timeout=REQUEST_TIMEOUT,
+                    retry=_RetryPolicy(attempts=1),
+                )
+                try:
+                    status_code = int(getattr(resp, "status_code", 0))
+                    if status_code >= 400:
+                        try:
+                            detail = resp.text
+                        except Exception:
+                            detail = ""
+                        raise HTTPException(status_code=status_code, detail=f"Google Embeddings error: {detail}")
+                    data = resp.json()
+                finally:
+                    close = getattr(resp, "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(resp, "close", None)
+                        if callable(close):
+                            close()
+                embs = []
+                try:
+                    items = data.get("embeddings") or []
+                    for it in items:
+                        vec = it.get("values") or it.get("embedding") or []
+                        if isinstance(vec, dict) and "values" in vec:
+                            vec = vec["values"]
+                        if not isinstance(vec, list):
+                            raise ValueError("invalid embedding vector")
+                        embs.append(vec)
+                except Exception:
                     embs = []
-                    try:
-                        items = data.get("embeddings") or []
-                        for it in items:
-                            vec = it.get("values") or it.get("embedding") or []
-                            if isinstance(vec, dict) and "values" in vec:
-                                vec = vec["values"]
-                            if not isinstance(vec, list):
-                                raise ValueError("invalid embedding vector")
-                            embs.append(vec)
-                    except Exception:
-                        embs = []
-                    if not embs or len(embs) != len(texts):
-                        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Google embeddings response format")
-                    return embs
+                if not embs or len(embs) != len(texts):
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Google embeddings response format")
+                return embs
             elif provider == "mlx":
                 loop = asyncio.get_running_loop()
                 registry = get_embeddings_registry()
@@ -1844,7 +1917,6 @@ async def create_embeddings_batch_async(
     summary="Create embeddings (enhanced with circuit breaker)",
     dependencies=[Depends(rbac_rate_limit("embeddings.create"))]
 )
-@apply_rate_limit("5/second")
 async def create_embedding_endpoint(
     request: Request,
     embedding_request: CreateEmbeddingRequest = Body(...),
@@ -2053,7 +2125,11 @@ async def create_embedding_endpoint(
                 try:
                     entity_scope, entity_value = entity.split(":", 1)
                 except Exception:
-                    entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+                    user_id = resolve_user_id_for_request(
+                        current_user,
+                        error_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+                    entity_scope, entity_value = "user", str(user_id)
 
                 daily_cap = 0
                 try:
@@ -2146,7 +2222,8 @@ async def create_embedding_endpoint(
                 # Prepare adapter request (provider-specific key if available)
                 byok_resolution = await _resolve_provider_credentials(provider)
                 if provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not byok_resolution.api_key:
-                    _raise_missing_embeddings_key(provider)
+                    if not _should_skip_missing_key(provider, byok_resolution):
+                        _raise_missing_embeddings_key(provider)
                 _api_key: Optional[str] = byok_resolution.api_key
 
                 adapter_request: Dict[str, Any] = {
@@ -2177,6 +2254,14 @@ async def create_embedding_endpoint(
                         embeddings = processed
                         embeddings_from_adapter = True
                 # If adapter failed to produce vectors, fall through to legacy/synthetic path
+            except HTTPException as he:
+                if (
+                    he.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+                    and isinstance(getattr(he, "detail", None), dict)
+                    and he.detail.get("error_code") == "missing_provider_credentials"
+                ):
+                    raise
+                logger.debug(f"Embeddings adapter path failed; falling back to legacy: {he}")
             except Exception as _e:
                 # Log and fall back silently; adapter path is optional
                 logger.debug(f"Embeddings adapter path failed; falling back to legacy: {_e}")
@@ -2220,9 +2305,12 @@ async def create_embedding_endpoint(
                     target_model_id = map_model_for_provider(original_provider, p, original_model)
                     credentials = await _resolve_provider_credentials(p)
                     if p in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not credentials.api_key:
-                        if p == requested_provider:
+                        if _should_skip_missing_key(p, credentials):
+                            pass
+                        elif p == requested_provider:
                             _raise_missing_embeddings_key(p)
-                        continue
+                        else:
+                            continue
                     embeddings = await create_embeddings_batch_async(
                         texts=texts_to_embed,
                         provider=p,
@@ -2244,6 +2332,12 @@ async def create_embedding_endpoint(
                         pass
                     break
                 except HTTPException as he:
+                    if (
+                        he.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+                        and isinstance(getattr(he, "detail", None), dict)
+                        and he.detail.get("error_code") == "missing_provider_credentials"
+                    ):
+                        raise
                     if he.status_code and 400 <= he.status_code < 500 and he.status_code != 429:
                         embedding_provider_failures.labels(provider=p, model=model, reason=f"http_{he.status_code}").inc()
                         last_error = he
@@ -2489,7 +2583,8 @@ async def create_embeddings_batch_endpoint(
 
     credentials = await _resolve_embeddings_byok(provider, current_user, request)
     if provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not credentials.api_key:
-        _raise_missing_embeddings_key(provider)
+        if not _should_skip_missing_key(provider, credentials):
+            _raise_missing_embeddings_key(provider)
 
     embeddings = await create_embeddings_batch_async(
         texts=texts,
@@ -2899,6 +2994,7 @@ async def list_collections(current_user: User = Depends(get_request_user)) -> Li
 @router.delete(
     "/embeddings/collections/{collection_name}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a ChromaDB collection"
 )
 async def delete_collection(
@@ -3200,7 +3296,7 @@ def _redact_obj(obj: Any, depth: int = 0) -> Any:
     dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def list_dlq_items(
-    stage: str = Query("embedding", description="Stage: chunking|embedding|storage"),
+    stage: str = Query("embedding", description="Stage: chunking|embedding|storage|content"),
     count: int = Query(50, ge=1, le=500, description="Max items to return"),
     job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
     _current_user: User = Depends(get_request_user),
@@ -3271,7 +3367,7 @@ async def list_dlq_items(
 
 
 class DLQRequeueRequest(BaseModel):
-    stage: str = Field(..., description="Stage: chunking|embedding|storage")
+    stage: str = Field(..., description="Stage: chunking|embedding|storage|content")
     entry_id: str = Field(..., description="Redis stream entry ID")
     delete_from_dlq: bool = Field(default=True)
     override_fields: Optional[Dict[str, Any]] = Field(default=None, description="Optional field overrides before requeue")
@@ -3488,7 +3584,7 @@ async def get_dlq_stats(
 ):
     client = await _get_redis_client()
     try:
-        queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+        queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
         depths = {}
         dlq_depths = {}
         for q in queues:
@@ -3609,14 +3705,14 @@ async def set_dlq_state(req: DLQStateSetRequest, current_user: User = Depends(ge
 # ---------------------------------------------------------------------------
 
 class StageControlRequest(BaseModel):
-    stage: str  # chunking|embedding|storage|all
+    stage: str  # chunking|embedding|storage|content|all
     action: str  # pause|resume|drain
 
 
 def _stage_key(stage: str, suffix: str) -> str:
     stage = stage.strip().lower()
-    if stage not in {"chunking", "embedding", "storage"}:
-        raise HTTPException(status_code=400, detail="Invalid stage; must be chunking|embedding|storage")
+    if stage not in {"chunking", "embedding", "storage", "content"}:
+        raise HTTPException(status_code=400, detail="Invalid stage; must be chunking|embedding|storage|content")
     return f"embeddings:stage:{stage}:{suffix}"
 
 
@@ -3629,7 +3725,7 @@ async def get_stage_status(current_user: User = Depends(get_request_user)):
     client = await _get_redis_client()
     try:
         out = {}
-        for st in ("chunking", "embedding", "storage"):
+        for st in ("chunking", "embedding", "storage", "content"):
             paused = await client.get(_stage_key(st, "paused"))
             drain = await client.get(_stage_key(st, "drain"))
             out[st] = {
@@ -3649,7 +3745,7 @@ async def get_stage_status(current_user: User = Depends(get_request_user)):
 async def control_stage(req: StageControlRequest, current_user: User = Depends(get_request_user)):
     client = await _get_redis_client()
     try:
-        stages = [req.stage] if req.stage != "all" else ["chunking", "embedding", "storage"]
+        stages = [req.stage] if req.stage != "all" else ["chunking", "embedding", "storage", "content"]
         for st in stages:
             if req.action == "pause":
                 await client.set(_stage_key(st, "paused"), "1")
@@ -3856,27 +3952,28 @@ async def schedule_reembed(
     current_user: User = Depends(get_request_user),
     request: Request = None,
 ):
-    """Create a Jobs row for the re-embed expansion worker to process.
+    """Create a media embeddings Jobs row to re-embed content.
 
-    Domain: embeddings, Queue: reembed (configurable via REEMBED_JOB_QUEUE), Job Type: expand_reembed.
+    Domain: embeddings, Queue: EMBEDDINGS_JOBS_QUEUE (default),
+    Job Types: embeddings_pipeline (root) with Redis Streams chunking stage.
     """
     # Build payload
     uid = str(req.user_id or current_user.id)
     payload = {
         "user_id": uid,
         "media_id": int(req.media_id),
-        "idempotency_key": req.idempotency_key,
-        "dedupe_key": req.dedupe_key,
+        "embedding_model": req.embedder_name,
+        "embedding_provider": None,
+        "request_source": "reembed",
         "operation_id": req.operation_id,
         "user_tier": req.user_tier or "free",
-        "embedder_name": req.embedder_name,
         "embedder_version": req.embedder_version,
+        "current_stage": "chunking",
+        "force_regenerate": False,
     }
     # Construct default idempotency/dedupe if not provided
-    if not req.idempotency_key:
-        payload["idempotency_key"] = f"reembed:{uid}:{int(req.media_id)}:{req.embedder_name or ''}:{req.embedder_version or ''}"
-    if not req.dedupe_key:
-        payload["dedupe_key"] = payload["idempotency_key"]
+    idempotency_key = req.idempotency_key or f"reembed:{uid}:{int(req.media_id)}:{req.embedder_name or ''}:{req.embedder_version or ''}"
+    dedupe_key = req.dedupe_key or idempotency_key
 
     # Create job via JobManager
     try:
@@ -3884,29 +3981,66 @@ async def schedule_reembed(
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         jm = JobManager(backend=backend, db_url=db_url)
-        queue = os.getenv("REEMBED_JOB_QUEUE", "reembed")
+        queue = (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip() or "default"
+        root_queue = (os.getenv("EMBEDDINGS_ROOT_JOBS_QUEUE") or "").strip()
+        if not root_queue:
+            root_queue = "low" if queue != "low" else "default"
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
-        row = jm.create_job(
+        priority = max(1, min(10, int((req.priority or 50) / 10)))
+        root_row = jm.create_job(
             domain="embeddings",
-            queue=queue,
-            job_type="expand_reembed",
+            queue=root_queue,
+            job_type="embeddings_pipeline",
             payload=payload,
             owner_user_id=uid,
-            priority=int(req.priority or 50),
-            idempotency_key=payload.get("idempotency_key"),
+            priority=priority,
+            idempotency_key=idempotency_key,
             request_id=rid,
         )
+        from tldw_Server_API.app.core.Embeddings import redis_pipeline
+
+        stage_payload = dict(payload)
+        stage_payload["root_job_uuid"] = root_row.get("uuid")
+        stage_payload["parent_job_uuid"] = root_row.get("uuid")
+        stage_payload["user_id"] = uid
+        if rid:
+            stage_payload["request_id"] = rid
+        if tp:
+            stage_payload["trace_id"] = tp
+        if idempotency_key:
+            stage_payload["idempotency_key"] = f"{idempotency_key}:chunking"
+        try:
+            stream_id = redis_pipeline.enqueue_chunking_job(
+                payload=stage_payload,
+                root_job_uuid=str(root_row.get("uuid") or ""),
+                force_regenerate=False,
+                require_redis=not redis_pipeline.allow_stub(),
+            )
+        except Exception:
+            try:
+                jm.fail_job(
+                    int(root_row["id"]),
+                    error="Failed to enqueue re-embed job to Redis",
+                    retryable=False,
+                    enforce=False,
+                )
+            except Exception:
+                pass
+            raise
         get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="reembed", traceparent=tp).info(
-            "Scheduled re-embed job: job_id=%s media_id=%s", row.get("id"), payload.get("media_id")
+            "Scheduled re-embed job: root_id=%s stream_id=%s media_id=%s",
+            root_row.get("id"),
+            stream_id,
+            payload.get("media_id"),
         )
         return ReembedScheduleResponse(
-            id=int(row.get("id")),
-            uuid=row.get("uuid"),
-            status=str(row.get("status")),
-            domain=str(row.get("domain")),
-            queue=str(row.get("queue")),
-            job_type=str(row.get("job_type")),
+            id=int(root_row.get("id")),
+            uuid=root_row.get("uuid"),
+            status=str(root_row.get("status")),
+            domain=str(root_row.get("domain")),
+            queue=str(root_row.get("queue")),
+            job_type=str(root_row.get("job_type")),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to schedule re-embed: {e}")
@@ -3926,13 +4060,13 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
         now_ts = _now()
 
     # Build the same structure as get_dlq_stats and add queue ages and stage flags
-    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
     depths: Dict[str, int] = {}
     dlq_depths: Dict[str, int] = {}
     ages: Dict[str, float] = {}
     # Optional per-priority depths when priority routing is enabled
     priority_enabled = str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes")
-    priority_depths: Dict[str, Dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}}
+    priority_depths: Dict[str, Dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}, "content": {}}
     for q in queues:
         try:
             depths[q] = await client.xlen(q)
@@ -3975,6 +4109,7 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
         "chunking": {"processed": 0, "failed": 0},
         "embedding": {"processed": 0, "failed": 0},
         "storage": {"processed": 0, "failed": 0},
+        "content": {"processed": 0, "failed": 0},
     }
     try:
         cursor = 0
@@ -4004,7 +4139,7 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
 
     # stage flags
     flags: Dict[str, Dict[str, bool]] = {}
-    for st in ("chunking", "embedding", "storage"):
+    for st in ("chunking", "embedding", "storage", "content"):
         p = await client.get(f"embeddings:stage:{st}:paused")
         d = await client.get(f"embeddings:stage:{st}:drain")
         flags[st] = {

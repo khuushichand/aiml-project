@@ -10,7 +10,7 @@ import pytest
 
 @pytest.mark.integration
 def test_artifact_traversal_rejected_under_uvicorn() -> None:
-    # Only run if uvicorn is available
+     # Only run if uvicorn is available
     try:
         import uvicorn  # type: ignore
     except ImportError:

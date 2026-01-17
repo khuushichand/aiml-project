@@ -8,7 +8,15 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 from loguru import logger
 
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
 ########################################################################################################################
@@ -21,7 +29,7 @@ class PromptExecutor:
     MAX_VARIABLE_VALUE_LENGTH = 100000  # 100K chars max per variable
     MAX_TOTAL_PROMPT_LENGTH = 500000    # 500K chars max total
 
-    # Normalize common aliases to canonical provider ids used by chat_api_call.
+    # Normalize common aliases to canonical provider ids used by the adapter registry.
     PROVIDER_ALIASES = {
         "llama": "llama.cpp",
         "oobabooga": "ooba",
@@ -31,6 +39,23 @@ class PromptExecutor:
         "custom-openai": "custom-openai-api",
         "custom_openai_2": "custom-openai-api-2",
         "custom-openai-2": "custom-openai-api-2",
+    }
+
+    _PARAM_ALIASES = {
+        "top_p": ("top_p", "topp", "maxp"),
+        "top_k": ("top_k", "topk"),
+        "min_p": ("min_p", "minp"),
+        "stop": ("stop",),
+        "response_format": ("response_format",),
+        "tools": ("tools",),
+        "tool_choice": ("tool_choice",),
+        "seed": ("seed",),
+        "logit_bias": ("logit_bias",),
+        "logprobs": ("logprobs",),
+        "top_logprobs": ("top_logprobs",),
+        "presence_penalty": ("presence_penalty",),
+        "frequency_penalty": ("frequency_penalty",),
+        "n": ("n",),
     }
 
     def __init__(self, db: PromptStudioDatabase):
@@ -192,6 +217,48 @@ class PromptExecutor:
         provider_lower = (provider or "").strip().lower()
         return cls.PROVIDER_ALIASES.get(provider_lower, provider_lower)
 
+    def _build_adapter_request(
+        self,
+        *,
+        provider: str,
+        model: Optional[str],
+        messages: List[Dict[str, Any]],
+        system_prompt: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        provider_name = normalize_provider(self._normalize_provider(provider))
+        if not provider_name:
+            raise ChatConfigurationError(provider=provider, message="LLM provider is required.")
+        app_config = ensure_app_config()
+        resolved_model = model or resolve_provider_model(provider_name, app_config)
+        if not resolved_model:
+            raise ChatConfigurationError(provider=provider_name, message="Model is required for provider.")
+
+        system_message = system_prompt
+        request_messages = messages
+        if not system_message:
+            system_message, request_messages = split_system_message(messages)
+
+        request: Dict[str, Any] = {
+            "messages": request_messages,
+            "system_message": system_message,
+            "model": resolved_model,
+            "api_key": resolve_provider_api_key_from_config(provider_name, app_config),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "app_config": app_config,
+        }
+
+        for canonical, aliases in self._PARAM_ALIASES.items():
+            for key in aliases:
+                if key in params and params[key] is not None:
+                    request[canonical] = params[key]
+                    break
+
+        return request
+
     @staticmethod
     def _coerce_llm_response(response: Any) -> Tuple[str, int]:
         if response is None:
@@ -283,16 +350,33 @@ class PromptExecutor:
         last_exc = None
         for attempt in range(3):
             try:
-                response = await asyncio.to_thread(
-                    chat_api_call,
-                    api_endpoint=api_endpoint,
-                    messages_payload=messages,
-                    system_message=system_prompt,
-                    temp=temperature,
-                    max_tokens=max_tokens,
-                    model=model,
-                    streaming=False,
-                )
+                adapter = get_registry().get_adapter(normalize_provider(api_endpoint))
+                if adapter is None:
+                    from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call as _legacy_call
+                    response = await asyncio.to_thread(
+                        _legacy_call,
+                        api_endpoint=api_endpoint,
+                        messages_payload=messages,
+                        system_message=system_prompt,
+                        temp=temperature,
+                        max_tokens=max_tokens,
+                        model=model,
+                        streaming=False,
+                    )
+                else:
+                    request = self._build_adapter_request(
+                        provider=api_endpoint,
+                        model=model,
+                        messages=messages,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        params=params,
+                    )
+                    response = await asyncio.to_thread(
+                        adapter.chat,
+                        request,
+                    )
                 content, tokens = self._coerce_llm_response(response)
                 return {"content": content, "tokens": tokens}
             except Exception as e:

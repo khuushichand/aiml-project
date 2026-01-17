@@ -15,10 +15,12 @@ class _FakeNeuTTSEngine:
         self._is_quantized_model = False
 
     def encode_reference(self, path):
+
         # Return some dummy codes
         return [1, 2, 3]
 
     def infer(self, text, ref_codes, ref_text):
+
         # Return a 0.5s of silence at 24kHz
         return np.zeros(12000, dtype=np.float32)
 
@@ -36,6 +38,8 @@ class _FakeNeuTTSEngineError(_FakeNeuTTSEngine):
 
 
 def _install_fake_engine(fake_cls):
+
+
     """Inject a fake NeuTTSAir into the vendored import path used by the adapter."""
     mod = types.ModuleType("tldw_Server_API.app.core.TTS.vendors.neuttsair.neutts")
     setattr(mod, "NeuTTSAir", fake_cls)

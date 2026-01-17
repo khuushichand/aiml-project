@@ -42,8 +42,12 @@ class UserDatabase(_UserDatabaseV2):
             super().__init__(backend=backend, config=config, client_id=client_id)
             return
 
+        if db_path is None:
+            super().__init__(client_id=client_id)
+            return
+
         # Legacy callers pass a filesystem path to an SQLite database.
-        resolved_path = Path(db_path) if db_path is not None else Path("../Databases/Users.db")
+        resolved_path = Path(db_path)
         sqlite_config = DatabaseConfig(
             backend_type=BackendType.SQLITE,
             sqlite_path=str(resolved_path),

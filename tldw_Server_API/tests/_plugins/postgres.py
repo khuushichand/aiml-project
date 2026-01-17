@@ -191,12 +191,7 @@ def pg_server() -> Dict[str, str | int]:
     return {"host": env.host, "port": int(env.port), "user": env.user, "password": env.password}
 
 
-@pytest.fixture(scope="function")
-def pg_temp_db(pg_server) -> Generator[Dict[str, object], None, None]:
-    """Create a temporary database for the current test and drop it afterwards.
-
-    Returns a dict with: host, port, user, password, database, dsn.
-    """
+def _temp_db_generator(pg_server) -> Generator[Dict[str, object], None, None]:
     host = str(pg_server["host"])  # type: ignore[index]
     port = int(pg_server["port"])  # type: ignore[index]
     user = str(pg_server["user"])  # type: ignore[index]
@@ -267,6 +262,21 @@ def pg_temp_db(pg_server) -> Generator[Dict[str, object], None, None]:
 
 
 @pytest.fixture(scope="function")
+def pg_temp_db(pg_server) -> Generator[Dict[str, object], None, None]:
+    """Create a temporary database for the current test and drop it afterwards.
+
+    Returns a dict with: host, port, user, password, database, dsn.
+    """
+    yield from _temp_db_generator(pg_server)
+
+
+@pytest.fixture(scope="session")
+def pg_temp_db_session(pg_server) -> Generator[Dict[str, object], None, None]:
+    """Create a temporary database for the test session and drop it afterwards."""
+    yield from _temp_db_generator(pg_server)
+
+
+@pytest.fixture(scope="function")
 def pg_eval_params(pg_temp_db) -> Dict[str, object]:
     """Compatibility fixture returning connection params for a live temp DB.
 
@@ -287,4 +297,18 @@ def pg_database_config(pg_temp_db):
         pg_database=str(pg_temp_db["database"]),
         pg_user=str(pg_temp_db["user"]),
         pg_password=str(pg_temp_db.get("password") or ""),
+    )
+
+
+@pytest.fixture(scope="session")
+def pg_database_config_session(pg_temp_db_session):
+    """Return a DatabaseConfig for a session-scoped Postgres database."""
+    from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+    return DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=str(pg_temp_db_session["host"]),
+        pg_port=int(pg_temp_db_session["port"]),
+        pg_database=str(pg_temp_db_session["database"]),
+        pg_user=str(pg_temp_db_session["user"]),
+        pg_password=str(pg_temp_db_session.get("password") or ""),
     )

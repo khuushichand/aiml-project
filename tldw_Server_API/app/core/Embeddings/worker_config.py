@@ -101,7 +101,26 @@ class OrchestrationConfig(BaseModel):
         import yaml
 
         with open(path, 'r') as f:
-            data = yaml.safe_load(f)
+            data = yaml.safe_load(f) or {}
+
+        pools = data.get("worker_pools")
+        if isinstance(pools, dict):
+            typed_pools: Dict[str, WorkerPoolConfig] = {}
+            pool_classes = {
+                "chunking": ChunkingWorkerPoolConfig,
+                "embedding": EmbeddingWorkerPoolConfig,
+                "storage": StorageWorkerPoolConfig,
+            }
+            for name, cfg in pools.items():
+                if isinstance(cfg, WorkerPoolConfig):
+                    typed_pools[name] = cfg
+                    continue
+                if not isinstance(cfg, dict):
+                    raise ValueError(f"worker_pools[{name}] must be a mapping")
+                worker_type = str(cfg.get("worker_type") or name).strip().lower()
+                pool_cls = pool_classes.get(worker_type, WorkerPoolConfig)
+                typed_pools[name] = pool_cls(**cfg)
+            data["worker_pools"] = typed_pools
 
         return cls(**data)
 

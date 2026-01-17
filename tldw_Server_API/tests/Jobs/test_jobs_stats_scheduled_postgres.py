@@ -16,6 +16,8 @@ def _setup(jobs_pg_dsn):
 
 
 def test_jobs_stats_includes_scheduled_postgres(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)

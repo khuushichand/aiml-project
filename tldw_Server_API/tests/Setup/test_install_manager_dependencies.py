@@ -21,6 +21,8 @@ def _read_status(path: str):
 
 
 def test_dependencies_skipped_when_pip_disabled(monkeypatch):
+
+
     plan = {
         'stt': [{'engine': 'faster_whisper', 'models': ['small']}],
         'tts': [],
@@ -51,6 +53,8 @@ def test_dependencies_skipped_when_pip_disabled(monkeypatch):
 
 
 def test_dependencies_trigger_pip_install(monkeypatch):
+
+
     plan = {
         'stt': [{'engine': 'faster_whisper', 'models': ['small']}],
         'tts': [],
@@ -67,6 +71,7 @@ def test_dependencies_trigger_pip_install(monkeypatch):
         original_find_spec = importlib.util.find_spec
 
         def fake_find_spec(name):
+
             if name == 'faster_whisper':
                 return None
             return original_find_spec(name)

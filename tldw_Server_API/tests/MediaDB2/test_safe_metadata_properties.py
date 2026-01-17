@@ -45,6 +45,7 @@ def test_doi_property_rejects_non_doi(s):
 # -------- arXiv ID property tests --------
 
 def _arxiv_new_style_ids():
+
     ver = st.integers(min_value=1, max_value=9).map(lambda v: f"v{v}") | st.just("")
     return st.builds(
         lambda a, b, c: f"{a:04d}.{b:04d}{c}",
@@ -55,6 +56,8 @@ def _arxiv_new_style_ids():
 
 
 def _arxiv_old_style_ids():
+
+
     cats = st.text(alphabet=st.sampled_from(list("abcdefghijklmnopqrstuvwxyz-")), min_size=1, max_size=10)
     nums = st.integers(min_value=0, max_value=9999999).map(lambda n: f"{n:07d}")
     return st.builds(lambda c, n: f"{c}/{n}", cats, nums)

@@ -57,7 +57,6 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _enable_native(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_GROQ", "1")
     monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_OPENROUTER", "1")
     monkeypatch.setenv("LOGURU_LEVEL", "ERROR")
@@ -66,8 +65,8 @@ def _enable_native(monkeypatch):
 
 async def test_orchestrator_async_groq_native(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    from tldw_Server_API.app.core.LLM_Calls.providers import groq_adapter
+    monkeypatch.setattr(groq_adapter, "http_client_factory", lambda *a, **k: _FakeClient())
     resp = await chat_api_call_async(
         api_endpoint="groq",
         messages_payload=[{"role": "user", "content": "hi"}],
@@ -90,8 +89,8 @@ async def test_orchestrator_async_groq_native(monkeypatch):
 
 async def test_orchestrator_async_openrouter_native(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    from tldw_Server_API.app.core.LLM_Calls.providers import openrouter_adapter
+    monkeypatch.setattr(openrouter_adapter, "http_client_factory", lambda *a, **k: _FakeClient())
     resp = await chat_api_call_async(
         api_endpoint="openrouter",
         messages_payload=[{"role": "user", "content": "hi"}],

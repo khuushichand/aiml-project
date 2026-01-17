@@ -1,17 +1,26 @@
 # PostgreSQL Content Migration Guide
 
-This document explains how to migrate existing SQLite content databases to PostgreSQL using the built-in migration tooling (`migration_tools.py`). The script copies Media, analytics, ChaChaNotes, workflows, and related metadata while preserving UUIDs, timestamps, and soft-delete flags so you can switch the backend without re-ingesting content or re-running jobs.
-
-See also: `Docs/Deployment/Postgres_Migration_Guide.md` in the repository for the source version.
+This document explains how to migrate existing SQLite content databases to PostgreSQL using the
+built-in migration tooling (`migration_tools.py`). The script copies Media, analytics,
+ChaChaNotes, **workflows**, and related metadata while preserving UUIDs, timestamps, and
+soft-delete flags so you can switch the backend without re-ingesting content or re-running
+workflow jobs.
 
 ## Prerequisites
 
-- Back up all SQLite databases (`Databases/user_databases/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `Databases/user_databases/*/ChaChaNotes.db`, `Analytics.db`).
-- Install PostgreSQL and ensure the target database is accessible.
-- Install `psycopg` (e.g., `pip install "psycopg[binary]"`).
-- Configure the server once against PostgreSQL so the schema exists (set `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API).
+- `<USER_DB_BASE_DIR>` is defined in `tldw_Server_API.app.core.config` (set via the `USER_DB_BASE_DIR` environment variable or `Config_Files/config.txt`); when unset it defaults to `Databases/user_databases/` under the project root.
+- Back up all SQLite databases for each user (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, and `<USER_DB_BASE_DIR>/<user_id>/workflows/workflows.db` if workflows are stored per-user), plus `Databases/Analytics.db`. If your deployment uses a shared workflows SQLite file (for example `workflows_path=Databases/workflows.db` in `Config_Files/config.txt`), back up `Databases/workflows.db` once outside the per-user list.
+- Install PostgreSQL and ensure the target database is accessible (local host or remote).
+- Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
+  - pip install "psycopg[binary]"
+- Configure the server once against PostgreSQL so the schema exists. The easiest option is to set
+  `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API; it will create all tables and
+  FTS artefacts, then shut the server down before migrating data.
 
 ## Step 1 - Prepare connection details
+
+Collect the PostgreSQL host, port, database, username, and password. These map directly onto the
+CLI arguments and `DatabaseConfig` fields inside the migration utility.
 
 ```bash
 export PGHOST=localhost
@@ -21,13 +30,20 @@ export PGUSER=tldw_user
 export PGPASSWORD=super-secret
 ```
 
+For production, use a `~/.pgpass` file (with `0600` permissions) or a secrets manager instead of exporting `PGPASSWORD`.
+
 ## Step 2 - Run the migration utility
+
+Invoke the migration module with paths to your existing SQLite databases. Provide `--content-sqlite`
+for the main media database and optionally pass `--chacha-sqlite`, `--analytics-sqlite`, and
+`--workflows-sqlite` if you want to migrate user notes, analytics data, and workflow runs in the
+same pass.
 
 ```bash
 python -m tldw_Server_API.app.core.DB_Management.migration_tools \
-      --content-sqlite Databases/user_databases/<user_id>/Media_DB_v2.db \
-      --chacha-sqlite Databases/user_databases/default/ChaChaNotes.db \
-      --analytics-sqlite Analytics.db \
+      --content-sqlite <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db \
+      --chacha-sqlite <USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db \
+      --analytics-sqlite Databases/Analytics.db \
       --workflows-sqlite Databases/workflows.db \
       --pg-host "$PGHOST" \
       --pg-port "$PGPORT" \
@@ -37,27 +53,123 @@ python -m tldw_Server_API.app.core.DB_Management.migration_tools \
       --batch-size 500
 ```
 
+For multi-user deployments, repeat the command for each user directory. Run these migrations
+sequentially; do not run multiple instances in parallel because the tool deletes rows before copying
+data. Use `--user-id` to scope deletions and inserts per user; when set, the tool issues scoped
+DELETE statements (not TRUNCATE) per user in dependency order. To auto-discover
+user IDs from the filesystem safely:
+
+```bash
+while IFS= read -r -d '' USER_DIR; do
+  USER_ID=$(basename "$USER_DIR")
+  python -m tldw_Server_API.app.core.DB_Management.migration_tools \
+        --content-sqlite "$USER_DIR/Media_DB_v2.db" \
+        --chacha-sqlite "$USER_DIR/ChaChaNotes.db" \
+        --analytics-sqlite Databases/Analytics.db \
+        --workflows-sqlite Databases/workflows.db \
+        --user-id "$USER_ID" \
+        --pg-host "$PGHOST" \
+        --pg-port "$PGPORT" \
+        --pg-database "$PGDATABASE" \
+        --pg-user "$PGUSER" \
+        --pg-password "$PGPASSWORD" \
+        --batch-size 500
+done < <(find "$USER_DB_BASE_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+```
+
+The script performs the following actions for each supplied database:
+
+1. Reads table definitions from SQLite, respecting foreign-key dependencies.
+2. Deletes existing rows in PostgreSQL (in dependency order) so the migration is idempotent.
+3. Copies data in batches using the backend abstraction layer.
+4. Resyncs sequences so future inserts continue from the correct IDs.
+5. Emits a row-count summary for each migrated table (including workflow definitions, runs, steps,
+   events, and artifacts) so you can compare the SQLite and Postgres totals at a glance.
+
+Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip large log tables).
+
 ## Step 3 - Validate the migration
 
-Compare row counts in SQLite vs Postgres, run dual-backend tests as needed, and check stress suite if applicable.
+- Compare row counts between SQLite and PostgreSQL:
+
+  ```sql
+  -- Run in psql
+  SELECT COUNT(*) FROM media;
+  SELECT COUNT(*) FROM claims;
+  SELECT COUNT(*) FROM workflow_runs;
+  SELECT COUNT(*) FROM workflow_steps;
+  ```
+
+  ```bash
+  sqlite3 <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db 'SELECT COUNT(*) FROM Media;'
+  sqlite3 Databases/workflows.db 'SELECT COUNT(*) FROM workflow_runs;'
+  ```
+
+- Run the dual-backend regression tests to ensure the application-level routines behave correctly (requires a Postgres instance with `POSTGRES_TEST_*` env vars):
+
+  ```bash
+  pytest tldw_Server_API/tests/DB_Management/test_media_postgres_support.py \
+         tldw_Server_API/tests/DB_Management/test_media_postgres_migrations.py \
+         tldw_Server_API/tests/RAG/test_analytics_backend.py \
+         tldw_Server_API/tests/RAG/test_dual_backend_rag_flow.py \
+         tldw_Server_API/tests/RAG/test_dual_backend_end_to_end.py \
+         tldw_Server_API/tests/DB_Management/test_migration_tools.py \
+         tldw_Server_API/tests/DB_Management/test_migration_cli_integration.py \
+         tldw_Server_API/tests/Workflows/test_workflows_postgres_migrations.py \
+         tldw_Server_API/tests/Workflows/test_dual_backend_workflows.py \
+         tldw_Server_API/tests/Workflows/test_dual_backend_engine.py
+  ```
+
+- Optionally run the workload stress sweep after verifying parity:
+
+  ```bash
+  TLDW_WORKFLOW_STRESS=1 pytest -v tldw_Server_API/tests/Workflows/test_workflow_stress.py
+  ```
+  Latest run (2025-10-08) processed 250 concurrent runs with 1,000 step events per backend in under
+  two minutes and finished with zero failures.
+
 
 ## Step 4 - Switch the application configuration
 
-Set environment variables (examples):
+1. Update environment variables or `Config_Files/config.txt`:
 
-```bash
-export TLDW_CONTENT_DB_BACKEND=postgresql
-export TLDW_PG_HOST=$PGHOST
-export TLDW_PG_PORT=$PGPORT
-export TLDW_PG_DATABASE=$PGDATABASE
-export TLDW_PG_USER=$PGUSER
-export TLDW_PG_PASSWORD=$PGPASSWORD
-```
+   ```bash
+   export TLDW_CONTENT_DB_BACKEND=postgresql
+   export TLDW_PG_HOST=$PGHOST
+   export TLDW_PG_PORT=$PGPORT
+   export TLDW_PG_DATABASE=$PGDATABASE
+   export TLDW_PG_USER=$PGUSER
+   export TLDW_PG_PASSWORD=$PGPASSWORD
+   # Optional overrides for connection pooling
+   export TLDW_DB_POOL_SIZE=15
+   export TLDW_DB_POOL_TIMEOUT=30
+   export WORKFLOWS_SQLITE_POOL_SIZE=10
+   # Or set in Config_Files/config.txt under [Database]:
+   # pool_size, max_overflow, pool_timeout
+   ```
 
-Restart the stack and confirm logs mention PostgreSQL usage for content and workflows.
+2. Remove or archive the old SQLite files once you are confident the migration succeeded.
+
+3. Restart the API/WebUI stack. On startup the service should log that it is using PostgreSQL for
+   Media, ChaChaNotes, Analytics, and Workflows. Monitor `/api/v1/workflows/runs` (or engine
+   metrics for queue depth) to ensure pending runs are processed.
 
 ## Troubleshooting
 
-- Foreign-key errors - ensure schema exists (start API once before migrating).
-- Sequence mismatch - rerun with small batch size or reseed sequences.
-- Large datasets - increase `--batch-size` or migrate one DB at a time.
+- **Foreign-key errors during copy** - ensure the PostgreSQL schema was created by running the API
+  once before migrating. The script expects tables and constraints to exist.
+- **Sequence mismatch** - rerun the migration with `--batch-size 1` for the affected database to
+  recompute the sequence state, or run the generated `SELECT setval(...)` statements manually.
+- **Large datasets** - increase `--batch-size` (default 500) to improve throughput, or run per
+  database to isolate issues.
+- **Workflow runtime lag** - confirm the connection pool overrides above are applied and check
+  `pg_stat_activity` for sessions waiting on locks. Enable the stress suite with reduced batch size
+  (set `TLDW_WORKFLOW_STRESS_BATCH=25`) to reproduce issues under controlled load.
+
+## Next steps
+
+- Update deployment scripts to point at PostgreSQL hosts.
+- Configure backups for the new PostgreSQL databases.
+- Remove legacy cron jobs or tooling that assumed SQLite file copies.
+- Add the workflow stress sweep (`TLDW_WORKFLOW_STRESS=1`) to nightly CI or a staging cron job to
+  detect regressions early.

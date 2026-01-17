@@ -43,6 +43,7 @@ async def test_paper_search_arxiv_success(monkeypatch, paper_search_app):
 async def test_paper_search_biorxiv_success(monkeypatch, paper_search_app):
 
     def _fake_bio(q, server, f, t, category, offset, limit, recent_days=None, recent_count=None):
+
         items = [
             {
                 "doi": "10.1101/2020.01.01.123456",
@@ -77,6 +78,7 @@ async def test_paper_search_biorxiv_success(monkeypatch, paper_search_app):
 async def test_paper_search_semantic_scholar_error_mapping(monkeypatch, paper_search_app):
 
     def _fake_s2(query, offset, limit, fos, pub_types, year_range, venue, min_citations, open_access_only, fields_to_return=None):
+
         return None, "Semantic Scholar API HTTP Error: 429 - Too Many Requests."
 
     from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as _S2
@@ -95,6 +97,7 @@ async def test_paper_search_semantic_scholar_error_mapping(monkeypatch, paper_se
 async def test_paper_search_pubmed_success(monkeypatch, paper_search_app):
 
     def _fake_pubmed(q, offset, limit, from_year, to_year, free_full_text):
+
         items = [
             {
                 "pmid": "12345678",
@@ -129,6 +132,7 @@ async def test_paper_search_pubmed_success(monkeypatch, paper_search_app):
 async def test_paper_search_pubmed_error_mapping(monkeypatch, paper_search_app):
 
     def _fake_pubmed_err(q, offset, limit, from_year, to_year, free_full_text):
+
         return None, 0, "PubMed API HTTP Error: 429"
 
     from tldw_Server_API.app.core.Third_Party import PubMed as _Pub
@@ -146,6 +150,7 @@ async def test_paper_search_pubmed_error_mapping(monkeypatch, paper_search_app):
 async def test_biorxiv_by_doi_success(monkeypatch, paper_search_app):
 
     def _fake_by_doi(doi, server):
+
         return {
             "doi": doi,
             "title": "A test preprint",
@@ -176,6 +181,7 @@ async def test_biorxiv_by_doi_success(monkeypatch, paper_search_app):
 async def test_biorxiv_by_doi_not_found(monkeypatch, paper_search_app):
 
     def _fake_by_doi_notfound(doi, server):
+
         return None, None
 
     from tldw_Server_API.app.core.Third_Party import BioRxiv as _Bio
@@ -194,6 +200,7 @@ async def test_arxiv_by_id_success(monkeypatch):
     from tldw_Server_API.app.main import app
 
     def _fake_arxiv_by_id(paper_id):
+
         return {
             "id": paper_id,
             "title": "Attention Is All You Need",
@@ -221,6 +228,7 @@ async def test_arxiv_by_id_not_found(monkeypatch):
     from tldw_Server_API.app.main import app
 
     def _fake_arxiv_by_id_notfound(paper_id):
+
         return None, None
 
     from tldw_Server_API.app.core.Third_Party import Arxiv as _Arxiv
@@ -239,6 +247,7 @@ async def test_semantic_scholar_by_id_success(monkeypatch):
     from tldw_Server_API.app.main import app
 
     def _fake_s2_details(paper_id, fields_to_return='paperId,title,abstract,year,citationCount,authors,venue,openAccessPdf,url,publicationTypes,publicationDate,externalIds'):
+
         return {
             "paperId": paper_id,
             "title": "Graph Neural Networks",
@@ -272,6 +281,7 @@ async def test_semantic_scholar_by_id_not_found(monkeypatch):
     from tldw_Server_API.app.main import app
 
     def _fake_s2_notfound(paper_id, fields_to_return='paperId,title,abstract,year,citationCount,authors,venue,openAccessPdf,url,publicationTypes,publicationDate,externalIds'):
+
         return None, "Semantic Scholar API HTTP Error: 404 - Not Found"
 
     from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as _S2
@@ -290,6 +300,7 @@ async def test_pubmed_by_id_success(monkeypatch):
     from tldw_Server_API.app.main import app
 
     def _fake_pubmed_by_id(pmid):
+
         return {
             "pmid": pmid,
             "title": "A Sample PubMed Record",
@@ -323,6 +334,7 @@ async def test_pubmed_by_id_not_found(monkeypatch):
     from tldw_Server_API.app.main import app
 
     def _fake_pubmed_by_id_notfound(pmid):
+
         return None, None
 
     from tldw_Server_API.app.core.Third_Party import PubMed as _Pub
@@ -341,6 +353,7 @@ async def test_biorxiv_pubs_search_success(monkeypatch):
     from tldw_Server_API.app.main import app
 
     def _fake_pubs(server, f, t, offset, limit, recent_days, recent_count, q):
+
         items = [{
             "biorxiv_doi": "10.1101/2021.11.09.467936",
             "published_doi": "10.7554/eLife.75393",
@@ -383,6 +396,7 @@ async def test_biorxiv_pubs_by_doi_success(monkeypatch):
     from tldw_Server_API.app.main import app
 
     def _fake_pub_by_doi(doi, server):
+
         return {
             "biorxiv_doi": doi,
             "published_doi": "10.7554/eLife.75393",

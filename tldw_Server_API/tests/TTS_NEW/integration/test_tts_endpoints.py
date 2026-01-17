@@ -24,7 +24,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 class TestTTSGenerateEndpoint:
     """Tests for the /api/v1/audio/speech endpoint."""
-    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_basic_audio(self, mock_post, test_client, auth_headers):
         """Test basic TTS generation endpoint."""
         # Mock OpenAI API response
@@ -51,7 +51,7 @@ class TestTTSGenerateEndpoint:
         assert len(response.content) > 0
 
     @pytest.mark.streaming
-    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_basic_audio_streaming(self, mock_post, test_client, auth_headers):
         """Test basic TTS generation endpoint in streaming mode (OpenAI)."""
 
@@ -255,8 +255,6 @@ class TestTTSStreamingEndpoint:
         """Streaming quota exceeded should ideally map to HTTP 402."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSQuotaExceededError
 
-        audio_endpoints.limiter._storage.reset()
-
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = TTSQuotaExceededError("Character quota exceeded")
 
@@ -285,7 +283,7 @@ class TestProviderManagementEndpoints:
     async def test_list_providers(self, test_client, auth_headers):
         """Test listing available TTS providers."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.get_capabilities') as mock_caps, \
-             patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.list_voices') as mock_voices:
+            patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.list_voices') as mock_voices:
             mock_caps.return_value = {
                 "openai": {"models": ["tts-1", "tts-1-hd"]},
                 "elevenlabs": {"models": ["eleven_multilingual_v2"]},
@@ -429,8 +427,6 @@ class TestErrorHandling:
         """Test handling of rate limit errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import rate_limit_error
 
-        audio_endpoints.limiter._storage.reset()
-
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = rate_limit_error("OpenAITTS", retry_after=60)
 
@@ -451,8 +447,6 @@ class TestErrorHandling:
     async def test_quota_exceeded_error(self, test_client, auth_headers):
         """Test handling of quota exceeded errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSQuotaExceededError
-
-        audio_endpoints.limiter._storage.reset()
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = TTSQuotaExceededError("Character quota exceeded")
@@ -491,6 +485,38 @@ class TestErrorHandling:
             )
 
             assert response.status_code in [status.HTTP_503_SERVICE_UNAVAILABLE, status.HTTP_429_TOO_MANY_REQUESTS]
+
+    async def test_missing_provider_credentials_returns_503(self, test_client, auth_headers, monkeypatch):
+        """Missing provider credentials should return 503 with error code."""
+        from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+
+        async def _missing(provider, *args, **kwargs):
+            return ResolvedByokCredentials(
+                provider=provider,
+                api_key=None,
+                app_config=None,
+                credential_fields={},
+                source="server",
+                allowlisted=True,
+            )
+
+        monkeypatch.setattr(audio_endpoints, "resolve_byok_credentials", _missing)
+
+        response = test_client.post(
+            "/api/v1/audio/speech",
+            json={
+                "input": "Test missing key",
+                "voice": "alloy",
+                "model": "tts-1",
+                "response_format": "mp3",
+                "stream": False,
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        detail = response.json().get("detail", {})
+        assert detail.get("error_code") == "missing_provider_credentials"
 
 # ========================================================================
 # Batch Processing Tests

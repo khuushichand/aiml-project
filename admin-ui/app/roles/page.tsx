@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -179,7 +179,7 @@ export default function RolesPage() {
   };
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8">
@@ -442,6 +442,6 @@ export default function RolesPage() {
             </Card>
           </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

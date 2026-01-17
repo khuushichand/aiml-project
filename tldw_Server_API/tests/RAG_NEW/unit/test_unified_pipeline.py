@@ -241,6 +241,59 @@ class TestUnifiedPipeline:
                     mock_citation_instance.generate_citations.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_unified_pipeline_chunk_type_filter_citations(self):
+        """Test chunk_type filtering and chunk-level citation locations."""
+        code_doc = Document(
+            id="code-1",
+            content="def add(a, b): return a + b",
+            metadata={"chunk_type": "code", "title": "Code Doc"},
+            source=DataSource.MEDIA_DB,
+            score=0.92,
+            page_number=2,
+            section_title="Code Section",
+            source_document_id="doc-123",
+        )
+        text_doc = Document(
+            id="text-1",
+            content="Plain text content.",
+            metadata={"chunk_type": "text", "title": "Text Doc"},
+            source=DataSource.MEDIA_DB,
+            score=0.75,
+            page_number=1,
+            section_title="Intro Section",
+            source_document_id="doc-123",
+        )
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+            mock_retriever_instance = MagicMock()
+            mock_retriever_instance.retrieve = AsyncMock(return_value=[code_doc, text_doc])
+            mock_retriever.return_value = mock_retriever_instance
+
+            result = await unified_rag_pipeline(
+                query="code example",
+                chunk_type_filter=["code"],
+                enable_citations=True,
+                enable_chunk_citations=True,
+                enable_generation=False,
+                enable_cache=False,
+                enable_reranking=False,
+            )
+
+            docs = getattr(result, 'documents', None) if not isinstance(result, dict) else result.get('documents', [])
+            metadata = getattr(result, 'metadata', None) if not isinstance(result, dict) else result.get('metadata', {})
+            chunk_citations = getattr(result, 'chunk_citations', None) if not isinstance(result, dict) else result.get('chunk_citations', [])
+
+            assert len(docs) == 1
+            assert docs[0].get("id") == "code-1"
+            assert docs[0].get("metadata", {}).get("chunk_type") == "code"
+            assert metadata.get("chunk_type_filter_before") == 2
+            assert metadata.get("chunk_type_filter_after") == 1
+            assert chunk_citations
+            location = chunk_citations[0].get("location", "")
+            assert "Section: Code Section" in location
+            assert "Page 2" in location
+
+    @pytest.mark.asyncio
     async def test_unified_pipeline_all_features(self):
         """Test unified pipeline with all features enabled."""
         result = await unified_rag_pipeline(

@@ -41,6 +41,7 @@ class TestTestModeProductionGuard:
                 raise RuntimeError("TEST_MODE cannot be enabled in production environment")
 
     def test_test_mode_allowed_with_override(self, monkeypatch):
+
         """TEST_MODE should work with explicit production override."""
         monkeypatch.setenv("TEST_MODE", "1")
         monkeypatch.setenv("ENVIRONMENT", "production")
@@ -55,6 +56,7 @@ class TestTestModeProductionGuard:
             pytest.fail("Should not have reached this check with override enabled")
 
     def test_test_mode_allowed_in_dev(self, monkeypatch):
+
         """TEST_MODE should work in non-production environments."""
         monkeypatch.setenv("TEST_MODE", "1")
         monkeypatch.setenv("ENVIRONMENT", "development")
@@ -101,6 +103,7 @@ class TestRBACErrorHandling:
     """Tests for RBAC permission check error handling."""
 
     def test_user_has_permission_raises_on_error(self, monkeypatch):
+
         """user_has_permission should raise RBACError on database errors."""
         reset_settings()
         monkeypatch.setenv("AUTH_MODE", "multi_user")
@@ -118,6 +121,7 @@ class TestCryptoFallbackProtection:
     """Tests for crypto fallback secret protection."""
 
     def test_crypto_fallback_blocked_in_production(self, monkeypatch):
+
         """Crypto fallback should be blocked in production environment.
 
         This test verifies that when no secrets are configured and ENVIRONMENT=production,
@@ -126,6 +130,7 @@ class TestCryptoFallbackProtection:
         # Set up environment for production with test context
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")  # Mark as test context
+        monkeypatch.setenv("TEST_MODE", "true")
 
         from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
 
@@ -149,10 +154,12 @@ class TestCryptoFallbackProtection:
         assert "production" in error_msg or "secret" in error_msg
 
     def test_crypto_fallback_warning_in_test_env(self, monkeypatch, caplog):
+
         """Crypto fallback should log a warning when used in test environment."""
         # Set up environment for non-production with test context
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")  # Mark as test context
+        monkeypatch.setenv("TEST_MODE", "true")
 
         from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
 
@@ -176,6 +183,7 @@ class TestInputValidationXSS:
     """Tests for input validation XSS prevention."""
 
     def test_script_tag_blocked(self):
+
         """Script tags should be blocked in input validation."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
@@ -184,6 +192,7 @@ class TestInputValidationXSS:
         assert ok is False
 
     def test_case_insensitive_script_blocked(self):
+
         """Script tags in different cases should be blocked."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
@@ -198,6 +207,7 @@ class TestInputValidationXSS:
         assert ok2 is False
 
     def test_javascript_uri_blocked(self):
+
         """JavaScript URIs should be blocked."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
@@ -206,6 +216,7 @@ class TestInputValidationXSS:
         assert ok is False
 
     def test_event_handler_blocked(self):
+
         """Event handlers like onclick should be blocked."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
@@ -214,6 +225,7 @@ class TestInputValidationXSS:
         assert ok is False
 
     def test_data_uri_xss_blocked(self):
+
         """Data URI XSS attempts should be blocked."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
@@ -222,6 +234,7 @@ class TestInputValidationXSS:
         assert ok is False
 
     def test_path_traversal_blocked(self):
+
         """Path traversal attempts should be blocked."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
@@ -236,6 +249,7 @@ class TestInputValidationXSS:
         assert ok2 is False
 
     def test_null_byte_blocked(self):
+
         """Null byte injection should be blocked."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
@@ -246,6 +260,7 @@ class TestInputValidationXSS:
         assert ok1 is False
 
     def test_normal_username_allowed(self):
+
         """Normal usernames should be allowed."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
@@ -264,6 +279,7 @@ class TestPrivilegeEscalationPrevention:
     """Tests for privilege escalation prevention."""
 
     def test_blocked_admin_usernames(self):
+
         """Admin-related usernames should be blocked."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
@@ -275,6 +291,7 @@ class TestPrivilegeEscalationPrevention:
             assert ok is False, f"{name} should be blocked"
 
     def test_blocked_service_usernames(self):
+
         """Service account usernames should be blocked."""
         from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 

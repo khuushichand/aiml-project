@@ -1,23 +1,25 @@
 from __future__ import annotations
 
-import os
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
 
-def _ensure_usage_middleware():
-    """Re-register usage logging middleware when TEST_MODE stripped it."""
+def _build_usage_test_app() -> FastAPI:
+    """Build a minimal app with usage logging middleware for tests."""
     from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
 
-    if not any(getattr(m, "cls", None) is UsageLoggingMiddleware for m in getattr(app, "user_middleware", [])):
-        app.add_middleware(UsageLoggingMiddleware)
-        # Starlette requires rebuilding the stack after manual mutation
-        app.middleware_stack = app.build_middleware_stack()
+    app_local = FastAPI()
+
+    @app_local.get("/api/v1/health/ready")
+    def _ready():
+        return {"ok": True}
+
+    app_local.add_middleware(UsageLoggingMiddleware)
+    return app_local
 
 
 async def _ensure_usage_tables():
@@ -102,9 +104,9 @@ async def test_middleware_logs_usage(monkeypatch):
     await reset_session_manager()
 
     headers = {"X-API-KEY": "middleware-test-key"}
-    _ensure_usage_middleware()
+    app_local = _build_usage_test_app()
 
-    with TestClient(app, headers=headers) as client:
+    with TestClient(app_local, headers=headers) as client:
         await _ensure_usage_tables()
         before = await _count_usage_rows()
 
@@ -136,9 +138,9 @@ async def test_middleware_excludes_prefix(monkeypatch):
     await reset_session_manager()
 
     headers = {"X-API-KEY": "middleware-test-key"}
-    _ensure_usage_middleware()
+    app_local = _build_usage_test_app()
 
-    with TestClient(app, headers=headers) as client:
+    with TestClient(app_local, headers=headers) as client:
         await _ensure_usage_tables()
         before = await _count_usage_rows()
 

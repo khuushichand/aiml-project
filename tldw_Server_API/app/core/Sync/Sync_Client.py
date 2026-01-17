@@ -1,10 +1,7 @@
 # sync_client.py
-import time
-import requests
 import json
-from loguru import logger
 import os
-import sqlite3 # For specific error types
+import sqlite3  # For specific error types
 from typing import List, Dict, Optional, Tuple
 #
 # Third-Party Imports
@@ -15,6 +12,8 @@ try:
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, ConflictError, DatabaseError, InputError
 except ImportError:
     logger.error("Could not import the 'Media_DB' library. Make sure Media_DB.py is accessible.")
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError, EgressPolicyError
+from tldw_Server_API.app.core.http_client import fetch
 #
 #######################################################################################################################
 #
@@ -32,6 +31,19 @@ CLIENT_ID = "client_abc_123" # Needs to be unique per client instance
 DATABASE_PATH = f"./client_dbs/{CLIENT_ID}_media.db" # Example: One DB per client
 SYNC_BATCH_SIZE = 50 # How many changes to send/receive at once
 SYNC_INTERVAL_SECONDS = 60 # How often to run the sync cycle automatically
+
+
+def _extract_http_status_error(exc: Exception) -> Optional[Tuple[int, str]]:
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", None)
+    if status is None:
+        return None
+    try:
+        status_int = int(status)
+    except (TypeError, ValueError):
+        status_int = 0
+    text = getattr(resp, "text", "No response body")
+    return status_int, str(text)
 
 
 class ClientSyncEngine:
@@ -107,16 +119,16 @@ class ClientSyncEngine:
             # 1. Push Local Changes
             self._push_local_changes()
 
-        except requests.exceptions.RequestException as e:
+        except (NetworkError, RetryExhaustedError, EgressPolicyError) as e:
             logger.error(f"Network error during push phase: {e}")
             network_error = True # Don't proceed to pull if push failed due to network
         except Exception as e:
             # Treat centralized NetworkError as network error as well
             try:
-                from tldw_Server_API.app.core.exceptions import NetworkError as _NetErr
-                if isinstance(e, _NetErr):
-                    logger.error(f"Network error during push phase: {e}")
-                    network_error = True
+                http_err = _extract_http_status_error(e)
+                if http_err:
+                    status, text = http_err
+                    logger.error(f"HTTP error during push phase: {status} - {text}")
                 else:
                     logger.error(f"Unexpected error during push phase: {e}", exc_info=True)
             except Exception:
@@ -128,10 +140,15 @@ class ClientSyncEngine:
                 # 2. Pull and Apply Remote Changes
                 self._pull_and_apply_remote_changes()
 
-            except requests.exceptions.RequestException as e:
+            except (NetworkError, RetryExhaustedError, EgressPolicyError) as e:
                 logger.error(f"Network error during pull phase: {e}")
             except Exception as e:
-                logger.error(f"Unexpected error during pull/apply phase: {e}", exc_info=True)
+                http_err = _extract_http_status_error(e)
+                if http_err:
+                    status, text = http_err
+                    logger.error(f"HTTP error during pull phase: {status} - {text}")
+                else:
+                    logger.error(f"Unexpected error during pull/apply phase: {e}", exc_info=True)
         else:
             logger.warning("Skipping pull phase due to earlier network error during push.")
 
@@ -173,9 +190,20 @@ class ClientSyncEngine:
             full_url = f"{self.server_api_url}{SYNC_ENDPOINT_SEND}"
             logger.debug(f"Posting {len(client_changes)} changes to {full_url}")
 
-            # Use requests here so tests can patch tldw_Server_API.app.core.Sync.Sync_Client.requests.post
-            resp = requests.post(full_url, headers=headers, json=payload, timeout=45)
-            resp.raise_for_status()
+            # Use fetch here so tests can patch tldw_Server_API.app.core.Sync.Sync_Client.fetch
+            resp = fetch(
+                method="POST",
+                url=full_url,
+                headers=headers,
+                json=payload,
+                timeout=45,
+            )
+            try:
+                resp.raise_for_status()
+            finally:
+                close = getattr(resp, "close", None)
+                if callable(close):
+                    close()
 
             # If successful, update the marker
             new_last_sent = client_changes[-1]['change_id']
@@ -183,26 +211,15 @@ class ClientSyncEngine:
             self._save_sync_state()
             logger.info(f"Successfully pushed {len(client_changes)} changes. Last sent ID updated to {new_last_sent}.")
 
-        except requests.exceptions.HTTPError as e:
-            # Add a check for e.response
-            status = e.response.status_code if e.response else "Unknown"
-            text = e.response.text if e.response else "No response body"
-            logger.error(f"HTTP error pushing changes: {status} - {text}")
         except Exception as e:
-            # httpx HTTPStatusError path
-            try:
-                import httpx as _httpx
-                if isinstance(e, _httpx.HTTPStatusError):
-                    resp = getattr(e, 'response', None)
-                    status = getattr(resp, 'status_code', 'Unknown')
-                    text = getattr(resp, 'text', 'No response body')
-                    logger.error(f"HTTP error pushing changes: {status} - {text}")
-                else:
-                    raise e
-            except Exception:
-                raise
+            http_err = _extract_http_status_error(e)
+            if http_err:
+                status, text = http_err
+                logger.error(f"HTTP error pushing changes: {status} - {text}")
+                return
+            raise
             # Do NOT update last_local_log_id_sent if push fails
-        # Let RequestException (network errors) be caught by run_sync_cycle
+        # Let transport errors be caught by run_sync_cycle
 
     def _pull_and_apply_remote_changes(self):
         """Pulls changes from the server and applies them locally."""
@@ -218,10 +235,21 @@ class ClientSyncEngine:
             full_url = f"{self.server_api_url}{SYNC_ENDPOINT_GET}"
             logger.debug(f"Getting changes from {full_url} with params {params}")
 
-            # Use requests here so tests can patch tldw_Server_API.app.core.Sync.Sync_Client.requests.get
-            r = requests.get(full_url, params=params, headers=headers, timeout=45)
-            r.raise_for_status()
-            sync_data = r.json()
+            # Use fetch here so tests can patch tldw_Server_API.app.core.Sync.Sync_Client.fetch
+            r = fetch(
+                method="GET",
+                url=full_url,
+                params=params,
+                headers=headers,
+                timeout=45,
+            )
+            try:
+                r.raise_for_status()
+                sync_data = r.json()
+            finally:
+                close = getattr(r, "close", None)
+                if callable(close):
+                    close()
             remote_changes = sync_data.get('changes', [])
             # Server should tell us its latest ID, even if no changes sent for us
             server_latest_id = sync_data.get('latest_change_id', self.last_server_log_id_processed)
@@ -250,21 +278,10 @@ class ClientSyncEngine:
                 logger.error("Failed to apply one or more remote changes in the batch. Last processed ID NOT updated.")
                 # Consider: Implement partial batch success handling? (More complex)
 
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP error pulling changes: {e.response.status_code} - {e.response.text}")
-        except Exception as e:
-            try:
-                import httpx as _httpx
-                if isinstance(e, _httpx.HTTPStatusError):
-                    resp = getattr(e, 'response', None)
-                    logger.error(f"HTTP error pulling changes: {getattr(resp, 'status_code', 'Unknown')} - {getattr(resp, 'text', '')}")
-                else:
-                    raise e
-            except Exception:
-                raise
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding JSON response from server: {e}")
-        # Let RequestException (network errors) be caught by run_sync_cycle
+            raise
+        # Let transport errors be caught by run_sync_cycle
 
 
     def _apply_remote_changes_batch(self, changes: List[Dict]) -> bool:

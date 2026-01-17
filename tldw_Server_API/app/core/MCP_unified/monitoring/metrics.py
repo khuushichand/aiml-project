@@ -667,6 +667,11 @@ def get_metrics_collector() -> MetricsCollector:
 
 # Convenience decorators for metric collection
 
+def record_rate_limit_fallback(backend: str = "redis") -> None:
+    """Record a rate limiter fallback event."""
+    collector = get_metrics_collector()
+    collector.record_rate_limit_fallback(backend=backend)
+
 def track_request_time(method: str):
     """Decorator to track request execution time"""
     def decorator(func):

@@ -9,39 +9,50 @@ Skips if TTS is not configured or returns JSON error.
 import pytest
 import httpx
 
-from .fixtures import api_client
+from .fixtures import api_client, has_openai_api_key
+
+
+def _should_try_openai_fallback(response: httpx.Response) -> bool:
+    if response.status_code in (401, 403):
+        return False
+    return response.status_code >= 400
+
+
+def _stream_tts_bytes(api_client, payload: dict) -> tuple[int, bool]:
+    with api_client.client.stream("POST", "/api/v1/audio/speech", json=payload) as r:
+        if _should_try_openai_fallback(r):
+            return 0, True
+        ct = r.headers.get("content-type", "")
+        assert ("audio/" in ct) or (ct == "application/octet-stream") or ct == ""
+        received = 0
+        for idx, chunk in enumerate(r.iter_bytes()):
+            if not chunk:
+                continue
+            received += len(chunk)
+            if idx >= 3:
+                break
+        return received, False
 
 
 @pytest.mark.critical
 def test_tts_streaming_http_chunks(api_client):
     payload = {
-        "model": "tts-1",  # server maps provider/model internally
+        "model": "kokoro",
         "input": "This is a short streaming test.",
-        "voice": "alloy",
+        "voice": "af_bella",
         "response_format": "mp3",
         "stream": True,
     }
 
-    # Use streaming response to validate chunked bytes
     try:
-        with api_client.client.stream("POST", "/api/v1/audio/speech", json=payload) as r:
-            # Content-Type should indicate audio; some adapters may delay headers
-            ct = r.headers.get("content-type", "")
-            # Accept either audio/* or octet-stream fallback
-            assert ("audio/" in ct) or (ct == "application/octet-stream") or ct == ""
+        received, wants_fallback = _stream_tts_bytes(api_client, payload)
+        if wants_fallback and has_openai_api_key():
+            fallback = dict(payload)
+            fallback["model"] = "tts-1"
+            fallback["voice"] = "alloy"
+            received, wants_fallback = _stream_tts_bytes(api_client, fallback)
 
-            received = 0
-            # Read a few chunks at most to avoid long test
-            for idx, chunk in enumerate(r.iter_bytes()):
-                if not chunk:
-                    continue
-                received += len(chunk)
-                # Stop after first few chunks
-                if idx >= 3:
-                    break
-            # If we got no bytes at all, treat as optional and skip
-            if received == 0:
-                pytest.skip("No audio bytes produced; TTS not configured or muted.")
+        if received == 0:
+            pytest.skip("No audio bytes produced; TTS not configured or muted.")
     except httpx.HTTPStatusError as e:
-        # Treat missing/disabled TTS as optional
         pytest.skip(f"TTS streaming not available/configured: {e}")

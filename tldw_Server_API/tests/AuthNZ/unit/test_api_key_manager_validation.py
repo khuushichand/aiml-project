@@ -12,6 +12,16 @@ class _StubRepo:
         return dict(self._key_info)
 
 
+class _StubKeyIdRepo:
+    def __init__(self, key_info: dict):
+        self._key_info = dict(key_info)
+        self.calls: list[str] = []
+
+    async def fetch_active_by_key_id(self, key_id: str):
+        self.calls.append(key_id)
+        return dict(self._key_info)
+
+
 async def _noop_async(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
     return None
 
@@ -47,6 +57,43 @@ async def test_validate_api_key_parses_zulu_expires_at(monkeypatch):
     assert result is not None
     assert result["id"] == 1
     assert "key_hash" not in result
+
+
+@pytest.mark.asyncio
+async def test_validate_api_key_kdf_path(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+    from tldw_Server_API.app.core.AuthNZ.api_key_crypto import (
+        format_api_key,
+        kdf_hash_api_key,
+    )
+    from tldw_Server_API.app.core.AuthNZ.settings import Settings
+
+    api_key = format_api_key("deadbeefcafe", "secret-part")
+
+    manager = APIKeyManager()
+    manager.settings = Settings(AUTH_MODE="multi_user", JWT_SECRET_KEY="test-secret-kdf-1234567890-abcdef")
+    manager._initialized = True
+
+    encoded = kdf_hash_api_key(api_key, salt=b"fixed-salt-123456")
+    repo = _StubKeyIdRepo(
+        {
+            "id": 10,
+            "user_id": 7,
+            "key_hash": encoded,
+            "expires_at": None,
+            "allowed_ips": None,
+            "scope": "read",
+        }
+    )
+
+    monkeypatch.setattr(manager, "_get_repo", lambda: repo, raising=True)
+    manager._update_usage = _noop_async  # type: ignore[method-assign]
+
+    result = await manager.validate_api_key(api_key)
+
+    assert result is not None
+    assert result["id"] == 10
+    assert repo.calls == ["deadbeefcafe"]
 
 
 @pytest.mark.asyncio

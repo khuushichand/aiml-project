@@ -22,20 +22,70 @@ Usage (single-user, local):
         --api-key "$SINGLE_USER_API_KEY"
 
 Notes:
-- Requires `requests` for HTTP and (optionally) `websockets` for the audio WS check.
+- Requires `tldw_Server_API` on the PYTHONPATH and (optionally) `websockets` for the audio WS check.
 - You can skip individual checks via flags (see --help).
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import quote
 
-import requests
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
+
+from common.repo_utils import configure_local_egress, ensure_repo_root
+
+
+def _status_from_exc(exc: Exception) -> int:
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            return int(getattr(resp, "status_code", 0) or 0)
+        except Exception:
+            pass
+    msg = str(exc)
+    for token in msg.split():
+        if token.isdigit() and len(token) == 3:
+            try:
+                return int(token)
+            except Exception:
+                continue
+    return 0
+
+
+async def _iter_sse_lines(byte_iter):
+    buffer = b""
+    async for chunk in byte_iter:
+        if not chunk:
+            continue
+        buffer += chunk
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            yield line.rstrip(b"\r").decode("utf-8", errors="replace")
+    if buffer:
+        yield buffer.decode("utf-8", errors="replace")
+
+
+ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1) from None
 
 
 def _headers(api_key: Optional[str]) -> Dict[str, str]:
@@ -51,7 +101,7 @@ def _print_banner(msg: str) -> None:
     print("=" * 80)
 
 
-def smoke_chat_sse(base_url: str, api_key: Optional[str], model: str, timeout: float = 600.0) -> None:
+async def smoke_chat_sse(base_url: str, api_key: Optional[str], model: str, timeout: float = 600.0) -> None:
     """
     Smoke-test Chat SSE streaming via unified streams.
 
@@ -70,19 +120,20 @@ def smoke_chat_sse(base_url: str, api_key: Optional[str], model: str, timeout: f
     done_count = 0
     error_frames = 0
     total_data_lines = 0
+    error_payloads: list[str] = []
 
     t0 = time.time()
     ttft_ms: Optional[float] = None
 
-    with requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout) as resp:
-        print(f"[chat] HTTP {resp.status_code} {resp.reason}")
-        ctype = resp.headers.get("content-type", "")
-        print(f"[chat] content-type: {ctype}")
-        resp.raise_for_status()
-        if not ctype.startswith("text/event-stream"):
-            raise RuntimeError("Chat SSE did not return text/event-stream")
-
-        for raw in resp.iter_lines(decode_unicode=True):
+    try:
+        byte_iter = http_client.astream_bytes(
+            method="POST",
+            url=url,
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
+        async for raw in _iter_sse_lines(byte_iter):
             if raw is None:
                 continue
             line = str(raw).strip()
@@ -109,15 +160,26 @@ def smoke_chat_sse(base_url: str, api_key: Optional[str], model: str, timeout: f
                 continue
             if isinstance(parsed, dict) and "error" in parsed:
                 error_frames += 1
+                if len(error_payloads) < 3:
+                    try:
+                        error_payloads.append(json.dumps(parsed.get("error"), ensure_ascii=True))
+                    except Exception:
+                        error_payloads.append(str(parsed.get("error")))
+    except Exception as exc:
+        status = _status_from_exc(exc)
+        if status:
+            print(f"[chat] HTTP {status}")
+        raise
 
     print(f"[chat] ttft_ms={ttft_ms:.1f} data_lines={total_data_lines} error_frames={error_frames} done_count={done_count}")
     if done_count != 1:
         raise RuntimeError(f"[chat] expected exactly one [DONE], saw {done_count}")
     if error_frames:
-        raise RuntimeError(f"[chat] saw {error_frames} error frames in stream")
+        detail = "; ".join(error_payloads) if error_payloads else "unknown error"
+        raise RuntimeError(f"[chat] saw {error_frames} error frames in stream: {detail}")
 
 
-def smoke_embeddings_sse(base_url: str, api_key: Optional[str], timeout: float = 120.0) -> None:
+async def smoke_embeddings_sse(base_url: str, api_key: Optional[str], timeout: float = 120.0) -> None:
     """
     Smoke-test embeddings orchestrator SSE:
     - Confirms event: summary appears with JSON payload.
@@ -130,19 +192,15 @@ def smoke_embeddings_sse(base_url: str, api_key: Optional[str], timeout: float =
     saw_summary = False
     summary_payloads = 0
 
-    with requests.get(url, headers=headers, stream=True, timeout=timeout) as resp:
-        print(f"[embeddings] HTTP {resp.status_code} {resp.reason}")
-        if resp.status_code == 403:
-            print("[embeddings] 403 Forbidden (likely admin-only). Skipping this check.")
-            return
-        ctype = resp.headers.get("content-type", "")
-        print(f"[embeddings] content-type: {ctype}")
-        resp.raise_for_status()
-        if not ctype.startswith("text/event-stream"):
-            raise RuntimeError("Embeddings SSE did not return text/event-stream")
-
+    try:
+        byte_iter = http_client.astream_bytes(
+            method="GET",
+            url=url,
+            headers=headers,
+            timeout=timeout,
+        )
         current_event: Optional[str] = None
-        for raw in resp.iter_lines(decode_unicode=True):
+        async for raw in _iter_sse_lines(byte_iter):
             if raw is None:
                 continue
             line = str(raw).rstrip("\n")
@@ -167,6 +225,14 @@ def smoke_embeddings_sse(base_url: str, api_key: Optional[str], timeout: float =
                 print("[embeddings] saw summary payload")
                 # A single payload is enough for smoke
                 break
+    except Exception as exc:
+        status = _status_from_exc(exc)
+        if status == 403:
+            print("[embeddings] 403 Forbidden (likely admin-only). Skipping this check.")
+            return
+        if status:
+            print(f"[embeddings] HTTP {status}")
+        raise
 
     print(f"[embeddings] saw_summary={saw_summary} summary_payloads={summary_payloads}")
     if not saw_summary:
@@ -252,8 +318,6 @@ def smoke_audio_ws(base_url: str, api_key: Optional[str], timeout: float = 20.0)
 
         return ping_count, saw_done
 
-    import asyncio
-
     ping_count, saw_done = asyncio.run(_run())
     print(f"[audio] ping_count={ping_count} saw_done={saw_done}")
     if ping_count == 0 and not saw_done:
@@ -309,15 +373,17 @@ def main() -> int:
     print(f"Chat model: {chat_model}")
     print("Hints: ensure the server is running with STREAMS_UNIFIED=1 for unified streaming endpoints.\n")
 
+    rc = 0
     try:
+        configure_local_egress(base_url)
         if not args.skip_chat:
-            smoke_chat_sse(base_url, api_key, chat_model)
+            asyncio.run(smoke_chat_sse(base_url, api_key, chat_model))
             print("\n✅ Chat SSE smoke test passed.")
         else:
             print("\n[skip] Chat SSE smoke test skipped.")
 
         if not args.skip_embeddings:
-            smoke_embeddings_sse(base_url, api_key)
+            asyncio.run(smoke_embeddings_sse(base_url, api_key))
             print("\n✅ Embeddings SSE smoke test passed (or skipped if admin-only).")
         else:
             print("\n[skip] Embeddings SSE smoke test skipped.")
@@ -330,10 +396,16 @@ def main() -> int:
 
     except Exception as exc:
         print(f"\n❌ Unified streaming smoke helper failed: {exc}")
-        return 1
+        rc = 1
+    finally:
+        try:
+            asyncio.run(http_client.shutdown_http_client())
+        except Exception:
+            pass
 
-    print("\nAll selected unified streaming smoke checks completed successfully.")
-    return 0
+    if rc == 0:
+        print("\nAll selected unified streaming smoke checks completed successfully.")
+    return rc
 
 
 if __name__ == "__main__":

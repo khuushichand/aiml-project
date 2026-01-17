@@ -26,9 +26,10 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Iterable, Sequence
+import sys
+from pathlib import Path
 
 import numpy as np
-import requests
 from loguru import logger
 
 
@@ -47,6 +48,25 @@ _SOUNDFILE_MISSING_MSG = (
 _PROMETHEUS_CLIENT_MISSING_MSG = (
     "Prometheus text parsing requires prometheus_client; install to enable fallback."
 )
+
+
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
+
+from common.repo_utils import configure_local_egress, ensure_repo_root
+
+ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception as err:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1) from err
 
 
 def _make_silence(duration_sec: float = 0.2, sr: int = 16000) -> bytes:
@@ -124,13 +144,13 @@ def _fetch_metrics(base_url: str, api_key: Optional[str]) -> Dict[str, Any]:
         For Prometheus text format, parses histogram metrics into structured dicts.
 
     Raises:
-        requests.HTTPError: If the request fails.
+        Exception: If the request fails.
         RuntimeError: If Prometheus parsing is needed but prometheus_client is not installed.
     """
     headers = {}
     if api_key:
         headers["X-API-KEY"] = api_key
-    r = requests.get(f"{base_url}/metrics", headers=headers, timeout=5)
+    r = http_client.fetch(method="GET", url=f"{base_url}/metrics", headers=headers, timeout=5)
     r.raise_for_status()
     try:
         data = r.json()
@@ -369,7 +389,7 @@ def run_full_turn(
         # Default harness target; override via server/env config as needed.
     }
     start = time.time()
-    r = requests.post(f"{base_url}/api/v1/audio/chat", headers=headers, json=payload, timeout=30)
+    r = http_client.fetch(method="POST", url=f"{base_url}/api/v1/audio/chat", headers=headers, json=payload, timeout=30)
     latency = time.time() - start
     r.raise_for_status()
 
@@ -409,6 +429,7 @@ def main():
     args = parser.parse_args()
 
     try:
+        configure_local_egress(args.base_url)
         if args.short:
             result = run_short_mode(args.base_url, args.api_key)
         else:

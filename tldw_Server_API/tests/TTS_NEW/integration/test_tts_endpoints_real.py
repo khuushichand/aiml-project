@@ -20,7 +20,7 @@ def client_with_user(bypass_api_limits):
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user] = override_user
-    with bypass_api_limits(app, limiters=(audio_endpoints.limiter,)), TestClient(app) as client:
+    with bypass_api_limits(app), TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()
 

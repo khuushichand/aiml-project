@@ -45,6 +45,8 @@ def client_with_overrides(monkeypatch, auth_headers):
 
 
 def test_rag_benchmarks_ablate_latency_and_accuracy(client_with_overrides, monkeypatch):
+
+
     client = client_with_overrides
 
     # Patch retrievers for both unified and agentic paths

@@ -15,16 +15,13 @@ TARGET_FILES = [
     "tldw_Server_API/app/core/Setup/install_manager.py",
     "tldw_Server_API/app/core/TTS/tts_config.py",
     "tldw_Server_API/app/core/TTS/adapter_registry.py",
-    "tldw_Server_API/app/core/Embeddings/workers/embedding_worker.py",
-    "tldw_Server_API/app/core/Embeddings/workers/chunking_worker.py",
-    "tldw_Server_API/app/core/Embeddings/workers/base_worker.py",
     "tldw_Server_API/app/core/Embeddings/worker_config.py",
-    "tldw_Server_API/app/core/Embeddings/worker_orchestrator.py",
-    "tldw_Server_API/app/core/Embeddings/job_manager.py",
 ]
 
 
 def test_no_deprecated_dict_usage():
+
+
     repo_root = Path(__file__).resolve().parents[3]
     offenders = []
 

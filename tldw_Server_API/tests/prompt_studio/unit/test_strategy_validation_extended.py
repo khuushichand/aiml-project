@@ -27,6 +27,8 @@ def _mk_prompt(client, project_id: int, backend_label: str) -> int:
 
 
 def test_beam_search_optional_validation(prompt_studio_dual_backend_client):
+
+
     backend_label, client, db = prompt_studio_dual_backend_client
     pid = _mk_project(client, backend_label)
     prompt_id = _mk_prompt(client, pid, backend_label)
@@ -53,6 +55,8 @@ def test_beam_search_optional_validation(prompt_studio_dual_backend_client):
 
 
 def test_anneal_optional_validation(prompt_studio_dual_backend_client):
+
+
     backend_label, client, db = prompt_studio_dual_backend_client
     pid = _mk_project(client, backend_label)
     prompt_id = _mk_prompt(client, pid, backend_label)
@@ -79,6 +83,8 @@ def test_anneal_optional_validation(prompt_studio_dual_backend_client):
 
 
 def test_genetic_optional_validation(prompt_studio_dual_backend_client):
+
+
     backend_label, client, db = prompt_studio_dual_backend_client
     pid = _mk_project(client, backend_label)
     prompt_id = _mk_prompt(client, pid, backend_label)

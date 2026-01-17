@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
     BackendFeatures,
     FTSQuery,
-    DatabaseError
+    DatabaseError,
 )
 from tldw_Server_API.app.core.DB_Management.backends.sqlite_backend import SQLiteBackend
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
@@ -30,7 +30,7 @@ class TestDatabaseBackends:
     @pytest.fixture
     def temp_db_path(self):
         """Create a temporary database file."""
-        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             temp_path = f.name
         yield temp_path
         # Cleanup
@@ -42,11 +42,7 @@ class TestDatabaseBackends:
     @pytest.fixture
     def sqlite_config(self, temp_db_path):
         """Create SQLite configuration."""
-        return DatabaseConfig(
-            backend_type=BackendType.SQLITE,
-            sqlite_path=temp_db_path,
-            client_id="test_client"
-        )
+        return DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=temp_db_path, client_id="test_client")
 
     def test_sqlite_backend_creation(self, sqlite_config):
         """Test that SQLite backend can be created."""
@@ -89,9 +85,7 @@ class TestDatabaseBackends:
         # Verify the test table exists
         conn = backend.connect()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'")
         result = cursor.fetchone()
         assert result is not None
         conn.close()
@@ -99,9 +93,7 @@ class TestDatabaseBackends:
     def test_sqlite_backend_pragma_returns_rows(self, sqlite_config):
         """Ensure PRAGMA results are returned for table introspection."""
         backend = SQLiteBackend(sqlite_config)
-        backend.create_tables(
-            "CREATE TABLE IF NOT EXISTS pragma_table (id INTEGER PRIMARY KEY, name TEXT)"
-        )
+        backend.create_tables("CREATE TABLE IF NOT EXISTS pragma_table (id INTEGER PRIMARY KEY, name TEXT)")
 
         pragma_result = backend.execute("PRAGMA table_info(pragma_table)")
         assert pragma_result.rows
@@ -114,9 +106,7 @@ class TestDatabaseBackends:
     def test_sqlite_backend_fts_rank_expression_sanitization(self, sqlite_config):
         """Ensure unsafe FTS rank expressions are ignored and queries remain safe."""
         backend = SQLiteBackend(sqlite_config)
-        backend.create_tables(
-            "CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY, title TEXT, content TEXT)"
-        )
+        backend.create_tables("CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY, title TEXT, content TEXT)")
         backend.execute("INSERT INTO docs (title, content) VALUES (?, ?)", ("hello", "world"))
         backend.create_fts_table("docs_fts", "docs", ["title", "content"])
 
@@ -131,11 +121,7 @@ class TestDatabaseBackends:
 
     def test_backend_factory_sqlite(self, temp_db_path):
         """Test that factory can create SQLite backend."""
-        config = DatabaseConfig(
-            backend_type=BackendType.SQLITE,
-            sqlite_path=temp_db_path,
-            client_id="test_factory"
-        )
+        config = DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=temp_db_path, client_id="test_factory")
 
         backend = DatabaseBackendFactory.create_backend(config)
         assert backend is not None
@@ -144,22 +130,16 @@ class TestDatabaseBackends:
 
     def test_backend_factory_invalid_type(self):
         """Test that factory raises error for invalid backend type."""
-        config = DatabaseConfig(
-            backend_type="invalid_type",  # Invalid
-            client_id="test"
-        )
+        config = DatabaseConfig(backend_type="invalid_type", client_id="test")  # Invalid
 
         with pytest.raises(ValueError):
             BackendFactory.create_backend(config)
 
-    @patch('tldw_Server_API.app.core.DB_Management.backends.postgresql_backend.PSYCOPG2_AVAILABLE', False)
+    @patch("tldw_Server_API.app.core.DB_Management.backends.postgresql_backend.PSYCOPG2_AVAILABLE", False)
     def test_postgresql_backend_unavailable(self):
         """Test that PostgreSQL backend fails gracefully when psycopg2 not available."""
         config = DatabaseConfig(
-            backend_type=BackendType.POSTGRESQL,
-            pg_host="localhost",
-            pg_database="test",
-            client_id="test"
+            backend_type=BackendType.POSTGRESQL, pg_host="localhost", pg_database="test", client_id="test"
         )
 
         with pytest.raises(DatabaseError) as exc_info:
@@ -170,12 +150,7 @@ class TestDatabaseBackends:
 
     def test_fts_query_creation(self):
         """Test FTS query object creation."""
-        query = FTSQuery(
-            query="test search",
-            columns=["title", "content"],
-            limit=10,
-            offset=0
-        )
+        query = FTSQuery(query="test search", columns=["title", "content"], limit=10, offset=0)
 
         assert query.query == "test search"
         assert query.columns == ["title", "content"]
@@ -194,9 +169,7 @@ class TestDatabaseBackends:
         # Verify table was created
         conn = backend.connect()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'")
         result = cursor.fetchone()
         assert result is not None
         conn.close()
@@ -218,9 +191,7 @@ class TestDatabaseBackends:
         # Verify table was NOT created (rolled back)
         conn = backend.connect()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='test_rollback'"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='test_rollback'")
         result = cursor.fetchone()
         assert result is None
         conn.close()

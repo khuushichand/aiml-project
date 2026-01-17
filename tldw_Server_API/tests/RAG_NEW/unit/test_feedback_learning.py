@@ -9,6 +9,10 @@ class Doc:
 
 
 def test_personalization_boost(tmp_path, monkeypatch):
+
+
+    base_dir = tmp_path / "Databases" / "user_databases"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     # Isolate user DB under tmp
     monkeypatch.chdir(tmp_path)
     store = UserPersonalizationStore("tester")
@@ -18,3 +22,17 @@ def test_personalization_boost(tmp_path, monkeypatch):
     boosted = store.boost_documents(docs, corpus="demo")
     # d2 should be ranked first after boost
     assert boosted[0].id == "d2"
+
+
+def test_personalization_store_sanitizes_user_id(tmp_path, monkeypatch):
+
+
+    base_dir = tmp_path / "Databases" / "user_databases"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    monkeypatch.chdir(tmp_path)
+    store = UserPersonalizationStore("../evil")
+    base = base_dir.resolve()
+    path = store.path.resolve()
+    path.relative_to(base)
+    assert "/" not in store.user_id
+    assert "\\" not in store.user_id

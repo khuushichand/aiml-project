@@ -24,7 +24,7 @@ Post‑v0.1 tracker:
   - Enforced via `ResourceGovernor` policies (memory/Redis backends + DB), or
   - Explicitly documented as intentionally out-of-scope for v0.1 (with rationale).
 - Legacy limiters called out in `AuthNZ-Refactor-Implementation-Plan.md` Stage 6 (“Remaining Work”) are handled as follows:
-  - Chat `ConversationRateLimiter`, embeddings `UserRateLimiter`, Evaluations/AuthNZ/Character-Chat/Web-Scraping shims, legacy SlowAPI counters, and non-RG audio concurrency counters are either removed, wrapped around `ResourceGovernor`, or explicitly gated behind compatibility flags that default to RG-first behavior.
+  - Chat `ConversationRateLimiter`, embeddings `UserRateLimiter`, Evaluations/AuthNZ/Character-Chat/Web-Scraping shims, legacy ingress counters, and non-RG audio concurrency counters are either removed, wrapped around `ResourceGovernor`, or explicitly gated behind compatibility flags that default to RG-first behavior.
 - For each major ingress surface (at minimum: `/api/v1/chat/completions`, `/api/v1/embeddings*`, `/api/v1/rag/*`, `/api/v1/media/*`, `/api/v1/research/*`, `/api/v1/workflows/*`, `/api/v1/prompt-studio/*`, `/api/v1/audio/*`, `/api/v1/auth/*`), the `route_map` / policy configuration:
   - Either has a concrete RG policy entry (per-principal and/or per-tenant) with documented defaults, or
   - Is documented in `Resource_Governor_PRD.md` as explicitly RG-free for v0.1 (e.g., low-risk or local-only routes).
@@ -59,10 +59,10 @@ Post‑v0.1 tracker:
 - Audio quotas and concurrency:
   - Audio stream concurrency is governed via ResourceGovernor “streams” leases in `audio_quota.can_start_stream/finish_stream/heartbeat_stream`, with Redis/in-process counters as explicit fallbacks when RG is unavailable; RG behavior is locked in by `tldw_Server_API/tests/Audio/test_audio_quota_rg_and_ledger.py`.
   - Daily minutes caps use the shared `ResourceDailyLedger` first (`_ledger_remaining_minutes`), with legacy `audio_usage_daily` enforcement as a fallback; the ledger path is covered by the same test module.
-- SlowAPI ingress:
-  - Global SlowAPI middleware uses a test-aware key function (`get_test_aware_remote_address`) that:
-    - Bypasses limits when `TEST_MODE`/`TLDW_TEST_MODE` is set.
-    - Returns `None` when `RGSimpleMiddleware` is attached, so ingress enforcement is handled by ResourceGovernor while SlowAPI decorators act purely as config carriers. This behavior is validated by `tldw_Server_API/tests/RateLimiting/test_slowapi_rg_key_func.py` and the RG ingress e2e tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py`.
+- Ingress limiting:
+  - `RGSimpleMiddleware` enforces ingress request limits using route_map/policy tags.
+  - When RG is enabled, ingress enforcement is RG-only and legacy decorator-based limiters are removed.
+  - Coverage is validated by `tldw_Server_API/tests/Resource_Governance/test_middleware_simple.py` and the RG ingress e2e tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py`.
 - High-value domains that were RG-free in v0.1 are now governed at ingress in v1.1:
   - Default policies and `route_map.by_path` entries exist for `/api/v1/research/*`, `/api/v1/workflows/*` (and `/api/v1/scheduler/workflows/*`), `/api/v1/prompt-studio/*`, `/api/v1/rag/*`, and `/api/v1/media/*`.
   - Legacy ingress limiters are bypassed on RG-governed routes so ResourceGovernor is the single source for request-rate enforcement.
@@ -81,7 +81,7 @@ Post‑v0.1 tracker:
 - For each audited cluster, concrete migrations are implemented:
   - Evaluations admin: legacy `require_admin` callsites are replaced with `get_auth_principal` + `require_roles("admin")` and, where appropriate, dedicated permissions (for example, heavy-evaluations admin) via `enforce_heavy_evaluations_admin(principal)` as outlined in `User-Auth-Deps-PRD.md`.
   - Embeddings v5 admin utilities: maintenance-only routes that still use a local `require_admin(current_user)` helper are migrated to explicit permissions/roles (for example, `EMBEDDINGS_ADMIN`, `EMBEDDINGS_TENANT_ADMIN`) or are explicitly tagged as compatibility-only and guarded by env flags.
-  - MCP unified diagnostics: endpoints relying on module-local `require_admin` are migrated to `require_roles("admin")` / `require_permissions(SYSTEM_LOGS)` where feasible, or explicitly documented as compatibility shims when MCP-specific tokens are necessary.
+  - MCP unified diagnostics: endpoints relying on module-local `require_admin` are migrated to `require_roles("admin")` / `require_permissions("system.logs")` where feasible, or explicitly documented as compatibility shims when MCP-specific tokens are necessary.
 - No new endpoints introduce:
   - Fresh `require_admin` usages (outside tests/compatibility stubs).
   - New `is_single_user_mode()`-based authorization branches or direct `request.state.user_id` gates.
@@ -102,7 +102,7 @@ Post‑v0.1 tracker:
 **Notes (v0.1 snapshot)**:
 - Evaluations admin flows now use `enforce_heavy_evaluations_admin(AuthPrincipal)` together with claim-first dependencies; the legacy `require_admin(user)` helper in `evaluations_auth.py` has no remaining router-level callsites and is retained only as a compatibility shim for heavy-evaluations admin paths explicitly called out in `User-Auth-Deps-PRD.md`.
 - Embeddings v5 admin utilities (model warmup/download, cache clear, tenant and DLQ maintenance) are gated via `require_roles("admin")` and dedicated permissions such as `SYSTEM_CONFIGURE` / `EMBEDDINGS_ADMIN` in `embeddings_v5_production_enhanced.py`; the older `require_admin(current_user)` helper lives only in an unused backup module and is not part of the supported surface.
-- MCP unified diagnostics adopt claim-first guards for both JSON and Prometheus endpoints: `/mcp/modules/health`, `/mcp/metrics`, and `/mcp/metrics/prometheus` all depend on `require_permissions(SYSTEM_LOGS)` and reuse `get_auth_principal`, with behavior covered by `tldw_Server_API/tests/AuthNZ_Unit/test_mcp_admin_permissions_claims.py`, `tldw_Server_API/tests/MCP_unified/test_mcp_http_auth_paths.py`, and the MCP metrics endpoint tests. The previous `require_admin_unless_public` compatibility shim and `MCP_PROMETHEUS_PUBLIC` flag are treated as deprecated and no longer influence access to the Prometheus endpoint.
+- MCP unified diagnostics adopt claim-first guards for both JSON and Prometheus endpoints: `/mcp/modules/health`, `/mcp/metrics`, and `/mcp/metrics/prometheus` all depend on `require_permissions("system.logs")` and reuse `get_auth_principal`, with behavior covered by `tldw_Server_API/tests/AuthNZ_Unit/test_mcp_admin_permissions_claims.py`, `tldw_Server_API/tests/MCP_unified/test_mcp_http_auth_paths.py`, and the MCP metrics endpoint tests. The previous `require_admin_unless_public` compatibility shim and `MCP_PROMETHEUS_PUBLIC` flag are treated as deprecated and no longer influence access to the Prometheus endpoint.
 - Topic monitoring, audit, chat diagnostics, RAG health, scheduler workflows admin, and notes graph endpoints all use `require_permissions(...)` / `require_roles(...)` on `AuthPrincipal` as their primary gates, with any remaining `require_admin` usage confined to narrow, documented abuse-cap or legacy flows (for example, flashcards import overrides).
 - An audit of `request.state.user_id` / `api_key_id` consumers confirms they are used as derived context (usage logging, RG entity keys, budget guards) rather than as primary authorization gates; new code is expected to continue using `AuthPrincipal` for decisions and treat these fields as secondary context only. New endpoints MUST NOT introduce fresh `require_admin` or `is_single_user_mode()`-based authorization branches; they must build on the unified claim-first dependency stack instead.
 

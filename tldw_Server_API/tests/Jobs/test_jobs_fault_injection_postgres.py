@@ -14,6 +14,8 @@ pytestmark = [
 
 
 def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     jm.create_job(domain="ps", queue="default", job_type="t", payload={}, owner_user_id="u")
@@ -24,21 +26,27 @@ def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch, jobs_pg
     class FlakyCursor:
         def __init__(self, cur):
             self._cur = cur
-            self._calls = 0
+            self._raised = False
 
         def execute(self, *a, **k):
-            if self._calls == 0:
-                self._calls += 1
+            sql = str(a[0]).strip().upper() if a else ""
+            if sql.startswith("SET LOCAL") or sql.startswith("RESET LOCAL"):
+                return self._cur.execute(*a, **k)
+            if not self._raised:
+                self._raised = True
                 raise pg_errors.SerializationFailure("serialization_failure")
             return self._cur.execute(*a, **k)
 
         def fetchone(self):
+
             return self._cur.fetchone()
 
         def fetchall(self):
+
             return self._cur.fetchall()
 
         def __enter__(self):
+
             self._cur.__enter__()
             return self
         def __exit__(self, exc_type, exc, tb):
@@ -58,13 +66,17 @@ def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch, jobs_pg
             return self._conn.close()
 
     def fake_connect(*a, **k):
+
         return FlakyConn(*a, **k)
 
     monkeypatch.setattr("psycopg.connect", fake_connect)
-    with pytest.raises(pg_errors.SerializationFailure):
-        jm.acquire_next_job(domain="ps", queue="default", lease_seconds=5, worker_id="w")
+    try:
+        with pytest.raises(pg_errors.SerializationFailure):
+            jm.acquire_next_job(domain="ps", queue="default", lease_seconds=5, worker_id="w")
+    finally:
+        # Always restore to avoid leaking flaky connections into teardown.
+        monkeypatch.setattr("psycopg.connect", real_connect)
 
-    # Restore and retry
-    monkeypatch.setattr("psycopg.connect", real_connect)
+    # Retry with restored connection
     acq = jm.acquire_next_job(domain="ps", queue="default", lease_seconds=5, worker_id="w")
     assert acq and str(acq.get("status")) == "processing"

@@ -1,6 +1,6 @@
 # Infrastructure
 
-Centralized helpers for shared runtime infrastructure. Today this module focuses on Redis connectivity with a robust in‑memory fallback and metrics instrumentation. Other modules (Embeddings orchestrator, backpressure guards, rate limiting, privilege cache, MCP Unified) import clients exclusively via this package.
+Centralized helpers for shared runtime infrastructure. Today this module focuses on Redis connectivity with a robust in‑memory fallback and metrics instrumentation. Other modules (Embeddings orchestrator, backpressure guards, privilege cache) import clients exclusively via this package.
 
 ## 1. Descriptive of Current Feature Set
 
@@ -16,10 +16,7 @@ Centralized helpers for shared runtime infrastructure. Today this module focuses
 - Related Endpoints/Modules (usage examples):
   - Backpressure dependency (Embeddings orchestrator depth/age): tldw_Server_API/app/api/v1/API_Deps/backpressure.py:16, tldw_Server_API/app/api/v1/API_Deps/backpressure.py:24
   - Embeddings API (tenant RPS + DLQ admin): tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py:78, tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py:474
-  - Rate limiting (generic FastAPI dependency): tldw_Server_API/app/core/RateLimiting/Rate_Limit.py:14, tldw_Server_API/app/core/RateLimiting/Rate_Limit.py:36
-  - Character Chat rate limiting (sync client option): tldw_Server_API/app/core/Character_Chat/character_rate_limiter.py:556, tldw_Server_API/app/core/Character_Chat/character_rate_limiter.py:558
   - Privilege maps cache invalidation (sync client): tldw_Server_API/app/core/PrivilegeMaps/cache.py:171
-  - MCP Unified distributed limiter: tldw_Server_API/app/core/MCP_unified/auth/rate_limiter.py:16
 - Related Schemas: N/A (this module exposes service clients, not Pydantic models).
 
 ## 2. Technical Details of Features
@@ -38,7 +35,7 @@ Centralized helpers for shared runtime infrastructure. Today this module focuses
   - Metrics (optional during early startup): hooks into `tldw_Server_API.app.core.Metrics.metrics_manager.get_metrics_registry`.
 - Data Models & DB:
   - No relational tables. Interacts with Redis using well‑known keys used by other modules, e.g.:
-    - Embeddings streams: `embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`, plus `:dlq` variants.
+    - Embeddings streams: `embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`, `embeddings:content`, plus `:dlq` variants.
     - Rate limit counters: `rl:req:{user}:{window}`, `rl:tok:{user}:{YYYYMMDD}`.
     - Tenant RPS: `embeddings:tenant:rps:{user}`, `ingest:tenant:rps:{user}:{ts}`.
     - Privilege cache generation key/channel: e.g., `privilege:cache:generation`, `privilege:cache:invalidate`.

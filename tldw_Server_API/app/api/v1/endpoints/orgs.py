@@ -8,12 +8,13 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
     get_registration_service_dep,
+    get_db_transaction,
 )
 from tldw_Server_API.app.api.v1.API_Deps.org_deps import (
     OrgContext,
@@ -47,6 +48,10 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgInviteAcceptRequest,
     OrgInviteAcceptResponse,
 )
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    OrgBudgetItem,
+    OrgBudgetSelfUpdateRequest,
+)
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
@@ -61,6 +66,15 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 from tldw_Server_API.app.services.org_invite_service import OrgInviteService, get_invite_service
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
+from tldw_Server_API.app.services.admin_budgets_service import (
+    list_org_budgets as svc_list_org_budgets,
+    upsert_org_budget as svc_upsert_org_budget,
+)
+from tldw_Server_API.app.services.budget_audit_service import emit_budget_audit_event
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+    get_or_create_audit_service_for_user_id,
+)
 
 
 router = APIRouter(
@@ -266,11 +280,12 @@ async def update_org(
 @router.delete(
     "/{org_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete organization",
 )
 async def delete_org(
     ctx: OrgContext = Depends(require_org_owner()),
-):
+) -> Response:
     """Delete an organization. Requires owner role."""
     # Check for active paid subscription before allowing deletion
     try:
@@ -323,6 +338,7 @@ async def delete_org(
                 await conn.execute("DELETE FROM organizations WHERE id = ?", (ctx.org_id,))
 
     logger.info(f"Org {ctx.org_id} deleted by owner")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -534,13 +550,14 @@ async def update_member_role(
 @router.delete(
     "/{org_id}/members/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Remove organization member",
 )
 async def remove_org_member(
     user_id: int,
     ctx: OrgContext = Depends(require_org_admin()),
     principal: AuthPrincipal = Depends(get_auth_principal),
-):
+) -> Response:
     """Remove a member from the organization. Requires admin or owner role."""
     db_pool = await get_db_pool()
     repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
@@ -570,6 +587,7 @@ async def remove_org_member(
         )
 
     logger.info(f"Removed user {user_id} from org {ctx.org_id}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # =============================================================================
@@ -730,12 +748,13 @@ async def update_team(
 @router.delete(
     "/{org_id}/teams/{team_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete team",
 )
 async def delete_team(
     team_id: int,
     ctx: OrgContext = Depends(require_org_admin()),
-):
+) -> Response:
     """Delete a team. Requires admin or owner role."""
     db_pool = await get_db_pool()
     repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
@@ -763,6 +782,7 @@ async def delete_team(
             await conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
 
     logger.info(f"Deleted team {team_id} from org {ctx.org_id}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # =============================================================================
@@ -849,13 +869,14 @@ async def add_team_member(
 @router.delete(
     "/{org_id}/teams/{team_id}/members/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Remove team member",
 )
 async def remove_team_member(
     team_id: int,
     user_id: int,
     ctx: OrgContext = Depends(require_org_admin()),
-):
+) -> Response:
     """Remove a member from a team. Requires admin or owner role."""
     db_pool = await get_db_pool()
     repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
@@ -876,6 +897,7 @@ async def remove_team_member(
         )
 
     logger.info(f"Removed user {user_id} from team {team_id}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # =============================================================================
@@ -919,6 +941,7 @@ async def list_invites(
 )
 async def create_invite(
     body: OrgInviteCreateRequest,
+    http_request: Request,
     ctx: OrgContext = Depends(require_org_admin()),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
@@ -934,11 +957,56 @@ async def create_invite(
             max_uses=body.max_uses,
             expiry_days=body.expiry_days,
             description=body.description,
+            allowed_email_domain=body.allowed_email_domain,
         )
 
         logger.info(
             f"Created invite {invite['code'][:8]}... for org {ctx.org_id} by user {principal.user_id}"
         )
+
+        async def _safe_audit_log_invite_create() -> None:
+            try:
+                if principal.user_id is None:
+                    return
+                svc = await get_or_create_audit_service_for_user_id(int(principal.user_id))
+                correlation_id = (
+                    http_request.headers.get("X-Correlation-ID")
+                    or getattr(http_request.state, "correlation_id", None)
+                )
+                request_id = (
+                    http_request.headers.get("X-Request-ID")
+                    or getattr(http_request.state, "request_id", None)
+                    or ""
+                )
+                audit_ctx = AuditContext(
+                    user_id=str(principal.user_id),
+                    correlation_id=correlation_id,
+                    request_id=request_id,
+                    ip_address=(http_request.client.host if http_request.client else None),
+                    user_agent=http_request.headers.get("user-agent"),
+                    endpoint=str(http_request.url.path),
+                    method=http_request.method,
+                )
+                await svc.log_event(
+                    event_type=AuditEventType.DATA_WRITE,
+                    context=audit_ctx,
+                    resource_type="org_invite",
+                    resource_id=str(invite.get("id")),
+                    action="org_invite.create",
+                    metadata={
+                        "org_id": ctx.org_id,
+                        "team_id": invite.get("team_id"),
+                        "role_to_grant": invite.get("role_to_grant"),
+                        "max_uses": invite.get("max_uses"),
+                        "expires_at": invite.get("expires_at"),
+                        "allowed_email_domain": invite.get("allowed_email_domain"),
+                        "code_prefix": str(invite.get("code") or "")[:8],
+                    },
+                )
+            except Exception as exc:
+                logger.debug("Org invite audit failed: {}", exc)
+
+        await _safe_audit_log_invite_create()
         return OrgInviteResponse(**invite)
     except ValueError as e:
         raise HTTPException(
@@ -950,12 +1018,15 @@ async def create_invite(
 @router.delete(
     "/{org_id}/invites/{invite_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Revoke invite",
 )
 async def revoke_invite(
     invite_id: int,
+    http_request: Request,
     ctx: OrgContext = Depends(require_org_admin()),
-):
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Response:
     """Revoke an invite. Requires admin or owner role."""
     invite_service = await get_invite_service()
 
@@ -968,6 +1039,46 @@ async def revoke_invite(
 
     logger.info(f"Revoked invite {invite_id} for org {ctx.org_id}")
 
+    async def _safe_audit_log_invite_revoke() -> None:
+        try:
+            if principal.user_id is None:
+                return
+            svc = await get_or_create_audit_service_for_user_id(int(principal.user_id))
+            correlation_id = (
+                http_request.headers.get("X-Correlation-ID")
+                or getattr(http_request.state, "correlation_id", None)
+            )
+            request_id = (
+                http_request.headers.get("X-Request-ID")
+                or getattr(http_request.state, "request_id", None)
+                or ""
+            )
+            audit_ctx = AuditContext(
+                user_id=str(principal.user_id),
+                correlation_id=correlation_id,
+                request_id=request_id,
+                ip_address=(http_request.client.host if http_request.client else None),
+                user_agent=http_request.headers.get("user-agent"),
+                endpoint=str(http_request.url.path),
+                method=http_request.method,
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                context=audit_ctx,
+                resource_type="org_invite",
+                resource_id=str(invite_id),
+                action="org_invite.revoke",
+                metadata={
+                    "org_id": ctx.org_id,
+                    "invite_id": invite_id,
+                },
+            )
+        except Exception as exc:
+            logger.debug("Org invite audit failed: {}", exc)
+
+    await _safe_audit_log_invite_revoke()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 @router.post(
     "/invites/accept",
@@ -976,6 +1087,7 @@ async def revoke_invite(
 )
 async def accept_org_invite(
     body: OrgInviteAcceptRequest,
+    http_request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
     registration_service: RegistrationService = Depends(get_registration_service_dep),
 ):
@@ -1006,6 +1118,50 @@ async def accept_org_invite(
             detail=str(exc) or "Invalid invite code",
         ) from exc
 
+    async def _safe_audit_log_invite_accept() -> None:
+        try:
+            if principal.user_id is None:
+                return
+            code_id = result.get("registration_code_id")
+            if code_id is None:
+                return
+            svc = await get_or_create_audit_service_for_user_id(int(principal.user_id))
+            correlation_id = (
+                http_request.headers.get("X-Correlation-ID")
+                or getattr(http_request.state, "correlation_id", None)
+            )
+            request_id = (
+                http_request.headers.get("X-Request-ID")
+                or getattr(http_request.state, "request_id", None)
+                or ""
+            )
+            ctx = AuditContext(
+                user_id=str(principal.user_id),
+                correlation_id=correlation_id,
+                request_id=request_id,
+                ip_address=(http_request.client.host if http_request.client else None),
+                user_agent=http_request.headers.get("user-agent"),
+                endpoint=str(http_request.url.path),
+                method=http_request.method,
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                context=ctx,
+                resource_type="registration_code",
+                resource_id=str(code_id),
+                action="registration_code.redeemed",
+                metadata={
+                    "registration_code_id": code_id,
+                    "org_id": result.get("org_id"),
+                    "org_role": result.get("org_role"),
+                    "team_id": result.get("team_id"),
+                    "was_already_member": result.get("was_already_member"),
+                },
+            )
+        except Exception as exc:
+            logger.debug("Org invite audit failed: {}", exc)
+
+    await _safe_audit_log_invite_accept()
     return OrgInviteAcceptResponse(
         success=True,
         org_id=result.get("org_id"),
@@ -1013,3 +1169,81 @@ async def accept_org_invite(
         org_role=result.get("org_role"),
         was_already_member=result.get("was_already_member", False),
     )
+
+
+# =============================================================================
+# Org Budget Governance
+# =============================================================================
+
+@router.get(
+    "/{org_id}/budgets",
+    response_model=OrgBudgetItem,
+    summary="Get organization budget settings",
+)
+async def get_org_budgets(
+    ctx: OrgContext = Depends(require_org_admin()),
+    db=Depends(get_db_transaction),
+) -> OrgBudgetItem:
+    """Return budget settings and plan context for an org."""
+    items, _total = await svc_list_org_budgets(
+        db,
+        org_ids=[ctx.org_id],
+        page=1,
+        limit=1,
+    )
+    if not items:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="org_not_found")
+    return OrgBudgetItem(**items[0])
+
+
+@router.post(
+    "/{org_id}/budgets",
+    response_model=OrgBudgetItem,
+    summary="Update organization budget settings",
+)
+async def update_org_budgets(
+    payload: OrgBudgetSelfUpdateRequest,
+    request: Request,
+    ctx: OrgContext = Depends(require_org_admin()),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> OrgBudgetItem:
+    """Update budget settings for an org (org admin/owner only)."""
+    budget_updates = None
+    if payload.budgets is not None:
+        budget_updates = payload.budgets.model_dump(exclude_unset=True, by_alias=True)
+    try:
+        item, audit_changes = await svc_upsert_org_budget(
+            db,
+            org_id=ctx.org_id,
+            budget_updates=budget_updates,
+            clear_budgets=payload.clear_budgets,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "org_not_found":
+            raise HTTPException(status_code=404, detail="org_not_found") from exc
+        if detail == "plan_not_found":
+            raise HTTPException(status_code=500, detail="plan_not_found") from exc
+        if detail == "subscription_not_found":
+            raise HTTPException(status_code=500, detail="subscription_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_budget_update") from exc
+    except Exception as exc:
+        logger.error(f"Failed to upsert org budget: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to upsert org budget") from exc
+
+    try:
+        await emit_budget_audit_event(
+            request,
+            principal,
+            org_id=ctx.org_id,
+            budget_updates=budget_updates,
+            audit_changes=audit_changes,
+            clear_budgets=payload.clear_budgets,
+            actor_role=ctx.role,
+        )
+    except Exception as exc:
+        logger.error(f"Budget audit failed: {exc}")
+        raise HTTPException(status_code=500, detail="audit_failed") from exc
+
+    return OrgBudgetItem(**item)

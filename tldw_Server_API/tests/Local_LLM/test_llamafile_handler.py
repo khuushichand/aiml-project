@@ -1,4 +1,6 @@
 import asyncio
+import platform
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,7 @@ class DummyProcess:
         return 0
 
     def terminate(self):
+
         self.returncode = 0
 
 
@@ -41,16 +44,22 @@ async def test_llamafile_start_server_redacts_api_key(monkeypatch, tmp_path: Pat
         models_dir=model_dir,
         default_host="127.0.0.1",
         default_port=8077,
+        allow_cli_secrets=True,
     )
     handler = LlamafileHandler(cfg, global_app_config={})
 
     # Monkeypatch binary downloader to return our dummy exe path
-    monkeypatch.setattr(handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe))
+    monkeypatch.setattr(
+        handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe)
+    )
+
     # Stub process creation and readiness
     async def _fake_cpe(*a, **k):
         return DummyProcess()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
     from tldw_Server_API.app.core.Local_LLM import http_utils
+
     monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
 
     res = await handler.start_server(model_filename=model.name, server_args={"port": 8077, "api_key": "supersecret"})
@@ -63,18 +72,24 @@ async def test_llamafile_start_server_redacts_api_key(monkeypatch, tmp_path: Pat
 async def test_llamafile_start_server_invalid_arg(monkeypatch, tmp_path: Path):
     llama_dir = tmp_path / "llamafile"
     model_dir = tmp_path / "models"
-    llama_dir.mkdir(); model_dir.mkdir()
-    exe = llama_dir / "llamafile"; exe.write_text("#!/bin/sh\n")
+    llama_dir.mkdir()
+    model_dir.mkdir()
+    exe = llama_dir / "llamafile"
+    exe.write_text("#!/bin/sh\n")
     (model_dir / "m.gguf").write_text("fake")
 
     cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=model_dir)
     handler = LlamafileHandler(cfg, global_app_config={})
 
-    monkeypatch.setattr(handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe))
+    monkeypatch.setattr(
+        handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe)
+    )
     # readiness will succeed but we should fail earlier due to invalid arg
     from tldw_Server_API.app.core.Local_LLM import http_utils
+
     async def _fake_cpe2(*a, **k):
         return DummyProcess()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe2)
     monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
 
@@ -85,15 +100,20 @@ async def test_llamafile_start_server_invalid_arg(monkeypatch, tmp_path: Path):
 @pytest.mark.asyncio
 async def test_llamafile_inference_http_error(monkeypatch, tmp_path: Path):
     # Prepare handler
-    llama_dir = tmp_path / "llamafile"; llama_dir.mkdir()
+    llama_dir = tmp_path / "llamafile"
+    llama_dir.mkdir()
     cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path)
     handler = LlamafileHandler(cfg, global_app_config={})
 
     # Fake running server map so it proceeds to HTTP request
-    class RP: pid = 2; returncode = None
+    class RP:
+        pid = 2
+        returncode = None
+
     handler._active_servers[8080] = RP()
 
     import tldw_Server_API.app.core.Local_LLM.Llamafile_Handler as lf_mod
+
     req = httpx.Request("POST", "http://127.0.0.1:8080/v1/chat/completions")
     resp = httpx.Response(500, request=req, text="err")
     err = httpx.HTTPStatusError("error", request=req, response=resp)
@@ -105,7 +125,8 @@ async def test_llamafile_inference_http_error(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_llamafile_stop_timeout(monkeypatch, tmp_path: Path):
-    llama_dir = tmp_path / "llamafile"; llama_dir.mkdir()
+    llama_dir = tmp_path / "llamafile"
+    llama_dir.mkdir()
     cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path)
     handler = LlamafileHandler(cfg, global_app_config={})
 
@@ -113,8 +134,10 @@ async def test_llamafile_stop_timeout(monkeypatch, tmp_path: Path):
         def __init__(self):
             self.pid = 99
             self.returncode = None
+
         async def wait(self):
             return 0
+
         def terminate(self):
             self.returncode = None
 
@@ -126,27 +149,325 @@ async def test_llamafile_stop_timeout(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
     # os.killpg will be called; stub it to avoid errors in tests
     import os as _os
+
     monkeypatch.setattr(_os, "killpg", lambda *a, **k: None, raising=False)
 
     msg = await handler.stop_server(port=5555)
     assert "stopped" in msg.lower() or "terminated" in msg.lower()
+
+
 @pytest.mark.asyncio
 async def test_llamafile_start_server_not_ready(monkeypatch, tmp_path: Path):
-    llama_dir = tmp_path / "llamafile"; model_dir = tmp_path / "models"
-    llama_dir.mkdir(); model_dir.mkdir()
-    exe = llama_dir / "llamafile"; exe.write_text("#!/bin/sh\n")
+    llama_dir = tmp_path / "llamafile"
+    model_dir = tmp_path / "models"
+    llama_dir.mkdir()
+    model_dir.mkdir()
+    exe = llama_dir / "llamafile"
+    exe.write_text("#!/bin/sh\n")
     (model_dir / "toy.gguf").write_text("fake")
 
     cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=model_dir, default_port=8077)
     handler = LlamafileHandler(cfg, global_app_config={})
 
-    monkeypatch.setattr(handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe))
-    class DP: pid=11; returncode=None; stdout=None; stderr=None
+    monkeypatch.setattr(
+        handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe)
+    )
+
+    class DP:
+        pid = 11
+        returncode = None
+        stdout = None
+        stderr = None
+
+        async def wait(self):
+            return 0
+
+        def terminate(self):
+            self.returncode = 0
+
     async def _fake_cpe3(*a, **k):
         return DP()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe3)
     from tldw_Server_API.app.core.Local_LLM import http_utils
+
     monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=False))
 
     with pytest.raises(ServerError):
         await handler.start_server("toy.gguf", server_args={"port": 8077})
+
+
+@pytest.mark.asyncio
+async def test_llamafile_start_server_not_ready_terminates_process(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    model_dir = tmp_path / "models"
+    llama_dir.mkdir()
+    model_dir.mkdir()
+    exe = llama_dir / "llamafile"
+    exe.write_text("#!/bin/sh\n")
+    (model_dir / "toy.gguf").write_text("fake")
+
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=model_dir, default_port=8077)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    monkeypatch.setattr(
+        handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe)
+    )
+
+    proc_holder = {}
+
+    class DP:
+        pid = 11
+        returncode = None
+        stdout = None
+        stderr = None
+
+        def __init__(self):
+            self.terminated = False
+            self.killed = False
+
+        async def wait(self):
+            self.returncode = 0
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+    async def _fake_cpe(*a, **k):
+        proc = DP()
+        proc_holder["proc"] = proc
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
+    from tldw_Server_API.app.core.Local_LLM import http_utils
+
+    monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    with pytest.raises(ServerError):
+        await handler.start_server("toy.gguf", server_args={"port": 8077})
+
+    proc = proc_holder["proc"]
+    assert proc.terminated or proc.killed
+
+
+@pytest.mark.asyncio
+async def test_llamafile_start_server_wildcard_host_uses_loopback(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    model_dir = tmp_path / "models"
+    llama_dir.mkdir()
+    model_dir.mkdir()
+    exe = llama_dir / "llamafile"
+    exe.write_text("#!/bin/sh\n")
+    (model_dir / "toy.gguf").write_text("fake")
+
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=model_dir, default_port=8077)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    monkeypatch.setattr(
+        handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe)
+    )
+
+    async def _fake_cpe(*a, **k):
+        return DummyProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
+    from tldw_Server_API.app.core.Local_LLM import http_utils
+
+    seen = {}
+
+    async def _fake_ready(base_url, *a, **k):
+        seen["base_url"] = base_url
+        return True
+
+    monkeypatch.setattr(http_utils, "wait_for_http_ready", _fake_ready)
+
+    res = await handler.start_server("toy.gguf", server_args={"host": "0.0.0.0", "port": 8077})
+    assert res["status"] == "started"
+    assert seen["base_url"] == "http://127.0.0.1:8077"
+
+
+@pytest.mark.asyncio
+async def test_llamafile_inference_wildcard_host_uses_loopback(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    llama_dir.mkdir()
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path, default_host="0.0.0.0")
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    class RP:
+        pid = 2
+        returncode = None
+
+    handler._active_servers[8080] = RP()
+
+    import tldw_Server_API.app.core.Local_LLM.Llamafile_Handler as lf_mod
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None):
+        captured["url"] = url
+        return {"ok": True}
+
+    monkeypatch.setattr(lf_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi", port=8080)
+    assert captured["url"].startswith("http://127.0.0.1:8080")
+
+
+@pytest.mark.asyncio
+async def test_llamafile_inference_defaults_port(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    llama_dir.mkdir()
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path, default_port=8123)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    class RP:
+        pid = 2
+        returncode = None
+
+    handler._active_servers[8123] = RP()
+
+    import tldw_Server_API.app.core.Local_LLM.Llamafile_Handler as lf_mod
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None):
+        captured["url"] = url
+        return {"ok": True}
+
+    monkeypatch.setattr(lf_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi")
+    assert captured["url"].startswith("http://127.0.0.1:8123")
+
+
+@pytest.mark.asyncio
+async def test_llamafile_inference_drops_timeout(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    llama_dir.mkdir()
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path, default_port=8124)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    class RP:
+        pid = 3
+        returncode = None
+
+    handler._active_servers[8124] = RP()
+
+    import tldw_Server_API.app.core.Local_LLM.Llamafile_Handler as lf_mod
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None):
+        captured["payload"] = json
+        return {"ok": True}
+
+    monkeypatch.setattr(lf_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi", port=8124, timeout=1.5)
+    assert "timeout" not in captured["payload"]
+
+
+@pytest.mark.asyncio
+async def test_llamafile_download_selects_exe_asset(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    llama_dir.mkdir()
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path)
+    handler = LlamafileHandler(cfg, global_app_config={})
+    handler.llamafile_exe_path = llama_dir / "llamafile.exe"
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def fake_request_json(client, method, url):
+        return {
+            "tag_name": "v1.2.3",
+            "assets": [
+                {
+                    "name": "llamafile-v1.2.3.zip",
+                    "browser_download_url": "http://example.com/llamafile.zip",
+                    "size": 200,
+                },
+                {
+                    "name": "llamafile-v1.2.3.exe",
+                    "browser_download_url": "http://example.com/llamafile.exe",
+                    "size": 100,
+                },
+            ],
+        }
+
+    downloads = []
+
+    async def fake_download(url, dest_path):
+        downloads.append(url)
+        Path(dest_path).write_text("binary")
+
+    import tldw_Server_API.app.core.Local_LLM.Llamafile_Handler as lf_mod
+    import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
+
+    monkeypatch.setattr(lf_mod, "create_async_client", lambda *a, **k: DummyClient())
+    monkeypatch.setattr(http_utils, "request_json", fake_request_json)
+    monkeypatch.setattr(http_utils, "async_stream_download", fake_download)
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    exe_path = await handler.download_latest_llamafile_executable(force_download=True)
+
+    assert downloads == ["http://example.com/llamafile.exe"]
+    assert exe_path == handler.llamafile_exe_path
+    assert exe_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_llamafile_download_extracts_zip_asset(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    llama_dir.mkdir()
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path)
+    handler = LlamafileHandler(cfg, global_app_config={})
+    handler.llamafile_exe_path = llama_dir / "llamafile.exe"
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def fake_request_json(client, method, url):
+        return {
+            "tag_name": "v1.2.3",
+            "assets": [
+                {
+                    "name": "llamafile-v1.2.3.zip",
+                    "browser_download_url": "http://example.com/llamafile.zip",
+                    "size": 200,
+                },
+            ],
+        }
+
+    downloads = []
+
+    async def fake_download(url, dest_path):
+        downloads.append(url)
+        with zipfile.ZipFile(dest_path, "w") as zf:
+            zf.writestr("llamafile.exe", "binary")
+
+    import tldw_Server_API.app.core.Local_LLM.Llamafile_Handler as lf_mod
+    import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
+
+    monkeypatch.setattr(lf_mod, "create_async_client", lambda *a, **k: DummyClient())
+    monkeypatch.setattr(http_utils, "request_json", fake_request_json)
+    monkeypatch.setattr(http_utils, "async_stream_download", fake_download)
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    exe_path = await handler.download_latest_llamafile_executable(force_download=True)
+
+    assert downloads == ["http://example.com/llamafile.zip"]
+    assert exe_path == handler.llamafile_exe_path
+    assert exe_path.exists()

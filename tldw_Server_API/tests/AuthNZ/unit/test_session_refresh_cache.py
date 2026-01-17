@@ -61,10 +61,12 @@ class StubPool:
         self.conn = conn
 
     def transaction(self):
+
         return StubTransaction(self.conn)
 
     def acquire(self):
-        # Match DatabasePool.acquire() context manager shape for repo helpers
+
+             # Match DatabasePool.acquire() context manager shape for repo helpers
         return StubTransaction(self.conn)
 
 
@@ -100,6 +102,7 @@ async def test_refresh_session_replaces_cached_access_token(monkeypatch):
     )
 
     def _extract_stub(self, token):
+
         if not token:
             return (None, None)
         return (f"jti:{token}", datetime.utcnow() + timedelta(minutes=30))
@@ -163,6 +166,7 @@ async def test_refresh_session_accepts_legacy_refresh_hash(monkeypatch):
     manager._initialized = True
 
     def _token_hash_candidates(self, token):
+
         return [f"new-h:{token}", f"old-h:{token}"]
 
     manager._token_hash_candidates = types.MethodType(_token_hash_candidates, manager)
@@ -176,6 +180,7 @@ async def test_refresh_session_accepts_legacy_refresh_hash(monkeypatch):
     )
 
     def _extract_stub(self, token):
+
         if not token:
             return (None, None)
         return (f"jti:{token}", datetime.utcnow() + timedelta(minutes=5))
@@ -233,6 +238,7 @@ async def test_validate_session_rewrites_legacy_hash(monkeypatch):
     manager.redis_client = FakeRedis()
 
     def _token_hash_candidates(self, token):
+
         return [f"new-h:{token}", f"old-h:{token}"]
 
     manager._token_hash_candidates = types.MethodType(_token_hash_candidates, manager)
@@ -292,6 +298,7 @@ async def test_validate_session_rewrites_legacy_hash(monkeypatch):
             self._conn = conn
 
         def acquire(self):
+
             return AcquireCtx(self._conn)
 
     stub_conn = LegacyConn(session_id=777, user_id=42, stored_hash=legacy_hash)
@@ -360,6 +367,7 @@ async def test_is_token_blacklisted_checks_refresh_hash_fallback(monkeypatch):
     revoked_refresh_hash = "hash:refresh-token"
 
     def _token_hash_candidates(self, token):
+
         return ["hash:access-token", revoked_refresh_hash]
 
     manager._token_hash_candidates = types.MethodType(_token_hash_candidates, manager)
@@ -371,7 +379,8 @@ async def test_is_token_blacklisted_checks_refresh_hash_fallback(monkeypatch):
             self.calls: list[tuple[str, str]] = []
 
         def acquire(self):
-            # Match DatabasePool.acquire() context manager shape for repo helpers
+
+                     # Match DatabasePool.acquire() context manager shape for repo helpers
             return StubTransaction(self)
 
         async def fetchval(self, query: str, candidate: str):

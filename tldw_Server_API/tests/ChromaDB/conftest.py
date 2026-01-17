@@ -43,22 +43,6 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
     create_embeddings_batch,
 )
-from tldw_Server_API.app.core.Embeddings.job_manager import EmbeddingJobManager
-from tldw_Server_API.app.core.Embeddings.worker_orchestrator import WorkerOrchestrator
-from tldw_Server_API.app.core.Embeddings import queue_schemas as _qs
-from tldw_Server_API.app.core.Embeddings.queue_schemas import (
-    ChunkingMessage as ChunkingTask,
-    EmbeddingMessage as EmbeddingTask,
-    StorageMessage as StorageTask,
-    JobStatus
-)
-setattr(_qs, 'ChunkingTask', ChunkingTask)
-setattr(_qs, 'EmbeddingTask', EmbeddingTask)
-setattr(_qs, 'StorageTask', StorageTask)
-from tldw_Server_API.app.core.Embeddings.workers.base_worker import BaseWorker
-from tldw_Server_API.app.core.Embeddings.workers.embedding_worker import EmbeddingWorker
-from tldw_Server_API.app.core.Embeddings.workers.chunking_worker import ChunkingWorker
-from tldw_Server_API.app.core.Embeddings.workers.storage_worker import StorageWorker
 from tldw_Server_API.app.core.Embeddings.connection_pool import ConnectionPool
 from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.Embeddings.error_recovery import ErrorRecoveryManager
@@ -93,6 +77,7 @@ def _disable_chromadb_force_stub_for_chromadb_unit_tests(monkeypatch):
 # =====================================================================
 
 def pytest_configure(config):
+
     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real ChromaDB")
@@ -105,6 +90,8 @@ def pytest_configure(config):
 
 
 def pytest_addoption(parser):
+
+
     """Add CLI option to run external model tests."""
     parser.addoption(
         "--run-model-tests",
@@ -114,6 +101,7 @@ def pytest_addoption(parser):
     )
 
 def pytest_collection_modifyitems(config, items):
+
     """Conditionally skip tests requiring external models based on flag/env."""
     run_models_flag = config.getoption("--run-model-tests") or os.getenv("RUN_MODEL_TESTS") == "1"
     for item in items:
@@ -306,6 +294,7 @@ def mock_embedding_provider(mock_embeddings):
     return mock_provider
 
 def _hf_connectivity_ok() -> bool:
+
     """Best-effort online check to Hugging Face Hub."""
     try:
         import requests  # Local import to avoid hard dependency if unused
@@ -359,100 +348,6 @@ def hf_or_deterministic_embeddings():
         return vecs
 
     return (lambda texts: _det_embed(texts, 384)), False, 384
-
-# =====================================================================
-# Worker and Job Fixtures
-# =====================================================================
-
-@pytest.fixture
-def job_manager(temp_media_db):
-    """Create an EmbeddingJobManager for testing."""
-    manager = EmbeddingJobManager(db_path=temp_media_db)
-    yield manager
-    # Cleanup
-    manager.cleanup()
-
-@pytest.fixture
-def mock_job_manager():
-    """Create a mock job manager for unit tests."""
-    mock_manager = MagicMock(spec=EmbeddingJobManager)
-    mock_manager.create_job.return_value = "test_job_id"
-    mock_manager.get_job_status.return_value = JobStatus(
-        job_id="test_job_id",
-        status="pending",
-        progress=0,
-        created_at="2024-01-01T00:00:00"
-    )
-    mock_manager.cancel_job.return_value = True
-    mock_manager.get_user_jobs.return_value = []
-    mock_manager.get_queue_stats.return_value = {
-        "pending": 0,
-        "processing": 0,
-        "completed": 0,
-        "failed": 0
-    }
-    return mock_manager
-
-@pytest.fixture
-def worker_config():
-    """Worker configuration for testing."""
-    return {
-        "chunking_workers": 2,
-        "embedding_workers": 2,
-        "storage_workers": 1,
-        "max_queue_size": 100,
-        "batch_size": 10,
-        "auto_scale": False
-    }
-
-@pytest.fixture
-def mock_queue():
-    """Create a mock queue for worker testing."""
-    return Queue()
-
-@pytest.fixture
-def chunking_worker(mock_queue):
-    """Create a chunking worker for testing."""
-    output_queue = Queue()
-    worker = ChunkingWorker(
-        worker_id="chunking_test_1",
-        input_queue=mock_queue,
-        output_queue=output_queue
-    )
-    yield worker
-    worker.stop()
-
-@pytest.fixture
-def embedding_worker(mock_queue, mock_embedding_provider):
-    """Create an embedding worker for testing."""
-    output_queue = Queue()
-    with patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch') as mock_create:
-        mock_create.return_value = [[0.1] * 384]
-        worker = EmbeddingWorker(
-            worker_id="embedding_test_1",
-            input_queue=mock_queue,
-            output_queue=output_queue,
-            embedding_provider=mock_embedding_provider
-        )
-        yield worker
-        worker.stop()
-
-@pytest.fixture
-def storage_worker(mock_queue, mock_chroma_client, temp_media_db):
-    """Create a storage worker for testing."""
-    with patch('tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager') as mock_manager_class:
-        mock_instance = MagicMock()
-        mock_instance.store_in_chroma.return_value = True
-        mock_manager_class.return_value = mock_instance
-
-        worker = StorageWorker(
-            worker_id="storage_test_1",
-            input_queue=mock_queue,
-            chroma_client=mock_chroma_client,
-            db_path=temp_media_db
-        )
-        yield worker
-        worker.stop()
 
 # =====================================================================
 # Error Recovery Fixtures
@@ -536,41 +431,6 @@ def sample_media_content():
             "tags": ["test", "chromadb", "embeddings"]
         }
     }
-
-@pytest.fixture
-def chunking_task():
-    """Sample chunking task for worker testing."""
-    return ChunkingTask(
-        job_id="test_job_1",
-        content="This is a test content that needs to be chunked into smaller pieces for processing.",
-        chunk_size=50,
-        overlap=10,
-        metadata={"source": "test"}
-    )
-
-@pytest.fixture
-def embedding_task(sample_texts):
-    """Sample embedding task for worker testing."""
-    return EmbeddingTask(
-        job_id="test_job_1",
-        chunks=sample_texts,
-        provider="openai",
-        model="text-embedding-ada-002",
-        metadata={"source": "test"}
-    )
-
-@pytest.fixture
-def storage_task(sample_texts, mock_embeddings):
-    """Sample storage task for worker testing."""
-    embeddings = mock_embeddings(sample_texts)
-    return StorageTask(
-        job_id="test_job_1",
-        collection_name="test_collection",
-        texts=sample_texts,
-        embeddings=embeddings,
-        ids=[f"chunk_{i}" for i in range(len(sample_texts))],
-        metadata=[{"chunk_index": i} for i in range(len(sample_texts))]
-    )
 
 # =====================================================================
 # Connection Pool Fixtures

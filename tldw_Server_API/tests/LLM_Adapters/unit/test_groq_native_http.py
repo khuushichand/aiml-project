@@ -42,7 +42,8 @@ class _FakeStreamCtx:
 
 class _FakeClient:
     def __init__(self, *args, **kwargs):
-        pass
+        self.last_post = None
+        self.last_stream = None
 
     def __enter__(self):
         return self
@@ -51,9 +52,11 @@ class _FakeClient:
         return False
 
     def post(self, url: str, json: Dict[str, Any], headers: Dict[str, str]):
+        self.last_post = {"url": url, "json": json, "headers": headers}
         return _FakeResponse(200)
 
     def stream(self, method: str, url: str, json: Dict[str, Any], headers: Dict[str, str]):
+        self.last_stream = {"method": method, "url": url, "json": json, "headers": headers}
         return _FakeStreamCtx(_FakeResponse(200))
 
 
@@ -82,3 +85,34 @@ def test_groq_adapter_native_http_streaming(monkeypatch):
     chunks = list(a.stream({"messages": [{"role": "user", "content": "hi"}], "model": "llama3-8b", "api_key": "k", "stream": True}))
     assert any(c.startswith("data: ") for c in chunks)
     assert sum(1 for c in chunks if "[DONE]" in c) == 1
+
+
+def test_groq_adapter_merges_extra_body_and_headers(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
+    import tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter as groq_mod
+
+    captured: Dict[str, Any] = {}
+
+    def _factory(*args, **kwargs):
+        client = _FakeClient(*args, **kwargs)
+        captured["client"] = client
+        return client
+
+    monkeypatch.setattr(groq_mod, "http_client_factory", _factory)
+    a = GroqAdapter()
+    _ = a.chat({
+        "messages": [{"role": "user", "content": "hi"}],
+        "model": "llama3-8b",
+        "api_key": "k",
+        "temperature": 0.2,
+        "extra_body": {"temperature": 0.9, "x_extra": "y"},
+        "extra_headers": {"Authorization": "Bearer override", "content-type": "text/plain", "X-Test": "1"},
+    })
+    payload = captured["client"].last_post["json"]
+    headers = captured["client"].last_post["headers"]
+    assert payload.get("temperature") == 0.2
+    assert payload.get("x_extra") == "y"
+    assert headers.get("Authorization") == "Bearer k"
+    assert headers.get("Content-Type") == "application/json"
+    assert headers.get("X-Test") == "1"
+    assert "content-type" not in headers

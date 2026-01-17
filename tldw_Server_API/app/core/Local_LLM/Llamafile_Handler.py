@@ -7,12 +7,14 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
+import zipfile
+import shutil
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 #
 # Third-party imports
 import asyncio
-import httpx
 import socket
 import time
 #
@@ -75,6 +77,74 @@ class LlamafileHandler(BaseLLMHandler):
         """Log defensively to avoid errors when sinks are closed during atexit."""
         handler_utils.safe_log(self.logger, level, msg, *args)
 
+    async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        is_windows = platform.system().lower().startswith("win")
+        if is_windows:
+            if hasattr(process, "terminate"):
+                process.terminate()
+        else:
+            try:
+                pgid = await asyncio.to_thread(os.getpgid, process.pid)
+                await asyncio.to_thread(os.killpg, pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                if hasattr(process, "terminate"):
+                    process.terminate()
+            except Exception:
+                if hasattr(process, "terminate"):
+                    process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            if is_windows:
+                if hasattr(process, "kill"):
+                    process.kill()
+            else:
+                try:
+                    pgid = await asyncio.to_thread(os.getpgid, process.pid)
+                    await asyncio.to_thread(os.killpg, pgid, signal.SIGKILL)
+                except Exception:
+                    if hasattr(process, "kill"):
+                        process.kill()
+            try:
+                await process.wait()
+            except Exception:
+                pass
+
+    def _extract_llamafile_from_zip(self, zip_path: Path, output_path: Path) -> None:
+        def _is_safe_member(member_name: str) -> bool:
+            member_path = Path(member_name)
+            return not member_path.is_absolute() and ".." not in member_path.parts
+
+        with zipfile.ZipFile(zip_path) as zf:
+            members = [m for m in zf.infolist() if not m.is_dir() and _is_safe_member(m.filename)]
+            if not members:
+                raise ModelDownloadError("No suitable files found in llamafile zip archive.")
+
+            def _pick_member():
+                for member in members:
+                    name = Path(member.filename).name.lower()
+                    if name in {"llamafile", "llamafile.exe"}:
+                        return member
+                for member in members:
+                    name = Path(member.filename).name.lower()
+                    if "llamafile" in name:
+                        return member
+                if len(members) == 1:
+                    return members[0]
+                return None
+
+            chosen = _pick_member()
+            if not chosen:
+                raise ModelDownloadError("No llamafile binary found in zip archive.")
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                zf.extract(chosen, tmp_dir)
+                extracted_path = Path(tmp_dir) / chosen.filename
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(extracted_path), str(output_path))
+
     def get_metrics(self) -> Dict[str, Any]:
         return dict(self.metrics)
 
@@ -120,7 +190,6 @@ class LlamafileHandler(BaseLLMHandler):
             return output_path
 
         repo = "Mozilla-Ocho/llamafile"
-        asset_name_prefix = "llamafile-"  # This needs to be accurate based on current releases
         latest_release_url = f"https://api.github.com/repos/{repo}/releases/latest"
 
         from tldw_Server_API.app.core.Local_LLM.http_utils import request_json, async_stream_download
@@ -135,46 +204,80 @@ class LlamafileHandler(BaseLLMHandler):
                 assets = latest_release_data.get('assets', [])
                 asset_url = None
                 chosen_asset_name = None
+                system = platform.system().lower()
+                is_windows = system.startswith("win")
+                tag_hint = tag_name.lower().lstrip("v")
+                machine = platform.machine().lower()
 
-                # Prioritize assets that are just "llamafile" or "llamafile-<version>"
-                # As the universal executable is often simply named.
-                simple_llamafile_asset = None
+                os_tokens = {
+                    "windows": {"windows", "win32", "win64"},
+                    "darwin": {"darwin", "macos", "osx", "mac"},
+                    "linux": {"linux", "ubuntu", "debian", "glibc", "musl"},
+                }
+                if system.startswith("win"):
+                    os_positive = os_tokens["windows"]
+                    os_negative = os_tokens["darwin"] | os_tokens["linux"]
+                elif system == "darwin":
+                    os_positive = os_tokens["darwin"]
+                    os_negative = os_tokens["windows"] | os_tokens["linux"]
+                else:
+                    os_positive = os_tokens["linux"]
+                    os_negative = os_tokens["windows"] | os_tokens["darwin"]
+
+                arch_positive: set[str] = set()
+                arch_negative: set[str] = set()
+                if machine in {"x86_64", "amd64"} or "x86_64" in machine or "amd64" in machine:
+                    arch_positive = {"x86_64", "amd64", "x64"}
+                    arch_negative = {"arm64", "aarch64"}
+                elif machine in {"arm64", "aarch64"} or "arm64" in machine or "aarch64" in machine:
+                    arch_positive = {"arm64", "aarch64"}
+                    arch_negative = {"x86_64", "amd64", "x64"}
+
+                def _asset_score(asset_name: str) -> Optional[int]:
+                    name = asset_name.lower()
+                    if "debug" in name:
+                        return None
+                    if name.endswith((".sha256", ".sig", ".txt", ".tar.gz", ".tgz", ".tar")):
+                        return None
+
+                    score = 100
+                    if "llamafile" in name:
+                        score -= 30
+                    if name.startswith("llamafile"):
+                        score -= 10
+                    if tag_hint and tag_hint in name:
+                        score -= 5
+                    if os_positive and any(token in name for token in os_positive):
+                        score -= 25
+                    elif os_negative and any(token in name for token in os_negative):
+                        score += 200
+                    if arch_positive and any(token in name for token in arch_positive):
+                        score -= 15
+                    elif arch_negative and any(token in name for token in arch_negative):
+                        score += 200
+                    if name.endswith(".exe"):
+                        score += -40 if is_windows else 80
+                    if name.endswith(".zip"):
+                        score += -20 if is_windows else 40
+                    if not is_windows and "." not in Path(name).name:
+                        score -= 20
+                    if "src" in name or "source" in name:
+                        score += 200
+                    return score
+
+                candidates = []
                 for asset in assets:
-                    if asset['name'] == "llamafile" or asset['name'].startswith(f"llamafile-{tag_name}") or asset[
-                        'name'].startswith(f"{asset_name_prefix}{tag_name.lstrip('v')}"):
-                        # Check if it's an executable type or no extension (common for Linux/macOS executables)
-                        if '.' not in asset['name'].split('-')[-1] or asset['name'].endswith(
-                                ('.exe', '.zip')) == False:  # Heuristic for executable
-                            simple_llamafile_asset = asset
-                            break
+                    name = asset.get("name", "")
+                    score = _asset_score(name)
+                    if score is None:
+                        continue
+                    candidates.append((score, asset))
 
-                if simple_llamafile_asset:
-                    asset_url = simple_llamafile_asset['browser_download_url']
-                    chosen_asset_name = simple_llamafile_asset['name']
-                else:  # Fallback to previous broader search if specific one isn't found
-                    preferred_assets = []
-                    for asset in assets:
-                        # More general check if the specific name isn't found
-                        if asset['name'].startswith(asset_name_prefix) and "debug" not in asset['name'].lower():
-                            preferred_assets.append(asset)
-
-                    if not preferred_assets:
-                        for asset in assets:  # Broader fallback if prefix fails
-                            if tag_name in asset['name'] and 'llamafile' in asset['name'].lower() and "debug" not in \
-                                    asset['name'].lower():
-                                preferred_assets.append(asset)
-
-                    if preferred_assets:
-                        # Simplistic choice: take the first one. Might need refinement.
-                        asset_to_download = preferred_assets[0]
-                        # Prefer smaller, non-source files if multiple matches
-                        preferred_assets.sort(key=lambda x: x.get('size', float('inf')))
-                        for pa in preferred_assets:
-                            if 'src' not in pa['name'].lower() and 'source' not in pa['name'].lower():
-                                asset_to_download = pa
-                                break
-                        asset_url = asset_to_download['browser_download_url']
-                        chosen_asset_name = asset_to_download['name']
+                if candidates:
+                    candidates.sort(key=lambda x: x[0])
+                    asset_to_download = candidates[0][1]
+                    asset_url = asset_to_download["browser_download_url"]
+                    chosen_asset_name = asset_to_download["name"]
 
                 if not asset_url:
                     self.logger.error(
@@ -188,17 +291,28 @@ class LlamafileHandler(BaseLLMHandler):
                 output_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Streaming download with retries
-                await async_stream_download(asset_url, str(output_path))
+                if chosen_asset_name and chosen_asset_name.lower().endswith(".zip"):
+                    tmp_zip_path = output_path.with_suffix(".zip")
+                    try:
+                        await async_stream_download(asset_url, str(tmp_zip_path))
+                        await asyncio.to_thread(self._extract_llamafile_from_zip, tmp_zip_path, output_path)
+                    finally:
+                        tmp_zip_path.unlink(missing_ok=True)
+                else:
+                    await async_stream_download(asset_url, str(output_path))
                 await asyncio.to_thread(os.chmod, output_path, 0o755)
                 self.logger.info(f"Downloaded {output_path.name} successfully.")
                 return output_path
 
-            except httpx.HTTPStatusError as e:
-                self.logger.error(
-                    f"Failed to fetch llamafile release info/download: {e.response.status_code} - {e.response.text}",
-                    exc_info=True)
-                raise ModelDownloadError(f"Failed to fetch/download llamafile: {e.response.status_code}")
             except Exception as e:
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    error_text = http_utils.get_http_error_text(e)
+                    self.logger.error(
+                        f"Failed to fetch llamafile release info/download: {status} - {error_text}",
+                        exc_info=True,
+                    )
+                    raise ModelDownloadError(f"Failed to fetch/download llamafile: {status}")
                 self.logger.error(f"Unexpected error downloading llamafile: {e}", exc_info=True)
                 if output_path.exists():
                     output_path.unlink(missing_ok=True)
@@ -266,6 +380,8 @@ class LlamafileHandler(BaseLLMHandler):
             raise ServerError("Llamafile executable not found or could not be downloaded.")
 
         model_path = self.models_dir / model_filename
+        if not self._is_path_allowed(model_path):
+            raise ServerError("Model path must be under allowed directories.")
         if not model_path.exists():
             raise ModelNotFoundError(f"Model file {model_filename} not found in {self.models_dir}.")
 
@@ -273,8 +389,18 @@ class LlamafileHandler(BaseLLMHandler):
         host = args.get("host", self.config.default_host)
         if not host:
             host = self.config.default_host or "127.0.0.1"
-        host = str(host)
-        port = self._pick_port(host, int(args.get("port", self.config.default_port)))
+        host = handler_utils.strip_host_brackets(str(host))
+        client_host = handler_utils.resolve_client_host(host)
+
+        def _coerce_port(value: Any, fallback: Any) -> int:
+            if value is None or value == "":
+                return int(fallback)
+            try:
+                return int(value)
+            except (TypeError, ValueError) as exc:
+                raise ServerError(f"Invalid port value: {value!r}") from exc
+
+        port = self._pick_port(host, _coerce_port(args.get("port"), self.config.default_port))
 
         # Corrected check using .returncode for asyncio.subprocess.Process
         if port in self._active_servers and self._active_servers[port].returncode is None:
@@ -373,19 +499,21 @@ class LlamafileHandler(BaseLLMHandler):
             if platform.system() != "Windows":
                 cpe_kwargs["preexec_fn"] = os.setsid
             else:
-                cpe_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                cpe_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
             t0 = time.perf_counter()
             process = await asyncio.create_subprocess_exec(*command, **cpe_kwargs)
             # Poll HTTP readiness instead of fixed sleep
-            base_url = f"http://{host}:{port}"
-            is_ready = await wait_for_http_ready(base_url, timeout_total=30.0, interval=0.5)
+            base_url = handler_utils.build_base_url(client_host, port)
+            readiness_timeout = getattr(self.config, "readiness_timeout", 30.0) or 30.0
+            is_ready = await wait_for_http_ready(base_url, timeout_total=readiness_timeout, interval=0.5)
 
             if process.returncode is not None or not is_ready:
                 stderr_output = ""
                 if process.stderr:
                     try:
                         # Use timeout to prevent blocking indefinitely if server is still writing
-                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
+                        stderr_timeout = getattr(self.config, "stderr_read_timeout", 5.0) or 5.0
+                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=stderr_timeout)
                         stderr_output = err_bytes.decode(errors='ignore').strip()
                     except asyncio.TimeoutError:
                         stderr_output = "(stderr read timed out after 5s)"
@@ -395,11 +523,13 @@ class LlamafileHandler(BaseLLMHandler):
                 stdout_output = ""
                 if process.stdout:
                     try:
-                        out_bytes = await asyncio.wait_for(process.stdout.read(), timeout=5.0)
+                        stderr_timeout = getattr(self.config, "stderr_read_timeout", 5.0) or 5.0
+                        out_bytes = await asyncio.wait_for(process.stdout.read(), timeout=stderr_timeout)
                         stdout_output = out_bytes.decode(errors='ignore').strip()
                     except asyncio.TimeoutError:
                         stdout_output = "(stdout read timed out after 5s)"
                 if stdout_output: self.logger.error(f"Llamafile server stdout: {stdout_output}")
+                await self._terminate_process(process)
                 self.metrics["start_errors"] += 1
                 raise ServerError(f"Llamafile server failed to start. Stderr: {stderr_output}")
 
@@ -532,7 +662,7 @@ class LlamafileHandler(BaseLLMHandler):
 
     async def inference(self,
                         prompt: str,
-                        port: int,
+                        port: Optional[int] = None,
                         host: Optional[str] = None,
                         system_prompt: Optional[str] = None,
                         n_predict: int = -1,
@@ -541,28 +671,33 @@ class LlamafileHandler(BaseLLMHandler):
                         top_p: float = 0.95,
                         api_key: Optional[str] = None,
                         **kwargs) -> Dict[str, Any]:
+        if port is None:
+            port = self.config.default_port
+        if port is None:
+            raise ServerError("Port is required for Llamafile inference.")
         target_host = host or self.config.default_host
-        api_url = f"http://{target_host}:{port}/v1/chat/completions"
+        client_host = handler_utils.resolve_client_host(target_host)
+        api_url = f"{handler_utils.build_base_url(client_host, port)}/v1/chat/completions"
 
         if port not in self._active_servers or self._active_servers[port].returncode is not None:
             self.logger.debug(
                 f"Port {port} not in _active_servers or process terminated. Checking for external server responsiveness.")
             conn_made = False
             try:
-                _, writer = await asyncio.open_connection(target_host, port)
+                _, writer = await asyncio.open_connection(client_host, port)
                 writer.close()
                 await writer.wait_closed()
                 conn_made = True
-                self.logger.debug(f"Successfully connected to {target_host}:{port}. Assuming external server.")
+                self.logger.debug(f"Successfully connected to {client_host}:{port}. Assuming external server.")
             except ConnectionRefusedError:
                 self.logger.error(
-                    f"No managed llamafile server on port {port} (or it terminated), and connection refused to {target_host}:{port}.")
-                raise ServerError(f"Llamafile server not found or not responding on {target_host}:{port}.")
+                    f"No managed llamafile server on port {port} (or it terminated), and connection refused to {client_host}:{port}.")
+                raise ServerError(f"Llamafile server not found or not responding on {client_host}:{port}.")
             except Exception as e:
-                self.logger.error(f"Error checking connection to {target_host}:{port}: {e}", exc_info=True)
-                raise ServerError(f"Error connecting to Llamafile server at {target_host}:{port}: {e}")
+                self.logger.error(f"Error checking connection to {client_host}:{port}: {e}", exc_info=True)
+                raise ServerError(f"Error connecting to Llamafile server at {client_host}:{port}: {e}")
             if not conn_made:
-                raise ServerError(f"Llamafile server not found/responding on {target_host}:{port} (conn test failed).")
+                raise ServerError(f"Llamafile server not found/responding on {client_host}:{port} (conn test failed).")
         else:
             self.logger.debug(f"Using managed llamafile server on port {port}.")
 
@@ -573,32 +708,38 @@ class LlamafileHandler(BaseLLMHandler):
         if system_prompt: messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        timeout = kwargs.pop("timeout", None)
+        if "stream" in kwargs:
+            kwargs = {k: v for k, v in kwargs.items() if k != "stream"}
         payload = {
             "messages": messages, "temperature": temperature, "top_k": top_k, "top_p": top_p,
-            "n_predict": n_predict, "stream": False, **kwargs
+            "n_predict": n_predict, **kwargs
         }
+        payload["stream"] = False
         payload = {k: v for k, v in payload.items() if v is not None}
 
         self.logger.debug(f"Sending llamafile inference request to {api_url} with payload: {payload}")
-        async with create_async_client(timeout=kwargs.get("timeout", 120.0)) as client:
+        http_timeout = timeout if timeout is not None else getattr(self.config, "http_timeout", 120.0)
+        async with create_async_client(timeout=http_timeout) as client:
             try:
                 result = await request_json(client, "POST", api_url, json=payload, headers=headers)
                 self.logger.debug("Llamafile inference successful.")
                 return result
-            except httpx.HTTPStatusError as e:
-                error_text = e.response.text
-                self.logger.error(
-                    f"Llamafile API error ({e.response.status_code}) from {api_url}: {error_text}",
-                    exc_info=True
-                )
-                raise InferenceError(f"Llamafile API error ({e.response.status_code}): {error_text}")
-            except httpx.RequestError as e:
-                self.logger.error(
-                    f"Could not connect or communicate with Llamafile server at {api_url}: {e}",
-                    exc_info=True
-                )
-                raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}")
             except Exception as e:
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    error_text = http_utils.get_http_error_text(e)
+                    self.logger.error(
+                        f"Llamafile API error ({status}) from {api_url}: {error_text}",
+                        exc_info=True
+                    )
+                    raise InferenceError(f"Llamafile API error ({status}): {error_text}")
+                if http_utils.is_network_error(e):
+                    self.logger.error(
+                        f"Could not connect or communicate with Llamafile server at {api_url}: {e}",
+                        exc_info=True
+                    )
+                    raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}")
                 self.logger.error(f"Unexpected error during llamafile inference to {api_url}: {e}", exc_info=True)
                 raise InferenceError(f"Unexpected error during llamafile inference: {e}")
 

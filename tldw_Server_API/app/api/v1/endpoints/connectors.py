@@ -52,6 +52,7 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import (
     create_oauth_state,
     consume_oauth_state,
 )
+from tldw_Server_API.app.core.http_client import afetch as _http_afetch, RetryPolicy as _RetryPolicy
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 
 
@@ -201,14 +202,28 @@ async def oauth_callback(
     notion_workspace_id: Optional[str] = None
     if provider == 'drive' and (tokens.get('access_token')):
         try:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                # userinfo endpoint provides email when scopes include 'email'
-                async with session.get('https://openidconnect.googleapis.com/v1/userinfo', headers={"Authorization": f"Bearer {tokens['access_token']}"}, timeout=15) as resp:
-                    if resp.status == 200:
-                        info = await resp.json()
+            # userinfo endpoint provides email when scopes include 'email'
+            resp = await _http_afetch(
+                method="GET",
+                url="https://openidconnect.googleapis.com/v1/userinfo",
+                headers={"Authorization": f"Bearer {tokens['access_token']}"},
+                timeout=15,
+                retry=_RetryPolicy(attempts=1),
+            )
+            try:
+                if int(getattr(resp, "status_code", 0)) == 200:
+                    info = resp.json()
+                    if isinstance(info, dict):
                         acct_email = info.get('email')
                         tokens['email'] = acct_email
+            finally:
+                close = getattr(resp, "aclose", None)
+                if callable(close):
+                    await close()
+                else:
+                    close = getattr(resp, "close", None)
+                    if callable(close):
+                        close()
         except Exception:
             pass
     elif provider == 'notion':

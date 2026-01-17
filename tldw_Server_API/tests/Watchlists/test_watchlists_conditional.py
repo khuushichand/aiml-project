@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-    # isolate per-user DBs
+     # isolate per-user DBs
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_cond"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))

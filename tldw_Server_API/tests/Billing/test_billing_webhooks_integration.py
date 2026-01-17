@@ -27,6 +27,8 @@ TEST_DB_PASSWORD = _pg.password
 
 
 def _has_postgres_dependencies() -> bool:
+
+
     """Check if PostgreSQL dependencies are available."""
     try:
         import psycopg  # noqa: F401

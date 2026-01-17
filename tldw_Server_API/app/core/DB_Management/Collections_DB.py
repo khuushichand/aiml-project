@@ -14,16 +14,34 @@ Notes:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from loguru import logger
 
+from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.exceptions import (
+    InvalidStoragePathError,
+    InvalidStorageUserIdError,
+    StorageUnavailableError,
+)
+from tldw_Server_API.app.core.DB_Management.content_backend import (
+    load_content_db_settings,
+    get_content_backend,
+)
+from tldw_Server_API.app.core.Collections.utils import (
+    build_highlight_context,
+    find_highlight_span,
+    hash_text_sha256,
+)
 from .backends.base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError
 from .backends.factory import DatabaseBackendFactory
-from .db_path_utils import DatabasePaths
+from .backends.query_utils import prepare_backend_statement
+from .db_path_utils import DatabasePaths, normalize_output_storage_filename
 
 
 def _utcnow_iso() -> str:
@@ -82,6 +100,7 @@ class ContentItemRow:
     domain: Optional[str]
     title: Optional[str]
     summary: Optional[str]
+    notes: Optional[str]
     content_hash: Optional[str]
     word_count: Optional[int]
     published_at: Optional[str]
@@ -106,9 +125,7 @@ class CollectionsDatabase:
     def __init__(self, user_id: int | str, backend: Optional[DatabaseBackend] = None):
         self.user_id = str(user_id)
         if backend is None:
-            db_path = str(DatabasePaths.get_media_db_path(int(user_id)))
-            cfg = DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=db_path)
-            backend = DatabaseBackendFactory.create_backend(cfg)
+            backend = self._resolve_backend()
         self.backend = backend
         self._fts_available = True
         self.ensure_schema()
@@ -122,65 +139,184 @@ class CollectionsDatabase:
         """Construct using an existing backend (avoids path resolution and int casting)."""
         return cls(user_id=user_id, backend=backend)
 
+    def _resolve_backend(self) -> DatabaseBackend:
+        backend_mode_env = (os.getenv("TLDW_CONTENT_DB_BACKEND") or "").strip().lower()
+        if backend_mode_env in {"postgres", "postgresql"}:
+            parser = load_comprehensive_config()
+            resolved = get_content_backend(parser)
+            if resolved is None:
+                raise DatabaseError("PostgreSQL content backend requested but not initialized")
+            return resolved
+
+        try:
+            parser = load_comprehensive_config()
+        except Exception:
+            parser = None
+
+        if parser is not None:
+            try:
+                content_settings = load_content_db_settings(parser)
+                if content_settings.backend_type == BackendType.POSTGRESQL:
+                    resolved = get_content_backend(parser)
+                    if resolved is None:
+                        raise DatabaseError("PostgreSQL content backend requested but not initialized")
+                    return resolved
+            except Exception:
+                pass
+
+        db_path = str(DatabasePaths.get_media_db_path(int(self.user_id)))
+        cfg = DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=db_path)
+        return DatabaseBackendFactory.create_backend(cfg)
+
+    def _execute_insert(self, query: str, params: Tuple[Any, ...]) -> Any:
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            prepared_query, prepared_params = prepare_backend_statement(
+                BackendType.POSTGRESQL,
+                query,
+                params,
+                apply_default_transform=True,
+                ensure_returning=True,
+            )
+            return self.backend.execute(prepared_query, prepared_params)
+        return self.backend.execute(query, params)
+
+    @staticmethod
+    def _extract_lastrowid(result: Any) -> Optional[int]:
+        try:
+            if result is None:
+                return None
+            lastrowid = getattr(result, "lastrowid", None)
+            if lastrowid:
+                return int(lastrowid)
+            first = getattr(result, "first", None)
+            if isinstance(first, dict) and first.get("id") is not None:
+                return int(first.get("id"))
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _coerce_bool_flag(value: Any, *, postgres: bool) -> Any:
+        if postgres:
+            return bool(value)
+        return 1 if value else 0
+
     def ensure_schema(self) -> None:
         """Create tables if they do not already exist."""
-        # SQLite-compatible DDL; also acceptable on Postgres for basic types
-        ddl = """
-        CREATE TABLE IF NOT EXISTS output_templates (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            type TEXT NOT NULL,
-            format TEXT NOT NULL,
-            body TEXT NOT NULL,
-            description TEXT,
-            is_default INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            metadata_json TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            ddl = """
+            CREATE TABLE IF NOT EXISTS output_templates (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                format TEXT NOT NULL,
+                body TEXT NOT NULL,
+                description TEXT,
+                is_default BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
 
-        CREATE TABLE IF NOT EXISTS reading_highlights (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            item_id INTEGER NOT NULL,
-            quote TEXT NOT NULL,
-            start_offset INTEGER,
-            end_offset INTEGER,
-            color TEXT,
-            note TEXT,
-            created_at TEXT NOT NULL,
-            anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
-            content_hash_ref TEXT,
-            context_before TEXT,
-            context_after TEXT,
-            state TEXT NOT NULL DEFAULT 'active'
-        );
-        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+            CREATE TABLE IF NOT EXISTS reading_highlights (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                item_id BIGINT NOT NULL,
+                quote TEXT NOT NULL,
+                start_offset INTEGER,
+                end_offset INTEGER,
+                color TEXT,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
+                content_hash_ref TEXT,
+                context_before TEXT,
+                context_after TEXT,
+                state TEXT NOT NULL DEFAULT 'active'
+            );
+            CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
 
-        CREATE TABLE IF NOT EXISTS outputs (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            job_id INTEGER,
-            run_id INTEGER,
-            type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            format TEXT NOT NULL,
-            storage_path TEXT NOT NULL,
-            metadata_json TEXT,
-            created_at TEXT NOT NULL,
-            media_item_id INTEGER,
-            chatbook_path TEXT,
-            deleted INTEGER NOT NULL DEFAULT 0,
-            deleted_at TEXT,
-            retention_until TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
-        CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0;
-        """
+            CREATE TABLE IF NOT EXISTS outputs (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                job_id BIGINT,
+                run_id BIGINT,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                format TEXT NOT NULL,
+                storage_path TEXT NOT NULL,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                media_item_id BIGINT,
+                chatbook_path TEXT,
+                deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                deleted_at TEXT,
+                retention_until TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = FALSE;
+            """
+        else:
+            ddl = """
+            CREATE TABLE IF NOT EXISTS output_templates (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                format TEXT NOT NULL,
+                body TEXT NOT NULL,
+                description TEXT,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
+
+            CREATE TABLE IF NOT EXISTS reading_highlights (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                item_id INTEGER NOT NULL,
+                quote TEXT NOT NULL,
+                start_offset INTEGER,
+                end_offset INTEGER,
+                color TEXT,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
+                content_hash_ref TEXT,
+                context_before TEXT,
+                context_after TEXT,
+                state TEXT NOT NULL DEFAULT 'active'
+            );
+            CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+
+            CREATE TABLE IF NOT EXISTS outputs (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                job_id INTEGER,
+                run_id INTEGER,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                format TEXT NOT NULL,
+                storage_path TEXT NOT NULL,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                media_item_id INTEGER,
+                chatbook_path TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                deleted_at TEXT,
+                retention_until TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0;
+            """
         try:
             self.backend.create_tables(ddl)
         except Exception as e:
@@ -194,7 +330,12 @@ class CollectionsDatabase:
             pass
         # Outputs table backfills
         try:
-            self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0", tuple())
+            deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+            deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
+            self.backend.execute(
+                f"ALTER TABLE outputs ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
+                tuple(),
+            )
         except Exception:
             pass
         try:
@@ -210,74 +351,125 @@ class CollectionsDatabase:
         except Exception:
             pass
         # Collections layer tables
-        fts_available = True
+        fts_available = self.backend.backend_type == BackendType.SQLITE
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            content_ddl = """
+            CREATE TABLE IF NOT EXISTS collection_tags (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                UNIQUE (user_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS content_items (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                origin_type TEXT,
+                origin_id BIGINT,
+                url TEXT,
+                canonical_url TEXT,
+                domain TEXT,
+                title TEXT,
+                summary TEXT,
+                notes TEXT,
+                content_hash TEXT,
+                word_count INTEGER,
+                published_at TEXT,
+                status TEXT,
+                favorite INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT,
+                media_id BIGINT,
+                job_id BIGINT,
+                run_id BIGINT,
+                source_id BIGINT,
+                read_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_content_items_user_updated ON content_items(user_id, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_content_items_user_domain ON content_items(user_id, domain);
+            CREATE INDEX IF NOT EXISTS idx_content_items_job ON content_items(job_id);
+            CREATE INDEX IF NOT EXISTS idx_content_items_run ON content_items(run_id);
+
+            CREATE TABLE IF NOT EXISTS content_item_tags (
+                item_id BIGINT NOT NULL,
+                tag_id BIGINT NOT NULL,
+                UNIQUE (item_id, tag_id)
+            );
+            """
+        else:
+            content_ddl = """
+            CREATE TABLE IF NOT EXISTS collection_tags (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                UNIQUE (user_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS content_items (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                origin_type TEXT,
+                origin_id INTEGER,
+                url TEXT,
+                canonical_url TEXT,
+                domain TEXT,
+                title TEXT,
+                summary TEXT,
+                notes TEXT,
+                content_hash TEXT,
+                word_count INTEGER,
+                published_at TEXT,
+                status TEXT,
+                favorite INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT,
+                media_id INTEGER,
+                job_id INTEGER,
+                run_id INTEGER,
+                source_id INTEGER,
+                read_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_content_items_user_updated ON content_items(user_id, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_content_items_user_domain ON content_items(user_id, domain);
+            CREATE INDEX IF NOT EXISTS idx_content_items_job ON content_items(job_id);
+            CREATE INDEX IF NOT EXISTS idx_content_items_run ON content_items(run_id);
+
+            CREATE TABLE IF NOT EXISTS content_item_tags (
+                item_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                UNIQUE (item_id, tag_id)
+            );
+            """
         try:
-            self.backend.create_tables(
-                """
-                CREATE TABLE IF NOT EXISTS collection_tags (
-                    id INTEGER PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    UNIQUE (user_id, name)
-                );
-
-                CREATE TABLE IF NOT EXISTS content_items (
-                    id INTEGER PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    origin TEXT NOT NULL,
-                    origin_type TEXT,
-                    origin_id INTEGER,
-                    url TEXT,
-                    canonical_url TEXT,
-                    domain TEXT,
-                    title TEXT,
-                    summary TEXT,
-                    content_hash TEXT,
-                    word_count INTEGER,
-                    published_at TEXT,
-                    status TEXT,
-                    favorite INTEGER NOT NULL DEFAULT 0,
-                    metadata_json TEXT,
-                    media_id INTEGER,
-                    job_id INTEGER,
-                    run_id INTEGER,
-                    source_id INTEGER,
-                    read_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_canonical ON content_items(user_id, canonical_url) WHERE canonical_url IS NOT NULL;
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_content_items_user_hash ON content_items(user_id, content_hash) WHERE content_hash IS NOT NULL;
-                CREATE INDEX IF NOT EXISTS idx_content_items_user_updated ON content_items(user_id, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_content_items_user_domain ON content_items(user_id, domain);
-                CREATE INDEX IF NOT EXISTS idx_content_items_job ON content_items(job_id);
-                CREATE INDEX IF NOT EXISTS idx_content_items_run ON content_items(run_id);
-
-                CREATE TABLE IF NOT EXISTS content_item_tags (
-                    item_id INTEGER NOT NULL,
-                    tag_id INTEGER NOT NULL,
-                    UNIQUE (item_id, tag_id)
-                );
-                """
-            )
+            self.backend.create_tables(content_ddl)
         except Exception as e:
             logger.error(f"Collections content_items schema init failed: {e}")
             raise
-        try:
-            self.backend.create_tables(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS content_items_fts USING fts5(
-                    title,
-                    summary,
-                    metadata,
-                    content=''
-                );
-                """
-            )
-        except Exception as e:
-            logger.debug(f"Collections FTS unavailable: {e}")
-            fts_available = False
+        if fts_available:
+            try:
+                self.backend.create_tables(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS content_items_fts USING fts5(
+                        title,
+                        summary,
+                        metadata,
+                        content=''
+                    );
+                    """
+                )
+            except Exception as e:
+                logger.debug(f"Collections FTS unavailable: {e}")
+                fts_available = False
         # Backfill columns for prior installs if table existed
         _backfill_columns: Dict[str, str] = {
             "origin_type": "TEXT",
@@ -286,6 +478,7 @@ class CollectionsDatabase:
             "run_id": "INTEGER",
             "source_id": "INTEGER",
             "read_at": "TEXT",
+            "notes": "TEXT",
         }
         for column, col_type in _backfill_columns.items():
             try:
@@ -293,6 +486,7 @@ class CollectionsDatabase:
             except Exception:
                 pass
         self._fts_available = fts_available
+        self._seed_output_templates_from_watchlists()
 
     # ------------------------
     # Collections Tags helpers
@@ -300,6 +494,78 @@ class CollectionsDatabase:
     @staticmethod
     def _normalize_collection_tag(name: str) -> str:
         return name.strip().lower()
+
+    @staticmethod
+    def _infer_output_template_type(name: str, fmt: str) -> str:
+        if fmt == "html":
+            return "newsletter_html"
+        lowered = name.lower()
+        if "mece" in lowered:
+            return "mece_markdown"
+        if "newsletter" in lowered:
+            return "newsletter_markdown"
+        return "briefing_markdown"
+
+    def _list_output_template_names(self) -> set[str]:
+        try:
+            rows = self.backend.execute(
+                "SELECT name FROM output_templates WHERE user_id = ?",
+                (self.user_id,),
+            ).rows
+        except Exception:
+            return set()
+        names: set[str] = set()
+        for row in rows:
+            if isinstance(row, dict) and row.get("name") is not None:
+                names.add(str(row.get("name")))
+        return names
+
+    def _seed_output_templates_from_watchlists(self) -> None:
+        try:
+            from tldw_Server_API.app.core.Watchlists import template_store
+        except Exception as exc:
+            logger.debug(f"Skipping watchlists template seeding: {exc}")
+            return
+
+        try:
+            records = template_store.list_templates()
+        except Exception as exc:
+            logger.debug(f"Failed to list watchlists templates for seeding: {exc}")
+            return
+
+        if not records:
+            return
+
+        existing_names = self._list_output_template_names()
+        for record in records:
+            if record.name in existing_names:
+                continue
+            try:
+                loaded = template_store.load_template(record.name)
+            except Exception as exc:
+                logger.debug(f"Skipping template {record.name} during seed: {exc}")
+                continue
+            fmt = (loaded.format or "").lower()
+            if fmt not in {"md", "html"}:
+                continue
+            type_ = self._infer_output_template_type(loaded.name, fmt)
+            metadata_json = json.dumps(
+                {"seeded_from": "watchlists_templates", "seeded_at": _utcnow_iso()},
+                ensure_ascii=False,
+            )
+            try:
+                self.create_output_template(
+                    name=loaded.name,
+                    type_=type_,
+                    format_=fmt,
+                    body=loaded.content,
+                    description=loaded.description,
+                    is_default=False,
+                    metadata_json=metadata_json,
+                )
+                existing_names.add(loaded.name)
+            except Exception as exc:
+                logger.debug(f"Failed to seed watchlists template {loaded.name}: {exc}")
 
     @staticmethod
     def _domain_from_url(url: Optional[str]) -> Optional[str]:
@@ -344,9 +610,8 @@ class CollectionsDatabase:
             insert_exc: Optional[Exception] = None
             tag_id: Optional[int] = None
             try:
-                res = self.backend.execute(insert_sql, (self.user_id, nm))
-                if res.lastrowid:
-                    tag_id = int(res.lastrowid)
+                res = self._execute_insert(insert_sql, (self.user_id, nm))
+                tag_id = self._extract_lastrowid(res)
             except Exception as exc:
                 insert_exc = exc
             if tag_id is None:
@@ -401,6 +666,7 @@ class CollectionsDatabase:
         *,
         title: Optional[str],
         summary: Optional[str],
+        notes: Optional[str],
         tags: Optional[List[str]],
         metadata_json: Optional[str],
     ) -> None:
@@ -408,6 +674,8 @@ class CollectionsDatabase:
             return
         try:
             metadata_text = metadata_json or ""
+            if notes:
+                metadata_text = f"{metadata_text}\n{notes}" if metadata_text else notes
             self.backend.execute(
                 "DELETE FROM content_items_fts WHERE rowid = ?",
                 (item_id,),
@@ -449,6 +717,7 @@ class CollectionsDatabase:
             domain=row.get("domain"),
             title=row.get("title"),
             summary=row.get("summary"),
+            notes=row.get("notes"),
             content_hash=row.get("content_hash"),
             word_count=(int(row.get("word_count")) if row.get("word_count") is not None else None),
             published_at=row.get("published_at"),
@@ -471,7 +740,7 @@ class CollectionsDatabase:
         row = self.backend.execute(
             """
             SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
-                   title, summary, content_hash, word_count, published_at, status, favorite,
+                   title, summary, notes, content_hash, word_count, published_at, status, favorite,
                    metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
             FROM content_items
             WHERE id = ? AND user_id = ?
@@ -482,6 +751,43 @@ class CollectionsDatabase:
             raise KeyError("content_item_not_found")
         tags_map = self._fetch_tags_for_item_ids([item_id])
         return self._row_to_content_item(row, tags_map.get(item_id, []))
+
+    def get_content_item_by_media_id(self, media_id: int) -> ContentItemRow:
+        row = self.backend.execute(
+            """
+            SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
+                   title, summary, notes, content_hash, word_count, published_at, status, favorite,
+                   metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
+            FROM content_items
+            WHERE media_id = ? AND user_id = ?
+            """,
+            (media_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("content_item_not_found")
+        item_id = int(row.get("id"))
+        tags_map = self._fetch_tags_for_item_ids([item_id])
+        return self._row_to_content_item(row, tags_map.get(item_id, []))
+
+    def get_content_item_by_url(self, url: str) -> Optional[ContentItemRow]:
+        if not url:
+            return None
+        row = self.backend.execute(
+            """
+            SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
+                   title, summary, notes, content_hash, word_count, published_at, status, favorite,
+                   metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
+            FROM content_items
+            WHERE user_id = ? AND (canonical_url = ? OR url = ?)
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (self.user_id, url, url),
+        ).first
+        if not row:
+            return None
+        tags_map = self._fetch_tags_for_item_ids([int(row.get("id"))])
+        return self._row_to_content_item(row, tags_map.get(int(row.get("id")), []))
 
     def upsert_content_item(
         self,
@@ -494,6 +800,7 @@ class CollectionsDatabase:
         domain: Optional[str],
         title: Optional[str],
         summary: Optional[str],
+        notes: Optional[str] = None,
         content_hash: Optional[str],
         word_count: Optional[int],
         published_at: Optional[str],
@@ -506,6 +813,7 @@ class CollectionsDatabase:
         source_id: Optional[int] = None,
         read_at: Optional[str] = None,
         tags: Optional[Iterable[str]] = None,
+        merge_tags: bool = False,
     ) -> ContentItemRow:
         """Insert or update a content item record and attach tags."""
         now = _utcnow_iso()
@@ -534,7 +842,7 @@ class CollectionsDatabase:
             existing_row = self.backend.execute(
                 f"""
                 SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
-                       title, summary, content_hash, word_count, published_at, status, favorite,
+                       title, summary, notes, content_hash, word_count, published_at, status, favorite,
                        metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
                 FROM content_items
                 WHERE user_id = ? AND {column} = ?
@@ -559,6 +867,7 @@ class CollectionsDatabase:
                 "domain = ?",
                 "title = ?",
                 "summary = ?",
+                "notes = ?",
                 "content_hash = ?",
                 "word_count = ?",
                 "published_at = ?",
@@ -581,6 +890,7 @@ class CollectionsDatabase:
                 domain_val,
                 title,
                 summary,
+                notes,
                 content_hash,
                 word_count,
                 published_at,
@@ -605,13 +915,13 @@ class CollectionsDatabase:
             else:
                 content_changed = True
         else:
-            res = self.backend.execute(
+            res = self._execute_insert(
                 """
                 INSERT INTO content_items (
                     user_id, origin, origin_type, origin_id, url, canonical_url, domain, title, summary,
-                    content_hash, word_count, published_at, status, favorite, metadata_json, media_id,
+                    notes, content_hash, word_count, published_at, status, favorite, metadata_json, media_id,
                     job_id, run_id, source_id, read_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     self.user_id,
@@ -623,6 +933,7 @@ class CollectionsDatabase:
                     domain_val,
                     title,
                     summary,
+                    notes,
                     content_hash,
                     word_count,
                     published_at,
@@ -638,10 +949,19 @@ class CollectionsDatabase:
                     now,
                 ),
             )
-            item_id = int(res.lastrowid or 0)
+            item_id = self._extract_lastrowid(res)
+            if not item_id:
+                raise DatabaseError("Failed to insert content item")
 
+        tags_for_fts = list(tags or [])
         if tags is not None:
-            tag_ids = self.ensure_collection_tag_ids(tags)
+            tag_list = list(tags)
+            if merge_tags and not created:
+                existing_tags = self._fetch_tags_for_item_ids([int(item_id or 0)]).get(int(item_id or 0), [])
+                if existing_tags:
+                    tag_list = list(dict.fromkeys([*existing_tags, *tag_list]))
+            tags_for_fts = tag_list
+            tag_ids = self.ensure_collection_tag_ids(tag_list)
             self._replace_item_tags(item_id, tag_ids)
 
         try:
@@ -649,7 +969,8 @@ class CollectionsDatabase:
                 item_id,
                 title=title,
                 summary=summary,
-                tags=list(tags or []),
+                notes=notes,
+                tags=tags_for_fts,
                 metadata_json=metadata_json,
             )
         except Exception:
@@ -676,11 +997,16 @@ class CollectionsDatabase:
         origin: Optional[str] = None,
         page: int = 1,
         size: int = 20,
+        offset: Optional[int] = None,
+        limit: Optional[int] = None,
+        sort: Optional[str] = None,
     ) -> Tuple[List[ContentItemRow], int]:
         where: List[str] = ["ci.user_id = ?"]
         params: List[Any] = [self.user_id]
         joins: List[str] = []
         having = ""
+        fts_query = ""
+        fts_joined = False
 
         if ids:
             id_list = [int(i) for i in ids]
@@ -695,14 +1021,19 @@ class CollectionsDatabase:
                 joins.append("INNER JOIN content_items_fts ON content_items_fts.rowid = ci.id")
                 where.append("content_items_fts MATCH ?")
                 params.append(fts_query)
+                fts_joined = True
             else:
                 q_like = f"%{q.lower()}%"
-                where.append("(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ?)")
-                params.extend([q_like, q_like])
+                where.append(
+                    "(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ? OR LOWER(COALESCE(ci.notes, '')) LIKE ?)"
+                )
+                params.extend([q_like, q_like, q_like])
         elif q:
             q_like = f"%{q.lower()}%"
-            where.append("(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ?)")
-            params.extend([q_like, q_like])
+            where.append(
+                "(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ? OR LOWER(COALESCE(ci.notes, '')) LIKE ?)"
+            )
+            params.extend([q_like, q_like, q_like])
 
         if domain:
             where.append("ci.domain = ?")
@@ -758,29 +1089,49 @@ class CollectionsDatabase:
             having = f"HAVING COUNT(DISTINCT ct.name) >= {len(tag_filters)}"
 
         where_clause = " AND ".join(where) if where else "1=1"
-        group_by = "GROUP BY ci.id"
+        group_by = "GROUP BY ci.id" if tag_filters else ""
         joins_sql = f" {' '.join(joins)}" if joins else ""
         base_from = f"FROM content_items ci{joins_sql}"
         subquery = f"SELECT ci.id {base_from} WHERE {where_clause} {group_by} {having}"
-        count_sql = f"SELECT COUNT(*) AS cnt FROM ({subquery})"
+        count_sql = f"SELECT COUNT(*) AS cnt FROM ({subquery}) AS subq"
         total = int(self.backend.execute(count_sql, tuple(params)).scalar or 0)
 
-        limit = size
-        offset = max(0, (page - 1) * size)
+        resolved_limit = limit if isinstance(limit, int) and limit > 0 else size
+        if isinstance(offset, int) and offset >= 0:
+            resolved_offset = offset
+        else:
+            resolved_offset = max(0, (page - 1) * size)
+
+        sort_key = (sort or "").strip().lower()
+        order_by = "ci.updated_at DESC, ci.id DESC"
+        if sort_key == "updated_asc":
+            order_by = "ci.updated_at ASC, ci.id ASC"
+        elif sort_key == "created_desc":
+            order_by = "ci.created_at DESC, ci.id DESC"
+        elif sort_key == "created_asc":
+            order_by = "ci.created_at ASC, ci.id ASC"
+        elif sort_key == "title_asc":
+            order_by = "ci.title ASC, ci.id ASC"
+        elif sort_key == "title_desc":
+            order_by = "ci.title DESC, ci.id DESC"
+        elif sort_key == "relevance" and fts_joined and not tag_filters:
+            order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
+        elif not sort_key and fts_joined and not tag_filters:
+            order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
         rows_sql = f"""
             SELECT
                 ci.id, ci.user_id, ci.origin, ci.origin_type, ci.origin_id, ci.url, ci.canonical_url,
-                ci.domain, ci.title, ci.summary, ci.content_hash, ci.word_count, ci.published_at,
+                ci.domain, ci.title, ci.summary, ci.notes, ci.content_hash, ci.word_count, ci.published_at,
                 ci.status, ci.favorite, ci.metadata_json, ci.media_id, ci.job_id, ci.run_id,
                 ci.source_id, ci.read_at, ci.created_at, ci.updated_at
             {base_from}
             WHERE {where_clause}
             {group_by}
             {having}
-            ORDER BY ci.updated_at DESC, ci.id DESC
+            ORDER BY {order_by}
             LIMIT ? OFFSET ?
         """
-        row_params = tuple(params + [limit, offset])
+        row_params = tuple(params + [resolved_limit, resolved_offset])
         rows = self.backend.execute(rows_sql, row_params).rows
         item_ids = [int(r.get("id")) for r in rows]
         tags_map = self._fetch_tags_for_item_ids(item_ids)
@@ -797,7 +1148,9 @@ class CollectionsDatabase:
         metadata: Optional[Dict[str, Any]] = None,
         title: Optional[str] = None,
         summary: Optional[str] = None,
+        notes: Optional[str] = None,
         read_at: Optional[str] = None,
+        clear_read_at: bool = False,
     ) -> ContentItemRow:
         """Update persisted content item fields and tags."""
         existing = self.get_content_item(item_id)
@@ -815,7 +1168,10 @@ class CollectionsDatabase:
         if summary is not None:
             updates.append("summary = ?")
             params.append(summary)
-        if read_at is not None:
+        if notes is not None:
+            updates.append("notes = ?")
+            params.append(notes)
+        if read_at is not None or clear_read_at:
             updates.append("read_at = ?")
             params.append(read_at)
 
@@ -851,6 +1207,7 @@ class CollectionsDatabase:
                 item_id,
                 title=tgt.title,
                 summary=tgt.summary,
+                notes=tgt.notes,
                 tags=tgt.tags,
                 metadata_json=tgt.metadata_json,
             )
@@ -861,6 +1218,28 @@ class CollectionsDatabase:
         row.is_new = False
         row.content_changed = False
         return row
+
+    def delete_content_item(self, item_id: int) -> None:
+        """Delete a content item and its tags/FTS entry."""
+        row = self.backend.execute(
+            "SELECT id FROM content_items WHERE id = ? AND user_id = ?",
+            (item_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("content_item_not_found")
+
+        self.backend.execute(
+            "DELETE FROM content_item_tags WHERE item_id = ?",
+            (item_id,),
+        )
+        self.backend.execute(
+            "DELETE FROM content_items WHERE id = ? AND user_id = ?",
+            (item_id, self.user_id),
+        )
+        try:
+            self._delete_content_fts_entry(item_id)
+        except Exception:
+            pass
 
     # ------------------------
     # Output Templates API
@@ -885,15 +1264,29 @@ class CollectionsDatabase:
         mapped = [OutputTemplateRow(**{**r, "is_default": bool(r.get("is_default", 0))}) for r in rows]
         return mapped, total
 
+    def get_default_output_template_by_type(self, type_: str) -> Optional[OutputTemplateRow]:
+        q = (
+            "SELECT id, user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json "
+            "FROM output_templates WHERE user_id = ? AND type = ? AND is_default = 1 ORDER BY updated_at DESC LIMIT 1"
+        )
+        row = self.backend.execute(q, (self.user_id, type_)).first
+        if not row:
+            return None
+        row["is_default"] = bool(row.get("is_default", 0))
+        return OutputTemplateRow(**row)
+
     def create_output_template(self, name: str, type_: str, format_: str, body: str, description: Optional[str], is_default: bool, metadata_json: Optional[str] = None) -> OutputTemplateRow:
         now = _utcnow_iso()
         q = (
             "INSERT INTO output_templates (user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
-        params = (self.user_id, name, type_, format_, body, description, 1 if is_default else 0, now, now, metadata_json)
-        res = self.backend.execute(q, params)
-        new_id = int(res.lastrowid or 0)
+        is_default_val = self._coerce_bool_flag(is_default, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        params = (self.user_id, name, type_, format_, body, description, is_default_val, now, now, metadata_json)
+        res = self._execute_insert(q, params)
+        new_id = self._extract_lastrowid(res)
+        if not new_id:
+            raise DatabaseError("Failed to create output template")
         return self.get_output_template(new_id)
 
     def get_output_template(self, template_id: int) -> OutputTemplateRow:
@@ -902,6 +1295,17 @@ class CollectionsDatabase:
             "FROM output_templates WHERE id = ? AND user_id = ?"
         )
         row = self.backend.execute(q, (template_id, self.user_id)).first
+        if not row:
+            raise KeyError("template_not_found")
+        row["is_default"] = bool(row.get("is_default", 0))
+        return OutputTemplateRow(**row)
+
+    def get_output_template_by_name(self, name: str) -> OutputTemplateRow:
+        q = (
+            "SELECT id, user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json "
+            "FROM output_templates WHERE user_id = ? AND name = ?"
+        )
+        row = self.backend.execute(q, (self.user_id, name)).first
         if not row:
             raise KeyError("template_not_found")
         row["is_default"] = bool(row.get("is_default", 0))
@@ -917,7 +1321,7 @@ class CollectionsDatabase:
                 fields.append(f"{key} = ?")
                 val = patch[key]
                 if key == "is_default":
-                    val = 1 if bool(val) else 0
+                    val = self._coerce_bool_flag(val, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
                 params.append(val)
         fields.append("updated_at = ?")
         params.append(_utcnow_iso())
@@ -971,8 +1375,10 @@ class CollectionsDatabase:
             context_after,
             state,
         )
-        res = self.backend.execute(q, params)
-        new_id = int(res.lastrowid or 0)
+        res = self._execute_insert(q, params)
+        new_id = self._extract_lastrowid(res)
+        if not new_id:
+            raise DatabaseError("Failed to create highlight")
         return self.get_highlight(new_id)
 
     def list_highlights_by_item(self, item_id: int) -> List[HighlightRow]:
@@ -1000,7 +1406,18 @@ class CollectionsDatabase:
             return self.get_highlight(highlight_id)
         fields = []
         params: List[Any] = []
-        for key in ("color", "note", "state"):
+        for key in (
+            "quote",
+            "start_offset",
+            "end_offset",
+            "color",
+            "note",
+            "anchor_strategy",
+            "content_hash_ref",
+            "context_before",
+            "context_after",
+            "state",
+        ):
             if key in patch and patch[key] is not None:
                 fields.append(f"{key} = ?")
                 params.append(patch[key])
@@ -1035,9 +1452,84 @@ class CollectionsDatabase:
         res = self.backend.execute(q, (self.user_id, item_id, new_content_hash))
         return int(res.rowcount or 0)
 
+    def reanchor_highlights_for_item(
+        self,
+        item_id: int,
+        *,
+        content_text: Optional[str],
+        content_hash: Optional[str],
+    ) -> Dict[str, int]:
+        if not content_text:
+            return {"updated": 0, "stale": 0, "skipped": 0}
+        resolved_hash = content_hash or hash_text_sha256(content_text)
+        if not resolved_hash:
+            return {"updated": 0, "stale": 0, "skipped": 0}
+
+        updated = 0
+        stale = 0
+        skipped = 0
+        for highlight in self.list_highlights_by_item(item_id=item_id):
+            if not highlight.quote:
+                skipped += 1
+                continue
+            span = find_highlight_span(
+                content_text,
+                highlight.quote,
+                start_offset=highlight.start_offset,
+                end_offset=highlight.end_offset,
+                context_before=highlight.context_before,
+                context_after=highlight.context_after,
+                anchor_strategy=highlight.anchor_strategy,
+            )
+            if span is None:
+                if highlight.state != "stale":
+                    self.update_highlight(highlight.id, {"state": "stale"})
+                stale += 1
+                continue
+
+            start_offset, end_offset = span
+            context_before, context_after = build_highlight_context(content_text, start_offset, end_offset)
+            self.update_highlight(
+                highlight.id,
+                {
+                    "start_offset": start_offset,
+                    "end_offset": end_offset,
+                    "content_hash_ref": resolved_hash,
+                    "context_before": context_before,
+                    "context_after": context_after,
+                    "state": "active",
+                },
+            )
+            updated += 1
+
+        return {"updated": updated, "stale": stale, "skipped": skipped}
+
     # ------------------------
     # Outputs artifacts API
     # ------------------------
+    def resolve_output_storage_path(self, path_value: str | Path) -> str:
+        """Resolve and validate output storage paths as relative filenames."""
+        try:
+            user_id = int(self.user_id)
+        except (TypeError, ValueError) as exc:
+            logger.error(f"outputs: invalid user id for storage path resolution: {self.user_id}")
+            raise InvalidStorageUserIdError("invalid_user_id") from exc
+        base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
+        try:
+            base_resolved = base_dir.resolve(strict=False)
+        except Exception as exc:
+            logger.error(f"outputs: failed to resolve outputs base dir for user {self.user_id}: {exc}")
+            raise StorageUnavailableError("storage_unavailable") from exc
+        return normalize_output_storage_filename(
+            storage_path=path_value,
+            allow_absolute=False,
+            reject_relative_with_separators=True,
+            base_resolved=base_resolved,
+            check_relative_containment=True,
+            log_message=logger.warning,
+            log_prefix="outputs",
+        )
+
     @dataclass
     class OutputArtifactRow:
         id: int
@@ -1068,6 +1560,7 @@ class CollectionsDatabase:
         retention_until: Optional[str] = None,
     ) -> "CollectionsDatabase.OutputArtifactRow":
         now = _utcnow_iso()
+        resolved_storage_path = self.resolve_output_storage_path(storage_path)
         q = (
             "INSERT INTO outputs (user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path, deleted, deleted_at, retention_until) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)"
@@ -1079,16 +1572,25 @@ class CollectionsDatabase:
             type_,
             title,
             format_,
-            storage_path,
+            resolved_storage_path,
             metadata_json,
             now,
             media_item_id,
             chatbook_path,
             retention_until,
         )
-        res = self.backend.execute(q, params)
-        new_id = int(res.lastrowid or 0)
+        res = self._execute_insert(q, params)
+        new_id = self._extract_lastrowid(res)
+        if not new_id:
+            raise DatabaseError("Failed to create output artifact")
         return self.get_output_artifact(new_id)
+
+    def update_output_media_item_id(self, output_id: int, media_item_id: Optional[int]) -> "CollectionsDatabase.OutputArtifactRow":
+        q = "UPDATE outputs SET media_item_id = ? WHERE id = ? AND user_id = ?"
+        res = self.backend.execute(q, (media_item_id, output_id, self.user_id))
+        if res.rowcount <= 0:
+            raise KeyError("output_not_found")
+        return self.get_output_artifact(output_id)
 
     def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
@@ -1168,6 +1670,7 @@ class CollectionsDatabase:
         fields = ["title = ?"]
         params: list[Any] = [new_title]
         if new_storage_path is not None:
+            new_storage_path = self.resolve_output_storage_path(new_storage_path)
             fields.append("storage_path = ?")
             params.append(new_storage_path)
         params.extend([output_id, self.user_id])
@@ -1180,6 +1683,19 @@ class CollectionsDatabase:
     def purge_expired_outputs(self) -> int:
         """Hard delete expired/retained outputs. Returns number of rows removed."""
         now = _utcnow_iso()
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            r1 = self.backend.execute(
+                "DELETE FROM outputs WHERE user_id = ? AND retention_until IS NOT NULL AND retention_until::timestamptz <= ?",
+                (self.user_id, now),
+            )
+            try:
+                r2 = self.backend.execute(
+                    "DELETE FROM outputs WHERE user_id = ? AND deleted = 1 AND deleted_at IS NOT NULL AND (NOW() - deleted_at::timestamptz) >= INTERVAL '30 days'",
+                    (self.user_id,),
+                )
+                return int((r1.rowcount or 0) + (r2.rowcount or 0))
+            except Exception:
+                return int(r1.rowcount or 0)
         # Hard delete those with retention_until past
         r1 = self.backend.execute(
             "DELETE FROM outputs WHERE user_id = ? AND retention_until IS NOT NULL AND retention_until <= ?",

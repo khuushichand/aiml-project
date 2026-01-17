@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard, usePermissions } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,7 +20,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form';
 import { Eye, Key, Search, Plus, Trash2, UserCheck, UserX, BookmarkPlus, BookmarkX } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { getCurrentUser } from '@/lib/auth';
 import { User } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportUsers, ExportFormat } from '@/lib/export';
@@ -54,7 +53,7 @@ function UsersPageContent() {
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
-  const currentUser = getCurrentUser();
+  const { user: currentUser } = usePermissions();
   const currentUserId = currentUser?.id;
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -121,14 +120,6 @@ function UsersPageContent() {
     }
   }, []);
 
-  const normalizeUsers = useCallback((data: unknown): User[] => {
-    if (Array.isArray(data)) return data;
-    if (data && typeof data === 'object' && Array.isArray((data as { users?: User[] }).users)) {
-      return (data as { users: User[] }).users;
-    }
-    return [];
-  }, []);
-
   const loadUsers = useCallback(async () => {
     try {
       setLoading(true);
@@ -137,7 +128,7 @@ function UsersPageContent() {
       if (selectedOrg) params.org_id = String(selectedOrg.id);
       if (searchQuery) params.search = searchQuery;
       const data = await api.getUsers(params);
-      setUsers(normalizeUsers(data));
+      setUsers(data);
     } catch (error: unknown) {
       console.error('Failed to load users:', error);
       setError(error instanceof Error && error.message ? error.message : 'Failed to load users');
@@ -145,7 +136,7 @@ function UsersPageContent() {
     } finally {
       setLoading(false);
     }
-  }, [normalizeUsers, searchQuery, selectedOrg]);
+  }, [searchQuery, selectedOrg]);
 
   useEffect(() => {
     loadUsers();
@@ -157,13 +148,13 @@ function UsersPageContent() {
       const available = new Set(users.map((user) => user.id));
       const next = new Set<number>();
       prev.forEach((id) => {
-        if (available.has(id)) {
+        if (available.has(id) && id !== currentUserId) {
           next.add(id);
         }
       });
       return next;
     });
-  }, [users]);
+  }, [currentUserId, users]);
 
   const filteredUsers = users.filter((user) => {
     if (!searchQuery) return true;
@@ -460,7 +451,7 @@ function UsersPageContent() {
   };
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -842,7 +833,7 @@ function UsersPageContent() {
             </Card>
           </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }
 
@@ -850,7 +841,7 @@ function UsersPageContent() {
 export default function UsersPage() {
   return (
     <Suspense fallback={
-      <ProtectedRoute>
+      <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8">
@@ -860,7 +851,7 @@ export default function UsersPage() {
             <TableSkeleton rows={5} columns={9} />
           </div>
         </ResponsiveLayout>
-      </ProtectedRoute>
+      </PermissionGuard>
     }>
       <UsersPageContent />
     </Suspense>

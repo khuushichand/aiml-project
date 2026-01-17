@@ -46,6 +46,7 @@ class TestEvaluationWorkflow:
         class PerfTracker:
             def measure(self, name):
                 from contextlib import contextmanager
+
                 @contextmanager
                 def _measure():
                     import time
@@ -60,6 +61,7 @@ class TestEvaluationWorkflow:
     # ===================== OpenAI-Compatible Evaluation Tests =====================
 
     def test_create_openai_evaluation(self):
+
         """Test creating an OpenAI-compatible evaluation."""
         with self.perf.measure("create_openai_evaluation"):
             # Create evaluation with inline dataset
@@ -116,6 +118,8 @@ class TestEvaluationWorkflow:
 
 
     def test_list_openai_evaluations(self):
+
+
         """Test listing OpenAI-compatible evaluations."""
         with self.perf.measure("list_openai_evaluations"):
             response = self.client.client.get("/api/v1/evaluations?limit=10")
@@ -140,6 +144,8 @@ class TestEvaluationWorkflow:
 
 
     def test_get_openai_evaluation(self):
+
+
         """Test retrieving a specific OpenAI-compatible evaluation."""
         if TestEvaluationWorkflow.eval_id is None:
             pytest.skip("No evaluation ID available")
@@ -159,6 +165,8 @@ class TestEvaluationWorkflow:
 
 
     def test_update_openai_evaluation(self):
+
+
         """Test updating an OpenAI-compatible evaluation."""
         if TestEvaluationWorkflow.eval_id is None:
             pytest.skip("No evaluation ID available")
@@ -191,6 +199,8 @@ class TestEvaluationWorkflow:
 
 
     def test_run_openai_evaluation(self):
+
+
         """Test running an OpenAI-compatible evaluation."""
         if TestEvaluationWorkflow.eval_id is None:
             pytest.skip("No evaluation ID available")
@@ -227,6 +237,8 @@ class TestEvaluationWorkflow:
 
 
     def test_list_evaluation_runs(self):
+
+
         """Test listing runs for an evaluation."""
         if TestEvaluationWorkflow.eval_id is None:
             pytest.skip("No evaluation ID available")
@@ -252,6 +264,8 @@ class TestEvaluationWorkflow:
 
 
     def test_geval_summarization(self):
+
+
         """Test G-Eval summarization evaluation."""
         with self.perf.measure("geval_summarization"):
             eval_data = {
@@ -293,6 +307,8 @@ class TestEvaluationWorkflow:
 
 
     def test_rag_evaluation(self):
+
+
         """Test RAG system evaluation."""
         with self.perf.measure("rag_evaluation"):
             rag_data = {
@@ -334,6 +350,8 @@ class TestEvaluationWorkflow:
 
 
     def test_response_quality_evaluation(self):
+
+
         """Test response quality evaluation."""
         with self.perf.measure("response_quality_evaluation"):
             quality_data = {
@@ -376,6 +394,8 @@ class TestEvaluationWorkflow:
 
 
     def test_batch_evaluation(self):
+
+
         """Test batch evaluation processing."""
         with self.perf.measure("batch_evaluation"):
             batch_data = {
@@ -419,6 +439,8 @@ class TestEvaluationWorkflow:
 
 
     def test_evaluation_comparison(self):
+
+
         """Test comparing multiple evaluations."""
         with self.perf.measure("evaluation_comparison"):
             comparison_data = {
@@ -470,6 +492,8 @@ class TestEvaluationWorkflow:
 
 
     def test_custom_metric_evaluation(self):
+
+
         """Test custom metric evaluation."""
         with self.perf.measure("custom_metric_evaluation"):
             custom_data = {
@@ -510,6 +534,8 @@ class TestEvaluationWorkflow:
 
 
     def test_evaluation_history(self):
+
+
         """Test retrieving evaluation history."""
         with self.perf.measure("evaluation_history"):
             history_params = {
@@ -540,6 +566,8 @@ class TestEvaluationWorkflow:
 
 
     def test_cleanup_evaluations(self):
+
+
         """Clean up created evaluations."""
         with self.perf.measure("cleanup_evaluations"):
             cleaned = 0
@@ -578,6 +606,7 @@ class TestEvaluationEdgeCases:
         class PerfTracker:
             def measure(self, name):
                 from contextlib import contextmanager
+
                 @contextmanager
                 def _measure():
                     import time
@@ -591,6 +620,8 @@ class TestEvaluationEdgeCases:
 
 
     def test_invalid_evaluation_type(self):
+
+
         """Test creating evaluation with invalid type."""
         with self.perf.measure("invalid_evaluation_type"):
             eval_data = {
@@ -604,6 +635,8 @@ class TestEvaluationEdgeCases:
 
             response = self.client.client.post("/api/v1/evaluations", json=eval_data)
             # Should get 401 in single-user mode if auth fails, or 422/400 for validation
+            if response.status_code == 429:
+                pytest.skip("Rate limited while verifying invalid evaluation type handling")
             assert response.status_code in [401, 422, 400]
 
             if response.status_code == 401:
@@ -613,6 +646,8 @@ class TestEvaluationEdgeCases:
 
 
     def test_missing_dataset(self):
+
+
         """Test creating evaluation without dataset."""
         with self.perf.measure("missing_dataset"):
             eval_data = {
@@ -626,6 +661,8 @@ class TestEvaluationEdgeCases:
 
             response = self.client.client.post("/api/v1/evaluations", json=eval_data)
             # Should get 401 in single-user mode if auth fails, or 422/400 for validation
+            if response.status_code == 429:
+                pytest.skip("Rate limited while verifying missing dataset handling")
             assert response.status_code in [401, 422, 400]
 
             if response.status_code == 401:
@@ -635,6 +672,8 @@ class TestEvaluationEdgeCases:
 
 
     def test_evaluation_timeout_handling(self):
+
+
         """Test evaluation timeout handling."""
         with self.perf.measure("evaluation_timeout"):
             eval_data = {

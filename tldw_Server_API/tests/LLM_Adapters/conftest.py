@@ -27,7 +27,9 @@ except Exception:
     m = types.ModuleType("tldw_Server_API.app.main")
     # Provide a minimal 'app' attribute that parent conftests import but do not use
     class _StubApp:  # pragma: no cover - simple container
-        pass
+        def __init__(self):
+            self.dependency_overrides = {}
+            self.state = types.SimpleNamespace()
 
     m.app = _StubApp()
     sys.modules["tldw_Server_API.app.main"] = m

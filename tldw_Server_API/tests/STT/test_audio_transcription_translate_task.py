@@ -34,7 +34,7 @@ async def test_transcription_verbose_json_includes_task_and_duration(bypass_api_
 
     path = _create_test_tone()
     try:
-        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+        ctx = bypass_api_limits(app)
         transport = httpx.ASGITransport(app=app)
         with ctx:
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -80,7 +80,7 @@ async def test_translation_endpoint_uses_translate_task_and_allows_auto_language
 
     path = _create_test_tone()
     try:
-        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+        ctx = bypass_api_limits(app)
         transport = httpx.ASGITransport(app=app)
         with ctx:
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

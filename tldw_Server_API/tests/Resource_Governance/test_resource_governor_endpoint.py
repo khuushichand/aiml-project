@@ -52,6 +52,8 @@ async def _create_admin_user_and_key(*, username: str, email: str) -> str:
 
 
 def _reset_rg_state(app) -> None:
+
+
     for attr in ("rg_governor", "rg_policy_loader", "rg_policy_store", "rg_policy_version", "rg_policy_count"):
         try:
             if hasattr(app.state, attr):

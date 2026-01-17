@@ -151,6 +151,8 @@ See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.m
 
 ## Quickstart
 
+Prefer a guided setup? Use the wizard: [`Docs/Development/Wizard.md`](./Docs/Development/Wizard.md)
+
 ### Run the API
 
 Prerequisites
@@ -409,7 +411,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers ([docs](Docs/API-related/OCR_API_Documentation.md))
 - VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers ([docs](Docs/Code_Documentation/VLM_Backends.md))
 - Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers ([docs](Docs/Product/External_Connectors_PRD.md))
-- Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3) ([docs](Docs/Product/Content_Collections_PRD.md))
+- Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3) ([docs](Docs/Product/Completed/Content_Collections_PRD.md))
 - Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format) ([docs](Docs/Deployment/Monitoring/Metrics_Cheatsheet.md))
 - Providers: `GET /api/v1/llm/providers` - provider/models list ([docs](Docs/API-related/Providers_API_Documentation.md))
 - MCP: `GET /api/v1/mcp/status` - MCP server status ([docs](Docs/MCP/Unified/System_Admin_Guide.md))
@@ -480,17 +482,22 @@ Examples
 │   │   │   └── API_Deps/         # Shared dependencies (auth, DB, rate limits)
 │   │   ├── core/                 # Core logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
 │   │   ├── services/             # Background services
+│   │   ├── Setup_UI/             # Setup UI assets
+│   │   ├── static/               # Static assets
 │   │   └── main.py               # FastAPI entry point
+│   ├── cli/                      # CLI entry points
 │   ├── WebUI/                    # Legacy integrated WebUI served at /webui (deprecated)
 │   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
 │   ├── Databases/                # Default DBs (runtime data; some are gitignored)
 │   ├── tests/                    # Pytest suite
 │   └── requirements.txt          # Legacy pin set (prefer pyproject extras)
+├── admin-ui/                     # Admin dashboard
 ├── tldw-frontend/                # Next.js WebUI (current client)
 ├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
 ├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
 ├── mock_openai_server/           # Mock OpenAI-compatible API server for tests/dev
 ├── Dockerfiles/                  # Docker images and compose files
+│   └── Monitoring/               # Monitoring stack assets
 ├── Databases/                    # DBs (AuthNZ defaults here; content DBs per-user under user_databases/)
 ├── models/                       # Optional model assets (if used)
 ├── pyproject.toml                # Project configuration

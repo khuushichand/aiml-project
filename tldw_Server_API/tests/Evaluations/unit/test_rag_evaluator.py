@@ -24,6 +24,7 @@ class TestRAGEvaluatorInit:
     """Test RAGEvaluator initialization."""
 
     def test_init_without_embeddings(self):
+
         """Test initialization without embedding support."""
         evaluator = RAGEvaluator(
             embedding_provider=None,
@@ -35,6 +36,7 @@ class TestRAGEvaluatorInit:
         assert evaluator.embedding_available is False
 
     def test_init_with_embeddings(self):
+
         """Test initialization with embedding configuration."""
         evaluator = RAGEvaluator(
             embedding_provider="openai",
@@ -355,6 +357,7 @@ class TestMetricCalculations:
     """Test metric calculation and normalization."""
 
     def test_normalize_score(self):
+
         """Test score normalization from 1-5 to 0-1."""
         evaluator = RAGEvaluator()
 
@@ -368,6 +371,7 @@ class TestMetricCalculations:
         assert evaluator._normalize_score(6) == 1.0
 
     def test_calculate_overall_score(self):
+
         """Test overall score calculation."""
         evaluator = RAGEvaluator()
 

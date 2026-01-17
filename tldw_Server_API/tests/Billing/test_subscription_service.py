@@ -3,9 +3,9 @@ Unit tests for SubscriptionService.
 
 These tests focus on subscription creation semantics, specifically:
 - Unknown plan names should raise a ValueError rather than silently
-  downgrading to the free tier.
+    downgrading to the free tier.
 - Valid plan names should delegate to the billing repo with the expected
-  arguments and status values.
+    arguments and status values.
 """
 from __future__ import annotations
 
@@ -146,6 +146,7 @@ class _FakeStripeClient:
     """Minimal Stripe client stub for checkout tests."""
 
     def __init__(self) -> None:
+
         self.is_available = True
 
     async def create_customer(self, *, email: str, name: Optional[str] = None, metadata: Optional[Dict[str, str]] = None) -> str:
@@ -167,6 +168,25 @@ class _FakeStripeClient:
         from tldw_Server_API.app.core.Billing.stripe_client import CheckoutSession
 
         return CheckoutSession(id="sess_test_123", url="https://example.com/checkout")
+
+
+@pytest.mark.asyncio
+async def test_get_plan_for_checkout_requires_active_plan() -> None:
+    """get_plan_for_checkout should return None for inactive plans."""
+
+    class _PlanRepo:
+        async def get_plan_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+            if name == "inactive":
+                return {"id": 99, "name": name, "is_active": False}
+            if name == "active":
+                return {"id": 100, "name": name, "is_active": True}
+            return None
+
+    service = SubscriptionService(billing_repo=_PlanRepo())
+
+    assert await service.get_plan_for_checkout("active") is not None
+    assert await service.get_plan_for_checkout("inactive") is None
+    assert await service.get_plan_for_checkout("missing") is None
 
 
 @pytest.mark.asyncio

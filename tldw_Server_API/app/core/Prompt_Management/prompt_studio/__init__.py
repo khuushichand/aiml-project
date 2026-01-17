@@ -16,7 +16,7 @@ This module provides comprehensive prompt engineering capabilities including:
 from .test_case_manager import TestCaseManager
 from .test_case_io import TestCaseIO
 from .test_case_generator import TestCaseGenerator
-from .job_manager import JobManager, JobType, JobStatus
+from .job_types import JobType, JobStatus
 from .job_processor import JobProcessor
 
 # Prompt generation and improvement
@@ -47,7 +47,6 @@ __all__ = [
     'TestCaseManager',
     'TestCaseIO',
     'TestCaseGenerator',
-    'JobManager',
     'JobType',
     'JobStatus',
     'JobProcessor',

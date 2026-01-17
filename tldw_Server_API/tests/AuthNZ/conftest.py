@@ -241,7 +241,10 @@ async def reset_singletons(request):
                 return None
 
             def _override_usage_logger(request=None, user=None, db=None):
-                return UsageEventLogger(user_id=str(getattr(user, "id", "test")), db=_StubPersonalizationDB())
+                return UsageEventLogger(
+                    user_id=str(getattr(user, "id", "test")),
+                    db=_StubPersonalizationDB(),
+                )
 
             if not request.node.get_closest_marker("real_audit"):
                 _app.dependency_overrides[get_audit_service_for_user] = _override_audit_dep
@@ -515,7 +518,8 @@ async def isolated_test_environment(monkeypatch):
             CREATE TABLE IF NOT EXISTS api_keys (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                key_hash VARCHAR(64) UNIQUE NOT NULL,
+                key_hash TEXT UNIQUE NOT NULL,
+                key_id VARCHAR(32),
                 key_prefix VARCHAR(16) NOT NULL,
                 name VARCHAR(255),
                 description TEXT,
@@ -549,6 +553,7 @@ async def isolated_test_environment(monkeypatch):
         """)
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+        await test_conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
 
@@ -995,6 +1000,7 @@ async def isolated_test_environment(monkeypatch):
                 max_uses INTEGER DEFAULT 1,
                 uses_count INTEGER DEFAULT 0,
                 is_active BOOLEAN DEFAULT TRUE,
+                allowed_email_domain TEXT,
                 description TEXT,
                 metadata JSONB
             )
@@ -1252,7 +1258,8 @@ async def setup_test_database(monkeypatch):
             CREATE TABLE IF NOT EXISTS api_keys (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                key_hash VARCHAR(64) UNIQUE NOT NULL,
+                key_hash TEXT UNIQUE NOT NULL,
+                key_id VARCHAR(32),
                 key_prefix VARCHAR(16) NOT NULL,
                 name VARCHAR(255),
                 description TEXT,
@@ -1286,6 +1293,7 @@ async def setup_test_database(monkeypatch):
         """)
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+        await test_conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
 
@@ -1548,8 +1556,6 @@ async def rate_limiter():
     """Create a rate limiter instance for testing."""
     limiter = RateLimiter()
     yield limiter
-    # Cleanup
-    await limiter.cleanup()
 
 
 @pytest_asyncio.fixture

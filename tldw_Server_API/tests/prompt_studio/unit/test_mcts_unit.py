@@ -38,6 +38,8 @@ def _seed_prompt_and_tests(db: PromptStudioDatabase, n_tests: int = 2):
 
 
 def test_uct_selection_behavior():
+
+
     parent = MCTSOptimizer._Node.__new__(MCTSOptimizer._Node)  # bypass __init__ signature
     parent.parent = None
     parent.segment_index = 0

@@ -36,9 +36,21 @@ T = TypeVar('T')
 # Global handles (created on demand)
 CPU_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
 
-# Thread pool for I/O-bound but CPU-heavy operations (safe to create at import time)
-CPU_THREAD_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cpu_worker")
-register_executor("cpu_thread_pool", CPU_THREAD_POOL)
+# Thread pool for I/O-bound but CPU-heavy operations (created lazily, can be recreated)
+CPU_THREAD_POOL: Optional[ThreadPoolExecutor] = None
+
+
+def _create_cpu_thread_pool() -> ThreadPoolExecutor:
+    pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cpu_worker")
+    register_executor("cpu_thread_pool", pool)
+    return pool
+
+
+def get_cpu_thread_pool() -> ThreadPoolExecutor:
+    global CPU_THREAD_POOL
+    if CPU_THREAD_POOL is None or getattr(CPU_THREAD_POOL, "_shutdown", False):
+        CPU_THREAD_POOL = _create_cpu_thread_pool()
+    return CPU_THREAD_POOL
 
 
 def _env_flag_true(name: str) -> bool:
@@ -100,7 +112,7 @@ async def run_cpu_bound(func: Callable[..., T], *args, **kwargs) -> T:
 
     # Prefer process pool unless disabled; fall back to thread pool in tests
     pool = get_cpu_process_pool()
-    executor = pool if pool is not None else CPU_THREAD_POOL
+    executor = pool if pool is not None else get_cpu_thread_pool()
 
     try:
         result = await loop.run_in_executor(executor, partial_func)
@@ -127,10 +139,10 @@ async def run_cpu_bound_thread(func: Callable[..., T], *args, **kwargs) -> T:
 
     try:
         result = await loop.run_in_executor(
-            CPU_THREAD_POOL,
+            get_cpu_thread_pool(),
             func,
             *args,
-            **kwargs
+            **kwargs,
         )
         return result
     except Exception as e:
@@ -371,12 +383,15 @@ async def batch_json_encode(data: Any) -> str:
 
 def cleanup_pools():
     """Cleanup process and thread pools."""
-    global CPU_PROCESS_POOL
+    global CPU_PROCESS_POOL, CPU_THREAD_POOL
     try:
         shutdown_executor_sync("cpu_process_pool", wait=True, cancel_futures=True)
     finally:
         CPU_PROCESS_POOL = None
-    shutdown_executor_sync("cpu_thread_pool", wait=True, cancel_futures=True)
+    try:
+        shutdown_executor_sync("cpu_thread_pool", wait=True, cancel_futures=True)
+    finally:
+        CPU_THREAD_POOL = None
 
 
 # Ensure pools are cleaned up on interpreter shutdown

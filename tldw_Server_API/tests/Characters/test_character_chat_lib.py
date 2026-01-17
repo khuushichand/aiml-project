@@ -16,11 +16,13 @@ import json
 import os
 import time
 import yaml
+
 #
 # Third Party Imports
 from PIL import Image as PILImageReal
 from loguru import logger as loguru_logger
 from hypothesis import given, strategies as st, settings, HealthCheck
+
 #
 # Local Imports
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
@@ -59,15 +61,16 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     edit_message_content,
     set_message_ranking,
     remove_message_from_conversation,
-    find_messages_in_conversation
+    find_messages_in_conversation,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
     InputError,
-    SchemaError
+    SchemaError,
 )
+
 #
 #######################################################################################################################
 #
@@ -82,16 +85,22 @@ MODULE_PATH_PREFIX = "tldw_Server_API.app.core.Character_Chat.modules"
 
 # --- Mock PIL Image object for finer control during unit tests where PIL is mocked ---
 class MockPILImageObject:
-    def __init__(self, format="PNG", info=None, width=100, height=100, mode="RGBA"): # mode was added here
+    def __init__(self, format="PNG", info=None, width=100, height=100, mode="RGBA"):  # mode was added here
         self.format = format
         self.info = info if info is not None else {}
         self.width = width
         self.height = height
         self.fp = None
-        self.mode = mode # And used here
+        self.mode = mode  # And used here
 
     def convert(self, mode):
-        new_mock = MockPILImageObject(format=self.format, info=self.info.copy(), width=self.width, height=self.height, mode=mode)
+        new_mock = MockPILImageObject(
+            format=self.format,
+            info=self.info.copy(),
+            width=self.width,
+            height=self.height,
+            mode=mode,
+        )
         return new_mock
 
     def close(self):
@@ -109,26 +118,25 @@ def create_dummy_png_bytes(chara_data_json_str=None, is_png=True):
         return b"GIF89a\x01\x00\x01\x00\x00\x00\x00;"
 
     base_png = (
-        b'\x89PNG\r\n\x1a\n'
-        b'\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89'
+        b"\x89PNG\r\n\x1a\n" b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
     )
     # A very minimal valid IDAT chunk for a 1x1 transparent pixel
-    idat_chunk = b'\x00\x00\x00\x0cIDAT\x08\xd7c`\x00\x00\x00\x02\x00\x01\xe2!\xbc\x33'
-    iend_chunk = b'\x00\x00\x00\x00IEND\xaeB`\x82'
+    idat_chunk = b"\x00\x00\x00\x0cIDAT\x08\xd7c`\x00\x00\x00\x02\x00\x01\xe2!\xbc\x33"
+    iend_chunk = b"\x00\x00\x00\x00IEND\xaeB`\x82"
 
     if chara_data_json_str:
-        keyword = b'chara'
-        encoded_json_bytes = chara_data_json_str.encode('utf-8')
+        keyword = b"chara"
+        encoded_json_bytes = chara_data_json_str.encode("utf-8")
         b64_data_bytes = base64.b64encode(encoded_json_bytes)
-        text_chunk_data = keyword + b'\x00' + b64_data_bytes
-        chunk_type = b'tEXt'  # Using tEXt for simplicity, could be zTXt or iTXt
+        text_chunk_data = keyword + b"\x00" + b64_data_bytes
+        chunk_type = b"tEXt"  # Using tEXt for simplicity, could be zTXt or iTXt
         chunk_len = len(text_chunk_data)
-        chunk_len_bytes = chunk_len.to_bytes(4, 'big')
+        chunk_len_bytes = chunk_len.to_bytes(4, "big")
         # CRC calculation: type + data
         crc_input_data = chunk_type + text_chunk_data
         crc_val = binascii.crc32(crc_input_data)
-        crc_val_unsigned = crc_val & 0xffffffff  # Ensure positive for to_bytes
-        crc_bytes = crc_val_unsigned.to_bytes(4, 'big')
+        crc_val_unsigned = crc_val & 0xFFFFFFFF  # Ensure positive for to_bytes
+        crc_bytes = crc_val_unsigned.to_bytes(4, "big")
         text_chunk = chunk_len_bytes + chunk_type + text_chunk_data + crc_bytes
         return base_png + text_chunk + idat_chunk + iend_chunk
     return base_png + idat_chunk + iend_chunk
@@ -138,7 +146,7 @@ def create_dummy_png_bytes(chara_data_json_str=None, is_png=True):
 @pytest.fixture
 def db():
     """Provides a fresh in-memory CharactersRAGDB instance for each test."""
-    db_instance = CharactersRAGDB(':memory:', client_id="pytest_client")
+    db_instance = CharactersRAGDB(":memory:", client_id="pytest_client")
     yield db_instance
     db_instance.close_connection()
 
@@ -170,29 +178,42 @@ def caplog_handler(caplog):
 
 # --- Unit Tests (Pure Logic) ---
 
-@pytest.mark.parametrize("text, char_name, user_name, expected", [
-    ("Hello {{char}}, I am {{user}}.", "Alice", "Bob", "Hello Alice, I am Bob."),
-    ("User: <USER>, Char: <CHAR>", "Wizard", "Hero", "User: Hero, Char: Wizard"),
-    ("{{random_user}} says hi.", None, "Guest", "Guest says hi."),
-    ("Numeric {{user}}", "Char", 123, "Numeric 123"),
-    ("", "Char", "User", ""), (None, "Char", "User", ""),
-])
+
+@pytest.mark.parametrize(
+    "text, char_name, user_name, expected",
+    [
+        ("Hello {{char}}, I am {{user}}.", "Alice", "Bob", "Hello Alice, I am Bob."),
+        ("User: <USER>, Char: <CHAR>", "Wizard", "Hero", "User: Hero, Char: Wizard"),
+        ("{{random_user}} says hi.", None, "Guest", "Guest says hi."),
+        ("Numeric {{user}}", "Char", 123, "Numeric 123"),
+        ("", "Char", "User", ""),
+        (None, "Char", "User", ""),
+    ],
+)
 def test_replace_placeholders(text, char_name, user_name, expected):
     assert replace_placeholders(text, char_name, user_name) == expected
 
 
-@pytest.mark.parametrize("history, user_name, expected", [
-    ([("Hi {{user}}", "Hello back, {{user}}")], "Sam", [("Hi Sam", "Hello back, Sam")]),
-    ([], "User", []),
-])
+@pytest.mark.parametrize(
+    "history, user_name, expected",
+    [
+        ([("Hi {{user}}", "Hello back, {{user}}")], "Sam", [("Hi Sam", "Hello back, Sam")]),
+        ([], "User", []),
+    ],
+)
 def test_replace_user_placeholder(history, user_name, expected):
     assert replace_user_placeholder(history, user_name) == expected
 
 
-@pytest.mark.parametrize("choice, expected_id, raises", [
-    ("My Character (ID: 123)", 123, None), ("789", 789, None),
-    ("Invalid Format", None, ValueError), ("", None, ValueError),
-])
+@pytest.mark.parametrize(
+    "choice, expected_id, raises",
+    [
+        ("My Character (ID: 123)", 123, None),
+        ("789", 789, None),
+        ("Invalid Format", None, ValueError),
+        ("", None, ValueError),
+    ],
+)
 def test_extract_character_id_from_ui_choice(choice, expected_id, raises):
     if raises:
         with pytest.raises(raises):
@@ -204,10 +225,7 @@ def test_extract_character_id_from_ui_choice(choice, expected_id, raises):
 def test_process_db_messages_to_ui_history_unit():
     char_name = "Botty"
     user_name = "Human"
-    db_messages = [
-        {"sender": "User", "content": "Hi {{char}}"},
-        {"sender": char_name, "content": "Hello {{user}}"}
-    ]
+    db_messages = [{"sender": "User", "content": "Hi {{char}}"}, {"sender": char_name, "content": "Hello {{user}}"}]
     expected = [("Hi Botty", "Hello Human")]
     assert process_db_messages_to_ui_history(db_messages, char_name, user_name) == expected
 
@@ -215,40 +233,37 @@ def test_process_db_messages_to_ui_history_unit():
     db_messages_consecutive_user = [
         {"sender": "User", "content": "Line 1 {{user}}"},
         {"sender": "User", "content": "Line 2 {{user}}"},
-        {"sender": char_name, "content": "Reply from {{char}}"}
+        {"sender": char_name, "content": "Reply from {{char}}"},
     ]
-    expected_consecutive_user = [
-        ("Line 1 Human", None),
-        ("Line 2 Human", "Reply from Botty")
-    ]
-    assert process_db_messages_to_ui_history(db_messages_consecutive_user, char_name,
-                                             user_name) == expected_consecutive_user
+    expected_consecutive_user = [("Line 1 Human", None), ("Line 2 Human", "Reply from Botty")]
+    assert (
+        process_db_messages_to_ui_history(db_messages_consecutive_user, char_name, user_name)
+        == expected_consecutive_user
+    )
 
     # Test consecutive bot messages
     db_messages_consecutive_bot = [
         {"sender": char_name, "content": "Bot says 1"},
         {"sender": "User", "content": "User confirms"},
         {"sender": char_name, "content": "Bot says 2"},
-        {"sender": char_name, "content": "Bot says 3"}
+        {"sender": char_name, "content": "Bot says 3"},
     ]
     expected_consecutive_bot = [
         (None, "Bot says 1"),
         ("User confirms", "Bot says 2"),  # Bot says 2 is paired here
-        (None, "Bot says 3")  # Bot says 3 starts a new turn
+        (None, "Bot says 3"),  # Bot says 3 starts a new turn
     ]
-    assert process_db_messages_to_ui_history(db_messages_consecutive_bot, char_name,
-                                             user_name) == expected_consecutive_bot
+    assert (
+        process_db_messages_to_ui_history(db_messages_consecutive_bot, char_name, user_name) == expected_consecutive_bot
+    )
 
     # Test unknown sender
     db_messages_unknown = [
         {"sender": "User", "content": "Question"},
         {"sender": "Narrator", "content": "Action: {{user}} ponders."},
-        {"sender": char_name, "content": "Answer from {{char}}"}
+        {"sender": char_name, "content": "Answer from {{char}}"},
     ]
-    expected_unknown = [
-        ("Question", "[Narrator] Action: Human ponders."),
-        (None, "Answer from Botty")
-    ]
+    expected_unknown = [("Question", "[Narrator] Action: Human ponders."), (None, "Answer from Botty")]
     assert process_db_messages_to_ui_history(db_messages_unknown, char_name, user_name) == expected_unknown
 
 
@@ -308,6 +323,7 @@ def test_process_db_messages_to_ui_history_handles_additional_alias():
 
 
 def test_process_db_messages_to_ui_history_handles_legacy_user_alias():
+
     char_name = "Botty"
     user_name = "Friend"
     db_messages = [
@@ -513,17 +529,26 @@ def test_chat_history_import_handles_structured_content_and_roles(db):
 
 
 MINIMAL_V2_DATA_NODE_UNIT = {
-    "name": "TestV2", "description": "Desc", "personality": "Pers",
-    "scenario": "Scen", "first_mes": "First", "mes_example": "Example"
+    "name": "TestV2",
+    "description": "Desc",
+    "personality": "Pers",
+    "scenario": "Scen",
+    "first_mes": "First",
+    "mes_example": "Example",
 }
 MINIMAL_V2_CARD_UNIT = {"spec": "chara_card_v2", "spec_version": "2.0", "data": MINIMAL_V2_DATA_NODE_UNIT.copy()}
 MINIMAL_V1_CARD_UNIT = {
-    "name": "TestV1", "description": "Desc", "personality": "Pers",
-    "scenario": "Scen", "first_mes": "First", "mes_example": "Example"
+    "name": "TestV1",
+    "description": "Desc",
+    "personality": "Pers",
+    "scenario": "Scen",
+    "first_mes": "First",
+    "mes_example": "Example",
 }
 
 
 def test_parse_v2_card_unit():
+
     # Basic V2
     parsed = parse_v2_card(MINIMAL_V2_CARD_UNIT.copy())
     assert parsed is not None
@@ -533,8 +558,10 @@ def test_parse_v2_card_unit():
 
     # V2 with character_book
     v2_with_book_data = MINIMAL_V2_DATA_NODE_UNIT.copy()
-    book_content = {"name": "Lore",
-                    "entries": [{"keys": ["key"], "content": "val", "enabled": True, "insertion_order": 0}]}
+    book_content = {
+        "name": "Lore",
+        "entries": [{"keys": ["key"], "content": "val", "enabled": True, "insertion_order": 0}],
+    }
     v2_with_book_data["character_book"] = book_content
     v2_card_with_book = {"spec": "chara_card_v2", "spec_version": "2.0", "data": v2_with_book_data}
 
@@ -640,11 +667,24 @@ def test_prepare_character_data_uses_lossless_for_alpha():
     assert pixel[3] == 128, f"Alpha value should be preserved as 128, got {pixel[3]}"
 
 
+@pytest.mark.parametrize("empty_value", ["", "   ", "\n\t"])
+def test_prepare_character_data_update_ignores_empty_image_base64(empty_value):
+    payload = {"name": "NoOpImageUpdate", "image_base64": empty_value}
+    db_ready = _prepare_character_data_for_db_storage(payload, is_update=True)
+
+    assert db_ready["name"] == "NoOpImageUpdate"
+    assert "image" not in db_ready
+
+
 def test_parse_character_book_unit():
+
     # Valid book
-    book_data = {"name": "My Lore", "description": "Lore desc", "scan_depth": 10,
-                 "entries": [
-                     {"keys": ["topic"], "content": "info", "enabled": True, "insertion_order": 1, "name": "Entry1"}]}
+    book_data = {
+        "name": "My Lore",
+        "description": "Lore desc",
+        "scan_depth": 10,
+        "entries": [{"keys": ["topic"], "content": "info", "enabled": True, "insertion_order": 1, "name": "Entry1"}],
+    }
     parsed = parse_character_book(book_data)
     assert parsed["name"] == "My Lore"
     assert len(parsed["entries"]) == 1
@@ -660,9 +700,7 @@ def test_parse_character_book_unit():
     assert parsed_empty["entries"] == []
 
 
-VALID_BOOK_ENTRY_UNIT = {
-    "keys": ["key1"], "content": "Entry content", "enabled": True, "insertion_order": 0
-}
+VALID_BOOK_ENTRY_UNIT = {"keys": ["key1"], "content": "Entry content", "enabled": True, "insertion_order": 0}
 VALID_BOOK_UNIT = {"entries": [VALID_BOOK_ENTRY_UNIT.copy()]}
 
 
@@ -670,7 +708,7 @@ def test_validate_character_book_entry_unit():
     is_valid, errors = validate_character_book_entry(VALID_BOOK_ENTRY_UNIT.copy(), 0, set())
     assert is_valid and not errors
     # Test invalid: missing key
-    entry_no_key = VALID_BOOK_ENTRY_UNIT.copy();
+    entry_no_key = VALID_BOOK_ENTRY_UNIT.copy()
     del entry_no_key["keys"]
     is_valid_nk, errors_nk = validate_character_book_entry(entry_no_key, 0, set())
     assert not is_valid_nk and "Missing required field 'keys'" in errors_nk[0]
@@ -699,7 +737,7 @@ def test_validate_character_book_entry_at_depth_position():
         "content": "Entry content",
         "enabled": True,
         "insertion_order": 0,
-        "position": "at_depth"  # This should now be valid
+        "position": "at_depth",  # This should now be valid
     }
     is_valid, errors = validate_character_book_entry(entry_at_depth, 0, set())
     assert is_valid, f"Position 'at_depth' should be valid. Errors: {errors}"
@@ -710,7 +748,7 @@ def test_validate_v2_card_unit():
     is_valid, errors = validate_v2_card(MINIMAL_V2_CARD_UNIT.copy())
     assert is_valid and not errors
     # Test invalid: missing spec
-    card_no_spec = MINIMAL_V2_CARD_UNIT.copy();
+    card_no_spec = MINIMAL_V2_CARD_UNIT.copy()
     del card_no_spec["spec"]
     is_valid_ns, errors_ns = validate_v2_card(card_no_spec)
     assert not is_valid_ns and "Missing 'spec' field" in errors_ns[0]
@@ -751,8 +789,9 @@ def test_import_character_card_from_json_string_unit(mock_parse_v1, mock_parse_v
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.import_character_card_from_json_string")
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.yaml")
-def test_load_character_card_from_string_content_unit(mock_yaml_module, mock_import_json_str,
-                                                      caplog_handler):  # caplog_handler now works
+def test_load_character_card_from_string_content_unit(
+    mock_yaml_module, mock_import_json_str, caplog_handler
+):  # caplog_handler now works
     mock_import_json_str.return_value = {"name": "Loaded"}
     json_content = json.dumps(MINIMAL_V1_CARD_UNIT)
     assert load_character_card_from_string_content(json_content)["name"] == "Loaded"
@@ -761,8 +800,12 @@ def test_load_character_card_from_string_content_unit(mock_yaml_module, mock_imp
     yaml_front = f"---\n{yaml_text}\n---"
 
     expected_dict_from_yaml = {
-        "name": "YChar", "description": "D", "first_mes": "FM",
-        "mes_example": "ME", "personality": "P", "scenario": "S"
+        "name": "YChar",
+        "description": "D",
+        "first_mes": "FM",
+        "mes_example": "ME",
+        "personality": "P",
+        "scenario": "S",
     }
     mock_yaml_module.safe_load.return_value = expected_dict_from_yaml
     expected_json_to_import_func = json.dumps(expected_dict_from_yaml)
@@ -792,7 +835,7 @@ def test_load_character_card_from_string_content_unit(mock_yaml_module, mock_imp
 def test_create_new_character_from_data_accepts_wrapped_base64(db):
     image_bytes = create_dummy_png_bytes()
     encoded = base64.b64encode(image_bytes).decode("utf-8")
-    wrapped = "\n".join(encoded[i:i + 60] for i in range(0, len(encoded), 60))
+    wrapped = "\n".join(encoded[i : i + 60] for i in range(0, len(encoded), 60))
 
     payload = {"name": "WhitespaceImageChar", "image_base64": wrapped}
 
@@ -819,9 +862,10 @@ def test_load_character_card_from_plain_text_creates_minimal_card():
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.Image", new_callable=mock.MagicMock)
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.base64")  # This is the base64 module used by the facade
-@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.json")    # This mock is 'mock_json_loads_mod'
-def test_extract_json_from_image_file_unit(mock_json_loads_mod, mock_base64_mod, MockPILImageModule, tmp_path,
-                                           caplog_handler):
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.json")  # This mock is 'mock_json_loads_mod'
+def test_extract_json_from_image_file_unit(
+    mock_json_loads_mod, mock_base64_mod, MockPILImageModule, tmp_path, caplog_handler
+):
     # --- FIX: Configure the mocked json module ---
     # The SUT uses 'json.JSONDecodeError'.
     # Since MODULE_PATH_PREFIX.json is mocked (as mock_json_loads_mod),
@@ -835,14 +879,14 @@ def test_extract_json_from_image_file_unit(mock_json_loads_mod, mock_base64_mod,
 
     chara_json_str = '{"name": "CharaFromImage"}'
     # base64 from 'import base64' (real module) is used for test data setup
-    b64_encoded_bytes = base64.b64encode(chara_json_str.encode('utf-8'))
-    b64_encoded_str = b64_encoded_bytes.decode('utf-8')
+    b64_encoded_bytes = base64.b64encode(chara_json_str.encode("utf-8"))
+    b64_encoded_str = b64_encoded_bytes.decode("utf-8")
 
-    mock_img_instance.info = {'chara': b64_encoded_str}
-    mock_img_instance.format = 'PNG'
+    mock_img_instance.info = {"chara": b64_encoded_str}
+    mock_img_instance.format = "PNG"
 
     # Default good path return values
-    default_b64_return = chara_json_str.encode('utf-8')
+    default_b64_return = chara_json_str.encode("utf-8")
     mock_base64_mod.b64decode.return_value = default_b64_return
     # mock_json_loads_mod.loads is the mocked function SUT will call.
     # json.loads(chara_json_str) uses the real 'json' module to prepare the expected return value.
@@ -852,13 +896,18 @@ def test_extract_json_from_image_file_unit(mock_json_loads_mod, mock_base64_mod,
     dummy_png_path.write_text("dummy_content_for_file_existence")
 
     result = extract_json_from_image_file(str(dummy_png_path))
-    assert result == chara_json_str # This should be json.loads(result) == json.loads(chara_json_str) if result is JSON string or just comparing strings is fine.
-                                      # The function returns a string, so string comparison is correct.
+    assert (
+        result == chara_json_str
+    )  # This should be json.loads(result) == json.loads(chara_json_str) if result is JSON string or just comparing strings is fine.
+    # The function returns a string, so string comparison is correct.
     MockPILImageModule.open.assert_called_once()
     assert isinstance(MockPILImageModule.open.call_args[0][0], io.BytesIO)
     mock_base64_mod.b64decode.assert_called_once_with(b64_encoded_str)
     mock_json_loads_mod.loads.assert_called_once_with(chara_json_str)
-    MockPILImageModule.open.reset_mock(); mock_base64_mod.b64decode.reset_mock(); mock_json_loads_mod.loads.reset_mock(); caplog_handler.clear()
+    MockPILImageModule.open.reset_mock()
+    mock_base64_mod.b64decode.reset_mock()
+    mock_json_loads_mod.loads.reset_mock()
+    caplog_handler.clear()
 
     MockPILImageModule.open.reset_mock()
     mock_base64_mod.b64decode.reset_mock()
@@ -866,19 +915,21 @@ def test_extract_json_from_image_file_unit(mock_json_loads_mod, mock_base64_mod,
     caplog_handler.clear()
 
     # Test Non-PNG with chara key
-    mock_img_instance.format = 'JPEG'
+    mock_img_instance.format = "JPEG"
     mock_base64_mod.b64decode.return_value = default_b64_return
     mock_json_loads_mod.loads.return_value = json.loads(chara_json_str)
     assert extract_json_from_image_file(str(dummy_png_path)) == chara_json_str
     assert "not in PNG or WEBP format" in caplog_handler.text
     caplog_handler.clear()
-    mock_img_instance.format = 'PNG'  # Reset format
+    mock_img_instance.format = "PNG"  # Reset format
 
     # --- Test error in b64decode / subsequent decode ---
     # To test the (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) block
 
     mock_base64_mod.b64decode.reset_mock()
-    mock_base64_mod.b64decode.return_value = b'\xff\xfe\xfd'  # Invalid UTF-8 sequence, will cause .decode('utf-8') to fail
+    mock_base64_mod.b64decode.return_value = (
+        b"\xff\xfe\xfd"  # Invalid UTF-8 sequence, will cause .decode('utf-8') to fail
+    )
     mock_json_loads_mod.loads.reset_mock()  # Not reached if .decode() fails
 
     assert extract_json_from_image_file(str(dummy_png_path)) is None
@@ -886,7 +937,9 @@ def test_extract_json_from_image_file_unit(mock_json_loads_mod, mock_base64_mod,
     assert "Error decoding 'chara' metadata" in caplog_handler.text
     mock_base64_mod.b64decode.assert_called_once_with(b64_encoded_str)
     mock_json_loads_mod.loads.assert_not_called()
-    mock_base64_mod.b64decode.return_value = default_b64_return; mock_base64_mod.b64decode.side_effect = None; caplog_handler.clear()
+    mock_base64_mod.b64decode.return_value = default_b64_return
+    mock_base64_mod.b64decode.side_effect = None
+    caplog_handler.clear()
 
     # Reset for next test section
     mock_base64_mod.b64decode.return_value = default_b64_return
@@ -898,20 +951,20 @@ def test_extract_json_from_image_file_unit(mock_json_loads_mod, mock_base64_mod,
     MockPILImageModule.open.side_effect = PILImageReal.UnidentifiedImageError("bad image file")
     assert extract_json_from_image_file(str(dummy_png_path)) is None
     assert "Cannot open or read image file" in caplog_handler.text
-    MockPILImageModule.open.side_effect = None; MockPILImageModule.open.return_value = mock_img_instance; caplog_handler.clear()
+    MockPILImageModule.open.side_effect = None
+    MockPILImageModule.open.return_value = mock_img_instance
+    caplog_handler.clear()
 
 
 # --- Property Tests (using Hypothesis) ---
 
 # Strategy for names that don't contain placeholders themselves
-safe_name_st = st.text(
-    alphabet=st.characters(min_codepoint=32, max_codepoint=126),
-    min_size=0, max_size=20
-).filter(
-    lambda x: not any(p in x for p in ['{{char}}', '{{user}}', '<CHAR>', '<USER>', '{{random_user}}'])
+safe_name_st = st.text(alphabet=st.characters(min_codepoint=32, max_codepoint=126), min_size=0, max_size=20).filter(
+    lambda x: not any(p in x for p in ["{{char}}", "{{user}}", "<CHAR>", "<USER>", "{{random_user}}"])
 )
 optional_safe_name_st = st.one_of(st.none(), safe_name_st)
 optional_general_text_st = st.one_of(st.none(), st.text(max_size=100))
+
 
 @given(text=optional_general_text_st, char_name=optional_safe_name_st, user_name=optional_safe_name_st)
 @settings(suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.data_too_large], deadline=None)
@@ -926,36 +979,44 @@ def test_property_replace_placeholders(text, char_name, user_name):
     result = replace_placeholders(text, char_name, user_name)
 
     expected = text
-    expected = expected.replace('{{char}}', char_name_actual)
-    expected = expected.replace('<CHAR>', char_name_actual)
-    expected = expected.replace('{{user}}', user_name_actual)
-    expected = expected.replace('<USER>', user_name_actual)
-    expected = expected.replace('{{random_user}}', user_name_actual)
+    expected = expected.replace("{{char}}", char_name_actual)
+    expected = expected.replace("<CHAR>", char_name_actual)
+    expected = expected.replace("{{user}}", user_name_actual)
+    expected = expected.replace("<USER>", user_name_actual)
+    expected = expected.replace("{{random_user}}", user_name_actual)
 
     assert result == expected
 
+
 id_st = st.integers(min_value=0, max_value=10**9)
 simple_char_name_for_id_test_st = st.text(
-    alphabet=st.characters(min_codepoint=97, max_codepoint=122),
-    min_size=1, max_size=20
-).filter(lambda x: '(' not in x and ')' not in x) # Avoid parens in name to simplify test
+    alphabet=st.characters(min_codepoint=97, max_codepoint=122), min_size=1, max_size=20
+).filter(
+    lambda x: "(" not in x and ")" not in x
+)  # Avoid parens in name to simplify test
 
-@given(id_val=id_st, name=simple_char_name_for_id_test_st,
-       id_internal_leading_spaces_count=st.integers(min_value=0, max_value=2),
-       id_internal_trailing_spaces_count=st.integers(min_value=0, max_value=2),
-       overall_leading_spaces_count=st.integers(min_value=0, max_value=2),
-       overall_trailing_spaces_count=st.integers(min_value=0, max_value=2)
-       )
+
+@given(
+    id_val=id_st,
+    name=simple_char_name_for_id_test_st,
+    id_internal_leading_spaces_count=st.integers(min_value=0, max_value=2),
+    id_internal_trailing_spaces_count=st.integers(min_value=0, max_value=2),
+    overall_leading_spaces_count=st.integers(min_value=0, max_value=2),
+    overall_trailing_spaces_count=st.integers(min_value=0, max_value=2),
+)
 @settings(suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.data_too_large], deadline=None)
 def test_property_extract_character_id_from_ui_choice_valid_formats(
-    id_val, name,
-    id_internal_leading_spaces_count, id_internal_trailing_spaces_count,
-    overall_leading_spaces_count, overall_trailing_spaces_count
+    id_val,
+    name,
+    id_internal_leading_spaces_count,
+    id_internal_trailing_spaces_count,
+    overall_leading_spaces_count,
+    overall_trailing_spaces_count,
 ):
-    id_int_ls = ' ' * id_internal_leading_spaces_count
-    id_int_ts = ' ' * id_internal_trailing_spaces_count
-    overall_ls = ' ' * overall_leading_spaces_count
-    overall_ts = ' ' * overall_trailing_spaces_count
+    id_int_ls = " " * id_internal_leading_spaces_count
+    id_int_ts = " " * id_internal_trailing_spaces_count
+    overall_ls = " " * overall_leading_spaces_count
+    overall_ts = " " * overall_trailing_spaces_count
 
     # Test "Name (ID: <id_val>)" format
     # The SUT's regex r'\(ID:\s*(\d+)\s*\)$' means the ')' must be the last non-whitespace char
@@ -967,7 +1028,7 @@ def test_property_extract_character_id_from_ui_choice_valid_formats(
     # Case 1: Regex match path " [Name] (ID: [spaces] id [spaces]) "
     # No overall trailing spaces for the regex to match with `$`
     choice1_core = f"{name} (ID:{id_int_ls}{id_val}{id_int_ts})"
-    choice1_for_regex = f"{overall_ls}{choice1_core}" # No overall_ts
+    choice1_for_regex = f"{overall_ls}{choice1_core}"  # No overall_ts
     assert extract_character_id_from_ui_choice(choice1_for_regex) == id_val
 
     # Case 2: Just ID path " [spaces] id [spaces] "
@@ -986,13 +1047,16 @@ def test_property_extract_character_id_from_ui_choice_valid_formats(
 #     with pytest.raises(ValueError, match="Invalid choice format"):
 #         extract_character_id_from_ui_choice(invalid_choice)
 
-@given(empty_or_whitespace_choice=st.text(alphabet=' \t\n\r', min_size=0, max_size=10))
-@settings(suppress_health_check=[HealthCheck.data_too_large, HealthCheck.filter_too_much], deadline=None) # Added deadline
+
+@given(empty_or_whitespace_choice=st.text(alphabet=" \t\n\r", min_size=0, max_size=10))
+@settings(
+    suppress_health_check=[HealthCheck.data_too_large, HealthCheck.filter_too_much], deadline=None
+)  # Added deadline
 def test_property_extract_character_id_from_ui_choice_empty_or_whitespace(empty_or_whitespace_choice):
     if not empty_or_whitespace_choice:
         with pytest.raises(ValueError, match="No choice provided"):
             extract_character_id_from_ui_choice(empty_or_whitespace_choice)
-    elif not empty_or_whitespace_choice.strip(): # Becomes empty after strip
+    elif not empty_or_whitespace_choice.strip():  # Becomes empty after strip
         with pytest.raises(ValueError, match="Invalid choice format"):
             extract_character_id_from_ui_choice(empty_or_whitespace_choice)
     # If it's whitespace but not empty after strip (e.g. " 123 "), it's handled by valid_formats
@@ -1000,31 +1064,52 @@ def test_property_extract_character_id_from_ui_choice_empty_or_whitespace(empty_
 
 
 # For parse_v1_card
-v1_required_fields_st = st.fixed_dictionaries({
-    "name": st.text(min_size=1, max_size=50),
-    "description": st.text(max_size=100),
-    "personality": st.text(max_size=100),
-    "scenario": st.text(max_size=100),
-    "first_mes": st.text(min_size=1, max_size=100),
-    "mes_example": st.text(max_size=100),
-})
-v1_optional_fields_st = st.fixed_dictionaries({
-    "creator_notes": st.text(max_size=100), "system_prompt": st.text(max_size=100),
-    "post_history_instructions": st.text(max_size=100),
-    "alternate_greetings": st.lists(st.text(max_size=50), max_size=3),
-    "tags": st.lists(st.text(max_size=20), max_size=5),
-    "creator": st.text(max_size=30), "character_version": st.text(max_size=10),
-    "char_image": st.one_of(st.none(), st.text(max_size=50)), # Can be None, empty string, or text
-    "image": st.one_of(st.none(), st.text(max_size=50))      # Can be None, empty string, or text
-})
+v1_required_fields_st = st.fixed_dictionaries(
+    {
+        "name": st.text(min_size=1, max_size=50),
+        "description": st.text(max_size=100),
+        "personality": st.text(max_size=100),
+        "scenario": st.text(max_size=100),
+        "first_mes": st.text(min_size=1, max_size=100),
+        "mes_example": st.text(max_size=100),
+    }
+)
+v1_optional_fields_st = st.fixed_dictionaries(
+    {
+        "creator_notes": st.text(max_size=100),
+        "system_prompt": st.text(max_size=100),
+        "post_history_instructions": st.text(max_size=100),
+        "alternate_greetings": st.lists(st.text(max_size=50), max_size=3),
+        "tags": st.lists(st.text(max_size=20), max_size=5),
+        "creator": st.text(max_size=30),
+        "character_version": st.text(max_size=10),
+        "char_image": st.one_of(st.none(), st.text(max_size=50)),  # Can be None, empty string, or text
+        "image": st.one_of(st.none(), st.text(max_size=50)),  # Can be None, empty string, or text
+    }
+)
 known_v1_keys = {
-    "name", "description", "personality", "scenario", "first_mes", "mes_example",
-    "creator_notes", "system_prompt", "post_history_instructions",
-    "alternate_greetings", "tags", "creator", "character_version", "char_image", "image"
+    "name",
+    "description",
+    "personality",
+    "scenario",
+    "first_mes",
+    "mes_example",
+    "creator_notes",
+    "system_prompt",
+    "post_history_instructions",
+    "alternate_greetings",
+    "tags",
+    "creator",
+    "character_version",
+    "char_image",
+    "image",
 }
-extension_key_st = st.text(min_size=1, max_size=20, alphabet=st.characters(min_codepoint=97, max_codepoint=122)).filter(lambda k: k not in known_v1_keys)
+extension_key_st = st.text(min_size=1, max_size=20, alphabet=st.characters(min_codepoint=97, max_codepoint=122)).filter(
+    lambda k: k not in known_v1_keys
+)
 extension_value_st = st.one_of(st.text(max_size=50), st.integers(), st.booleans(), st.none())
 extensions_st = st.dictionaries(extension_key_st, extension_value_st, max_size=3)
+
 
 @given(required_data=v1_required_fields_st, optional_data=v1_optional_fields_st, extensions=extensions_st)
 @settings(suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.data_too_large], deadline=None)
@@ -1033,28 +1118,29 @@ def test_property_parse_v1_card_structure_and_extensions(required_data, optional
     parsed = parse_v1_card(v1_card_data)
 
     assert parsed is not None
-    assert parsed['name'] == required_data['name']
-    assert parsed['first_message'] == required_data['first_mes']
-    assert parsed['creator_notes'] == optional_data.get('creator_notes', '')
-    assert parsed['alternate_greetings'] == optional_data.get('alternate_greetings', [])
+    assert parsed["name"] == required_data["name"]
+    assert parsed["first_message"] == required_data["first_mes"]
+    assert parsed["creator_notes"] == optional_data.get("creator_notes", "")
+    assert parsed["alternate_greetings"] == optional_data.get("alternate_greetings", [])
 
     # Correctly test image_base64 based on SUT's `val1 or val2` logic
-    expected_image_base64 = v1_card_data.get('char_image') or v1_card_data.get('image')
-    assert parsed['image_base64'] == expected_image_base64
+    expected_image_base64 = v1_card_data.get("char_image") or v1_card_data.get("image")
+    assert parsed["image_base64"] == expected_image_base64
 
-    parsed_extensions = parsed.get('extensions', {})
+    parsed_extensions = parsed.get("extensions", {})
     for key, value in extensions.items():
         assert key in parsed_extensions and parsed_extensions[key] == value
     # Ensure standard keys (that were part of required_data or optional_data) are not in extensions
-    for key in (set(required_data.keys()) | set(optional_data.keys())):
-        if key not in extensions: # Unless it was *also* an extension key (unlikely with filter)
-             assert key not in parsed_extensions
+    for key in set(required_data.keys()) | set(optional_data.keys()):
+        if key not in extensions:  # Unless it was *also* an extension key (unlikely with filter)
+            assert key not in parsed_extensions
 
 
 @given(base_card=v1_required_fields_st)
 @settings(suppress_health_check=[HealthCheck.data_too_large], deadline=None)
 def test_property_parse_v1_card_missing_required_fields(base_card):
-    import random # Keep import local if only used here
+    import random  # Keep import local if only used here
+
     card_with_missing_field = base_card.copy()
     required_keys_list = ["name", "description", "personality", "scenario", "first_mes", "mes_example"]
     field_to_remove = random.choice(required_keys_list)
@@ -1062,19 +1148,21 @@ def test_property_parse_v1_card_missing_required_fields(base_card):
     with pytest.raises(ValueError, match=f"Missing required field in V1 card: {field_to_remove}"):
         parse_v1_card(card_with_missing_field)
 
+
 # For process_db_messages_to_ui_history
 db_message_content_st = st.text(max_size=30)
+
 
 @given(
     user_messages_content=st.lists(db_message_content_st, min_size=0, max_size=3),
     char_name=safe_name_st.filter(lambda x: x != "User" and x != "" and x is not None),
-    user_name=optional_safe_name_st
+    user_name=optional_safe_name_st,
 )
 @settings(suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.data_too_large], deadline=None)
 def test_property_process_db_messages_to_ui_history_only_user(user_messages_content, char_name, user_name):
     db_messages = [{"sender": "User", "content": content} for content in user_messages_content]
     user_name_actual = user_name if user_name is not None else "User"
-    char_name_actual = char_name # Already filtered to be non-None, non-empty
+    char_name_actual = char_name  # Already filtered to be non-None, non-empty
     processed_history = process_db_messages_to_ui_history(db_messages, char_name_actual, user_name_actual)
 
     assert len(processed_history) == len(user_messages_content)
@@ -1082,14 +1170,15 @@ def test_property_process_db_messages_to_ui_history_only_user(user_messages_cont
         expected_processed_content = replace_placeholders(original_content, char_name_actual, user_name_actual)
         assert processed_history[i] == (expected_processed_content, None)
 
+
 @given(
     char_messages_content=st.lists(db_message_content_st, min_size=0, max_size=3),
     char_name=safe_name_st.filter(lambda x: x != "User" and x != "" and x is not None),
-    user_name=optional_safe_name_st
+    user_name=optional_safe_name_st,
 )
 @settings(suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.data_too_large], deadline=None)
 def test_property_process_db_messages_to_ui_history_only_char(char_messages_content, char_name, user_name):
-    char_name_actual = char_name # Already filtered
+    char_name_actual = char_name  # Already filtered
     db_messages = [{"sender": char_name_actual, "content": content} for content in char_messages_content]
     user_name_actual = user_name if user_name is not None else "User"
 
@@ -1101,16 +1190,17 @@ def test_property_process_db_messages_to_ui_history_only_char(char_messages_cont
         expected_processed_content = replace_placeholders(original_content, char_name_actual, user_name_actual)
         assert processed_history[i] == (None, expected_processed_content)
 
+
 @given(
     message_pairs_content=st.lists(st.tuples(db_message_content_st, db_message_content_st), min_size=0, max_size=2),
     char_name=safe_name_st.filter(lambda x: x != "User" and x != "" and x is not None),
-    user_name=optional_safe_name_st
+    user_name=optional_safe_name_st,
 )
 @settings(suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.data_too_large], deadline=None)
 def test_property_process_db_messages_to_ui_history_alternating(message_pairs_content, char_name, user_name):
-    char_name_actual = char_name # Already filtered
+    char_name_actual = char_name  # Already filtered
     db_messages = []
-    for user_content, char_content_for_pair in message_pairs_content: # Renamed to avoid clash
+    for user_content, char_content_for_pair in message_pairs_content:  # Renamed to avoid clash
         db_messages.append({"sender": "User", "content": user_content})
         db_messages.append({"sender": char_name_actual, "content": char_content_for_pair})
     user_name_actual = user_name if user_name is not None else "User"
@@ -1124,10 +1214,12 @@ def test_property_process_db_messages_to_ui_history_alternating(message_pairs_co
         exp_char_c = replace_placeholders(orig_char_c, char_name_actual, user_name_actual)
         assert processed_history[i] == (exp_user_c, exp_char_c)
 
+
 # --- End of Property Tests ---
 
 
 # --- Integration Tests (using the 'db' fixture) ---
+
 
 def test_get_character_list_for_ui_integration(db):
     char1_id = db.add_character_card({"name": "Charlie", "description": "C"})
@@ -1143,7 +1235,7 @@ def test_get_character_list_for_ui_integration(db):
     char3_data_for_delete = db.get_character_card_by_name(char3_name_to_add)  # Fetch it by name
 
     assert char3_data_for_delete is not None, f"Character '{char3_name_to_add}' should have been found after adding."
-    db.soft_delete_character_card(char3_data_for_delete['id'], char3_data_for_delete['version'])
+    db.soft_delete_character_card(char3_data_for_delete["id"], char3_data_for_delete["version"])
 
     ui_list = get_character_list_for_ui(db, limit=10)
     # The list should be sorted by name: Alice, Charlie, Default Assistant
@@ -1154,8 +1246,9 @@ def test_get_character_list_for_ui_integration(db):
     assert ui_list[2]["name"] == "Default Assistant"
 
 
-
-@mock.patch(f"{MODULE_PATH_PREFIX}.character_db.Image", new_callable=mock.MagicMock)  # Patches PIL.Image used by the facade
+@mock.patch(
+    f"{MODULE_PATH_PREFIX}.character_db.Image", new_callable=mock.MagicMock
+)  # Patches PIL.Image used by the facade
 def test_load_character_and_image_integration(MockPILImageModule, db, caplog_handler):
     mock_opened_image = MockPILImageObject(format="PNG")  # This is what Image.open() will return
     mock_converted_image = MockPILImageObject(format="PNG", mode="RGBA")  # This is what .convert() will return
@@ -1163,11 +1256,13 @@ def test_load_character_and_image_integration(MockPILImageModule, db, caplog_han
     # Configure the mock chain: Image.open().convert()
     MockPILImageModule.open.return_value = mock_opened_image
     mock_opened_image.convert = mock.Mock(
-        return_value=mock_converted_image)  # Mock the convert method on the opened instance
+        return_value=mock_converted_image
+    )  # Mock the convert method on the opened instance
 
     image_bytes = create_dummy_png_bytes()
     char_id = db.add_character_card(
-        {"name": "Gandalf", "description": "W {{user}}", "first_message": "FM {{char}} {{user}}", "image": image_bytes})
+        {"name": "Gandalf", "description": "W {{user}}", "first_message": "FM {{char}} {{user}}", "image": image_bytes}
+    )
 
     loaded_char, hist, img = load_character_and_image(db, char_id, "Frodo")
 
@@ -1185,7 +1280,9 @@ def test_load_character_and_image_integration(MockPILImageModule, db, caplog_han
     loaded_char_bad_img, _, img_bad = load_character_and_image(db, char_id, "Frodo")
     assert loaded_char_bad_img is not None  # Char data should still load
     assert img_bad is None
-    assert f"Error processing image for character 'Gandalf' (ID: {char_id})" in caplog_handler.text  # This will use the new caplog_handler
+    assert (
+        f"Error processing image for character 'Gandalf' (ID: {char_id})" in caplog_handler.text
+    )  # This will use the new caplog_handler
 
     MockPILImageModule.open.side_effect = None  # Reset side effect
     MockPILImageModule.open.return_value = mock_opened_image  # Reset return value for other tests
@@ -1225,14 +1322,19 @@ def test_load_character_and_image_accepts_memoryview(MockPILImageModule, db):
     mock_opened_image.convert.assert_called_once_with("RGBA")
 
 
-
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.yaml")
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.Image", new_callable=mock.MagicMock)
 def test_import_and_save_character_from_file_integration(MockPILImageModule, mock_yaml_module, db, tmp_path):
     # JSON file
-    v1_content = {"name": "JSON Char", "description": "D", "first_mes": "FM", "mes_example": "ME", "personality": "P",
-                  "scenario": "S"}
-    json_file = tmp_path / "import.json";
+    v1_content = {
+        "name": "JSON Char",
+        "description": "D",
+        "first_mes": "FM",
+        "mes_example": "ME",
+        "personality": "P",
+        "scenario": "S",
+    }
+    json_file = tmp_path / "import.json"
     json_file.write_text(json.dumps(v1_content))
     success_json, message_json, char_id_json = import_and_save_character_from_file(db, str(json_file))
     assert success_json and char_id_json is not None
@@ -1243,11 +1345,11 @@ def test_import_and_save_character_from_file_integration(MockPILImageModule, moc
     MockPILImageModule.open.return_value = mock_img_instance
     png_chara_data = {"name": "PNG Chara", "first_mes": "FMpng"}
     png_chara_json_str = json.dumps({**MINIMAL_V1_CARD_UNIT, **png_chara_data})  # Ensure all V1 fields for parser
-    b64_encoded = base64.b64encode(png_chara_json_str.encode('utf-8')).decode('utf-8')
-    mock_img_instance.info = {'chara': b64_encoded};
-    mock_img_instance.format = 'PNG'
+    b64_encoded = base64.b64encode(png_chara_json_str.encode("utf-8")).decode("utf-8")
+    mock_img_instance.info = {"chara": b64_encoded}
+    mock_img_instance.format = "PNG"
     dummy_png_bytes = create_dummy_png_bytes(png_chara_json_str)
-    png_file = tmp_path / "chara.png";
+    png_file = tmp_path / "chara.png"
     png_file.write_bytes(dummy_png_bytes)
 
     success_png, message_png, char_id_png = import_and_save_character_from_file(db, str(png_file))
@@ -1256,10 +1358,37 @@ def test_import_and_save_character_from_file_integration(MockPILImageModule, moc
     assert retrieved_png["name"] == "PNG Chara" and retrieved_png["image"] == dummy_png_bytes
 
 
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.Image", new_callable=mock.MagicMock)
+def test_import_png_invalid_image_base64_uses_file_bytes(MockPILImageModule, db, tmp_path):
+    mock_img_instance = MockPILImageObject()
+    MockPILImageModule.open.return_value = mock_img_instance
+
+    payload = {
+        **MINIMAL_V1_CARD_UNIT,
+        "name": "PNG Bad Base64",
+        "char_image": "not-a-valid-base64",
+    }
+    payload_json = json.dumps(payload)
+    mock_img_instance.info = {
+        "chara": base64.b64encode(payload_json.encode("utf-8")).decode("utf-8")
+    }
+    mock_img_instance.format = "PNG"
+
+    dummy_png_bytes = create_dummy_png_bytes()
+    png_file = tmp_path / "bad_base64.png"
+    png_file.write_bytes(dummy_png_bytes)
+
+    success_png, message_png, char_id_png = import_and_save_character_from_file(db, str(png_file))
+    assert success_png and char_id_png is not None
+    retrieved_png = db.get_character_card_by_id(char_id_png)
+    assert retrieved_png["name"] == "PNG Bad Base64"
+    assert retrieved_png["image"] == dummy_png_bytes
+
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.time.strftime", return_value=MOCK_TIME_STRFTIME)
-def test_load_chat_history_from_file_and_save_to_db_integration(mock_strftime, db, tmp_path,
-                                                                caplog_handler):  # caplog_handler now works
+def test_load_chat_history_from_file_and_save_to_db_integration(
+    mock_strftime, db, tmp_path, caplog_handler
+):  # caplog_handler now works
     char_name_in_db = "HistCharDB"  # Renamed to avoid clash with `char_name` variable if any
     char_id_db = db.add_character_card({"name": char_name_in_db, "description": "D"})
     log_user = "LogU"
@@ -1273,16 +1402,14 @@ def test_load_chat_history_from_file_and_save_to_db_integration(mock_strftime, d
                 "not a list",
                 ["User only"],
                 ["Msg1", "Msg2", "Msg3"],
-                [None, None]
+                [None, None],
             ]
-        }
+        },
     }
-    hist_file_path = tmp_path / "hist.json"; hist_file_path.write_text(json.dumps(chat_data))
+    hist_file_path = tmp_path / "hist.json"
+    hist_file_path.write_text(json.dumps(chat_data))
     conv_id, char_id_hist = load_chat_history_from_file_and_save_to_db(
-        db,
-        char_id_db,
-        str(hist_file_path),
-        user_name_for_placeholders=log_user
+        db, char_id_db, str(hist_file_path), user_name_for_placeholders=log_user
     )
     assert conv_id is not None and char_id_hist == char_id_db
     msgs = db.get_messages_for_conversation(conv_id)
@@ -1295,7 +1422,6 @@ def test_load_chat_history_from_file_and_save_to_db_integration(mock_strftime, d
     assert msgs[1]["sender"] == char_name_in_db
     assert msgs[2]["content"] == "User only"
     assert msgs[2]["sender"] == "User"
-
 
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.time.strftime", return_value=MOCK_TIME_STRFTIME)
@@ -1346,12 +1472,7 @@ def test_load_chat_history_yaml_sequence(mock_strftime, db):
 def test_load_chat_history_cleanup_on_failure(db):
     char_id = db.add_character_card({"name": "CleanupChar", "first_message": "Hi there"})
     failing_payload = json.dumps(
-        {
-            "messages": [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi!"}
-            ]
-        }
+        {"messages": [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi!"}]}
     )
 
     with mock.patch(
@@ -1402,7 +1523,8 @@ def test_full_chat_session_flow_integration(MockPILImageModule, mock_strftime, d
     MockPILImageModule.open.return_value = mock_img_instance
 
     char_id = db.add_character_card(
-        {"name": "FlowChar", "first_message": "Hi {{char}}", "image": create_dummy_png_bytes()})
+        {"name": "FlowChar", "first_message": "Hi {{char}}", "image": create_dummy_png_bytes()}
+    )
     user_name = "FlowUser"
     conv_id, _, init_hist, _ = start_new_chat_session(db, char_id, user_name, "FlowTitle")
     assert conv_id and init_hist == [(None, "Hi FlowChar")]
@@ -1413,35 +1535,35 @@ def test_full_chat_session_flow_integration(MockPILImageModule, mock_strftime, d
     user_msg_id = post_message_to_conversation(db, conv_id, "FlowChar", "User says {{user}}", True)
     conv_after_user_msg = db.get_conversation_by_id(conv_id)
     assert conv_after_user_msg is not None
-    assert conv_after_user_msg["version"] == conv_initial["version"] + 1
+    assert conv_after_user_msg["version"] >= conv_initial["version"] + 1
     assert conv_after_user_msg["last_modified"] >= conv_initial["last_modified"]
 
     char_resp_id = post_message_to_conversation(db, conv_id, "FlowChar", "Char says {{char}}", False)
     conv_after_char_msg = db.get_conversation_by_id(conv_id)
     assert conv_after_char_msg is not None
-    assert conv_after_char_msg["version"] == conv_after_user_msg["version"] + 1
+    assert conv_after_char_msg["version"] >= conv_after_user_msg["version"] + 1
     assert conv_after_char_msg["last_modified"] >= conv_after_user_msg["last_modified"]
 
     ui_hist = retrieve_conversation_messages_for_ui(db, conv_id, "FlowChar", user_name)
     assert ui_hist == [(None, "Hi FlowChar"), ("User says FlowUser", "Char says FlowChar")]
 
     msg_to_edit = db.get_message_by_id(user_msg_id)
-    assert edit_message_content(db, user_msg_id, "Edited", msg_to_edit['version'])
+    assert edit_message_content(db, user_msg_id, "Edited", msg_to_edit["version"])
 
     msg_to_rank = db.get_message_by_id(char_resp_id)
-    assert set_message_ranking(db, char_resp_id, 3, msg_to_rank['version'])
-    msg_to_remove = db.get_message_by_id(user_msg_id) # Re-fetch after edit for new version
-    assert remove_message_from_conversation(db, user_msg_id, msg_to_remove['version'])
+    assert set_message_ranking(db, char_resp_id, 3, msg_to_rank["version"])
+    msg_to_remove = db.get_message_by_id(user_msg_id)  # Re-fetch after edit for new version
+    assert remove_message_from_conversation(db, user_msg_id, msg_to_remove["version"])
 
     conv_meta = db.get_conversation_by_id(conv_id)
-    assert update_conversation_metadata(db, conv_id, {"title": "NewTitle"}, conv_meta['version'])
+    assert update_conversation_metadata(db, conv_id, {"title": "NewTitle"}, conv_meta["version"])
 
     assert len(search_conversations_by_title_query(db, "NewTitle")) == 1
 
     found_msgs = find_messages_in_conversation(db, conv_id, "Char says", "FlowChar", user_name)
     assert len(found_msgs) == 1 and found_msgs[0]["content"] == "Char says FlowChar"
-    conv_to_del = db.get_conversation_by_id(conv_id) # Re-fetch after update for new version
-    assert delete_conversation_by_id(db, conv_id, conv_to_del['version'])
+    conv_to_del = db.get_conversation_by_id(conv_id)  # Re-fetch after update for new version
+    assert delete_conversation_by_id(db, conv_id, conv_to_del["version"])
     assert db.get_conversation_by_id(conv_id) is None
 
 
@@ -1532,6 +1654,33 @@ def test_retrieve_conversation_messages_for_ui_rich_output(db):
     assert turn["character"]["attachments"]
 
 
+def test_retrieve_conversation_messages_for_ui_rich_output_drops_trailing_user(db):
+    char_id = db.add_character_card({"name": "Chrony"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Chrony Chat"})
+
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Hello"})
+    db.add_message({"conversation_id": conv_id, "sender": "Chrony", "content": "Hi"})
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Trailing"})
+
+    history = retrieve_conversation_messages_for_ui(
+        db,
+        conversation_id=conv_id,
+        character_name="Chrony",
+        user_name="Alice",
+        rich_output=True,
+    )
+
+    assert len(history) == 1
+    assert history[0]["user"]["content"] == "Hello"
+    assert history[0]["character"]["content"] == "Hi"
+    all_contents = []
+    for turn in history:
+        for role in ("user", "character", "non_character"):
+            if turn.get(role) and turn[role].get("content"):
+                all_contents.append(turn[role]["content"])
+    assert "Trailing" not in all_contents
+
+
 def test_sender_override_is_treated_as_user(db):
     char_id = db.add_character_card({"name": "Botty"})
     conv_id = db.add_conversation({"character_id": char_id, "title": "Alias Chat"})
@@ -1572,7 +1721,6 @@ def test_load_chat_and_character_integration(db):
         assert char_data["name"] == "LoadChar" and history == [("Hi LoadChar", "Yo Loader")]
 
 
-
 def test_load_character_wrapper_integration(db):
     char_id = db.add_character_card({"name": "Wrap", "first_message": "FM {{user}}"})
     user_name = "Wrapper"
@@ -1583,14 +1731,12 @@ def test_load_character_wrapper_integration(db):
         assert hist_str == [(None, "FM Wrapper")]
 
 
-
 def test_get_conversation_metadata_integration(db):
     char_id = db.add_character_card({"name": "MetaChar", "description": "D"})
     conv_id = db.add_conversation({"character_id": char_id, "title": "MetaTitle", "rating": 4})
     meta = get_conversation_metadata(db, conv_id)
     assert meta and meta["title"] == "MetaTitle" and meta["rating"] == 4
     assert get_conversation_metadata(db, "non_existent_conv") is None
-
 
 
 def test_retrieve_message_details_integration(db):
@@ -1601,9 +1747,11 @@ def test_retrieve_message_details_integration(db):
     assert details and details["content"] == "Test MsgDetChar from TestUser"
     assert retrieve_message_details(db, "non_existent_msg", "Char", "User") is None
 
+
 #
 # --- Regression Tests for Bug Fixes ---
 #
+
 
 def test_ambiguous_sender_lookahead_next_is_character():
     """

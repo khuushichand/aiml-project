@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
+from fastapi import status
 from httpx import AsyncClient
 import time
 
@@ -74,6 +75,7 @@ def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
     from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
 
     def _get_db_path(_self, explicit_path=None, **_ignored):
+
         if explicit_path:
             try:
                 return Path(explicit_path)
@@ -83,6 +85,7 @@ def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
 
     monkeypatch.setattr(EvaluationManager, "_get_db_path", _get_db_path, raising=False)
     monkeypatch.setenv("EVALUATIONS_TEST_DB_PATH", str(temp_db_path))
+    monkeypatch.setenv("OPENAI_API_KEY", TEST_SK_KEY)
 
     service = UnifiedEvaluationService(
         db_path=str(temp_db_path),
@@ -246,6 +249,7 @@ class TestUnifiedEvaluationCRUD:
     """Test CRUD operations for unified evaluations API"""
 
     def test_create_evaluation(self, client, auth_headers, sample_evaluation_request):
+
         """Test creating a new evaluation"""
         response = client.post(
             "/api/v1/evaluations",
@@ -260,6 +264,7 @@ class TestUnifiedEvaluationCRUD:
         assert "created_at" in data
 
     def test_get_evaluation(self, client, auth_headers, sample_evaluation_request):
+
         """Test getting an evaluation by ID"""
         # First create an evaluation
         create_response = client.post(
@@ -277,6 +282,7 @@ class TestUnifiedEvaluationCRUD:
         assert data["name"] == sample_evaluation_request["name"]
 
     def test_update_evaluation(self, client, auth_headers, sample_evaluation_request):
+
         """Test updating an evaluation"""
         # Create evaluation
         create_response = client.post(
@@ -302,6 +308,7 @@ class TestUnifiedEvaluationCRUD:
         assert data["metadata"]["custom"]["updated"] is True
 
     def test_delete_evaluation(self, client, auth_headers, sample_evaluation_request):
+
         """Test deleting an evaluation"""
         # Create evaluation
         create_response = client.post(
@@ -321,6 +328,7 @@ class TestUnifiedEvaluationCRUD:
         assert get_response.status_code in [404, 200]
 
     def test_list_evaluations(self, client, auth_headers, sample_evaluation_request):
+
         """Test listing evaluations with pagination"""
         # Create multiple evaluations
         for i in range(3):
@@ -340,7 +348,43 @@ class TestUnifiedEvaluationCRUD:
 class TestTldwSpecificEndpoints:
     """Test tldw-specific evaluation endpoints"""
 
+    def test_geval_missing_provider_credentials_returns_503(
+        self,
+        client,
+        auth_headers,
+        sample_geval_request,
+        monkeypatch,
+    ):
+
+        """Missing provider credentials should return 503 with error code."""
+        from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as eval_ep
+        from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+
+        async def _missing(provider, *args, **kwargs):
+            return ResolvedByokCredentials(
+                provider=provider,
+                api_key=None,
+                app_config=None,
+                credential_fields={},
+                source="server",
+                allowlisted=True,
+            )
+
+        monkeypatch.setattr(eval_ep, "_is_eval_test_mode", lambda: False)
+        monkeypatch.setattr(eval_ep, "resolve_byok_credentials", _missing)
+
+        response = client.post(
+            "/api/v1/evaluations/geval",
+            json=sample_geval_request,
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        detail = response.json().get("detail", {})
+        assert detail.get("error_code") == "missing_provider_credentials"
+
     def test_geval_endpoint(self, client, auth_headers, sample_geval_request):
+
         """Test G-Eval summarization endpoint"""
         # Mock multiple potential service paths
         with patch('tldw_Server_API.app.core.Evaluations.ms_g_eval.run_geval') as mock_run_geval:
@@ -385,7 +429,10 @@ class TestTldwSpecificEndpoints:
 
     async def test_rag_endpoint(self, client, auth_headers, sample_rag_request):
         """Test RAG evaluation endpoint"""
-        with patch('tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_rag') as mock_evaluate:
+        with patch(
+            'tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_rag',
+            new_callable=AsyncMock,
+        ) as mock_evaluate:
             # Mock the RAG evaluation service method
             mock_evaluate.return_value = {
                 "evaluation_id": "rag_123",
@@ -423,7 +470,10 @@ class TestTldwSpecificEndpoints:
 
     async def test_response_quality_endpoint(self, client, auth_headers):
         """Test response quality evaluation endpoint"""
-        with patch('tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_response_quality') as mock_evaluate:
+        with patch(
+            'tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_response_quality',
+            new_callable=AsyncMock,
+        ) as mock_evaluate:
             # Mock the response quality evaluation service method
             mock_evaluate.return_value = {
                 "evaluation_id": "quality_123",
@@ -470,6 +520,7 @@ class TestRunManagement:
     """Test evaluation run management"""
 
     def test_create_run(self, client, auth_headers, sample_evaluation_request, sample_run_request):
+
         """Test creating an evaluation run"""
         # First create an evaluation
         eval_response = client.post(
@@ -493,6 +544,7 @@ class TestRunManagement:
             assert data["target_model"] == sample_run_request["target_model"]
 
     def test_get_run_status(self, client, auth_headers, sample_evaluation_request, sample_run_request):
+
         """Test getting run status"""
         # Create evaluation and run
         eval_response = client.post(
@@ -518,6 +570,7 @@ class TestRunManagement:
         assert "status" in data
 
     def test_cancel_run(self, client, auth_headers, sample_evaluation_request, sample_run_request):
+
         """Test cancelling a run"""
         # Create evaluation and run
         eval_response = client.post(
@@ -547,6 +600,7 @@ class TestDatasetManagement:
     """Test dataset management endpoints"""
 
     def test_create_dataset(self, client, auth_headers, sample_dataset_request):
+
         """Test creating a dataset"""
         response = client.post(
             "/api/v1/evaluations/datasets",
@@ -559,6 +613,7 @@ class TestDatasetManagement:
         assert data["sample_count"] == len(sample_dataset_request["samples"])
 
     def test_get_dataset(self, client, auth_headers, sample_dataset_request):
+
         """Test getting a dataset"""
         # Create dataset
         create_response = client.post(
@@ -576,6 +631,7 @@ class TestDatasetManagement:
         assert data["name"] == sample_dataset_request["name"]
 
     def test_list_datasets(self, client, auth_headers, sample_dataset_request):
+
         """Test listing datasets"""
         # Create multiple datasets
         for i in range(3):
@@ -591,6 +647,7 @@ class TestDatasetManagement:
         assert len(data["data"]) <= 2
 
     def test_delete_dataset(self, client, auth_headers, sample_dataset_request):
+
         """Test deleting a dataset"""
         # Create dataset
         create_response = client.post(
@@ -609,6 +666,7 @@ class TestWebhooks:
     """Test webhook functionality"""
 
     def test_register_webhook(self, client, auth_headers):
+
         """Test webhook registration"""
         with patch('tldw_Server_API.app.core.Evaluations.webhook_manager.webhook_manager.register_webhook') as mock_register:
             mock_register.return_value = {
@@ -637,6 +695,7 @@ class TestWebhooks:
             assert data["url"] == request_data["url"]
 
     def test_list_webhooks(self, client, auth_headers):
+
         """Test listing webhooks"""
         with patch('tldw_Server_API.app.core.Evaluations.webhook_manager.webhook_manager.get_webhook_status') as mock_status:
             mock_status.return_value = [
@@ -657,6 +716,7 @@ class TestWebhooks:
             assert data[0]["webhook_id"] == 1
 
     def test_test_webhook(self, client, auth_headers):
+
         """Test webhook testing endpoint"""
         with patch('tldw_Server_API.app.core.Evaluations.webhook_manager.webhook_manager.test_webhook') as mock_test:
             mock_test.return_value = {
@@ -684,6 +744,7 @@ class TestHealthAndMetrics:
     """Test health check and metrics endpoints"""
 
     def test_health_check(self, client, auth_headers):
+
         """Test health check endpoint"""
         response = client.get("/api/v1/evaluations/health", headers=auth_headers)
         assert response.status_code == 200
@@ -694,6 +755,7 @@ class TestHealthAndMetrics:
         assert "database" in data
 
     def test_metrics_endpoint(self, client, auth_headers):
+
         """Test metrics endpoint"""
         response = client.get("/api/v1/evaluations/metrics", headers=auth_headers)
         assert response.status_code == 200
@@ -710,6 +772,7 @@ class TestRateLimiting:
     """Test rate limiting functionality"""
 
     def test_rate_limit_status(self, client, auth_headers):
+
         """Test getting rate limit status"""
         from datetime import datetime, timezone
         with patch('tldw_Server_API.app.core.Evaluations.user_rate_limiter.user_rate_limiter.get_usage_summary') as mock_summary:
@@ -732,6 +795,7 @@ class TestRateLimiting:
             assert "usage" in data
 
     def test_rate_limit_exceeded(self, client, auth_headers, sample_geval_request):
+
         """Test rate limit exceeded response"""
         # Mock rate limiter to always reject
         with patch('tldw_Server_API.app.core.AuthNZ.rate_limiter.RateLimiter.check_rate_limit') as mock_check:
@@ -826,12 +890,18 @@ class TestErrorHandling:
     """Test error handling"""
 
     def test_missing_auth(self, client):
+
         """Test request without authentication"""
         response = client.get("/api/v1/evaluations")
         assert response.status_code == 401
-        assert "error" in response.json()["detail"]
+        detail = response.json().get("detail")
+        assert isinstance(detail, dict)
+        error = detail.get("error")
+        assert isinstance(error, dict)
+        assert "message" in error
 
     def test_invalid_evaluation_type(self, client, auth_headers):
+
         """Test creating evaluation with invalid type"""
         request_data = {
             "name": "test",
@@ -846,6 +916,7 @@ class TestErrorHandling:
         assert response.status_code == 422  # Validation error
 
     def test_not_found(self, client, auth_headers):
+
         """Test getting non-existent evaluation"""
         response = client.get(
             "/api/v1/evaluations/eval_nonexistent",
@@ -860,11 +931,13 @@ class TestAuthentication:
     """Test authentication modes"""
 
     def test_bearer_token_auth(self, client, auth_headers):
+
         """Test authentication with Bearer token"""
         response = client.get("/api/v1/evaluations", headers=auth_headers)
         assert response.status_code == 200
 
     def test_x_api_key_auth(self, client):
+
         """Test authentication with X-API-KEY header"""
         headers = {"X-API-KEY": DEFAULT_API_KEY}
         response = client.get("/api/v1/evaluations", headers=headers)

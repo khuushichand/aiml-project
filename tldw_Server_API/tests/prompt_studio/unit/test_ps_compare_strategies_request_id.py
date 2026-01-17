@@ -14,6 +14,7 @@ class _StubDB:
         return {"id": prompt_id, "project_id": 123}
 
     def create_optimization(self, **kwargs):
+
         oid = self._next_opt_id
         self._next_opt_id += 1
         return {"id": oid, **kwargs}
@@ -41,16 +42,30 @@ def override_db_dependency(monkeypatch):
 
 
 def test_compare_strategies_propagates_request_id_for_each_job(monkeypatch, override_db_dependency):
+
+
     captured_payloads = []
 
-    # Patch PS JobManager.create_job to capture each payload
-    from tldw_Server_API.app.core.Prompt_Management.prompt_studio import job_manager as ps_jm
+    # Patch Prompt Studio Jobs adapter to capture each payload
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio import jobs_adapter as ps_jobs
 
-    def fake_create_job(self, job_type, entity_id, payload, project_id=None, priority=5, max_retries=3):  # noqa: D401
+    def fake_create_job(  # noqa: D401
+        self,
+        *,
+        user_id=None,
+        job_type=None,
+        entity_id=None,
+        payload=None,
+        project_id=None,
+        priority=5,
+        max_retries=3,
+        request_id=None,
+        trace_id=None,
+    ):
         captured_payloads.append(payload)
         return {"id": 9000 + len(captured_payloads), "status": "queued"}
 
-    monkeypatch.setattr(ps_jm.JobManager, "create_job", fake_create_job, raising=True)
+    monkeypatch.setattr(ps_jobs.PromptStudioJobsAdapter, "create_job", fake_create_job, raising=True)
 
     client = TestClient(app)
     strategies = ["iterative", "mipro", "genetic"]
@@ -73,15 +88,29 @@ def test_compare_strategies_propagates_request_id_for_each_job(monkeypatch, over
 
 
 def test_compare_strategies_mixed_case_request_id_header(monkeypatch, override_db_dependency):
+
+
     captured_payloads = []
 
-    from tldw_Server_API.app.core.Prompt_Management.prompt_studio import job_manager as ps_jm
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio import jobs_adapter as ps_jobs
 
-    def fake_create_job(self, job_type, entity_id, payload, project_id=None, priority=5, max_retries=3):  # noqa: D401
+    def fake_create_job(  # noqa: D401
+        self,
+        *,
+        user_id=None,
+        job_type=None,
+        entity_id=None,
+        payload=None,
+        project_id=None,
+        priority=5,
+        max_retries=3,
+        request_id=None,
+        trace_id=None,
+    ):
         captured_payloads.append(payload)
         return {"id": 8000 + len(captured_payloads), "status": "queued"}
 
-    monkeypatch.setattr(ps_jm.JobManager, "create_job", fake_create_job, raising=True)
+    monkeypatch.setattr(ps_jobs.PromptStudioJobsAdapter, "create_job", fake_create_job, raising=True)
 
     client = TestClient(app)
     r = client.post(

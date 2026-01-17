@@ -250,6 +250,116 @@ async def test_local_alias_provider_resolution():
 
 
 @pytest.mark.asyncio
+async def test_local_provider_with_api_url_routes_to_local_api():
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="local",
+                api_url="http://localhost:8080/v1/embeddings",
+                models=["my-local-model"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=True,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="local",
+        default_model="my-local-model",
+    )
+    batcher = RequestBatcher(config=config)
+    batcher.metrics = SimpleNamespace(log_batch_size=lambda *args, **kwargs: None, log_error=lambda *args, **kwargs: None)
+
+    stop_event = asyncio.Event()
+    captured = {}
+
+    async def stub_process_queue(self, queue_key):
+        await stop_event.wait()
+        queue = self.queues[queue_key]
+        batch = list(queue)
+        queue.clear()
+        captured["provider"] = queue_key[0]
+        for req in batch:
+            if not req.future.done():
+                req.future.set_result([0.0])
+
+    batcher._process_queue = MethodType(stub_process_queue, batcher)
+
+    task = asyncio.create_task(
+        batcher.submit_request(
+            text="alpha",
+            model="my-local-model",
+            provider="local",
+        )
+    )
+
+    await asyncio.sleep(0.05)
+    assert {key[0] for key in batcher.queues.keys()} == {"local_api"}
+
+    stop_event.set()
+    await task
+    assert captured["provider"] == "local_api"
+    await batcher.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_local_provider_without_api_url_routes_in_process():
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="local",
+                api_url=None,
+                models=["my-local-model"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=True,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="local",
+        default_model="my-local-model",
+    )
+    batcher = RequestBatcher(config=config)
+    batcher.metrics = SimpleNamespace(log_batch_size=lambda *args, **kwargs: None, log_error=lambda *args, **kwargs: None)
+
+    stop_event = asyncio.Event()
+    captured = {}
+
+    async def stub_process_queue(self, queue_key):
+        await stop_event.wait()
+        queue = self.queues[queue_key]
+        batch = list(queue)
+        queue.clear()
+        captured["provider"] = queue_key[0]
+        for req in batch:
+            if not req.future.done():
+                req.future.set_result([0.0])
+
+    batcher._process_queue = MethodType(stub_process_queue, batcher)
+
+    task = asyncio.create_task(
+        batcher.submit_request(
+            text="bravo",
+            model="my-local-model",
+            provider="local",
+        )
+    )
+
+    await asyncio.sleep(0.05)
+    assert {key[0] for key in batcher.queues.keys()} == {"local"}
+
+    stop_event.set()
+    await task
+    assert captured["provider"] == "local"
+    await batcher.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_submit_request_enforces_rate_limits(monkeypatch):
     limiter_calls = []
 
@@ -412,6 +522,48 @@ async def test_global_batch_helper_passes_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_global_batch_helper_uses_default_model_id(monkeypatch):
+    captured = {}
+
+    class StubBatcher:
+        enabled = True
+
+        async def submit_request(self, text, model, provider, metadata=None, config_override=None):
+            captured["model"] = model
+            captured["provider"] = provider
+            captured["config_override"] = config_override
+            return [0.11]
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.request_batching.get_batcher",
+        lambda: StubBatcher(),
+        raising=True,
+    )
+
+    config = {
+        "embedding_config": {
+            "default_model_id": "huggingface:sentence-transformers/all-MiniLM-L6-v2",
+            "models": {
+                "huggingface:sentence-transformers/all-MiniLM-L6-v2": {
+                    "provider": "huggingface",
+                    "model_name_or_path": "sentence-transformers/all-MiniLM-L6-v2",
+                }
+            },
+        }
+    }
+
+    result = await create_embeddings_batch_async(
+        texts=["hello"],
+        config=config,
+    )
+
+    assert result == [[0.11]]
+    assert captured["provider"] == "huggingface"
+    assert captured["model"] == "sentence-transformers/all-MiniLM-L6-v2"
+    assert captured["config_override"] == config
+
+
+@pytest.mark.asyncio
 async def test_config_override_creates_distinct_queues(monkeypatch):
     async def fake_create_embeddings_batch_async(texts, user_app_config, model_id_override=None):
         return [[float(len(text))] for text in texts]
@@ -491,6 +643,8 @@ async def test_config_override_creates_distinct_queues(monkeypatch):
 
 
 def test_identical_override_configs_share_queue(tmp_path):
+
+
     config = EmbeddingsConfig(
         providers=[
             ProviderConfig(
@@ -512,6 +666,7 @@ def test_identical_override_configs_share_queue(tmp_path):
     batcher = RequestBatcher(config=config)
 
     def _make_override():
+
         return {
             "embedding_config": {
                 "default_model_id": "huggingface:sentence-transformers/all-MiniLM-L6-v2",
@@ -654,6 +809,8 @@ async def test_submit_request_restarts_cancelled_processing_task(monkeypatch):
 
 
 def test_build_user_app_config_normalizes_local_provider():
+
+
     config = EmbeddingsConfig(
         providers=[
             ProviderConfig(

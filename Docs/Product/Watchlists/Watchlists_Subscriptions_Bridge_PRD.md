@@ -41,7 +41,7 @@ Implementation status
 - Admin runs UI: global and by-job modes; filter counters; tallies on demand; CSV/JSON export.
 - Admin runs UI polish: added pagination in By Job mode and a “Download Tallies CSV” button when tallies are loaded.
 - Admin items UI: `/admin/watchlists-items` lists items for a selected run with pagination and status filtering; linked from the Runs table (“View items”).
-  - Rate limits: SlowAPI limits on OPML import and job filters endpoints (test-aware bypass).
+  - Rate limits: RG ingress limits on OPML import and job filters endpoints.
   - Preview/dry-run: `POST /watchlists/jobs/{job_id}/preview` ships; respects include-only gating; returns decision per item; test-mode stubs for deterministic previews.
   - CSV exports (server-side): `GET /watchlists/runs/export.csv` (global or by job) and `GET /watchlists/runs/{run_id}/tallies.csv`.
   - Docs: API page updated (global runs endpoint, run-detail tallies toggle, OPML group filter, preview endpoint, CSV exports). Release notes added.

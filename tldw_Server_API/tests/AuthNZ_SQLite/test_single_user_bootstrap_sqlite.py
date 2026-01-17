@@ -167,3 +167,117 @@ async def test_single_user_bootstrap_reuses_preseeded_primary_key(tmp_path, monk
     assert row["scope"] == "admin"
     assert row["status"] == "active"
     assert int(row["is_virtual"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_single_user_bootstrap_fails_with_extra_active_user_sqlite(tmp_path, monkeypatch):
+    db_path = tmp_path / "users_conflict.db"
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_conflict_key_123")
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(pool.db_path))
+
+    # Pre-seed an additional active user to trigger bootstrap failure.
+    await pool.execute(
+        """
+        INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
+        VALUES (?, ?, ?, ?, 1, 1, 'user')
+        """,
+        999,
+        "extra_user",
+        "extra@example.local",
+        "",
+    )
+
+    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
+
+    ok = await bootstrap_single_user_profile()
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_single_user_bootstrap_fails_with_multiple_primary_keys_sqlite(tmp_path, monkeypatch):
+    db_path = tmp_path / "users_multiple_keys.db"
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_multi_key_123")
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(pool.db_path))
+
+    settings = get_settings()
+    single_user_id = settings.SINGLE_USER_FIXED_ID
+
+    # Ensure the single-user row exists for FK constraints.
+    await pool.execute(
+        """
+        INSERT OR IGNORE INTO users (id, username, email, password_hash, is_active, is_verified, role)
+        VALUES (?, ?, ?, ?, 1, 1, 'admin')
+        """,
+        single_user_id,
+        "single_user",
+        "single_user@example.local",
+        "",
+    )
+
+    manager = APIKeyManager()
+    await manager.initialize()
+
+    primary_value = settings.SINGLE_USER_API_KEY
+    primary_hash = manager.hash_api_key(primary_value)
+    primary_prefix = (primary_value[:10] + "...") if len(primary_value) > 10 else primary_value
+
+    extra_value = "extra_single_user_key_456"
+    extra_hash = manager.hash_api_key(extra_value)
+    extra_prefix = (extra_value[:10] + "...") if len(extra_value) > 10 else extra_value
+
+    await pool.execute(
+        """
+        INSERT INTO api_keys (
+            user_id, key_hash, key_prefix, name, description,
+            scope, status, is_virtual
+        ) VALUES (?, ?, ?, ?, ?, ?, 'active', 0)
+        """,
+        single_user_id,
+        primary_hash,
+        primary_prefix,
+        "primary key",
+        "Primary API key",
+        "admin",
+    )
+    await pool.execute(
+        """
+        INSERT INTO api_keys (
+            user_id, key_hash, key_prefix, name, description,
+            scope, status, is_virtual
+        ) VALUES (?, ?, ?, ?, ?, ?, 'active', 0)
+        """,
+        single_user_id,
+        extra_hash,
+        extra_prefix,
+        "extra key",
+        "Extra API key",
+        "read",
+    )
+
+    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
+
+    ok = await bootstrap_single_user_profile()
+    assert ok is False

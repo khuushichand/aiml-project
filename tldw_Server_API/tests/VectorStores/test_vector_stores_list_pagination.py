@@ -32,14 +32,16 @@ def client(monkeypatch):
                 if 'metadatas' in include:
                     out['metadatas'] = [self.metas[i] for i in idxs]
             return out
-        def count(self): return len(self.ids)
+        def count(self):
+            return len(self.ids)
     class FakeAdapter:
         def __init__(self):
             self._initialized=False
             self.config=types.SimpleNamespace(embedding_dim=8)
             self.col = FakeCol()
             self.manager = types.SimpleNamespace(get_or_create_collection=lambda name: self.col)
-        async def initialize(self): self._initialized=True
+        async def initialize(self):
+            self._initialized=True
         async def get_collection_stats(self, name):
             return {'dimension': 8, 'metadata': {}}
         async def upsert_vectors(self, name, ids, vectors, documents, metadatas):

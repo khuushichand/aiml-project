@@ -5,7 +5,7 @@ import requests
 from unittest.mock import Mock
 from typing import Iterable
 
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import (
     get_openai_embeddings,
     get_openai_embeddings_batch,
     chat_with_openai,
@@ -68,6 +68,7 @@ class _FakeClient:
     def stream(self, method, url, *, headers=None, json=None):
         self.last_json = json
         return _FakeResp(status_code=200, lines=self._stream_lines)
+
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError, ChatProviderError
 
 
@@ -129,11 +130,11 @@ def test_get_openai_embeddings_uses_timeout_and_closes(monkeypatch):
     session = _mock_session_with_response([{"embedding": [0.1, 0.2]}])
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -156,11 +157,11 @@ def test_get_openai_embeddings_includes_dimensions(monkeypatch):
     session = _mock_session_with_response([{"embedding": [0.1, 0.2]}])
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -183,11 +184,11 @@ def test_get_openai_embeddings_batch_uses_timeout_and_closes(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -215,11 +216,11 @@ def test_get_openai_embeddings_batch_includes_dimensions(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -237,11 +238,11 @@ def test_get_openai_embeddings_respects_api_base(monkeypatch):
     session = _mock_session_with_response([{"embedding": [0.5, 0.6]}])
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -266,11 +267,11 @@ def test_get_openai_embeddings_batch_respects_api_base(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -312,7 +313,7 @@ def _patch_async_client(monkeypatch, lines):
     stream = _DummyStream(lines)
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.httpx.AsyncClient",
+        "tldw_Server_API.app.core.http_client.create_async_client",
         lambda *args, **kwargs: _DummyAsyncClient(stream),
     )
 
@@ -395,10 +396,14 @@ async def test_chat_with_openai_async_retries_request_error(monkeypatch):
             return False
 
         def stream(self, *args, **kwargs):
-            raise httpx.RequestError("boom", request=httpx.Request("POST", "https://retry.test"))
+            raise httpx.RequestError(
+                "boom", request=httpx.Request("POST", "https://retry.test")
+            )
 
         def post(self, *args, **kwargs):
-            raise AssertionError("Non-streaming POST should not be invoked in this test.")
+            raise AssertionError(
+                "Non-streaming POST should not be invoked in this test."
+            )
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
@@ -425,7 +430,9 @@ async def test_chat_with_openai_async_non_streaming_exhausts_retries(monkeypatch
             return False
 
         def post(self, *args, **kwargs):
-            raise httpx.RequestError("boom-1", request=httpx.Request("POST", "https://retry.test"))
+            raise httpx.RequestError(
+                "boom-1", request=httpx.Request("POST", "https://retry.test")
+            )
 
         def stream(self, *args, **kwargs):
             raise AssertionError("Stream should not be used in this test.")

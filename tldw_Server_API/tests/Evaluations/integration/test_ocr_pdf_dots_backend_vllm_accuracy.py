@@ -9,7 +9,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
 
 
 def _detect_vllm_base_url():
-    # Try common env vars or default to local vLLM
+
+
+     # Try common env vars or default to local vLLM
     for key in ("VLLM_API_URL", "OPENAI_API_BASE", "OPENAI_BASE_URL"):
         val = os.getenv(key)
         if val:
@@ -18,6 +20,8 @@ def _detect_vllm_base_url():
 
 
 def _vllm_available():
+
+
     try:
         import httpx
 
@@ -34,7 +38,7 @@ def _vllm_available():
 
 @pytest.mark.requires_llm
 def test_ocr_pdf_with_dots_and_vllm_text_accuracy():
-    # Skip if dots_ocr is not installed
+     # Skip if dots_ocr is not installed
     pytest.importorskip("dots_ocr")
 
     # Skip if vLLM endpoint isn't responding

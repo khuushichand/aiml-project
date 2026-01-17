@@ -24,7 +24,7 @@ Prompt Studio is a comprehensive prompt engineering platform integrated into tld
 - **Evaluation System**: Comprehensive metrics for prompt performance assessment
 - **Optimization Engine**: 5 different optimization strategies (MIPRO, Bootstrap, Genetic, etc.)
 - **Real-time Updates**: WebSocket support for live progress tracking
-- **Job Queue**: Async processing with retry logic and prioritization
+- **Job Queue**: Async processing via core Jobs with retry logic and prioritization
 - **Version Control**: Full prompt versioning with history tracking
 
 ### Key Components
@@ -48,7 +48,8 @@ prompt_studio/
 │   └── optimization_engine.py      # Optimization strategies
 ├── Management Systems
 │   ├── test_case_manager.py        # Test CRUD operations
-│   ├── job_manager.py              # Job queue management
+│   ├── jobs_adapter.py             # Core Jobs adapter (job lifecycle/status)
+│   ├── job_types.py                # Shared job type/status enums
 │   └── event_broadcaster.py        # Real-time events
 ├── API Layer
 │   ├── endpoints/                  # FastAPI endpoints
@@ -612,9 +613,11 @@ logger.add("prompt_studio_debug.log", level="DEBUG")
 
 Check metrics:
 ```python
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from prompt_studio.monitoring import PromptStudioHealthCheck
 
-health = PromptStudioHealthCheck(db)
+jm = JobManager()  # uses JOBS_DB_URL if configured
+health = PromptStudioHealthCheck(db, job_manager=jm)
 status = health.check_health()
 print(json.dumps(status, indent=2))
 ```
@@ -637,9 +640,27 @@ PROMPT_STUDIO_CACHE_SIZE=1000
 # Monitoring
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 
-# Prompt Studio job processing
-TLDW_PS_JOB_LEASE_SECONDS=60      # Lease duration for in-progress jobs (default 60)
-TLDW_PS_HEARTBEAT_SECONDS=0       # Heartbeat; if 0, derived from lease
+# Prompt Studio job processing (core Jobs)
+JOBS_DB_URL=postgresql://...      # Optional; enables Postgres-backed core Jobs
+PROMPT_STUDIO_JOBS_QUEUE=default  # Queue for Prompt Studio jobs
+PROMPT_STUDIO_JOBS_LEASE_SECONDS=60  # WorkerSDK lease duration
+PROMPT_STUDIO_JOBS_RENEW_THRESHOLD_SECONDS=10  # Renew when lease is within threshold
+PROMPT_STUDIO_JOBS_RENEW_JITTER_SECONDS=5  # Random jitter added to renew interval
+
+# Prompt Studio job quotas (per-user, via core Jobs)
+PROMPT_STUDIO_MAX_CONCURRENT_JOBS=10  # Maps to JOBS_QUOTA_MAX_INFLIGHT_PROMPT_STUDIO
+PROMPT_STUDIO_JOBS_MAX_QUEUED=100     # Maps to JOBS_QUOTA_MAX_QUEUED_PROMPT_STUDIO
+PROMPT_STUDIO_JOBS_SUBMITS_PER_MIN=30 # Maps to JOBS_QUOTA_SUBMITS_PER_MIN_PROMPT_STUDIO
+# Per-user overrides (optional):
+# JOBS_QUOTA_MAX_INFLIGHT_PROMPT_STUDIO_USER_<user_id>=...
+# Per-user AuthNZ policy overrides (preferred):
+# limits.prompt_studio_max_concurrent_jobs
+# limits.prompt_studio_max_queued_jobs
+# limits.prompt_studio_submits_per_min
+
+# Legacy prompt_studio_job_queue (kept for compatibility)
+TLDW_PS_JOB_LEASE_SECONDS=60      # Legacy lease duration
+TLDW_PS_HEARTBEAT_SECONDS=0       # Legacy heartbeat; if 0, derived from lease
 
 # Shared rate limiting (via core AuthNZ limiter)
 # Set REDIS_URL to enable Redis-backed distributed limits

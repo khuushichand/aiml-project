@@ -15,6 +15,8 @@ pytestmark = pytest.mark.pg_jobs
 
 
 def _require_pg(monkeypatch):
+
+
     db_url = os.getenv("JOBS_DB_URL", "")
     if not db_url or not db_url.startswith("postgres"):
         pytest.skip("JOBS_DB_URL not configured for Postgres tests")
@@ -23,6 +25,8 @@ def _require_pg(monkeypatch):
 
 
 def test_pg_single_update_acquire_concurrency(monkeypatch):
+
+
     _require_pg(monkeypatch)
     jm = JobManager(backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
     domain = "chatbooks"; queue = "default"; job_type = "export"
@@ -67,6 +71,8 @@ def test_pg_single_update_acquire_concurrency(monkeypatch):
 
 
 def test_pg_single_update_acquire_with_slow_worker(monkeypatch):
+
+
     _require_pg(monkeypatch)
     jm = JobManager(backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
     domain = "chatbooks"; queue = "default"; job_type = "export"
@@ -79,6 +85,7 @@ def test_pg_single_update_acquire_with_slow_worker(monkeypatch):
     lock = threading.Lock()
 
     def slow_worker():
+
         while True:
             job = jm.acquire_next_job(domain=domain, queue=queue, lease_seconds=30, worker_id="slow")
             if not job:
@@ -115,6 +122,8 @@ def test_pg_single_update_acquire_with_slow_worker(monkeypatch):
 
 
 def test_pg_single_update_acquire_priority_ordering_single_worker(monkeypatch):
+
+
     _require_pg(monkeypatch)
     jm = JobManager(backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
     domain = "chatbooks"; queue = "default"; job_type = "export"

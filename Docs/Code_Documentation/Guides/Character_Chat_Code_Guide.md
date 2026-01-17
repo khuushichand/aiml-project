@@ -41,7 +41,7 @@ See also: `tldw_Server_API/app/core/Character_Chat/README.md` for a focused modu
 Each router resolves the per-user DB via `get_chacha_db_for_user` and the authenticated user via `get_request_user`.
 
 ## Core Concepts & Data Flow
-- Per-user isolation and storage path: Every request uses a user-scoped `CharactersRAGDB`. Character Chat resolves the base directory from `USER_DB_BASE_DIR` and stores the DB at `USER_DB_BASE_DIR/<user_id>/ChaChaNotes.db`. If not configured, Character Chat falls back to `./app_data/user_databases_fallback/<user_id>/ChaChaNotes.db`. Other modules that use `DatabasePaths` may default to `Databases/user_databases/<user_id>/ChaChaNotes.db` when unset. For consistency across modules, set `USER_DB_BASE_DIR` in settings or env.
+- Per-user isolation and storage path: Every request uses a user-scoped `CharactersRAGDB`. Character Chat resolves the base directory from `USER_DB_BASE_DIR` (defined in `tldw_Server_API.app.core.config`) and stores the DB at `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`. When unset, the default base is `Databases/user_databases/` under the project root via `db_path_utils`. Override via environment variable or `Config_Files/config.txt` as needed.
 - Characters: Stored with textual fields and optional image bytes. JSON-like fields (`alternate_greetings`, `tags`, `extensions`) are normalized when stored.
 - Placeholders: Strings may contain `{{char}}`, `{{user}}`, `<CHAR>`, `<USER>`. Utilities replace them at render time.
 - Conversations & Messages: Conversations are UUID-identified. Messages reference `conversation_id` and keep `sender` as a string; utilities map sender→role.
@@ -136,6 +136,7 @@ msgs = retrieve_conversation_messages_for_ui(db, chat_id, messages_limit=50)
 # Or via endpoint:
 # GET /api/v1/chats/{chat_id}/messages?format_for_completions=true
 # Add include_character_context=true to prepend character system context
+# Add include_message_ids=true to include message_id fields in completions format
 ```
 
 5) Prepare and call completion (v2)
@@ -184,7 +185,7 @@ curl -sS "$API/chats/<CHAT_ID>/messages?limit=50&include_tool_calls=true&include
   -H "X-API-KEY: $KEY"
 
 # Completions-ready format with system context:
-curl -sS "$API/chats/<CHAT_ID>/messages?format_for_completions=true&include_character_context=true" \
+curl -sS "$API/chats/<CHAT_ID>/messages?format_for_completions=true&include_character_context=true&include_message_ids=true" \
   -H "X-API-KEY: $KEY"
 ```
 
@@ -259,9 +260,9 @@ curl -sS "$API/characters/rate-limit-status" -H "X-API-KEY: $KEY"
 - Add card formats: extend `character_validation.py` and `character_io.py` (parsing + normalization), wire through facade exports if needed.
 - Customize role mapping: adjust `map_sender_to_role` and alias constants in `character_utils.py`.
 - Message metadata/tool-calls: store via endpoints that accept `tool_calls` and retrieve with `db.get_message_metadata(message_id)` (see `character_messages.py`).
-- Rate limits: tune in `character_rate_limiter.py` or via env/settings (`CHARACTER_RATE_LIMIT_*`, `MAX_*`). Defaults (current): `MAX_CHATS_PER_USER=100`, `MAX_MESSAGES_PER_CHAT=1000`, `MAX_CHAT_COMPLETIONS_PER_MINUTE=20`, `MAX_MESSAGE_SENDS_PER_MINUTE=60`.
+- Rate limits: tune in `character_rate_limiter.py` or via env/settings (`CHARACTER_RATE_LIMIT_*`, `MAX_*`). Defaults (current): `MAX_CHATS_PER_USER=100`, `MAX_MESSAGES_PER_CHAT=1000`, `MAX_MESSAGES_PER_CHAT_SOFT=1000` (non-persisted completions), `MAX_CHAT_COMPLETIONS_PER_MINUTE=20`, `MAX_MESSAGE_SENDS_PER_MINUTE=60`.
 - Provider integration: Character Chat builds standard OpenAI-style `messages` for `/api/v1/chat/completions`. Extend provider logic in the Chat module (`core/Chat/*`).
- - Dictionary application: Pre-gen dictionary logic lives in the Chat module (`chat()`); Character Chat `/complete-v2` does not apply it by default.
+- Dictionary application: Pre-gen dictionary logic lives in the Chat module (`chat()`); Character Chat `/complete-v2` does not apply it by default.
 
 ## Error Handling & Guardrails
 - Validation: Pydantic schemas enforce inputs; import/path errors surface as `InputError`/`ConflictError` mapped to HTTP 400/409.
@@ -271,7 +272,7 @@ curl -sS "$API/characters/rate-limit-status" -H "X-API-KEY: $KEY"
 - Tool-calls retrieval: `include_tool_calls=true` enriches the standard messages response. The `format_for_completions=true` output is OpenAI-style and does not include `tool_calls` objects.
 
 ## Settings & Environment Flags
-- Rate limiting: `CHARACTER_RATE_LIMIT_ENABLED`, `CHARACTER_RATE_LIMIT_OPS`, `CHARACTER_RATE_LIMIT_WINDOW`, `MAX_CHARACTERS_PER_USER`, `MAX_CHATS_PER_USER` (default 100), `MAX_MESSAGES_PER_CHAT` (default 1000), `MAX_CHAT_COMPLETIONS_PER_MINUTE` (default 20), `MAX_MESSAGE_SENDS_PER_MINUTE` (default 60)
+- Rate limiting: `CHARACTER_RATE_LIMIT_ENABLED`, `CHARACTER_RATE_LIMIT_OPS`, `CHARACTER_RATE_LIMIT_WINDOW`, `MAX_CHARACTERS_PER_USER`, `MAX_CHATS_PER_USER` (default 100), `MAX_MESSAGES_PER_CHAT` (default 1000), `MAX_MESSAGES_PER_CHAT_SOFT` (default 1000, non-persisted completions), `MAX_CHAT_COMPLETIONS_PER_MINUTE` (default 20), `MAX_MESSAGE_SENDS_PER_MINUTE` (default 60)
 - Redis: `REDIS_ENABLED`, `REDIS_URL`
 - Test mode: `TEST_MODE=1` relaxes rate limits and disables heavy workers
 - Local LLM toggles used by completion paths: `ENABLE_LOCAL_LLM_PROVIDER`, `ALLOW_LOCAL_LLM_CALLS`, `DISABLE_OFFLINE_SIM`

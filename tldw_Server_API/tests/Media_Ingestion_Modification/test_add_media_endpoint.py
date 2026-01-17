@@ -22,7 +22,6 @@ from urllib.parse import urlparse
 import pytest
 import httpx # Keep for mocking specific download errors
 from fastapi import status, Header
-from fastapi.testclient import TestClient
 from loguru import logger
 from io import BytesIO
 import pytest
@@ -34,7 +33,10 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (  # type: ignore
     process_document_like_item as _process_document_like_item,
 )
-from tldw_Server_API.tests.test_utils import temp_db
+from tldw_Server_API.tests.test_utils import (
+    skip_if_transcription_model_unavailable,
+    temp_db,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase # Import Database class
@@ -47,7 +49,7 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
 
 # --- Use Main App Instance ---
 try:
-    from tldw_Server_API.app.main import app as fastapi_app_instance, app
+    from tldw_Server_API.app.main import app
 except ImportError:
     raise ImportError("Could not locate the main FastAPI app instance. Adjust the import path.")
 
@@ -126,6 +128,9 @@ VALID_TXT_URL = "https://archives.phrack.org/issues/1/1.txt" # Raw text URL (sta
 VALID_MD_URL = "https://raw.githubusercontent.com/rmusser01/tldw/main/README.md" # Raw markdown URL
 INVALID_URL = "http://this.url.does.not.exist/resource.file"
 URL_404 = "https://httpbin.org/status/404" # Reliable 404
+TEST_VIDEO_TRANSCRIPTION_MODEL = "small"
+TEST_VIDEO_START_TIME = "0"
+TEST_VIDEO_END_TIME = "00:00:20"
 
 # --- Fixtures ---
 
@@ -208,11 +213,8 @@ def override_get_media_db_for_user_dependency(db_fixture):
     return _override
 
 @pytest.fixture(scope="function")
-def test_api_client(db_session_scope): # Depends on the FUNCTION-scoped DB fixture now
-    """
-    RENAMED: Provides a TestClient instance, overriding auth and DB dependencies.
-    Function-scoped to ensure DB isolation per test.
-    """
+def test_api_client(client_user_only, db_session_scope):  # Depends on the FUNCTION-scoped DB fixture now
+    """Provides a shared authenticated TestClient with a per-test Media DB override."""
     logger.debug(f"Setting up test_api_client fixture for FUNCTION (DB: {db_session_scope.db_path_str})...")
 
     # --- File Existence Checks (Keep these or adapt as needed) ---
@@ -226,32 +228,24 @@ def test_api_client(db_session_scope): # Depends on the FUNCTION-scoped DB fixtu
     # Create the override function using the FUNCTION-scoped DB instance
     db_override_func = override_get_media_db_for_user_dependency(db_session_scope)
 
-    # Store original overrides to restore later
-    original_overrides = app.dependency_overrides.copy()
-
-    # Apply overrides
-    app.dependency_overrides[get_request_user] = override_get_request_user
+    # Apply overrides, preserving any existing override for get_media_db_for_user.
+    original_db_override = app.dependency_overrides.get(get_media_db_for_user)
     app.dependency_overrides[get_media_db_for_user] = db_override_func
-    logger.info("Applied dependency overrides for get_request_user and get_media_db_for_user (FUNCTION scope)")
+    logger.info("Applied dependency override for get_media_db_for_user (FUNCTION scope)")
 
-    # Instantiate the TestClient
     try:
-        # Using 'with' ensures client exits cleanly for each function
-        with TestClient(fastapi_app_instance) as test_client_instance:
-            logger.debug("Function-scoped TestClient instance created.")
-            yield test_client_instance
-    except Exception as client_exc:
-        logger.error(f"Failed to create TestClient: {client_exc}", exc_info=True)
-        pytest.fail(f"TestClient instantiation failed: {client_exc}")
+        yield client_user_only
     finally:
-        # Restore original overrides after the function test is done
-        app.dependency_overrides = original_overrides
-        logger.info("Restored original dependency overrides (FUNCTION scope teardown)")
+        if original_db_override is None:
+            app.dependency_overrides.pop(get_media_db_for_user, None)
+        else:
+            app.dependency_overrides[get_media_db_for_user] = original_db_override
+        logger.info("Restored dependency override for get_media_db_for_user (FUNCTION scope teardown)")
 
 @pytest.fixture
 def dummy_headers():
     """Provides headers required by endpoint signature, even if logic is mocked."""
-    # The actual value doesn't matter because get_request_user is mocked
+    # The actual value doesn't matter because auth is overridden in client_user_only.
     return {"token": "dummy_test_token_for_header"}
 
 @pytest.fixture
@@ -278,9 +272,9 @@ def create_upload_file(dummy_file_content):
         }
         mime_type = mime_map.get(filepath.suffix.lower(), "application/octet-stream")
         try:
-             content = filepath.read_bytes()
+            content = filepath.read_bytes()
         except Exception as e:
-             pytest.fail(f"Failed to read test file {filepath}: {e}")
+            pytest.fail(f"Failed to read test file {filepath}: {e}")
         return (filepath.name, content, mime_type)
     return _create
 
@@ -317,6 +311,8 @@ def check_batch_response(
 
 
 def check_media_item_result(result, expected_status, check_db_interaction=True, expected_media_type=None):
+
+
     assert isinstance(result, dict), f"Result item is not a dictionary: {result}"
     assert "status" in result, f"Result missing 'status' key: {result}"
     assert result["status"] == expected_status, f"Expected status '{expected_status}', got '{result['status']}' for input '{result.get('input_ref', 'N/A')}'"
@@ -336,7 +332,7 @@ def check_media_item_result(result, expected_status, check_db_interaction=True, 
         assert "db_id" in result, "Result missing 'db_id' key"
         assert "db_message" in result, "Result missing 'db_message' key"
         if expected_status == "Success" and "added" in result.get("db_message", "").lower():
-             assert isinstance(result.get("db_id"), int), f"Expected integer db_id for Success status, got {result.get('db_id')}"
+            assert isinstance(result.get("db_id"), int), f"Expected integer db_id for Success status, got {result.get('db_id')}"
     if expected_status in ["Error", "Failed"]:
         pass
     elif expected_status == "Success":
@@ -346,6 +342,8 @@ def check_media_item_result(result, expected_status, check_db_interaction=True, 
 
 
 def _build_nested_eml_bytes():
+
+
     # Construct a simple nested .eml in-memory
     from email.message import EmailMessage
     inner = EmailMessage()
@@ -364,6 +362,8 @@ def _build_nested_eml_bytes():
 
 
 def test_add_email_with_children_persists_child(test_api_client, db_session, dummy_headers):
+
+
     # Prepare form for email add with attachment ingestion
     form_data = create_add_media_form_data(
         media_type="email",
@@ -397,6 +397,8 @@ def test_add_email_with_children_persists_child(test_api_client, db_session, dum
 
 
 def _build_zip_emails_bytes():
+
+
     # Build two simple EMLs and zip them
     eml1 = (
         b"From: X <x@example.com>\r\n"
@@ -423,6 +425,8 @@ def _build_zip_emails_bytes():
 
 
 def test_add_email_archive_persists_children(test_api_client, db_session, dummy_headers):
+
+
     # Similar to nested eml, but provide a .zip and accept_archives=true; expect children persisted
     form_data = create_add_media_form_data(
         media_type="email",
@@ -459,6 +463,8 @@ def test_add_email_archive_persists_children(test_api_client, db_session, dummy_
 
 
 def test_add_email_pst_feature_flag_behavior(test_api_client, db_session, dummy_headers):
+
+
     # With accept_pst=true and a small placeholder .pst, expect synthetic parent with children containing informative error
     form_data = create_add_media_form_data(
         media_type="email",
@@ -571,6 +577,8 @@ def test_add_email_mbox_large_container_persists_children(test_api_client, db_se
 
 
 def test_add_email_zip_guardrail_too_many_files(test_api_client, db_session, dummy_headers):
+
+
     # Temporarily lower guardrail to 1 to trigger error list
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
@@ -602,6 +610,8 @@ def test_add_email_zip_guardrail_too_many_files(test_api_client, db_session, dum
 
 
 def test_add_email_mbox_guardrail_too_many_messages(test_api_client, db_session, dummy_headers):
+
+
     # Lower guardrail to 1 and create 2-message mbox; expect error in children and no child persistence
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     import mailbox as _mailbox
@@ -623,8 +633,10 @@ def test_add_email_mbox_guardrail_too_many_messages(test_api_client, db_session,
                 mbox_bytes = f.read()
         finally:
             import os as _os
-            try: _os.unlink(tmp_path)
-            except Exception: pass
+            try:
+                _os.unlink(tmp_path)
+            except Exception:
+                pass
         form_data = create_add_media_form_data(media_type="email", perform_chunking=False)
         form_data.update({'accept_mbox': 'true'})
         files = {'files': ('emails.mbox', mbox_bytes, 'application/mbox')}
@@ -641,6 +653,8 @@ def test_add_email_mbox_guardrail_too_many_messages(test_api_client, db_session,
 
 
 def _build_mbox_two_emails_bytes() -> bytes:
+
+
     import mailbox as _mailbox
     import tempfile as _tempfile
     from email.message import EmailMessage
@@ -673,6 +687,8 @@ def _build_mbox_two_emails_bytes() -> bytes:
 
 
 def test_add_email_mbox_persists_children(test_api_client, db_session, dummy_headers):
+
+
     form_data = create_add_media_form_data(
         media_type="email",
         perform_chunking=True,
@@ -752,15 +768,24 @@ def create_add_media_form_data(**overrides) -> Dict[str, Any]:
         if v is None:
             if k == 'keywords' and v is None: form_dict[k] = ""
             continue
-        if k == 'urls' and isinstance(v, list): form_dict[k] = v
-        elif isinstance(v, bool): form_dict[k] = str(v).lower()
-        elif isinstance(v, (int, float, str)): form_dict[k] = v
-        elif isinstance(v, Path): form_dict[k] = str(v)
-        elif hasattr(v, 'value'): form_dict[k] = str(v.value)
-        else: form_dict[k] = str(v)
-    if "media_type" not in form_dict: form_dict["media_type"] = defaults["media_type"]
+        if k == 'urls' and isinstance(v, list):
+            form_dict[k] = v
+        elif isinstance(v, bool):
+            form_dict[k] = str(v).lower()
+        elif isinstance(v, (int, float, str)):
+            form_dict[k] = v
+        elif isinstance(v, Path):
+            form_dict[k] = str(v)
+        elif hasattr(v, 'value'):
+            form_dict[k] = str(v.value)
+        else:
+            form_dict[k] = str(v)
+    if "media_type" not in form_dict:
+        form_dict["media_type"] = defaults["media_type"]
     logger.debug(f"Generated form data for /add: {form_dict}")
     return form_dict
+
+
 
 
 # ##################################################################################################################
@@ -774,6 +799,7 @@ HAS_FFMPEG = bool(shutil.which('ffmpeg') or os.path.exists('/opt/homebrew/bin/ff
 NETWORK_TESTS_ENABLED = os.getenv('ENABLE_NETWORK_TESTS', '').lower() in {"1", "true", "yes", "on"}
 
 def test_add_media_invalid_media_type_value(test_api_client, dummy_headers):
+
     """Test sending an invalid value for the media_type enum."""
     form_data = create_add_media_form_data(media_type="picture", urls=["http://a.com"])
     # Use the RENAMED client variable
@@ -786,6 +812,7 @@ def test_add_media_invalid_media_type_value(test_api_client, dummy_headers):
                for err in details if 'media_type' in err.get('loc', [])), f"Error details: {details}"
 
 def test_add_media_invalid_field_type(test_api_client, dummy_headers):
+
     """Test sending a non-boolean string for a boolean field."""
     form_data = create_add_media_form_data(media_type="video", urls=["http://a.com"], diarize="maybe")
     response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, headers=dummy_headers)
@@ -801,6 +828,8 @@ def test_add_media_invalid_field_type(test_api_client, dummy_headers):
 
 
 def test_add_media_missing_url_and_file(test_api_client, dummy_headers):
+
+
     """Test calling the endpoint with valid media_type but no sources."""
     form_data = create_add_media_form_data(media_type="video", urls=None)
     # Ensure 'urls' key is truly absent if None
@@ -812,6 +841,7 @@ def test_add_media_missing_url_and_file(test_api_client, dummy_headers):
     assert "No valid media sources supplied" in response.json()["detail"]
 
 def test_add_media_missing_required_form_field(test_api_client, dummy_headers):
+
     """Test calling without a required field like media_type."""
     # Remove media_type from the form data dictionary entirely
     form_data = create_add_media_form_data(media_type="video", urls=["http://a.com"])
@@ -825,19 +855,71 @@ def test_add_media_missing_required_form_field(test_api_client, dummy_headers):
 # === Basic Success Path Tests (URL & Upload) ===
 
 @pytest.mark.parametrize("media_type, valid_url, expected_content_present", [
-    pytest.param("video", VALID_VIDEO_URL, True, marks=pytest.mark.skipif(not (HAS_FFMPEG and NETWORK_TESTS_ENABLED), reason="Requires network + ffmpeg for video URL")),
-    ("audio", VALID_AUDIO_URL, True),
-    ("pdf", VALID_PDF_URL, True),
+    pytest.param(
+        "video",
+        VALID_VIDEO_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not (HAS_FFMPEG and NETWORK_TESTS_ENABLED),
+            reason="Requires network + ffmpeg for video URL",
+        ),
+    ),
+    pytest.param(
+        "audio",
+        VALID_AUDIO_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not NETWORK_TESTS_ENABLED,
+            reason="Requires network for audio URL",
+        ),
+    ),
+    pytest.param(
+        "pdf",
+        VALID_PDF_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not NETWORK_TESTS_ENABLED,
+            reason="Requires network for PDF URL",
+        ),
+    ),
     # Skip Ebook URL test for now due to potential download size/time
     # pytest.param("ebook", VALID_EPUB_URL, True, marks=pytest.mark.skip(reason="EPUB URL download can be large/slow"), id="ebook_url"),
-    ("document", VALID_TXT_URL, True),
-    ("document", VALID_MD_URL, True),
+    pytest.param(
+        "document",
+        VALID_TXT_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not NETWORK_TESTS_ENABLED,
+            reason="Requires network for TXT URL",
+        ),
+    ),
+    pytest.param(
+        "document",
+        VALID_MD_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not NETWORK_TESTS_ENABLED,
+            reason="Requires network for Markdown URL",
+        ),
+    ),
 ], ids=["video_url", "audio_url", "pdf_url", "txt_url", "md_url"]) # Removed ebook id
 
 @pytest.mark.timeout(180) # Increased timeout for external downloads/processing
 def test_add_media_single_url_success(test_api_client, db_session, media_type, valid_url, expected_content_present, dummy_headers): # Added db_session
     """Test processing a single valid URL for each media type."""
-    form_data = create_add_media_form_data(media_type=media_type, urls=[valid_url])
+    if media_type == "video":
+        skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        form_data = create_add_media_form_data(
+            media_type=media_type,
+            urls=[valid_url],
+            transcription_model=TEST_VIDEO_TRANSCRIPTION_MODEL,
+            start_time=TEST_VIDEO_START_TIME,
+            end_time=TEST_VIDEO_END_TIME,
+            perform_analysis=False,
+            perform_chunking=False,
+        )
+    else:
+        form_data = create_add_media_form_data(media_type=media_type, urls=[valid_url])
     response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, headers=dummy_headers)
     # Expect 200 OK for success, or 207 if warnings occurred during processing.
     # In environments without external network/egress, audio URLs may fail to download;
@@ -905,14 +987,25 @@ def test_add_media_single_file_upload_success(test_api_client, db_session, creat
     if not sample_path.exists(): pytest.skip(f"Test file not found: {sample_path}")
 
     file_tuple = create_upload_file(sample_path)
-    form_data = create_add_media_form_data(media_type=media_type)
+    if media_type == "video":
+        skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        form_data = create_add_media_form_data(
+            media_type=media_type,
+            transcription_model=TEST_VIDEO_TRANSCRIPTION_MODEL,
+            start_time=TEST_VIDEO_START_TIME,
+            end_time=TEST_VIDEO_END_TIME,
+            perform_analysis=False,
+            perform_chunking=False,
+        )
+    else:
+        form_data = create_add_media_form_data(media_type=media_type)
 
     # --- CORRECTED TestClient Call ---
     # Pass form data via `data` and files via `files` in the same call
     if media_type == "audio":
         # Avoid heavy dependencies by mocking conversion + transcription
         with patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.convert_to_wav", side_effect=lambda p, **kw: p), \
-             patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text", return_value=[{"Text": "test", "start_seconds": 0, "end_seconds": 1}]):
+        patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text", return_value=[{"Text": "test", "start_seconds": 0, "end_seconds": 1}]):
             response = test_api_client.post(
                 ADD_MEDIA_ENDPOINT,
                 data=form_data,
@@ -964,7 +1057,16 @@ def test_add_media_mixed_url_file_success(test_api_client, db_session, create_up
     if not SAMPLE_VIDEO_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_VIDEO_PATH}")
 
     file_tuple = create_upload_file(SAMPLE_VIDEO_PATH)
-    form_data = create_add_media_form_data(media_type="video", urls=[VALID_VIDEO_URL])
+    skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+    form_data = create_add_media_form_data(
+        media_type="video",
+        urls=[VALID_VIDEO_URL],
+        transcription_model=TEST_VIDEO_TRANSCRIPTION_MODEL,
+        start_time=TEST_VIDEO_START_TIME,
+        end_time=TEST_VIDEO_END_TIME,
+        perform_analysis=False,
+        perform_chunking=False,
+    )
 
     # --- CORRECTED TestClient Call ---
     response = test_api_client.post(
@@ -1030,8 +1132,8 @@ def test_add_media_multiple_failures_and_success_pdf(
 
         # --- Ensure essential values needed for logic are present ---
         if item_input_ref is None or processing_source is None or is_url is None or temp_dir is None:
-             logger.error(f"[Refined Mock] Missing essential kwargs: {list(kwargs.keys())}")
-             return {"status": "Error", "error": "Mock received incomplete kwargs"}
+            logger.error(f"[Refined Mock] Missing essential kwargs: {list(kwargs.keys())}")
+            return {"status": "Error", "error": "Mock received incomplete kwargs"}
 
         logger.info(f"[Refined Mock _process_doc_item] Called for: ref='{item_input_ref}', source='{processing_source}', is_url={is_url}")
 
@@ -1095,9 +1197,11 @@ def test_add_media_multiple_failures_and_success_pdf(
     expected_code = status.HTTP_207_MULTI_STATUS
     if response.status_code != expected_code:
         logger.error(f"Multiple Fail/Success test failed. Status: {response.status_code}, Expected: {expected_code}")
-        try: logger.error(f"Response JSON: {response.json()}")
-        except Exception: logger.error(f"Response Text: {response.text}")
-        assert response.status_code == expected_code
+        try:
+            logger.error(f"Response JSON: {response.json()}")
+        except Exception:
+            logger.error(f"Response Text: {response.text}")
+    assert response.status_code == expected_code
 
     data = check_batch_response(response, 207, expected_processed=2, expected_errors=2, check_results_len=4)
     results_map = {r["input_ref"]: r for r in data["results"]}
@@ -1126,10 +1230,10 @@ def test_add_media_multiple_failures_and_success_pdf(
     check_media_item_result(results_map[invalid_pdf_path.name], "Error", expected_media_type="pdf")
     error_msg = results_map[invalid_pdf_path.name].get("error", "").lower()
     assert "pdf extraction error" in error_msg or \
-           "failed to open file" in error_msg or \
-           "invalid file" in error_msg or \
-           "cannot parse" in error_msg or \
-           "pymupdf" in error_msg, f"Expected PDF processing error for real invalid file, got: {error_msg}"
+    "failed to open file" in error_msg or \
+    "invalid file" in error_msg or \
+    "cannot parse" in error_msg or \
+    "pymupdf" in error_msg, f"Expected PDF processing error for real invalid file, got: {error_msg}"
     assert results_map[invalid_pdf_path.name].get("db_id") is None
 
     assert mock_processor.call_count == 4, f"Expected 4 calls to _process_document_like_item, got {mock_processor.call_count}"
@@ -1217,7 +1321,7 @@ def test_add_media_temp_dir_creation_error(mock_temp_dir_manager_class, test_api
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
     # Check the detail message from the endpoint's exception handler
     assert "OS error during setup" in response.json().get("detail", "") or \
-           "Failed to create temporary directory" in response.json().get("detail", "") # Allow for variations
+    "Failed to create temporary directory" in response.json().get("detail", "") # Allow for variations
     assert "Permission denied" in response.json().get("detail", "")
 
 
@@ -1275,6 +1379,8 @@ def test_add_media_processor_handles_invalid_format(test_api_client, db_session,
 def test_add_media_pdf_with_analysis_mocked(mock_analyze, test_api_client, db_session, dummy_headers):
     """Test PDF analysis via /add, mocking only the summarize call."""
     if not SAMPLE_PDF_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_PDF_PATH}")
+    if not NETWORK_TESTS_ENABLED:
+        pytest.skip("Requires network for PDF URL download")
 
     mock_analysis_text = "Mocked analysis for PDF."
     # Configure the mock to return the desired text directly since analyze is synchronous
@@ -1350,7 +1456,7 @@ def check_processing_only_item_result_structure(
                                                             analysis_details.get("llm_api",
                                                                                analysis_details.get("analysis_model"))))
     assert actual_api_name == expected_api_name, \
-        f"Expected API name '{expected_api_name}', got '{actual_api_name}' in analysis_details"
+    f"Expected API name '{expected_api_name}', got '{actual_api_name}' in analysis_details"
 
     assert result_item.get("db_id") is None
     assert result_item.get("db_message") == "Processing only endpoint."
@@ -1394,7 +1500,7 @@ def test_process_ebook_with_analysis_mocked(mock_analyze, test_api_client, db_se
     )
 
     assert response.status_code in [status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS], \
-        f"Request failed: {response.status_code} - {response.text}"
+    f"Request failed: {response.status_code} - {response.text}"
 
     data = response.json()
     assert data.get("processed_count", 0) >= 1  # Allow for warnings to still count as processed
@@ -1447,8 +1553,16 @@ def test_process_audio_with_analysis_mocked(mock_analyze, test_api_client, db_se
 
     file_tuple = create_upload_file(SAMPLE_AUDIO_PATH)
     # Avoid real conversion/transcription during tests
-    with patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.convert_to_wav", side_effect=lambda p, **kw: p), \
-         patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text", return_value=[{"Text": "hello", "start_seconds": 0, "end_seconds": 1}]):
+    with (
+        patch(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.convert_to_wav",
+            side_effect=lambda p, **kw: p,
+        ),
+        patch(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
+            return_value=[{"Text": "hello", "start_seconds": 0, "end_seconds": 1}],
+        ),
+    ):
         response = test_api_client.post(
             PROCESS_AUDIO_ENDPOINT,
             data=form_data_dict,
@@ -1457,7 +1571,7 @@ def test_process_audio_with_analysis_mocked(mock_analyze, test_api_client, db_se
         )
 
     assert response.status_code in [status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS], \
-        f"Request failed: {response.status_code} - {response.text}"
+    f"Request failed: {response.status_code} - {response.text}"
 
     data = response.json()
     assert data.get("processed_count", 0) >= 1
@@ -1480,12 +1594,15 @@ def test_process_video_with_analysis_mocked(mock_analyze, test_api_client, db_se
     mock_analysis_text = "Mocked analysis for Video."
     mock_analyze.return_value = mock_analysis_text
 
+    skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
     form_data_dict = create_add_media_form_data(
         perform_analysis=True,
         perform_chunking=True,
         api_name="mock_llm",
         api_key="mock_key",
-        transcription_model="deepdml/faster-distil-whisper-large-v3.5"
+        transcription_model=TEST_VIDEO_TRANSCRIPTION_MODEL,
+        start_time=TEST_VIDEO_START_TIME,
+        end_time=TEST_VIDEO_END_TIME,
     )
     if 'media_type' in form_data_dict: del form_data_dict['media_type']
     if 'keep_original_file' in form_data_dict: del form_data_dict['keep_original_file']
@@ -1500,7 +1617,7 @@ def test_process_video_with_analysis_mocked(mock_analyze, test_api_client, db_se
     )
 
     assert response.status_code in [status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS], \
-        f"Request failed: {response.status_code} - {response.text}"
+    f"Request failed: {response.status_code} - {response.text}"
 
     data = response.json()
     assert data.get("processed_count", 0) >= 1
@@ -1543,7 +1660,7 @@ def test_process_document_with_analysis_mocked(mock_analyze, test_api_client, db
     )
 
     assert response.status_code in [status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS], \
-        f"Request failed: {response.status_code} - {response.text}"
+    f"Request failed: {response.status_code} - {response.text}"
 
     data = response.json()
     assert data.get("processed_count", 0) >= 1

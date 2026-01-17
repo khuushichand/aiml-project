@@ -1,11 +1,13 @@
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import Request
 
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
 from tldw_Server_API.app.core.AuthNZ.repos.user_provider_secrets_repo import AuthnzUserProviderSecretsRepo
 from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import AuthnzOrgProviderSecretsRepo
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     build_secret_payload,
     encrypt_byok_payload,
@@ -45,6 +47,18 @@ async def _upsert_shared_key(repo, scope_type, scope_id, provider, api_key, cred
     )
 
 
+def _make_request(principal: AuthPrincipal) -> Request:
+    scope = {"type": "http", "method": "GET", "path": "/"}
+    request = Request(scope)
+    request.state.auth = AuthContext(
+        principal=principal,
+        ip="127.0.0.1",
+        user_agent="pytest",
+        request_id="byok-test",
+    )
+    return request
+
+
 @pytest.mark.asyncio
 async def test_byok_resolution_precedence(tmp_path, monkeypatch):
     state = await _setup_byok_sqlite(tmp_path, monkeypatch)
@@ -78,11 +92,30 @@ async def test_byok_resolution_precedence(tmp_path, monkeypatch):
         "sk-org-openai-3333",
     )
 
+    request = _make_request(
+        AuthPrincipal(
+            kind="user",
+            user_id=user_id,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=[],
+            is_admin=True,
+            org_ids=[org_id],
+            team_ids=[team_id],
+            active_org_id=org_id,
+            active_team_id=team_id,
+        )
+    )
+
     resolved = await resolve_byok_credentials(
         "openai",
         user_id=user_id,
         team_ids=[team_id],
         org_ids=[org_id],
+        request=request,
     )
     assert resolved.source == "user"
     assert resolved.api_key == "sk-user-openai-1111"
@@ -96,6 +129,7 @@ async def test_byok_resolution_precedence(tmp_path, monkeypatch):
         user_id=user_id,
         team_ids=[team_id],
         org_ids=[org_id],
+        request=request,
     )
     assert resolved.source == "team"
     assert resolved.api_key == "sk-team-openai-2222"
@@ -107,9 +141,57 @@ async def test_byok_resolution_precedence(tmp_path, monkeypatch):
         user_id=user_id,
         team_ids=[team_id],
         org_ids=[org_id],
+        request=request,
     )
     assert resolved.source == "org"
     assert resolved.api_key == "sk-org-openai-3333"
+
+
+@pytest.mark.asyncio
+async def test_byok_resolution_base_url_requires_trusted_request(tmp_path, monkeypatch):
+    state = await _setup_byok_sqlite(tmp_path, monkeypatch)
+    user_id = int(state["user"]["id"])
+    org_id = int(state["org"]["id"])
+    team_id = int(state["team"]["id"])
+    pool = state["pool"]
+
+    user_repo = AuthnzUserProviderSecretsRepo(pool)
+    await _upsert_user_key(
+        user_repo,
+        user_id,
+        "openai",
+        "sk-user-openai-1111",
+        credential_fields={"base_url": "https://example.com/v1"},
+    )
+
+    request = _make_request(
+        AuthPrincipal(
+            kind="user",
+            user_id=user_id,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["user"],
+            permissions=[],
+            is_admin=False,
+            org_ids=[org_id],
+            team_ids=[team_id],
+            active_org_id=org_id,
+            active_team_id=team_id,
+        )
+    )
+
+    resolved = await resolve_byok_credentials(
+        "openai",
+        user_id=user_id,
+        team_ids=[team_id],
+        org_ids=[org_id],
+        request=request,
+    )
+
+    base_url = ((resolved.app_config or {}).get("openai_api") or {}).get("api_base_url")
+    assert base_url != "https://example.com/v1"
 
 
 @pytest.mark.asyncio

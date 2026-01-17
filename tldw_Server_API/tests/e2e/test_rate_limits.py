@@ -10,7 +10,7 @@ they skip to avoid flakiness where rate limits are disabled.
 import pytest
 import httpx
 
-from .fixtures import api_client
+from .fixtures import api_client, NO_RETRY_HEADER
 
 
 def _burst_until_429(fn, max_attempts: int = 20) -> bool:
@@ -33,7 +33,11 @@ def test_rate_limit_chat(api_client):
     }
 
     def _call():
-        return api_client.client.post("/api/v1/chat/completions", json=body)
+        return api_client.client.post(
+            "/api/v1/chat/completions",
+            json=body,
+            headers={NO_RETRY_HEADER: "1"},
+        )
 
     got = _burst_until_429(_call)
     if not got:
@@ -45,7 +49,11 @@ def test_rate_limit_audio_speech(api_client):
     payload = {"model": "tts-1", "input": "ping", "voice": "alloy", "response_format": "mp3"}
 
     def _call():
-        return api_client.client.post("/api/v1/audio/speech", json=payload)
+        return api_client.client.post(
+            "/api/v1/audio/speech",
+            json=payload,
+            headers={NO_RETRY_HEADER: "1"},
+        )
 
     got = _burst_until_429(_call)
     if not got:
@@ -63,7 +71,11 @@ def test_rate_limit_evaluations(api_client):
     }
 
     def _call():
-        return api_client.client.post("/api/v1/prompt-studio/evaluations", json=payload)
+        return api_client.client.post(
+            "/api/v1/prompt-studio/evaluations",
+            json=payload,
+            headers={NO_RETRY_HEADER: "1"},
+        )
 
     got = _burst_until_429(_call)
     if not got:

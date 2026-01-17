@@ -23,6 +23,8 @@ TEST_RLS_ROLE = "tldw_rls_tester"
 
 
 def _has_postgres_dependencies() -> bool:
+
+
     try:
         import psycopg  # noqa: F401
         return True

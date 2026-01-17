@@ -20,6 +20,7 @@ class _Loader:
         self._policy = policy
 
     def get_snapshot(self):
+
         return self._snap
 
     def get_policy(self, _policy_id: str):

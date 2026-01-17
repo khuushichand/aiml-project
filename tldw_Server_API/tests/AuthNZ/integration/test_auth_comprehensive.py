@@ -240,6 +240,7 @@ class TestAuthentication:
         assert data["expires_in"] > 0
 
     def test_login_invalid_username(self, isolated_test_environment):
+
         """Test login with invalid username"""
         client, db_name = isolated_test_environment
         response = client.post(
@@ -326,6 +327,7 @@ class TestRegistration:
     """Test user registration"""
 
     def test_register_success(self, isolated_test_environment):
+
         """Test successful registration"""
         client, db_name = isolated_test_environment
         response = client.post(
@@ -343,6 +345,7 @@ class TestRegistration:
         assert "user_id" in data
 
     def test_register_duplicate_username(self, isolated_test_environment, test_user_data):
+
         """Test registration with duplicate username"""
         client, db_name = isolated_test_environment
         response = client.post(
@@ -357,6 +360,7 @@ class TestRegistration:
         assert "already" in response.json()["detail"].lower()
 
     def test_register_duplicate_email(self, isolated_test_environment, test_user_data):
+
         """Test registration with duplicate email"""
         client, db_name = isolated_test_environment
         response = client.post(
@@ -644,6 +648,7 @@ class TestHealthEndpoints:
     """Test health monitoring endpoints"""
 
     def test_health_check(self, isolated_test_environment):
+
         """Test main health check"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health")
@@ -654,6 +659,7 @@ class TestHealthEndpoints:
         assert "timestamp" in data
 
     def test_liveness_probe(self, isolated_test_environment):
+
         """Test liveness probe"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health/live")
@@ -661,6 +667,7 @@ class TestHealthEndpoints:
         assert response.json()["status"] == "alive"
 
     def test_readiness_probe(self, isolated_test_environment):
+
         """Test readiness probe"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health/ready")
@@ -669,6 +676,7 @@ class TestHealthEndpoints:
         assert "status" in data
 
     def test_metrics_endpoint(self, isolated_test_environment):
+
         """Test metrics endpoint"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health/metrics")
@@ -687,12 +695,14 @@ class TestSecurity:
     """Test security features"""
 
     def test_unauthorized_access(self, isolated_test_environment):
+
         """Test accessing protected endpoint without auth"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/users/me")
         assert response.status_code in [401, 403]  # Both unauthorized and forbidden are acceptable
 
     def test_invalid_token(self, isolated_test_environment):
+
         """Test with invalid token"""
         client, db_name = isolated_test_environment
         response = client.get(
@@ -840,6 +850,7 @@ class TestIntegration:
     """Test full user flows"""
 
     def test_full_user_lifecycle(self, isolated_test_environment):
+
         """Test complete user lifecycle from registration to deletion"""
         client, db_name = isolated_test_environment
         # 1. Register new user

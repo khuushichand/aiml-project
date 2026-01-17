@@ -48,7 +48,7 @@
   - Transcript schema includes segments with timestamps, speaker labels, confidence, optional diarization, and usage stats; shape aligns with the existing REST/WS schemas, with optional extra metadata for diagnostics.
   - Persist transcripts and metadata into Media DB v2: normalized STT artifacts (including `text`, `segments`, `language`, `diarization`, `usage`, `metadata`) serialized into the `Transcripts` table (`transcription`), keyed by `(media_id, whisper_model)` (provider/model), with `Media.transcription_model` tracking the effective/default model. Segments/chunks are written via `MediaChunks`/`UnvectorizedMediaChunks`; ingestion result JSON continues to carry transcript content/segments in the established shape and may include `normalized_stt` for internal consumers.
   - Config-driven defaults with request-level overrides (bounded validation).
-  - Rate limiting via SlowAPI/global plus per-provider thresholds.
+  - Rate limiting via RG ingress policies plus per-provider thresholds.
   - Retry/backoff policy with provider-specific fatal vs retriable errors; fallbacks must not mask auth/quota/validation failures and should be configurable per environment.
   - Metrics and audit: emit `audio.stt.*` counters/histograms, hook into unified audit service for lifecycle events; STT/TTS/voice-to-voice metrics labels documented.
   - Failure modes: fail-open when VAD/diarization unavailable (log once, continue streaming) rather than blocking; record a clear metric/log label when operating in fail-open mode so latency/quality are interpreted correctly.

@@ -12,6 +12,7 @@ class FakeTime:
         self.t = t0
 
     def __call__(self) -> float:
+
         return self.t
 
     def advance(self, s: float) -> None:
@@ -229,10 +230,10 @@ async def test_concurrency_streams_units_enforced():
     assert d3.allowed and h3
 
     # Commit should release just this handle's leases via ZREM
-    await rg.commit(h1)
+    await rg.commit(h3)
 
-    d3, h3 = await rg.reserve(req)
-    assert d3.allowed and h3
+    d4, h4 = await rg.reserve(req_two)
+    assert d4.allowed and h4
 
 
 @pytest.mark.asyncio
@@ -318,7 +319,7 @@ async def test_requests_burst_and_retry_after_behavior():
 async def test_requests_steady_rate_no_denials():
     class _Loader:
         def get_policy(self, pid):
-            # 6 rpm → one every 10s should always pass
+                     # 6 rpm → one every 10s should always pass
             return {"requests": {"rpm": 6}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
@@ -352,7 +353,7 @@ async def test_partial_add_rollback_yields_denial_and_cleans_up_members():
     """Simulate a partial add failure: allow requests but deny tokens; ensure rollback and denial decision."""
     class _Loader:
         def get_policy(self, pid):
-            # 1 rpm and 1 token per minute; both scoped to global+user
+                     # 1 rpm and 1 token per minute; both scoped to global+user
             return {"requests": {"rpm": 1}, "tokens": {"per_min": 1}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)

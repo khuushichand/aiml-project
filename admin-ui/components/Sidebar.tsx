@@ -1,10 +1,9 @@
 'use client';
 
-import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { LogOut, Keyboard } from 'lucide-react';
-import { logout, getCurrentUser, type AdminUser } from '@/lib/auth';
+import { logout } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -17,14 +16,13 @@ import { navigation } from '@/lib/navigation';
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<AdminUser | null>(() => getCurrentUser());
-  const { hasPermission, hasRole, loading: permLoading } = usePermissions();
+  const { user, hasPermission, hasRole, loading: permLoading, refresh } = usePermissions();
   const { error: showError } = useToast();
 
   const handleLogout = async () => {
     try {
       await logout();
-      setUser(null);
+      await refresh();
       router.push('/login');
     } catch (error) {
       console.error('Logout failed:', error);

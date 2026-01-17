@@ -645,15 +645,32 @@ curl -X POST "http://localhost:8000/api/v1/chunking/templates" \
   }'
 ```
 
+Shared utility for Python examples (used in Examples 2 and 3):
+
+```python
+import json
+from urllib.request import Request, urlopen
+
+def request_json(method, url, payload):
+    data = json.dumps(payload).encode("utf-8")
+    req = Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    with urlopen(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+```
+
 ### Example 2: Processing a Research Paper
 
 ```python
-import requests
-
 # Apply the academic_paper template
-response = requests.post(
+result = request_json(
+    "POST",
     "http://localhost:8000/api/v1/chunking/templates/apply",
-    json={
+    {
         "template_name": "academic_paper",
         "text": """
         # Abstract
@@ -664,11 +681,11 @@ response = requests.post(
 
         # Methodology
         We propose a three-stage approach...
-        """
-    }
+        """,
+    },
 )
 
-chunks = response.json()["chunks"]
+chunks = result["chunks"]
 for i, chunk in enumerate(chunks):
     print(f"Chunk {i+1}: {chunk[:100]}...")
 ```
@@ -676,8 +693,6 @@ for i, chunk in enumerate(chunks):
 ### Example 3: Batch Processing with Templates
 
 ```python
-import requests
-
 documents = [
     {"type": "academic_paper", "text": "..."},
     {"type": "code_documentation", "text": "..."},
@@ -685,17 +700,15 @@ documents = [
 ]
 
 for doc in documents:
-    response = requests.post(
+    result = request_json(
+        "POST",
         "http://localhost:8000/api/v1/chunking/templates/apply",
-        json={
+        {
             "template_name": doc["type"],
-            "text": doc["text"]
-        }
+            "text": doc["text"],
+        },
     )
-
-    if response.status_code == 200:
-        result = response.json()
-        print(f"Processed {doc['type']}: {result['metadata']['chunk_count']} chunks")
+    print(f"Processed {doc['type']}: {result['metadata']['chunk_count']} chunks")
 ```
 
 ## Migration Guide

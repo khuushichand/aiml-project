@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator
 
 
 def test_create_backup_missing_source_returns_error(tmp_path):
+
     db_path = tmp_path / "missing.db"
     backup_dir = tmp_path / "backups"
 
@@ -21,6 +22,7 @@ def test_create_backup_missing_source_returns_error(tmp_path):
 
 
 def test_incremental_backup_handles_quoted_paths(tmp_path):
+
     quoted_dir = tmp_path / "owner's"
     quoted_dir.mkdir()
     db_path = quoted_dir / "data.db"
@@ -44,6 +46,7 @@ def test_incremental_backup_handles_quoted_paths(tmp_path):
 
 
 def test_incremental_backup_creates_directory_when_missing(tmp_path):
+
     db_path = tmp_path / "data.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE entries (val TEXT)")
@@ -60,6 +63,7 @@ def test_incremental_backup_creates_directory_when_missing(tmp_path):
 
 
 def test_rollback_to_backup_restores_wal_sidecars(tmp_path):
+
     db_path = tmp_path / "waltest.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
@@ -93,6 +97,7 @@ def test_rollback_to_backup_restores_wal_sidecars(tmp_path):
 
 
 def test_restore_skips_snapshot_when_target_missing(tmp_path):
+
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir()
     backup_name = "test_backup.db"
@@ -109,6 +114,7 @@ def test_restore_skips_snapshot_when_target_missing(tmp_path):
 
 
 def test_restore_creates_snapshot_when_target_exists(tmp_path):
+
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir()
     backup_name = "test_backup.db"
@@ -127,7 +133,21 @@ def test_restore_creates_snapshot_when_target_exists(tmp_path):
     assert db_path.read_text() == "new data"
 
 
+def test_restore_rejects_invalid_backup_name(tmp_path):
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    db_path = tmp_path / "restore.db"
+    db_path.write_text("existing data")
+
+    result = restore_single_db_backup(str(db_path), str(backup_dir), "data", "../evil.db")
+
+    assert "invalid backup name" in result.lower()
+    assert db_path.read_text() == "existing data"
+
+
 def test_backup_round_trip_uses_flat_directory(tmp_path):
+
     db_path = tmp_path / "data.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL")

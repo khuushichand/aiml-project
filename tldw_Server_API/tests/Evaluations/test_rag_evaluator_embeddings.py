@@ -143,6 +143,7 @@ class TestRAGEvaluatorEmbeddings:
                 assert results["metrics"]["answer_similarity"]["method"] == "embeddings"
 
     def test_evaluator_cleanup(self):
+
         """Test that evaluator properly cleans up resources."""
         evaluator = RAGEvaluator()
         evaluator.close()  # Should not raise

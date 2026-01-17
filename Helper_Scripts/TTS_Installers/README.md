@@ -28,6 +28,11 @@ Examples:
 - Chatterbox (deps only):
   python Helper_Scripts/TTS_Installers/install_tts_chatterbox.py
 
+- Supertonic2 (assets + config snippet):
+  python Helper_Scripts/TTS_Installers/install_tts_supertonic2.py
+  # Skip config updates:
+  # python Helper_Scripts/TTS_Installers/install_tts_supertonic2.py --no-config-update
+
 Notes
 - Scripts use tldw’s internal installer utilities where possible (pip + HF snapshots).
 - Downloads respect environment flags:

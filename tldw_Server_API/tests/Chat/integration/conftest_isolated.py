@@ -2,6 +2,7 @@
 Isolated test configuration that avoids global state modifications.
 This replaces the problematic autouse fixtures with explicit, isolated fixtures.
 """
+
 import os
 import pytest
 import tempfile
@@ -9,9 +10,13 @@ from unittest.mock import Mock, MagicMock, patch
 from fastapi.testclient import TestClient
 from typing import Dict, Any
 
+
 def _get_app():
     from tldw_Server_API.app.main import app as _app
+
     return _app
+
+
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
@@ -21,11 +26,13 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHA
 # ISOLATED FIXTURES - No global state modifications
 # ============================================================================
 
+
 @pytest.fixture(scope="function")
 def isolated_db():
     """Create an isolated database for each test."""
     import sqlite3
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 
     # Initialize database with WAL mode for better concurrency
@@ -37,15 +44,17 @@ def isolated_db():
     conn.commit()
 
     # Add default character
-    db.add_character_card({
-        "name": DEFAULT_CHARACTER_NAME,
-        "description": "Test character",
-        "personality": "Helpful",
-        "scenario": "Testing",
-        "system_prompt": "You are a helpful AI assistant.",
-        "first_message": "Hello!",
-        "creator_notes": "Test"
-    })
+    db.add_character_card(
+        {
+            "name": DEFAULT_CHARACTER_NAME,
+            "description": "Test character",
+            "personality": "Helpful",
+            "scenario": "Testing",
+            "system_prompt": "You are a helpful AI assistant.",
+            "first_message": "Hello!",
+            "creator_notes": "Test",
+        }
+    )
 
     yield db
 
@@ -89,11 +98,7 @@ def isolated_client(isolated_db):
 @pytest.fixture(scope="function")
 def mock_api_keys():
     """Return mock API keys without modifying global state."""
-    return {
-        "openai": "sk-mock-key-12345",
-        "local-llm": "dummy-key",
-        "anthropic": "mock-anthropic-key"
-    }
+    return {"openai": "sk-mock-key-12345", "local-llm": "dummy-key", "anthropic": "mock-anthropic-key"}
 
 
 @pytest.fixture(scope="function")
@@ -103,12 +108,9 @@ def isolated_auth_token():
     if settings.AUTH_MODE == "multi_user":
         # In multi-user mode, create a JWT token
         from tldw_Server_API.app.core.Security.JWT import get_jwt_service
+
         jwt_service = get_jwt_service()
-        access_token = jwt_service.create_access_token(
-            user_id="test_user_id",
-            username="test_user",
-            role="user"
-        )
+        access_token = jwt_service.create_access_token(user_id="test_user_id", username="test_user", role="user")
         return f"Bearer {access_token}"
     else:
         # In single-user mode, use the actual API key from settings
@@ -125,39 +127,36 @@ def mock_llm_response():
         "object": "chat.completion",
         "created": 1234567890,
         "model": "test-model",
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": "This is a test response"},
-            "finish_reason": "stop"
-        }],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "total_tokens": 15
-        }
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "This is a test response"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
 
 
 @pytest.fixture(scope="function")
 def isolated_chat_endpoint_mocks(mock_api_keys, mock_llm_response):
     """Create isolated mocks for chat endpoint without global modifications."""
-    with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", mock_api_keys), \
-         patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform, \
-         patch("tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call") as mock_chat_call:
+    with (
+        patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", mock_api_keys),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform,
+        patch("tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call") as mock_chat_call,
+    ):
 
         mock_perform.return_value = mock_llm_response
         mock_chat_call.return_value = mock_llm_response
 
-        yield {
-            "perform_chat_api_call": mock_perform,
-            "chat_api_call": mock_chat_call,
-            "response": mock_llm_response
-        }
+        yield {"perform_chat_api_call": mock_perform, "chat_api_call": mock_chat_call, "response": mock_llm_response}
 
 
 # ============================================================================
 # UNIT TEST FIXTURES - For tests that don't need external services
 # ============================================================================
+
 
 @pytest.fixture(scope="function")
 def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
@@ -182,6 +181,7 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
         # In single-user mode, the API expects X-API-KEY to match settings.
         # Keep legacy 'Token' header for backward compatibility in tests.
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+
         _settings = _get_settings()
         headers = {"X-CSRF-Token": csrf_token}
         # Always include X-API-KEY for single-user auth
@@ -206,10 +206,12 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
 # INTEGRATION TEST FIXTURES - For tests that need the mock server
 # ============================================================================
 
+
 @pytest.fixture(scope="session")
 def mock_server_url():
     """Return the mock server URL if it's running."""
     import requests
+
     try:
         response = requests.get("http://localhost:8080/v1/models", timeout=1)
         if response.status_code == 200:
@@ -234,11 +236,14 @@ def integration_test_client(isolated_db, mock_server_url):
 
     # Set environment for this test only using monkeypatch would be better
     # but for now we'll use a context manager approach
-    with patch.dict(os.environ, {
-        "OPENAI_API_KEY": "sk-mock-key-12345",
-        "OPENAI_API_BASE": f"{mock_server_url}/v1",
-        "CUSTOM_OPENAI_API_IP": f"{mock_server_url}/v1/chat/completions"
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "sk-mock-key-12345",
+            "OPENAI_API_BASE": f"{mock_server_url}/v1",
+            "CUSTOM_OPENAI_API_IP": f"{mock_server_url}/v1/chat/completions",
+        },
+    ):
         # Temporarily patch API_KEYS for this test
         with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "sk-mock-key-12345"}):
             client = TestClient(test_app)
@@ -251,6 +256,7 @@ def integration_test_client(isolated_db, mock_server_url):
             # Add helper for authenticated requests
             def post_with_auth(url, json_data, auth_token="Bearer sk-mock-key-12345"):
                 from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+
                 _settings = _get_settings()
                 headers = {"X-CSRF-Token": csrf_token}
                 try:
@@ -273,20 +279,19 @@ def integration_test_client(isolated_db, mock_server_url):
 # HELPER FIXTURES
 # ============================================================================
 
+
 @pytest.fixture
 def sample_chat_request():
     """Provide a sample chat request for testing."""
     from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
         ChatCompletionRequest,
-        ChatCompletionUserMessageParam
+        ChatCompletionUserMessageParam,
     )
 
     return ChatCompletionRequest(
         model="test-model",
         api_provider="openai",
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Hello, how are you?")
-        ]
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello, how are you?")],
     )
 
 
@@ -301,5 +306,5 @@ def mock_character():
         "scenario": "Testing",
         "system_prompt": "You are a test assistant",
         "first_message": "Hello! I'm TestCharacter.",
-        "creator_notes": "Created for testing"
+        "creator_notes": "Created for testing",
     }

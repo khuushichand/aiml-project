@@ -782,20 +782,31 @@ When `webhook_url` is provided in a run request, the following payload is sent u
 
 ## Code Examples
 
-> ⚠️ Generate a strong API key and set it via `SINGLE_USER_API_KEY` before running these examples:
+> ⚠️ Generate a strong API key (new format) and set it via `SINGLE_USER_API_KEY` before running these examples:
 > ```bash
-> export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+> python -m tldw_Server_API.app.core.AuthNZ.initialize
+> # Copy SINGLE_USER_API_KEY into your environment
 > ```
 > Replace `YOUR_API_KEY` below with that value (or load it from your environment at runtime).
 
 ### Python
 ```python
-import requests
+import json
+from urllib.request import Request, urlopen
 
 # Configuration
 API_KEY = "YOUR_API_KEY"
 BASE_URL = "http://localhost:8000"
 headers = {"Authorization": f"Bearer {API_KEY}"}
+
+def request_json(method, url, payload=None, headers=None):
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update(headers)
+    req = Request(url, data=data, headers=hdrs, method=method)
+    with urlopen(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 # Create evaluation
 eval_request = {
@@ -807,28 +818,31 @@ eval_request = {
     ]
 }
 
-response = requests.post(
+eval_response = request_json(
+    "POST",
     f"{BASE_URL}/api/v1/evaluations",
-    json=eval_request,
-    headers=headers
+    payload=eval_request,
+    headers=headers,
 )
-eval_id = response.json()["id"]
+eval_id = eval_response["id"]
 
 # Run evaluation
 run_request = {"config": {"temperature": 0}}
-response = requests.post(
+run_response = request_json(
+    "POST",
     f"{BASE_URL}/api/v1/evaluations/{eval_id}/runs",
-    json=run_request,
-    headers=headers
+    payload=run_request,
+    headers=headers,
 )
-run_id = response.json()["id"]
+run_id = run_response["id"]
 
 # Get results
-response = requests.get(
+results = request_json(
+    "GET",
     f"{BASE_URL}/api/v1/evaluations/runs/{run_id}/results",
-    headers=headers
+    headers=headers,
 )
-print(response.json())
+print(results)
 ```
 
 ### cURL

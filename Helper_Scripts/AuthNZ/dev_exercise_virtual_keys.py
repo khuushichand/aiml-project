@@ -21,23 +21,37 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Dict, Any
 
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
+
+from common.repo_utils import configure_local_egress, ensure_repo_root
+
+ensure_repo_root()
+
 try:
-    import requests
+    from tldw_Server_API.app.core import http_client
 except Exception:
-    print("Please 'pip install requests' to run this helper.")
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.")
     sys.exit(1)
 
 
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 ADMIN_BEARER = os.getenv("ADMIN_BEARER_TOKEN")
 API_KEY = os.getenv("X_API_KEY") or os.getenv("SINGLE_USER_API_KEY")
+configure_local_egress(BASE_URL)
 
 
-def _post(path: str, headers: Dict[str, str], json_body: Dict[str, Any]) -> requests.Response:
+def _post(path: str, headers: Dict[str, str], json_body: Dict[str, Any]):
     url = f"{BASE_URL}{path}"
-    return requests.post(url, headers=headers, json=json_body, timeout=30)
+    return http_client.fetch(method="POST", url=url, headers=headers, json=json_body, timeout=30)
 
 
 def _chat_payload() -> Dict[str, Any]:
@@ -91,7 +105,7 @@ def exercise_virtual_api_key():
         "expires_in_days": 1,
     }
     url = f"{BASE_URL}/api/v1/users/api-keys/virtual"
-    r = requests.post(url, headers=headers, json=body, timeout=30)
+    r = http_client.fetch(method="POST", url=url, headers=headers, json=body, timeout=30)
     if r.status_code != 200:
         print(f"[warn] virtual api key mint failed: {r.status_code} {r.text}")
         return

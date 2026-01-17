@@ -4,8 +4,6 @@ Integration tests for Kanban API endpoints using a real Kanban DB.
 No mocking of internal functions; only dependency override to inject a temp DB.
 """
 
-import os
-import tempfile
 import importlib
 
 import pytest
@@ -13,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 pytestmark = pytest.mark.integration
@@ -21,7 +20,8 @@ pytestmark = pytest.mark.integration
 @pytest.fixture()
 def client_with_kanban_db(tmp_path, monkeypatch):
     """Create a test client with a temporary Kanban database."""
-    db_path = tmp_path / "kanban_integration.db"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+    db_path = DatabasePaths.get_kanban_db_path("integration_test_user")
     db = KanbanDB(str(db_path), user_id="integration_test_user")
 
     async def override_user():
@@ -31,6 +31,7 @@ def client_with_kanban_db(tmp_path, monkeypatch):
     from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import get_kanban_db_for_user
 
     def override_db_dep():
+
         return db
 
     # Use full app profile so Kanban routes are included
@@ -56,6 +57,7 @@ def client_with_kanban_db(tmp_path, monkeypatch):
 # =============================================================================
 
 def test_board_crud(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Create board
@@ -112,6 +114,7 @@ def test_board_crud(client_with_kanban_db):
 # =============================================================================
 
 def test_list_crud(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Create board first
@@ -169,6 +172,7 @@ def test_list_crud(client_with_kanban_db):
 # =============================================================================
 
 def test_card_crud(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Setup board and list
@@ -248,6 +252,7 @@ def test_card_crud(client_with_kanban_db):
 # =============================================================================
 
 def test_label_crud(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Create board
@@ -313,6 +318,7 @@ def test_label_crud(client_with_kanban_db):
 # =============================================================================
 
 def test_checklist_crud(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Setup board, list, card
@@ -363,6 +369,8 @@ def test_checklist_crud(client_with_kanban_db):
 
 
 def test_checklist_item_crud(client_with_kanban_db):
+
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -418,6 +426,8 @@ def test_checklist_item_crud(client_with_kanban_db):
 
 
 def test_toggle_all_checklist_items(client_with_kanban_db):
+
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -467,6 +477,7 @@ def test_toggle_all_checklist_items(client_with_kanban_db):
 # =============================================================================
 
 def test_comment_crud(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -516,6 +527,7 @@ def test_comment_crud(client_with_kanban_db):
 # =============================================================================
 
 def test_bulk_move_cards(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -560,6 +572,8 @@ def test_bulk_move_cards(client_with_kanban_db):
 
 
 def test_bulk_archive_cards(client_with_kanban_db):
+
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -599,6 +613,8 @@ def test_bulk_archive_cards(client_with_kanban_db):
 
 
 def test_bulk_delete_cards(client_with_kanban_db):
+
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -630,6 +646,8 @@ def test_bulk_delete_cards(client_with_kanban_db):
 
 
 def test_bulk_label_cards(client_with_kanban_db):
+
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -687,6 +705,7 @@ def test_bulk_label_cards(client_with_kanban_db):
 # =============================================================================
 
 def test_filter_cards(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -725,6 +744,8 @@ def test_filter_cards(client_with_kanban_db):
 
 
 def test_filter_cards_by_label(client_with_kanban_db):
+
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -770,6 +791,7 @@ def test_filter_cards_by_label(client_with_kanban_db):
 # =============================================================================
 
 def test_copy_card_with_checklists(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Setup
@@ -827,6 +849,7 @@ def test_copy_card_with_checklists(client_with_kanban_db):
 # =============================================================================
 
 def test_export_import_board(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Create board with content
@@ -869,6 +892,7 @@ def test_export_import_board(client_with_kanban_db):
 # =============================================================================
 
 def test_activity_log(client_with_kanban_db):
+
     client, db = client_with_kanban_db
 
     # Create board with some activity
@@ -899,6 +923,7 @@ def test_activity_log(client_with_kanban_db):
 # =============================================================================
 
 def test_search_cards_get(client_with_kanban_db):
+
     """Test GET /api/v1/kanban/search endpoint."""
     client, db = client_with_kanban_db
 
@@ -939,6 +964,8 @@ def test_search_cards_get(client_with_kanban_db):
 
 
 def test_search_cards_post(client_with_kanban_db):
+
+
     """Test POST /api/v1/kanban/search endpoint."""
     client, db = client_with_kanban_db
 
@@ -975,6 +1002,8 @@ def test_search_cards_post(client_with_kanban_db):
 
 
 def test_search_with_board_filter(client_with_kanban_db):
+
+
     """Test search filtering by board_id."""
     client, db = client_with_kanban_db
 
@@ -1020,6 +1049,8 @@ def test_search_with_board_filter(client_with_kanban_db):
 
 
 def test_search_with_priority_filter(client_with_kanban_db):
+
+
     """Test search filtering by priority."""
     client, db = client_with_kanban_db
 
@@ -1055,6 +1086,8 @@ def test_search_with_priority_filter(client_with_kanban_db):
 
 
 def test_search_with_label_filter(client_with_kanban_db):
+
+
     """Test search filtering by label_ids."""
     client, db = client_with_kanban_db
 
@@ -1098,6 +1131,8 @@ def test_search_with_label_filter(client_with_kanban_db):
 
 
 def test_search_includes_enriched_data(client_with_kanban_db):
+
+
     """Test that search results include board_name, list_name, and labels."""
     client, db = client_with_kanban_db
 
@@ -1137,6 +1172,8 @@ def test_search_includes_enriched_data(client_with_kanban_db):
 
 
 def test_search_pagination(client_with_kanban_db):
+
+
     """Test search pagination."""
     client, db = client_with_kanban_db
 
@@ -1182,6 +1219,8 @@ def test_search_pagination(client_with_kanban_db):
 
 
 def test_search_empty_query_rejected(client_with_kanban_db):
+
+
     """Test that empty search query is rejected."""
     client, db = client_with_kanban_db
 
@@ -1191,6 +1230,8 @@ def test_search_empty_query_rejected(client_with_kanban_db):
 
 
 def test_search_no_results(client_with_kanban_db):
+
+
     """Test search with no matching results."""
     client, db = client_with_kanban_db
 
@@ -1219,6 +1260,8 @@ def test_search_no_results(client_with_kanban_db):
 
 
 def test_search_archived_cards(client_with_kanban_db):
+
+
     """Test search with include_archived parameter."""
     client, db = client_with_kanban_db
 
@@ -1261,6 +1304,8 @@ def test_search_archived_cards(client_with_kanban_db):
 
 
 def test_search_status(client_with_kanban_db):
+
+
     """Test GET /api/v1/kanban/search/status endpoint."""
     client, db = client_with_kanban_db
 
@@ -1288,6 +1333,8 @@ def test_search_status(client_with_kanban_db):
 
 
 def test_search_invalid_label_ids_format(client_with_kanban_db):
+
+
     """Test that invalid label_ids format returns 400 error."""
     client, db = client_with_kanban_db
 
@@ -1301,6 +1348,8 @@ def test_search_invalid_label_ids_format(client_with_kanban_db):
 
 
 def test_search_with_search_mode_parameter(client_with_kanban_db):
+
+
     """Test search_mode parameter (fts, vector, hybrid)."""
     client, db = client_with_kanban_db
 
@@ -1354,6 +1403,8 @@ def test_search_with_search_mode_parameter(client_with_kanban_db):
 
 
 def test_search_with_special_characters(client_with_kanban_db):
+
+
     """Test search handles special characters safely without SQL/FTS5 syntax errors."""
     client, db = client_with_kanban_db
 
@@ -1414,6 +1465,8 @@ def test_search_with_special_characters(client_with_kanban_db):
 
 
 def test_search_post_with_all_parameters(client_with_kanban_db):
+
+
     """Test POST search with all available parameters."""
     client, db = client_with_kanban_db
 
@@ -1471,6 +1524,7 @@ def test_search_post_with_all_parameters(client_with_kanban_db):
 # =============================================================================
 
 def test_card_link_crud(client_with_kanban_db):
+
     """Test basic CRUD operations for card links."""
     client, db = client_with_kanban_db
 
@@ -1546,6 +1600,8 @@ def test_card_link_crud(client_with_kanban_db):
 
 
 def test_card_link_duplicate_rejected(client_with_kanban_db):
+
+
     """Test that duplicate links are rejected with 409 Conflict."""
     client, db = client_with_kanban_db
 
@@ -1578,6 +1634,8 @@ def test_card_link_duplicate_rejected(client_with_kanban_db):
 
 
 def test_card_link_invalid_type_rejected(client_with_kanban_db):
+
+
     """Test that invalid linked_type is rejected with 422."""
     client, db = client_with_kanban_db
 
@@ -1604,6 +1662,8 @@ def test_card_link_invalid_type_rejected(client_with_kanban_db):
 
 
 def test_bulk_card_links(client_with_kanban_db):
+
+
     """Test bulk add and remove card links."""
     client, db = client_with_kanban_db
 
@@ -1678,6 +1738,8 @@ def test_bulk_card_links(client_with_kanban_db):
 
 
 def test_bidirectional_lookup(client_with_kanban_db):
+
+
     """Test finding cards that link to a specific content item."""
     client, db = client_with_kanban_db
 
@@ -1745,6 +1807,8 @@ def test_bidirectional_lookup(client_with_kanban_db):
 
 
 def test_bidirectional_lookup_respects_archived(client_with_kanban_db):
+
+
     """Test that bidirectional lookup respects include_archived flag."""
     client, db = client_with_kanban_db
 
@@ -1796,6 +1860,8 @@ def test_bidirectional_lookup_respects_archived(client_with_kanban_db):
 
 
 def test_bidirectional_lookup_invalid_type(client_with_kanban_db):
+
+
     """Test that invalid linked_type in lookup returns 400."""
     client, db = client_with_kanban_db
 
@@ -1804,6 +1870,8 @@ def test_bidirectional_lookup_invalid_type(client_with_kanban_db):
 
 
 def test_bidirectional_lookup_no_cards(client_with_kanban_db):
+
+
     """Test bidirectional lookup returns empty list when no cards link to content."""
     client, db = client_with_kanban_db
 

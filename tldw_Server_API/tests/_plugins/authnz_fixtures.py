@@ -60,6 +60,8 @@ async def authnz_schema_ready():
 
 
 def _run_async(coro):
+
+
     import asyncio as _asyncio
     try:
         loop = _asyncio.get_event_loop()

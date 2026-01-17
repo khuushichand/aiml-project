@@ -38,7 +38,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call as chat_api_call
 
 
 class DocumentType(Enum):
@@ -142,7 +143,7 @@ class DocumentGeneratorService:
         # Request-scoped cache for prompts
         self._prompt_cache: Dict[DocumentType, Dict[str, Any]] = {}
 
-        # No longer need provider mapping - using chat_api_call abstraction
+        # No longer need provider mapping - using adapter registry
     @staticmethod
     def _normalize_conversation_id(conversation_id: Optional[Union[str, int]]) -> Optional[str]:
         """Normalize conversation identifiers provided by API/legacy callers."""
@@ -618,26 +619,28 @@ class DocumentGeneratorService:
         Returns:
             Generated content or stream generator
         """
-        # Prepare messages in OpenAI format
+        # Prepare messages in OpenAI format (system handled separately).
         messages = [
-            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
 
-        # Use the chat_api_call abstraction layer
         response = chat_api_call(
-            api_endpoint=provider.lower(),
+            api_endpoint=provider,
             messages_payload=messages,
+            system_message=system_prompt,
             api_key=api_key,
             model=model,
-            temp=temperature,
+            temperature=temperature,
             max_tokens=max_tokens,
-            streaming=stream,
-            system_message=system_prompt,
+            stream=stream,
             app_config=app_config,
         )
-
-        return response
+        if stream:
+            return response
+        content = extract_response_content(response)
+        if content is None:
+            raise ChatAPIError("LLM returned empty document content.")
+        return content
 
     def _save_generated_document(
         self,

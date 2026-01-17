@@ -26,7 +26,23 @@ def _reconstruct_tokens_from_stream(chunks: List[str], max_overlap: int) -> List
     return out
 
 
+def _reconstruct_chars_from_stream(chunks: List[str], max_overlap: int) -> str:
+    """Reconstruct a character stream from streaming chunks with overlap."""
+    out: List[str] = []
+    for ch in chunks:
+        chars = list(ch)
+        d = 0
+        L = min(max_overlap, len(chars), len(out))
+        for k in range(L, 0, -1):
+            if out[-k:] == chars[:k]:
+                d = k
+                break
+        out.extend(chars[d:])
+    return "".join(out)
+
+
 def test_chunk_file_stream_words_overlap(tmp_path):
+
     # Prepare a deterministic whitespace-normalized corpus
     words = [f"w{i:04d}" for i in range(1, 1200)]
     text = " ".join(words)
@@ -36,25 +52,42 @@ def test_chunk_file_stream_words_overlap(tmp_path):
     ck = Chunker()
 
     # overlap > 0
-    chunks = list(
-        ck.chunk_file_stream(
-            p, method="words", max_size=25, overlap=5, language="en", buffer_size=1024
-        )
-    )
+    chunks = list(ck.chunk_file_stream(p, method="words", max_size=25, overlap=5, language="en", buffer_size=1024))
     recon = _reconstruct_tokens_from_stream(chunks, max_overlap=5)
     assert recon == words, "Reconstructed token stream should match original (overlap>0)"
 
     # overlap == 0
-    chunks0 = list(
-        ck.chunk_file_stream(
-            p, method="words", max_size=25, overlap=0, language="en", buffer_size=1024
-        )
-    )
+    chunks0 = list(ck.chunk_file_stream(p, method="words", max_size=25, overlap=0, language="en", buffer_size=1024))
     recon0 = _reconstruct_tokens_from_stream(chunks0, max_overlap=0)
     assert recon0 == words, "Reconstructed token stream should match original (overlap=0)"
 
 
+def test_chunk_file_stream_words_no_space_language(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
+
+    monkeypatch.setattr(WordChunkingStrategy, "_tokenize_thai", lambda self, text: list(text))
+
+    text = "abcdefg" * 700  # > 2048 chars to force multiple streaming flushes
+    p = tmp_path / "nospace.txt"
+    p.write_text(text, encoding="utf-8")
+
+    ck = Chunker()
+    chunks = list(
+        ck.chunk_file_stream(
+            p,
+            method="words",
+            max_size=32,
+            overlap=5,
+            language="th",
+            buffer_size=1024,
+        )
+    )
+    recon = _reconstruct_chars_from_stream(chunks, max_overlap=5)
+    assert recon == text
+
+
 def test_chunk_file_stream_sentences_overlap(tmp_path):
+
     # Build simple sentences
     sents = [f"This is sentence {i}." for i in range(1, 400)]
     text = " ".join(sents)
@@ -64,11 +97,7 @@ def test_chunk_file_stream_sentences_overlap(tmp_path):
     ck = Chunker()
 
     # overlap one sentence
-    chunks = list(
-        ck.chunk_file_stream(
-            p, method="sentences", max_size=8, overlap=1, language="en", buffer_size=2048
-        )
-    )
+    chunks = list(ck.chunk_file_stream(p, method="sentences", max_size=8, overlap=1, language="en", buffer_size=2048))
     recon = _reconstruct_tokens_from_stream(chunks, max_overlap=50)  # sentence ~ few tokens
     # Compare after whitespace normalization via token lists
     original_tokens = text.split()
@@ -76,14 +105,9 @@ def test_chunk_file_stream_sentences_overlap(tmp_path):
 
 
 def test_structure_aware_code_fence_no_trailing_newline():
+
     ck = Chunker()
-    src = (
-        "# Title\n\n"
-        "```python\n"
-        "print('hello')"
-        "```\n"
-        "Paragraph after.\n"
-    )
+    src = "# Title\n\n" "```python\n" "print('hello')" "```\n" "Paragraph after.\n"
     # Intentionally no newline before the closing fence in middle of the string
     chunks = ck.chunk_text(src, method="structure_aware", max_size=3, overlap=0, language="en")
     # Ensure code fence is recognized and serialized back with fences present
@@ -92,6 +116,7 @@ def test_structure_aware_code_fence_no_trailing_newline():
 
 
 def test_language_autodetect_thai():
+
     ck = Chunker()
     thai_text = "ภาษาไทยทดสอบ ทดสอบข้อความ เพื่อการตัดประโยคฯ"
     out = ck.process_text(
@@ -106,6 +131,24 @@ def test_language_autodetect_thai():
     assert out and isinstance(out, list)
     md = out[0].get("metadata", {})
     assert md.get("language") == "th", f"Expected Thai autodetect, got {md.get('language')}"
+
+
+def test_language_autodetect_japanese_prefers_kana():
+
+    ck = Chunker()
+    japanese_text = "これはテストです。次の文です。"
+    out = ck.process_text(
+        japanese_text,
+        options={
+            "method": "sentences",
+            "max_size": 2,
+            "overlap": 0,
+            "language": "auto",
+        },
+    )
+    assert out and isinstance(out, list)
+    md = out[0].get("metadata", {})
+    assert md.get("language") == "ja", f"Expected Japanese autodetect, got {md.get('language')}"
 
 
 @pytest.mark.asyncio
@@ -133,3 +176,68 @@ async def test_async_chunk_stream_sentences_overlap_tail():
         ]
 
     assert "Sentence 5. Sentence 6." in chunks
+
+
+@pytest.mark.asyncio
+async def test_async_chunk_stream_words_no_space_language(monkeypatch):
+    from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
+    from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
+
+    monkeypatch.setattr(WordChunkingStrategy, "_tokenize_thai", lambda self, text: list(text))
+
+    text = "abcdefg" * 200
+    part1 = text[: len(text) // 2]
+    part2 = text[len(text) // 2 :]
+
+    async def text_stream():
+        yield part1
+        yield part2
+
+    async with AsyncChunker() as chunker:
+        chunks = [
+            ch
+            async for ch in chunker.chunk_stream(
+                text_stream(),
+                method="words",
+                max_size=16,
+                overlap=4,
+                buffer_size=len(part1),
+                language="th",
+            )
+        ]
+
+    recon = _reconstruct_chars_from_stream(chunks, max_overlap=4)
+    assert recon == text
+
+
+@pytest.mark.asyncio
+async def test_async_chunk_stream_overlap_no_tail_dup_on_boundary():
+    from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
+
+    text = " ".join([f"Sentence {i}." for i in range(1, 7)])
+
+    async def text_stream():
+        yield text
+
+    expected = Chunker().chunk_text(
+        text,
+        method="sentences",
+        max_size=2,
+        overlap=1,
+        language="en",
+    )
+
+    async with AsyncChunker() as chunker:
+        chunks = [
+            ch
+            async for ch in chunker.chunk_stream(
+                text_stream(),
+                method="sentences",
+                max_size=2,
+                overlap=1,
+                buffer_size=len(text),
+                language="en",
+            )
+        ]
+
+    assert chunks == expected

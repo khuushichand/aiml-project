@@ -9,7 +9,7 @@ from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced impo
 
 @pytest.mark.unit
 def test_base64_never_normalizes(monkeypatch):
-    # Ensure env is unset to avoid influencing behavior
+     # Ensure env is unset to avoid influencing behavior
     monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
 
     emb = [3.0, 4.0]
@@ -58,7 +58,7 @@ def test_adapter_vectors_normalize_when_env_truthy(monkeypatch):
 
 @pytest.mark.unit
 def test_env_false_non_adapter_still_normalizes(monkeypatch):
-    # Explicitly set false, which only disables L2 for adapter-supplied vectors
+     # Explicitly set false, which only disables L2 for adapter-supplied vectors
     monkeypatch.setenv("LLM_EMBEDDINGS_L2_NORMALIZE", "false")
 
     emb = [3.0, 4.0]
@@ -70,11 +70,12 @@ def test_env_false_non_adapter_still_normalizes(monkeypatch):
 
 @pytest.mark.unit
 def test_error_during_norm_returns_original_and_logs(monkeypatch):
-    # Force an error in np.linalg.norm to exercise error path
+     # Force an error in np.linalg.norm to exercise error path
     original_norm = np.linalg.norm
     monkeypatch.setenv("LLM_EMBEDDINGS_L2_NORMALIZE", "true")
 
     def boom(_):
+
         raise RuntimeError("norm failed")
 
     monkeypatch.setattr(np.linalg, "norm", boom)
@@ -111,7 +112,7 @@ def test_unknown_encoding_treated_as_numeric(monkeypatch):
 
 @pytest.mark.unit
 def test_base64_ignores_env_truthy(monkeypatch):
-    # Even if env requests normalization, base64 outputs are never normalized
+     # Even if env requests normalization, base64 outputs are never normalized
     monkeypatch.setenv("LLM_EMBEDDINGS_L2_NORMALIZE", "1")
     emb = [3.0, 4.0]
     arr, did_l2 = decide_and_apply_l2(emb, encoding_format="base64", embeddings_from_adapter=False)
@@ -122,7 +123,7 @@ def test_base64_ignores_env_truthy(monkeypatch):
 
 @pytest.mark.unit
 def test_mixed_batch_default_preserves_adapters(monkeypatch):
-    # Default: non-adapter numeric → normalize; adapter numeric → preserve
+     # Default: non-adapter numeric → normalize; adapter numeric → preserve
     monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
 
     e1 = [1.0, 2.0, 2.0]  # non-adapter
@@ -140,7 +141,7 @@ def test_mixed_batch_default_preserves_adapters(monkeypatch):
 
 @pytest.mark.unit
 def test_mixed_batch_env_truthy_normalizes_all(monkeypatch):
-    # Env truthy: both adapter and non-adapter numeric normalize
+     # Env truthy: both adapter and non-adapter numeric normalize
     monkeypatch.setenv("LLM_EMBEDDINGS_L2_NORMALIZE", "true")
 
     e1 = [1.0, 2.0, 2.0]

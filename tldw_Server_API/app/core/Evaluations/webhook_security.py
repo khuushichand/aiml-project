@@ -13,11 +13,11 @@ from typing import Dict, Any, Optional, List, Set, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import asyncio
-import aiohttp
 import ssl
 from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.config_manager import get_config
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 
 
 class WebhookSecurityLevel(Enum):
@@ -63,6 +63,18 @@ class WebhookValidationResult:
     def has_warnings(self) -> bool:
         """Check if validation has warnings."""
         return len(self.warnings) > 0
+
+
+async def _close_response(resp: Any) -> None:
+    if resp is None:
+        return
+    close = getattr(resp, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(resp, "close", None)
+    if callable(close):
+        close()
 
 
 class WebhookSecurityValidator:
@@ -462,149 +474,126 @@ class WebhookSecurityValidator:
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
 
-            # Test connectivity with a simple HEAD request
-            timeout = aiohttp.ClientTimeout(total=10)
-
-            # Custom connector to prevent SSRF attacks
-            connector = aiohttp.TCPConnector(
-                ssl=ssl_context,
-                force_close=True,
-                enable_cleanup_closed=True
-            )
-
-            async with aiohttp.ClientSession(
-                timeout=timeout,
-                connector=connector,
-                trust_env=False  # Disable automatic proxy detection
-            ) as session:
-                start_time = asyncio.get_event_loop().time()
-
+            start_time = asyncio.get_event_loop().time()
+            resp = None
+            try:
+                # Validate hostname and port before making request
+                # Resolve the hostname once and use the IP directly to prevent DNS rebinding
+                safe_ip = None
                 try:
-                    # Validate hostname and port before making request
-                    # Resolve the hostname once and use the IP directly to prevent DNS rebinding
-                    safe_ip = None
+                    ip_addr = ipaddress.ip_address(hostname)
+                    # Check if IP is in private networks
+                    for network in self.private_networks:
+                        if ip_addr in network:
+                            result["error"] = f"Private network address not allowed: {hostname}"
+                            return result
+                    safe_ip = str(ip_addr)
+                except ValueError:
+                    # Not a direct IP, resolve it
                     try:
-                        ip_addr = ipaddress.ip_address(hostname)
-                        # Check if IP is in private networks
-                        for network in self.private_networks:
-                            if ip_addr in network:
-                                result["error"] = f"Private network address not allowed: {hostname}"
-                                return result
-                        safe_ip = str(ip_addr)
-                    except ValueError:
-                        # Not a direct IP, resolve it
-                        try:
-                            import socket
-                            ip_addresses = socket.getaddrinfo(hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
-                            if not ip_addresses:
-                                result["error"] = "Failed to resolve hostname"
-                                return result
-
-                            # Check all resolved IPs
-                            safe_ips = []
-                            for addr_info in ip_addresses:
-                                ip_str = addr_info[4][0]
-                                try:
-                                    ip_addr = ipaddress.ip_address(ip_str)
-                                    # Check against private networks
-                                    is_private = False
-                                    for network in self.private_networks:
-                                        if ip_addr in network:
-                                            is_private = True
-                                            break
-
-                                    if is_private:
-                                        result["error"] = f"Hostname resolves to private IP: {ip_str}"
-                                        return result
-
-                                    safe_ips.append(ip_str)
-                                except ValueError:
-                                    continue
-
-                            if not safe_ips:
-                                result["error"] = "No valid IPs found for hostname"
-                                return result
-
-                            # Use the first safe IP
-                            safe_ip = safe_ips[0]
-
-                        except socket.gaierror as e:
-                            result["error"] = f"DNS resolution failed: {str(e)}"
+                        ip_addresses = socket.getaddrinfo(hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                        if not ip_addresses:
+                            result["error"] = "Failed to resolve hostname"
                             return result
 
-                    # Reconstruct URL with the resolved IP to prevent DNS rebinding
-                    from urllib.parse import urlparse, urlunparse
-                    parsed = urlparse(url)
+                        # Check all resolved IPs
+                        safe_ips = []
+                        for addr_info in ip_addresses:
+                            ip_str = addr_info[4][0]
+                            try:
+                                ip_addr = ipaddress.ip_address(ip_str)
+                                # Check against private networks
+                                is_private = False
+                                for network in self.private_networks:
+                                    if ip_addr in network:
+                                        is_private = True
+                                        break
 
-                    # Build new URL with IP address instead of hostname
-                    if parsed.port:
-                        netloc = f"[{safe_ip}]:{parsed.port}" if ":" in safe_ip else f"{safe_ip}:{parsed.port}"
-                    else:
-                        netloc = f"[{safe_ip}]" if ":" in safe_ip else safe_ip
+                                if is_private:
+                                    result["error"] = f"Hostname resolves to private IP: {ip_str}"
+                                    return result
 
-                    # Create the URL with IP
-                    ip_url = urlunparse((
-                        parsed.scheme,
-                        netloc,
-                        parsed.path,
-                        parsed.params,
-                        parsed.query,
-                        parsed.fragment
-                    ))
+                                safe_ips.append(ip_str)
+                            except ValueError:
+                                continue
 
-                    # Set Host header to original hostname for virtual hosting
-                    headers = {'Host': hostname}
+                        if not safe_ips:
+                            result["error"] = "No valid IPs found for hostname"
+                            return result
 
-                    async with session.head(
-                        ip_url,  # Use IP-based URL to prevent DNS rebinding
-                        ssl=ssl_context,
-                        headers=headers,
-                        allow_redirects=False,  # Disable automatic redirects to prevent SSRF
-                        max_redirects=0,  # Additional protection against redirects
-                        trace_request_ctx={'original_url': url}  # Keep track of original URL
-                    ) as response:
-                        end_time = asyncio.get_event_loop().time()
-                        result["response_time_ms"] = int((end_time - start_time) * 1000)
-                        result["reachable"] = True
-                        result["status_code"] = response.status
+                        # Use the first safe IP
+                        safe_ip = safe_ips[0]
 
-                        # Check for redirect attempts
-                        if response.status in [301, 302, 303, 307, 308]:
-                            redirect_location = response.headers.get('Location', '')
-                            if redirect_location:
-                                # Parse and validate redirect location
+                    except socket.gaierror as e:
+                        result["error"] = f"DNS resolution failed: {str(e)}"
+                        return result
+
+                # Reconstruct URL with the resolved IP to prevent DNS rebinding
+                from urllib.parse import urlparse, urlunparse
+                parsed = urlparse(url)
+
+                # Build new URL with IP address instead of hostname
+                if parsed.port:
+                    netloc = f"[{safe_ip}]:{parsed.port}" if ":" in safe_ip else f"{safe_ip}:{parsed.port}"
+                else:
+                    netloc = f"[{safe_ip}]" if ":" in safe_ip else safe_ip
+
+                # Create the URL with IP
+                ip_url = urlunparse((
+                    parsed.scheme,
+                    netloc,
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment
+                ))
+
+                # Set Host header to original hostname for virtual hosting
+                headers = {'Host': hostname}
+
+                resp = await afetch(
+                    method="HEAD",
+                    url=ip_url,  # Use IP-based URL to prevent DNS rebinding
+                    headers=headers,
+                    timeout=10,
+                    allow_redirects=False,
+                    retry=RetryPolicy(attempts=1),
+                    verify=ssl_context,
+                )
+                end_time = asyncio.get_event_loop().time()
+                result["response_time_ms"] = int((end_time - start_time) * 1000)
+                result["reachable"] = True
+                status_code = int(resp.status_code)
+                result["status_code"] = status_code
+
+                # Check for redirect attempts
+                if status_code in [301, 302, 303, 307, 308]:
+                    redirect_location = resp.headers.get('Location', '') or resp.headers.get('location', '')
+                    if redirect_location:
+                        # Parse and validate redirect location
+                        try:
+                            redirect_parsed = urlparse(redirect_location)
+                            if redirect_parsed.hostname:
+                                # Validate redirect hostname
                                 try:
-                                    redirect_parsed = urlparse(redirect_location)
-                                    if redirect_parsed.hostname:
-                                        # Validate redirect hostname
-                                        try:
-                                            redirect_ip = socket.getaddrinfo(redirect_parsed.hostname, None)[0][4][0]
-                                            redirect_addr = ipaddress.ip_address(redirect_ip)
-                                            for network in self.private_networks:
-                                                if redirect_addr in network:
-                                                    result["error"] = f"Redirect to private network blocked: {redirect_location}"
-                                                    result["reachable"] = False
-                                                    return result
-                                        except (socket.gaierror, ValueError):
-                                            pass
-                                    result["redirect_location"] = redirect_location[:200]  # Truncate for safety
-                                except Exception:
+                                    redirect_ip = socket.getaddrinfo(redirect_parsed.hostname, None)[0][4][0]
+                                    redirect_addr = ipaddress.ip_address(redirect_ip)
+                                    for network in self.private_networks:
+                                        if redirect_addr in network:
+                                            result["error"] = f"Redirect to private network blocked: {redirect_location}"
+                                            result["reachable"] = False
+                                            return result
+                                except (socket.gaierror, ValueError):
                                     pass
+                            result["redirect_location"] = redirect_location[:200]  # Truncate for safety
+                        except Exception:
+                            pass
 
-                        # Check SSL if HTTPS
-                        if url.startswith("https://"):
-                            result["ssl_valid"] = True  # If we got here, SSL is valid
-
-                except aiohttp.ClientSSLError as e:
-                    result["error"] = f"SSL error: {str(e)}"
-                    result["ssl_valid"] = False
-
-                except aiohttp.ClientConnectorError as e:
-                    result["error"] = f"Connection error: {str(e)}"
-
-                except asyncio.TimeoutError:
-                    result["error"] = "Connection timeout"
-
+                # Check SSL if HTTPS
+                if url.startswith("https://"):
+                    result["ssl_valid"] = True  # If we got here, SSL is valid
+            finally:
+                await _close_response(resp)
         except Exception as e:
             result["error"] = f"Connectivity test failed: {str(e)}"
 
@@ -679,16 +668,14 @@ class WebhookPermissionManager:
             with self.db_adapter.transaction():
                 if webhook_id:
                     # Check by webhook ID
-                    cursor = conn.execute("""
+                    row = self.db_adapter.fetch_one("""
                         SELECT user_id FROM webhook_registrations
                         WHERE id = ? AND active = 1
                     """, (webhook_id,))
-
-                    row = cursor.fetchone()
-                    if not row:
+                    if row is None:
                         return False, "Webhook not found"
 
-                    webhook_owner = row[0]
+                    webhook_owner = row.get("user_id") if isinstance(row, dict) else row[0]
                     if webhook_owner != user_id:
                         # (Optional) Could emit a unified audit SECURITY_VIOLATION here
                         return False, "Access denied: not webhook owner"

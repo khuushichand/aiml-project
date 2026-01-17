@@ -8,7 +8,9 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 
 def test_optional_claim_embeddings_with_chroma(monkeypatch):
-    # Enable flags
+
+
+     # Enable flags
     from tldw_Server_API.app.core.config import settings as app_settings
     orig_enable = app_settings.get("ENABLE_INGESTION_CLAIMS")
     orig_embed = app_settings.get("CLAIMS_EMBED")

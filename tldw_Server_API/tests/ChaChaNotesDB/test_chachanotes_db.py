@@ -83,6 +83,8 @@ def get_current_utc_timestamp_iso():
 
 
 def _create_sample_card_data(name_suffix="", client_id_override=None):
+
+
     return {
         "name": f"Test Character {name_suffix}",
         "description": "A test character.",
@@ -113,9 +115,13 @@ class TestDBInitialization:
         conn.execute("SELECT version FROM db_schema_version WHERE schema_name = ?", (db._SCHEMA_NAME,)).fetchone()[
             'version']
         assert version == db._CURRENT_SCHEMA_VERSION
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_metadata'"
+        ).fetchone() is not None
         db.close_connection()
 
     def test_in_memory_db(self, client_id):
+
         db = CharactersRAGDB(":memory:", client_id)
         assert db.is_memory_db
         assert db.client_id == client_id
@@ -125,15 +131,20 @@ class TestDBInitialization:
         conn.execute("SELECT version FROM db_schema_version WHERE schema_name = ?", (db._SCHEMA_NAME,)).fetchone()[
             'version']
         assert version == db._CURRENT_SCHEMA_VERSION
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_metadata'"
+        ).fetchone() is not None
         db.close_connection()
 
     def test_missing_client_id(self, db_path):
+
         with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
             CharactersRAGDB(db_path, "")
         with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
             CharactersRAGDB(db_path, None)
 
     def test_reopen_db(self, db_path, client_id):
+
         db1 = CharactersRAGDB(db_path, client_id)
         v1 = db1._get_db_version(db1.get_connection()) # Assuming _get_db_version is still available for tests
         db1.close_connection()
@@ -145,11 +156,12 @@ class TestDBInitialization:
         db2.close_connection()
 
     def test_schema_newer_than_code(self, db_path, client_id):
+
         db = CharactersRAGDB(db_path, client_id)
         conn = db.get_connection()
         # Manually set a newer version
         conn.execute("UPDATE db_schema_version SET version = ? WHERE schema_name = ?",
-                     (CharactersRAGDB._CURRENT_SCHEMA_VERSION + 1, CharactersRAGDB._SCHEMA_NAME))
+                    (CharactersRAGDB._CURRENT_SCHEMA_VERSION + 1, CharactersRAGDB._SCHEMA_NAME))
         conn.commit()
         db.close_connection()
 
@@ -198,6 +210,46 @@ class TestCharacterCards:
         retrieved = db_instance.get_character_card_by_name(card_data["name"])
         assert retrieved is not None
         assert retrieved["description"] == card_data["description"]
+
+
+class TestMessageMetadata:
+    def test_get_message_metadata_auto_creates_table(self, db_instance: CharactersRAGDB):
+        conn = db_instance.get_connection()
+        conn.execute("DROP TABLE IF EXISTS message_metadata")
+        conn.commit()
+
+        db_instance.get_message_metadata("missing-id")
+
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_metadata'"
+        ).fetchone()
+        assert exists is not None
+
+    def test_migration_v12_to_v13_creates_table(self, db_path, client_id):
+
+        db = CharactersRAGDB(db_path, client_id)
+        db.close_connection()
+
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                "UPDATE db_schema_version SET version = ? WHERE schema_name = ?",
+                (12, CharactersRAGDB._SCHEMA_NAME),
+            )
+            conn.execute("DROP TABLE IF EXISTS message_metadata")
+            conn.commit()
+
+        db = CharactersRAGDB(db_path, client_id)
+        conn = db.get_connection()
+        version = conn.execute(
+            "SELECT version FROM db_schema_version WHERE schema_name = ?",
+            (CharactersRAGDB._SCHEMA_NAME,),
+        ).fetchone()["version"]
+        assert version == CharactersRAGDB._CURRENT_SCHEMA_VERSION
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_metadata'"
+        ).fetchone()
+        assert exists is not None
+        db.close_connection()
 
     def test_list_character_cards(self, db_instance: CharactersRAGDB):
         # Get initial count (database has a default character card)
@@ -280,8 +332,10 @@ class TestCharacterCards:
             db_instance.update_character_card(card_id, update_payload, expected_version=client_expected_version)
 
     def test_update_character_card_not_found(self, db_instance: CharactersRAGDB):
-        with pytest.raises(ConflictError,
-                           match="Record not found in character_cards."):  # Match new _get_current_db_version error
+        with pytest.raises(
+            ConflictError,
+            match="Record not found in character_cards.",
+        ):  # Match new _get_current_db_version error
             db_instance.update_character_card(999, {"description": "Not Found"}, expected_version=1)
 
     def test_soft_delete_character_card(self, db_instance: CharactersRAGDB):
@@ -312,11 +366,11 @@ class TestCharacterCards:
         # The internal _get_current_db_version would raise "Record is soft-deleted",
         # which soft_delete_character_card catches and handles.
         assert db_instance.soft_delete_character_card(card_id,
-                                                      expected_version=expected_version_for_first_delete) is True
+                                                    expected_version=expected_version_for_first_delete) is True
 
         # Verify version didn't change again (it's still 2 from the first delete)
         still_deleted_card_info = conn.execute("SELECT version, deleted FROM character_cards WHERE id = ?",
-                                               (card_id,)).fetchone()
+                                            (card_id,)).fetchone()
         assert still_deleted_card_info is not None
         assert still_deleted_card_info["deleted"] == 1
         assert still_deleted_card_info['version'] == expected_version_for_first_delete + 1  # Still version 2
@@ -472,7 +526,7 @@ class TestConversationsAndMessages:
         assert retrieved_after_update["title"] == updated_title, "Title was not updated correctly in main table"
         assert retrieved_after_update["rating"] == updated_rating, "Rating was not updated correctly"
         assert retrieved_after_update[
-                   "version"] == initial_expected_version + 1, "Version did not increment correctly after update"
+                "version"] == initial_expected_version + 1, "Version did not increment correctly after update"
 
         # 7. Verify FTS state after update
         #    Search for the NEW title
@@ -589,7 +643,7 @@ class TestConversationsAndMessages:
         conv_id = db_instance.add_conversation({"character_id": char_id, "title": "MessageSearchConv"})
         assert conv_id is not None
         msg1_data = {"id": str(uuid.uuid4()), "conversation_id": conv_id, "sender": "user",
-                     "content": "UniqueMessageContentAlpha"}
+                    "content": "UniqueMessageContentAlpha"}
         msg2_data = {"id": str(uuid.uuid4()), "conversation_id": conv_id, "sender": "ai", "content": "Another phrase"}
 
         db_instance.add_message(msg1_data)
@@ -602,7 +656,7 @@ class TestConversationsAndMessages:
 
         # Test search within a specific conversation
         results_conv_specific = db_instance.search_messages_by_content("UniqueMessageContentAlpha",
-                                                                       conversation_id=conv_id)
+                                                                    conversation_id=conv_id)
         assert len(results_conv_specific) == 1
         assert results_conv_specific[0]["id"] == msg1_data["id"]
 
@@ -610,7 +664,7 @@ class TestConversationsAndMessages:
         other_conv_id = db_instance.add_conversation({"character_id": char_id, "title": "Other MessageSearchConv"})
         assert other_conv_id is not None
         db_instance.add_message({"id": str(uuid.uuid4()), "conversation_id": other_conv_id, "sender": "user",
-                                 "content": "UniqueMessageContentAlpha In Other"})
+                                "content": "UniqueMessageContentAlpha In Other"})
 
         results_other_conv = db_instance.search_messages_by_content("UniqueMessageContentAlpha",
                                                                     conversation_id=other_conv_id)
@@ -618,7 +672,7 @@ class TestConversationsAndMessages:
         assert results_other_conv[0]["content"] == "UniqueMessageContentAlpha In Other"
 
         results_original_conv_again = db_instance.search_messages_by_content("UniqueMessageContentAlpha",
-                                                                             conversation_id=conv_id)
+                                                                            conversation_id=conv_id)
         assert len(results_original_conv_again) == 1
         assert results_original_conv_again[0]["id"] == msg1_data["id"]
 
@@ -654,7 +708,7 @@ class TestNotes:
         expected_version = original_note['version']  # Should be 1
 
         updated = db_instance.update_note(note_id, {"title": "Updated Title", "content": "Updated Content"},
-                                          expected_version=expected_version)
+                                        expected_version=expected_version)
         assert updated is True
 
         retrieved = db_instance.get_note_by_id(note_id)
@@ -828,15 +882,16 @@ class TestSyncLog:
         latest_change_id = db_instance.get_latest_sync_log_change_id()
 
         db_instance.update_character_card(card_id, {"description": "Updated for Sync"},
-                                          expected_version=expected_version)
+                                        expected_version=expected_version)
 
         new_entries = db_instance.get_sync_log_entries(since_change_id=latest_change_id)
         assert len(new_entries) >= 1
 
         update_log_entry = None
         for entry in new_entries:
-            if entry["entity"] == "character_cards" and entry["entity_id"] == str(card_id) and entry[
-                "operation"] == "update":
+            if (entry["entity"] == "character_cards"
+                    and entry["entity_id"] == str(card_id)
+                    and entry["operation"] == "update"):
                 update_log_entry = entry
                 break
 
@@ -859,8 +914,11 @@ class TestSyncLog:
         new_entries = db_instance.get_sync_log_entries(since_change_id=latest_change_id)
         delete_log_entry = None
         for entry in new_entries:
-            if entry["entity"] == "character_cards" and entry["entity_id"] == str(card_id) and entry[
-                "operation"] == "delete":
+            if (
+                entry["entity"] == "character_cards"
+                and entry["entity_id"] == str(card_id)
+                and entry["operation"] == "delete"
+            ):
                 delete_log_entry = entry
                 break
 

@@ -1,17 +1,66 @@
 # Prompt_Engineering.py
 # Description: Library for generating prompts
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import re
 from loguru import logger
 
 # Local Imports
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.config import load_and_log_configs
 
 
 class PromptGenerationError(Exception):
     """Raised when prompt generation fails."""
     pass
+
+
+def _call_adapter(api_endpoint: str, request: Dict[str, Any]) -> Any:
+    provider = (api_endpoint or "").strip().lower()
+    if not provider:
+        raise PromptGenerationError("Provider name is required.")
+    registry = get_registry()
+    adapter = registry.get_adapter(provider)
+    if adapter is None:
+        raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
+    payload = dict(request or {})
+    app_config = payload.get("app_config") or load_and_log_configs() or {}
+    payload["app_config"] = app_config
+    if payload.get("model") is None:
+        resolved = _resolve_model(provider, app_config)
+        if not resolved:
+            raise PromptGenerationError("Model is required for provider '%s'." % provider)
+        payload["model"] = resolved
+    return adapter.chat(payload)
+
+
+def _resolve_model(provider: str, app_config: Dict[str, Any]) -> Optional[str]:
+    key = f"{provider.replace('-', '_').replace('.', '_')}_api"
+    model = (app_config.get(key) or {}).get("model")
+    return model
+
+
+def chat_api_call(**kwargs: Any) -> Any:
+    """Compatibility shim for legacy chat_api_call usage in prompt tooling."""
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+    except Exception:
+        api_endpoint = (
+            kwargs.get("api_endpoint")
+            or kwargs.get("api_name")
+            or kwargs.get("provider")
+            or kwargs.get("endpoint")
+        )
+        if not api_endpoint:
+            raise PromptGenerationError("Provider name is required.")
+        request = dict(kwargs)
+        messages_payload = request.pop("messages_payload", None)
+        if messages_payload is not None and "messages" not in request:
+            request["messages"] = messages_payload
+        return _call_adapter(api_endpoint, request)
+    return perform_chat_api_call(**kwargs)
+
 
 #######################################################################################################################
 # Function Definitions
@@ -23,8 +72,8 @@ def generate_prompt(api_endpoint: str, api_key: str, task: str, variables_str: s
     """Generate a prompt using a meta-prompt with examples.
 
     Args:
-        api_endpoint: Chat API endpoint identifier used by chat_api_call
-        api_key: API key for the provider behind chat_api_call
+        api_endpoint: Provider identifier used by the adapter registry
+        api_key: API key for the provider adapter
         task: The task description to embed into the meta-prompt
         variables_str: Comma-separated variable names (currently informational)
         temperature: Sampling temperature for the generation call
@@ -506,17 +555,13 @@ def generate_prompt(api_endpoint: str, api_key: str, task: str, variables_str: s
     Note: If the task is particularly complicated, you may wish to instruct the AI to think things out beforehand in scratchpad or inner monologue XML tags before it gives its final answer. For simple tasks, omit this.
     Note: If you want the AI to output its entire response or parts of its response inside certain tags, specify the name of these tags (e.g. "write your answer inside <answer> tags") but do not include closing tags or unnecessary open-and-close tag sections."""
 
-    # Call chat API to generate the prompt
+    # Call adapter to generate the prompt
     try:
         response = chat_api_call(
             api_endpoint=api_endpoint,
             api_key=api_key,
             messages_payload=[{"role": "user", "content": metaprompt}],
-            temp=temperature,
-            streaming=False,
-            minp=None,
-            maxp=None,
-            model=None,
+            temperature=temperature,
         )
         if response is None:
             raise PromptGenerationError("Chat API returned empty response")
@@ -610,18 +655,13 @@ def test_generated_prompt(
     for ph, val in replacements.items():
         prompt_with_values = prompt_with_values.replace(ph, val)
 
-    # Send the filled-in prompt to the chat API
+    # Send the filled-in prompt to the provider adapter
     try:
         response = chat_api_call(
             api_endpoint=api_endpoint,
             api_key=api_key,
             messages_payload=[{"role": "user", "content": prompt_with_values}],
-            temp=temperature,
-            system_message=None,
-            streaming=False,
-            minp=None,
-            maxp=None,
-            model=None,
+            temperature=temperature,
         )
         if response is None:
             raise PromptGenerationError("Chat API returned empty response")

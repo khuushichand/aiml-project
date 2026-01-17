@@ -4,6 +4,8 @@ from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced impo
 
 
 def _override_user_admin():
+
+
     async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=2, username="admin", email="a@x", is_active=True, is_admin=True)
@@ -32,7 +34,6 @@ def test_orchestrator_sse_first_event_direct(redis_client):
 @pytest.mark.unit
 @pytest.mark.parametrize('stage', ['chunking', 'embedding', 'storage'])
 def test_orchestrator_sse_flags_reflected(redis_client, stage):
-
     async def _take_first_after_flags():
         # Set flags for the specific stage
         await redis_client.set(f"embeddings:stage:{stage}:paused", "1")

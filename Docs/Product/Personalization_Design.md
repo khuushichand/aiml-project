@@ -64,7 +64,8 @@ Provide opt-in, explainable personalization that leverages a per-user topic prof
 
 ## Data Model (SQLite + Chroma)
 
-SQLite (per-user DB): `Databases/user_databases/<user_id>/Personalization.db`
+SQLite (per-user DB): `<USER_DB_BASE_DIR>/<user_id>/Personalization.db`
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 - `UserProfile`
   - `user_id: str` (PK)
@@ -207,7 +208,7 @@ Runtime capability surface:
 
 - Fixtures/Mocks
   - Mock embeddings and LLM summarization for deterministic tests.
-  - Use temporary per-test user DBs under `Databases/user_databases/<test_user>`.
+  - Use temporary per-test user DBs under `<USER_DB_BASE_DIR>/<test_user>`.
 
 ## Metrics & Evaluation
 

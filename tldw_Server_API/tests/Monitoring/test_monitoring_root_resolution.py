@@ -4,6 +4,11 @@ from pathlib import Path
 import pytest
 
 from tldw_Server_API.app.api.v1.endpoints import monitoring as monitoring_ep
+from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicMonitoringDB
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import (
+    get_topic_monitoring_service,
+    _reset_topic_monitoring_service,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -77,3 +82,38 @@ def test_get_topic_monitoring_db_raises_when_import_and_fallback_root_search_fai
     with pytest.raises(RuntimeError) as exc_info:
         monitoring_ep.get_topic_monitoring_db()
     assert "importing get_project_root failed: import boom" in str(exc_info.value)
+
+
+def test_get_topic_monitoring_db_rejects_relative_path_without_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("MONITORING_ALERTS_DB", "alerts.db")
+    monitoring_ep._TOPIC_MONITORING_DB = None
+
+    with pytest.raises(RuntimeError) as exc_info:
+        monitoring_ep.get_topic_monitoring_db()
+    msg = str(exc_info.value)
+    assert "MONITORING_ALERTS_DB" in msg
+    assert "directory" in msg
+
+
+def test_topic_monitoring_service_rejects_watchlists_path_without_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MONITORING_ALERTS_DB", str(tmp_path / "alerts.db"))
+    monkeypatch.setenv("MONITORING_WATCHLISTS_FILE", "watchlists.json")
+    _reset_topic_monitoring_service()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        get_topic_monitoring_service()
+    msg = str(exc_info.value)
+    assert "MONITORING_WATCHLISTS_FILE" in msg
+    assert "directory" in msg
+
+
+def test_topic_monitoring_db_rejects_relative_path_without_directory() -> None:
+    with pytest.raises(RuntimeError) as exc_info:
+        TopicMonitoringDB(db_path="monitoring_alerts.db")
+    assert "directory" in str(exc_info.value)

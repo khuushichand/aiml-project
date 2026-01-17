@@ -10,6 +10,8 @@ import tempfile
 import logging # Added for potential logging
 from pathlib import Path
 
+import pytest
+
 #
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, DatabaseError
@@ -36,9 +38,9 @@ def temp_db(client_id: str = None):
             # -------------------------------------------------------------
             yield db
         except (DatabaseError, sqlite3.Error) as e:
-             logging.error(f"Failed to create/initialize temp DB {db_path}: {e}", exc_info=True)
-             # Re-raise to fail the test setup clearly
-             raise RuntimeError(f"Failed temp_db setup for {db_path}: {e}") from e
+            logging.error(f"Failed to create/initialize temp DB {db_path}: {e}", exc_info=True)
+            # Re-raise to fail the test setup clearly
+            raise RuntimeError(f"Failed temp_db setup for {db_path}: {e}") from e
         finally:
             if db:
                 logging.debug(f"Closing temp DB connection for test: {db_path}")
@@ -51,6 +53,7 @@ def temp_db(client_id: str = None):
             logging.debug(f"Temporary directory {temp_dir} will be removed.")
 
 def verify_media_db_schema(db):
+
     """Ensure critical columns exist in Media table."""
     # Make sure this function uses the instance's connection method
     conn = None
@@ -70,8 +73,8 @@ def verify_media_db_schema(db):
         else:
             logging.debug("verify_media_db_schema passed.")
     except Exception as e:
-         logging.error(f"Error during schema verification: {e}", exc_info=True)
-         raise # Re-raise the exception
+        logging.error(f"Error during schema verification: {e}", exc_info=True)
+        raise # Re-raise the exception
     # No finally block needed to close conn, as get_connection manages thread-local connection
 
 
@@ -98,6 +101,17 @@ def create_test_media(db: MediaDatabase, title: str, content: str, content_hash:
     if result:
         return result["id"] if isinstance(result, dict) else result[0]
     raise RuntimeError("Failed to retrieve media id after creating test media.")
+
+
+def skip_if_transcription_model_unavailable(model_name: str) -> None:
+    """Skip test if the specified transcription model is not available."""
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
+        check_transcription_model_status,
+    )
+
+    status = check_transcription_model_status(model_name)
+    if not status.get("available"):
+        pytest.skip(status.get("message", "Transcription model not available"))
 
 
 # End of test_utils.py

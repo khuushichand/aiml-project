@@ -9,7 +9,11 @@ import os
 # ---------------------------------------------------------------------------
 # Imports
 # ---------------------------------------------------------------------------
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    get_request_user,
+    User,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
 from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
     validate_provider_override,
@@ -24,12 +28,14 @@ from tldw_Server_API.app.core.Utils.image_validation import (
 )
 import asyncio
 import sys
+import math
 import json
 import time
 import uuid
 from functools import partial, lru_cache
 from collections import defaultdict, deque
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Literal
+from datetime import date, datetime, timezone, timedelta
 from unittest.mock import Mock
 from weakref import WeakKeyDictionary
 import threading
@@ -41,6 +47,8 @@ from fastapi import (
     Depends,
     Header,
     HTTPException,
+    Path,
+    Query,
     Request,
     status,
 )
@@ -76,10 +84,6 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     API_KEYS as SCHEMAS_API_KEYS,
     get_api_keys,
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import (
-    chat_api_call as perform_chat_api_call,
-)
-_ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -92,6 +96,19 @@ from tldw_Server_API.app.core.DB_Management.transaction_utils import (
 from tldw_Server_API.app.api.v1.schemas.chat_knowledge_schemas import (
     KnowledgeSaveRequest,
     KnowledgeSaveResponse,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
+    ConversationListResponse,
+    ConversationListItem,
+    ConversationListPagination,
+    ConversationUpdateRequest,
+    ConversationTreeResponse,
+    ConversationTreeNode,
+    ConversationTreePagination,
+    ConversationMetadata,
+    ChatAnalyticsResponse,
+    ChatAnalyticsBucket,
+    ChatAnalyticsPagination,
 )
 # Note: streaming utilities are handled inside chat_service. No direct import needed here.
 from tldw_Server_API.app.core.Chat.chat_helpers import (
@@ -113,6 +130,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_validators import (
 )
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call,
     resolve_provider_and_model,
     resolve_provider_api_key,
     build_call_params_from_request,
@@ -124,6 +142,10 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_non_stream_call,
     queue_is_active,
 )
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    map_sender_to_role,
+)
+_ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     load_template,
@@ -180,6 +202,7 @@ from .chat_dictionaries import (
 API_KEYS = SCHEMAS_API_KEYS
 
 router = APIRouter()
+conversations_alias_router = APIRouter()
 
 router.include_router(chat_dictionaries.router)
 router.include_router(chat_documents.router)
@@ -216,6 +239,19 @@ MAX_IMAGES_PER_REQUEST: int = int(_chat_config.get('max_images_per_request', 10)
 MAX_BASE64_BYTES: int = get_max_base64_bytes()
 # Provider fallback setting - disabled by default for production stability
 ENABLE_PROVIDER_FALLBACK: bool = _chat_config.get('enable_provider_fallback', 'False').lower() == 'true'
+def _cfg_float(key: str, fallback: float) -> float:
+    try:
+        raw = _chat_config.get(key)
+        return float(raw) if raw is not None else fallback
+    except Exception:
+        return fallback
+
+RECENCY_HALF_LIFE_DAYS: float = _cfg_float("half_life_days", 14.0)
+CHAT_BM25_WEIGHT: float = _cfg_float("w_bm25", 0.65)
+CHAT_RECENCY_WEIGHT: float = _cfg_float("w_recency", 0.35)
+ANALYTICS_MAX_RANGE_DAYS: int = int(_chat_config.get("analytics_max_range_days", 180))
+TREE_MESSAGE_CAP_DEFAULT: int = int(_chat_config.get("tree_message_cap_default", 200))
+TREE_MESSAGE_CAP_MAX: int = int(_chat_config.get("tree_message_cap_max", 500))
 
 # Chat-Commands feature toggles (env overrides take priority)
 def _cfg_bool_cmds(env_name: str, cfg_key: str, fallback: bool) -> bool:
@@ -240,6 +276,17 @@ except Exception:
 
 def _to_bool(val: str) -> bool:
     return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _resolve_base64_image_limit_enforcement() -> bool:
+    """Return True when base64 image size enforcement should run at ingress."""
+    env_val = os.getenv("CHAT_ENFORCE_BASE64_IMAGE_LIMIT")
+    if isinstance(env_val, str) and env_val.strip():
+        return _to_bool(env_val)
+    cfg_val = _chat_config.get("enforce_base64_image_limit") if _chat_config else None
+    if cfg_val is None:
+        return False
+    return _to_bool(cfg_val)
 
 # Optional flag: allow auto-switch from 'local-llm' to 'openai' when an
 # OpenAI key is present. Intended primarily for tests; disabled by default.
@@ -738,6 +785,38 @@ def _summarize_tool_calls(tool_calls: Any) -> str:
     except Exception:
         return "[tool_call]"
 
+def _normalize_message_timestamp(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, date):
+        dt = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    elif isinstance(value, (int, float)):
+        try:
+            dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
+            return dt.isoformat().replace("+00:00", "Z")
+        except (ValueError, OSError, OverflowError):
+            return None
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        s_norm = s[:-1] + "+00:00" if s.endswith("Z") else s
+        try:
+            dt = datetime.fromisoformat(s_norm)
+        except ValueError:
+            try:
+                dt = datetime.fromtimestamp(float(s), tz=timezone.utc)
+            except (ValueError, OSError, OverflowError):
+                return None
+    else:
+        return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
 def _persist_message_sync(
     db: CharactersRAGDB,
     payload: Dict[str, Any],
@@ -771,7 +850,7 @@ async def _save_message_turn_to_db(
     metrics = get_chat_metrics()
     current_loop = asyncio.get_running_loop()
     role = message_obj.get("role")
-    if role not in ("user", "assistant", "tool"):
+    if role not in ("user", "assistant", "tool", "system"):
         logger.warning("Skip DB save: invalid role='%s' for conv=%s", role, conversation_id)
         return None
 
@@ -879,6 +958,9 @@ async def _save_message_turn_to_db(
         "image_mime_type": primary_image_mime,
         "client_id": db.client_id,
     }
+    timestamp = _normalize_message_timestamp(message_obj.get("timestamp"))
+    if timestamp:
+        db_payload["timestamp"] = timestamp
     if normalized_images:
         # Remove helper position key before persisting
         db_payload["images"] = [{"data": item["data"], "mime": item["mime"]} for item in normalized_images]
@@ -954,6 +1036,58 @@ async def _save_message_turn_to_db(
         return None
 
 
+async def _persist_system_message_if_needed(
+    *,
+    db: CharactersRAGDB,
+    conversation_id: str,
+    system_message: Optional[str],
+    save_message_fn: Callable[..., Any],
+    loop: asyncio.AbstractEventLoop,
+) -> Optional[str]:
+    if not system_message or not system_message.strip():
+        return None
+    try:
+        # Best-effort guard; concurrent requests may still race and insert duplicates.
+        has_system = await loop.run_in_executor(
+            None,
+            db.has_system_message_for_conversation,
+            conversation_id,
+        )
+    except (CharactersRAGDBError, RuntimeError) as exc:
+        logger.debug(
+            "System message presence check failed for conv=%s: %s",
+            conversation_id,
+            exc,
+        )
+        has_system = False
+    if has_system:
+        return None
+    try:
+        conv_created_at = None
+        try:
+            conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
+            if conv:
+                conv_created_at = conv.get("created_at")
+        except (CharactersRAGDBError, RuntimeError):
+            conv_created_at = None
+        system_payload: Dict[str, Any] = {"role": "system", "content": system_message.strip()}
+        if conv_created_at:
+            system_payload["timestamp"] = conv_created_at
+        return await save_message_fn(
+            db,
+            conversation_id,
+            system_payload,
+            use_transaction=True,
+        )
+    except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
+        logger.warning(
+            "Failed to persist system message for conv=%s: %s",
+            conversation_id,
+            exc,
+        )
+        return None
+
+
 @router.post(
     "/completions",
     summary="Create chat completion (OpenAI-compatible)",
@@ -1019,6 +1153,10 @@ async def create_chat_completion(
 
     # Budget enforcement is handled by the dependency and/or middleware.
     # Avoid duplicating authorization logic in the handler to prevent drift.
+
+    # Optional ingress enforcement for base64 image payload sizes (off by default).
+    enforce_image_size = _resolve_base64_image_limit_enforcement()
+    max_image_bytes = get_max_base64_bytes() if enforce_image_size else None
 
     # Capture raw model input before any normalization for later decisions
     raw_model_input = request_data.model
@@ -1115,14 +1253,16 @@ async def create_chat_completion(
             request_data,
             max_messages=MAX_MESSAGES_PER_REQUEST,
             max_images=MAX_IMAGES_PER_REQUEST,
-            max_text_length=MAX_TEXT_LENGTH
+            max_text_length=MAX_TEXT_LENGTH,
+            enforce_image_max_bytes=enforce_image_size,
+            max_image_bytes=max_image_bytes,
         )
         metrics.metrics.validation_duration.record(time.time() - validation_start)
 
         if not is_valid:
             metrics.track_validation_failure("payload", error_message)
             logger.warning(f"Request validation failed: {error_message}")
-            if "too many" in error_message.lower() or "too long" in error_message.lower():
+            if any(term in error_message.lower() for term in ("too many", "too long", "too large")):
                 raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
@@ -1147,7 +1287,7 @@ async def create_chat_completion(
 
         except ValueError as e:
             logger.warning(f"Input validation error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from e
 
         # Slash command handling: compute, moderate, then optionally inject
         try:
@@ -1326,14 +1466,16 @@ async def create_chat_completion(
             request_data,
             max_messages=MAX_MESSAGES_PER_REQUEST,
             max_images=MAX_IMAGES_PER_REQUEST,
-            max_text_length=MAX_TEXT_LENGTH
+            max_text_length=MAX_TEXT_LENGTH,
+            enforce_image_max_bytes=enforce_image_size,
+            max_image_bytes=max_image_bytes,
         )
         metrics.metrics.validation_duration.record(time.time() - validation_start)
 
         if not is_valid:
             metrics.track_validation_failure("payload_post_injection", error_message)
             logger.warning(f"Request validation failed after slash command injection: {error_message}")
-            if "too many" in error_message.lower() or "too long" in error_message.lower():
+            if any(term in error_message.lower() for term in ("too many", "too long", "too large")):
                 raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
 
@@ -1346,14 +1488,19 @@ async def create_chat_completion(
             validate_request_size(request_json)
         except ValueError as e:
             logger.warning(f"Input validation error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+            error_text = str(e)
+            if "request too large" in error_text.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail="Request payload too large.",
+                ) from None
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from None
 
         # Apply rate limiting after slash command mutation so estimates are accurate.
         #
         # When ResourceGovernor is active (via RGSimpleMiddleware), request-level
         # limits are already enforced at ingress and we prefer RG for token
         # accounting as well to avoid double enforcement.
-        rate_limiter = get_rate_limiter()
         # In some test scenarios we patch dependencies with Mocks. Historically we
         # disabled rate limiting when mocks were detected to simplify unit tests.
         # However, Chat_NEW integration tests rely on deterministic TEST_MODE rate
@@ -1363,175 +1510,173 @@ async def create_chat_completion(
             _is_test_mode = _to_bool(os.getenv("TEST_MODE", ""))
         except Exception:
             _is_test_mode = False
-        rg_enabled_for_chat = False
+
+        rg_active = False
         try:
             from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
 
-            rg_enabled_for_chat = bool(_rg_enabled_flag(False))
-        except Exception:
-            rg_enabled_for_chat = False
+            rg_active = bool(_rg_enabled_flag(False))
+        except Exception as exc:
+            logger.debug(
+                "Chat RG: rg_enabled lookup failed; disabling RG path: {}",
+                exc,
+            )
+            rg_active = False
 
-        if (
-            not _is_test_mode
-            and not rg_enabled_for_chat
-            and (isinstance(chat_db, Mock) or isinstance(perform_chat_api_call, Mock))
-        ):
-            rate_limiter = None
-        # Ensure a limiter exists in TEST_MODE even if startup didn't init it
-        if _is_test_mode and rate_limiter is None:
-            try:
-                from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
-                # Passing None lets initialize_rate_limiter read TEST_MODE env overrides
-                rate_limiter = initialize_rate_limiter()  # type: ignore[arg-type]
-            except Exception:
-                rate_limiter = None
         # ResourceGovernor is attached in middleware and the governor/policy_loader
         # are stored on app.state. Use them when present to enforce tokens with
         # correct per-request units (and durable tokens/day caps via the ledger).
         rg_gov = None
         rg_loader = None
-        rg_active = False
         if request is not None:
-            try:
-                from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
-
-                rg_active = bool(_rg_enabled_flag(False))
-            except Exception as exc:
-                logger.debug(
-                    "Chat RG: rg_enabled lookup failed; disabling RG path: {}",
-                    exc,
-                )
-                rg_active = False
             try:
                 rg_gov = getattr(request.app.state, "rg_governor", None)
                 rg_loader = getattr(request.app.state, "rg_policy_loader", None)
             except Exception as exc:
                 logger.debug(
-                    "Chat RG: governor/policy_loader lookup failed; falling back to legacy limiter only: {}",
+                    "Chat RG: governor/policy_loader lookup failed; disabling RG path: {}",
                     exc,
                 )
                 rg_gov = None
                 rg_loader = None
 
-            # Avoid implicitly enabling RG in tests unless the global flag is set.
+        rg_ready = bool(rg_active and rg_gov is not None and rg_loader is not None)
 
-        rg_reserved = False
-        if rate_limiter or (rg_active and rg_gov is not None and rg_loader is not None):
+        rate_limiter = None
+        if not rg_active:
+            rate_limiter = get_rate_limiter()
+            if (
+                not _is_test_mode
+                and (isinstance(chat_db, Mock) or isinstance(perform_chat_api_call, Mock))
+            ):
+                rate_limiter = None
+            # Ensure a limiter exists in TEST_MODE even if startup didn't init it
+            if _is_test_mode and rate_limiter is None:
+                try:
+                    from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter
+                    # Passing None lets initialize_rate_limiter read TEST_MODE env overrides
+                    rate_limiter = initialize_rate_limiter()  # type: ignore[arg-type]
+                except Exception:
+                    rate_limiter = None
+
+        if rg_ready:
+            # Estimate tokens for rate limiting (heuristic).
+            estimated_tokens = estimate_tokens_from_json(_sanitize_json_for_rate_limit(request_json))
+            try:
+                # Derive policy_id from middleware route_map when present.
+                policy_id = str(
+                    getattr(request.state, "rg_policy_id", None) or "chat.default"
+                )
+                _rg_policy_id = policy_id
+
+                entity = derive_entity_key(request)
+                try:
+                    entity_scope, entity_value = entity.split(":", 1)
+                except Exception as exc:
+                    logger.debug(
+                        "Chat RG: entity split failed, using user fallback: {}",
+                        exc,
+                    )
+                    user_id = resolve_user_id_for_request(
+                        current_user,
+                        error_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+                    entity_scope, entity_value = "user", str(user_id)
+
+                # Best-effort backfill: if a tokens.daily_cap is configured,
+                # mirror today's legacy llm_usage_log totals into the ledger
+                # so upgrades preserve in-progress daily caps.
+                daily_cap = 0
+                try:
+                    pol = rg_loader.get_policy(policy_id) or {}
+                    daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                except Exception as exc:
+                    logger.debug(
+                        "Chat RG: tokens.daily_cap lookup failed for policy_id={}: {}",
+                        policy_id,
+                        exc,
+                    )
+                    daily_cap = 0
+                if daily_cap > 0:
+                    # Best-effort helper is idempotent and internally guarded
+                    # by a per-process entity/day set, so hot-path overhead is
+                    # minimal after the first backfill.
+                    try:
+                        await backfill_legacy_tokens_to_ledger(
+                            entity_scope=str(entity_scope),
+                            entity_value=str(entity_value),
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "Chat RG: legacy tokens backfill failed for entity_scope={} entity_value={}: {}",
+                            entity_scope,
+                            entity_value,
+                            exc,
+                        )
+
+                completion_budget = 0
+                try:
+                    completion_budget = int(getattr(request_data, "max_tokens", 0) or 0)
+                except Exception:
+                    completion_budget = 0
+
+                reserve_units = max(1, int(estimated_tokens or 0) + max(0, completion_budget))
+                dec, hid = await rg_gov.reserve(
+                    RGRequest(
+                        entity=entity,
+                        categories={"tokens": {"units": reserve_units}},
+                        tags={"policy_id": policy_id, "endpoint": request.url.path},
+                    ),
+                    op_id=request_id,
+                )
+                if not bool(getattr(dec, "allowed", False)):
+                    retry_after = int(getattr(dec, "retry_after", None) or 1)
+                    detail = f"Rate limit exceeded (ResourceGovernor policy={policy_id})"
+                    if retry_after >= 0:
+                        detail = f"{detail}; retry_after={retry_after}s"
+                    headers = {"Retry-After": str(retry_after)}
+                    try:
+                        pol = rg_loader.get_policy(policy_id) or {}
+                        per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
+                        limit_val = per_min or int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                        if limit_val:
+                            headers.update(
+                                {
+                                    "X-RateLimit-Limit": str(limit_val),
+                                    "X-RateLimit-Remaining": "0",
+                                    "X-RateLimit-Reset": str(retry_after),
+                                }
+                            )
+                            if per_min > 0:
+                                headers.update(
+                                    {
+                                        "X-RateLimit-PerMinute-Limit": str(per_min),
+                                        "X-RateLimit-PerMinute-Remaining": "0",
+                                        "X-RateLimit-Tokens-Remaining": "0",
+                                    }
+                                )
+                    except Exception as exc:
+                        logger.debug(
+                            "Chat RG: header enrichment from policy failed for policy_id={}: {}",
+                            policy_id,
+                            exc,
+                        )
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail=detail,
+                        headers=headers,
+                    )
+                _rg_handle_id = hid
+            except HTTPException:
+                raise
+            except Exception as rg_exc:
+                logger.debug(f"RG tokens reserve skipped: {rg_exc}")
+
+        elif rate_limiter:
             active_count = await _increment_active_request(user_id)
             try:
                 # Estimate tokens for rate limiting (heuristic).
                 estimated_tokens = estimate_tokens_from_json(_sanitize_json_for_rate_limit(request_json))
-
-                # Reserve tokens via ResourceGovernor when available; this is the
-                # preferred enforcement path once RG is enabled.
-                if request is not None and rg_active and rg_gov is not None and rg_loader is not None:
-                    try:
-                        # Derive policy_id from middleware route_map when present.
-                        policy_id = str(
-                            getattr(request.state, "rg_policy_id", None) or "chat.default"
-                        )
-                        _rg_policy_id = policy_id
-
-                        entity = derive_entity_key(request)
-                        try:
-                            entity_scope, entity_value = entity.split(":", 1)
-                        except Exception as exc:
-                            logger.debug(
-                                "Chat RG: entity split failed, using user fallback: {}",
-                                exc,
-                            )
-                            entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
-
-                        # Best-effort backfill: if a tokens.daily_cap is configured,
-                        # mirror today's legacy llm_usage_log totals into the ledger
-                        # so upgrades preserve in-progress daily caps.
-                        daily_cap = 0
-                        try:
-                            pol = rg_loader.get_policy(policy_id) or {}
-                            daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
-                        except Exception as exc:
-                            logger.debug(
-                                "Chat RG: tokens.daily_cap lookup failed for policy_id={}: {}",
-                                policy_id,
-                                exc,
-                            )
-                            daily_cap = 0
-                        if daily_cap > 0:
-                            # Best-effort helper is idempotent and internally guarded
-                            # by a per-process entity/day set, so hot-path overhead is
-                            # minimal after the first backfill.
-                            try:
-                                await backfill_legacy_tokens_to_ledger(
-                                    entity_scope=str(entity_scope),
-                                    entity_value=str(entity_value),
-                                )
-                            except Exception as exc:
-                                logger.debug(
-                                    "Chat RG: legacy tokens backfill failed for entity_scope={} entity_value={}: {}",
-                                    entity_scope,
-                                    entity_value,
-                                    exc,
-                                )
-
-                        completion_budget = 0
-                        try:
-                            completion_budget = int(getattr(request_data, "max_tokens", 0) or 0)
-                        except Exception:
-                            completion_budget = 0
-
-                        reserve_units = max(1, int(estimated_tokens or 0) + max(0, completion_budget))
-                        dec, hid = await rg_gov.reserve(
-                            RGRequest(
-                                entity=entity,
-                                categories={"tokens": {"units": reserve_units}},
-                                tags={"policy_id": policy_id, "endpoint": request.url.path},
-                            ),
-                            op_id=request_id,
-                        )
-                        if not bool(getattr(dec, "allowed", False)):
-                            retry_after = int(getattr(dec, "retry_after", None) or 1)
-                            detail = f"Rate limit exceeded (ResourceGovernor policy={policy_id})"
-                            if retry_after >= 0:
-                                detail = f"{detail}; retry_after={retry_after}s"
-                            headers = {"Retry-After": str(retry_after)}
-                            try:
-                                pol = rg_loader.get_policy(policy_id) or {}
-                                per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
-                                limit_val = per_min or int((pol.get("tokens") or {}).get("daily_cap") or 0)
-                                if limit_val:
-                                    headers.update(
-                                        {
-                                            "X-RateLimit-Limit": str(limit_val),
-                                            "X-RateLimit-Remaining": "0",
-                                            "X-RateLimit-Reset": str(retry_after),
-                                        }
-                                    )
-                                    if per_min > 0:
-                                        headers.update(
-                                            {
-                                                "X-RateLimit-PerMinute-Limit": str(per_min),
-                                                "X-RateLimit-PerMinute-Remaining": "0",
-                                                "X-RateLimit-Tokens-Remaining": "0",
-                                            }
-                                    )
-                            except Exception as exc:
-                                logger.debug(
-                                    "Chat RG: header enrichment from policy failed for policy_id={}: {}",
-                                    policy_id,
-                                    exc,
-                                )
-                            raise HTTPException(
-                                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                detail=detail,
-                                headers=headers,
-                            )
-                        _rg_handle_id = hid
-                        rg_reserved = bool(hid)
-                    except HTTPException:
-                        raise
-                    except Exception as rg_exc:
-                        logger.debug(f"RG tokens reserve skipped: {rg_exc}")
-                        rg_reserved = False
 
                 # In TEST_MODE, avoid cross-test flakiness by scoping limiter to this request
                 # when no explicit conversation_id is provided. This prevents cumulative
@@ -1541,101 +1686,100 @@ async def create_chat_completion(
                 if _is_test_mode and not limiter_conversation_id:
                     limiter_conversation_id = request_id
 
-                if rate_limiter and not rg_reserved:
-                    # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
-                    per_user_limit = getattr(getattr(rate_limiter, "config", None), "per_user_rpm", None)
-                    enable_burst_suppression = (
-                        _is_test_mode
-                        and isinstance(per_user_limit, (int, float))
-                        and per_user_limit >= _RECENT_CALLS_MIN_CONCURRENT
-                    )
-                    concurrent_burst = active_count > 1
-                    if enable_burst_suppression and not concurrent_burst:
-                        try:
-                            now_ts = time.time()
-                            dq = _recent_calls_by_user[str(user_id)]
-                            # prune window
-                            while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
-                                dq.popleft()
-                            dq.append(now_ts)
-                            concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
-                        except Exception:
-                            concurrent_burst = False
+                # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
+                per_user_limit = getattr(getattr(rate_limiter, "config", None), "per_user_rpm", None)
+                enable_burst_suppression = (
+                    _is_test_mode
+                    and isinstance(per_user_limit, (int, float))
+                    and per_user_limit >= _RECENT_CALLS_MIN_CONCURRENT
+                )
+                concurrent_burst = active_count > 1
+                if enable_burst_suppression and not concurrent_burst:
+                    try:
+                        now_ts = time.time()
+                        dq = _recent_calls_by_user[str(user_id)]
+                        # prune window
+                        while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
+                            dq.popleft()
+                        dq.append(now_ts)
+                        concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
+                    except Exception:
+                        concurrent_burst = False
 
-                    limiter_user_id = user_id
-                    if enable_burst_suppression and concurrent_burst:
-                        try:
-                            limiter_user_id = f"{user_id}:{request_id}"
-                        except Exception:
-                            limiter_user_id = user_id
+                limiter_user_id = user_id
+                if enable_burst_suppression and concurrent_burst:
+                    try:
+                        limiter_user_id = f"{user_id}:{request_id}"
+                    except Exception:
+                        limiter_user_id = user_id
 
-                    allowed, rate_error = await rate_limiter.check_rate_limit(
-                        user_id=limiter_user_id,
-                        conversation_id=limiter_conversation_id,
-                        estimated_tokens=estimated_tokens,
-                    )
+                allowed, rate_error = await rate_limiter.check_rate_limit(
+                    user_id=limiter_user_id,
+                    conversation_id=limiter_conversation_id,
+                    estimated_tokens=estimated_tokens,
+                )
 
-                    # Shadow-mode comparison between legacy limiter and ResourceGovernor (observability-only).
-                    if request is not None:
-                        try:
-                            await _maybe_rg_shadow_chat_decision(
-                                request=request,
-                                limiter_user_id=str(limiter_user_id),
-                                limiter_conversation_id=limiter_conversation_id,
-                                estimated_tokens=int(estimated_tokens or 0),
-                                legacy_allowed=bool(allowed),
-                            )
-                        except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect rate limiting
-                            # Shadow path must never affect primary rate-limiting behavior.
-                            logger.debug(
-                                "RG shadow helper failed; ignoring and continuing: {}",
-                                exc,
-                            )
+                # Shadow-mode comparison between legacy limiter and ResourceGovernor (observability-only).
+                if request is not None:
+                    try:
+                        await _maybe_rg_shadow_chat_decision(
+                            request=request,
+                            limiter_user_id=str(limiter_user_id),
+                            limiter_conversation_id=limiter_conversation_id,
+                            estimated_tokens=int(estimated_tokens or 0),
+                            legacy_allowed=bool(allowed),
+                        )
+                    except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect rate limiting
+                        # Shadow path must never affect primary rate-limiting behavior.
+                        logger.debug(
+                            "RG shadow helper failed; ignoring and continuing: {}",
+                            exc,
+                        )
 
-                    if not allowed:
-                        metrics.track_rate_limit(user_id)
-                        if audit_service and context:
-                            await audit_service.log_event(
-                                event_type=AuditEventType.API_RATE_LIMITED,
-                                context=context,
-                                action="rate_limit_exceeded",
-                                metadata={"reason": rate_error},
-                            )
-                        # In TEST_MODE, try a short wait-for-capacity to reduce
-                        # suite-order flakiness in concurrency tests. If still denied,
-                        # surface as 503 (service busy) rather than 429 which those
-                        # tests do not assert on.
-                        if _is_test_mode:
-                            # Only apply wait/503 fallback for global capacity exhaustion;
-                            # keep 429 for per-user/conversation/token limits to satisfy
-                            # deterministic rate-limit tests.
-                            is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
-                            if is_global_cap or concurrent_burst:
-                                try:
-                                    allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
-                                        user_id=limiter_user_id,
-                                        conversation_id=limiter_conversation_id,
-                                        estimated_tokens=estimated_tokens,
-                                        timeout=5.0,
-                                    )
-                                except Exception:
-                                    allowed_after_wait = False
-                                if not allowed_after_wait:
-                                    raise HTTPException(
-                                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                        detail="Service busy. Please retry.",
-                                    )
-                                # If capacity became available, continue processing
-                            else:
-                                raise HTTPException(
-                                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                    detail=rate_error or "Rate limit exceeded",
+                if not allowed:
+                    metrics.track_rate_limit(user_id)
+                    if audit_service and context:
+                        await audit_service.log_event(
+                            event_type=AuditEventType.API_RATE_LIMITED,
+                            context=context,
+                            action="rate_limit_exceeded",
+                            metadata={"reason": rate_error},
+                        )
+                    # In TEST_MODE, try a short wait-for-capacity to reduce
+                    # suite-order flakiness in concurrency tests. If still denied,
+                    # surface as 503 (service busy) rather than 429 which those
+                    # tests do not assert on.
+                    if _is_test_mode:
+                        # Only apply wait/503 fallback for global capacity exhaustion;
+                        # keep 429 for per-user/conversation/token limits to satisfy
+                        # deterministic rate-limit tests.
+                        is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
+                        if is_global_cap or concurrent_burst:
+                            try:
+                                allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
+                                    user_id=limiter_user_id,
+                                    conversation_id=limiter_conversation_id,
+                                    estimated_tokens=estimated_tokens,
+                                    timeout=5.0,
                                 )
+                            except Exception:
+                                allowed_after_wait = False
+                            if not allowed_after_wait:
+                                raise HTTPException(
+                                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                    detail="Service busy. Please retry.",
+                                )
+                            # If capacity became available, continue processing
                         else:
                             raise HTTPException(
                                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail=rate_error or "Rate limit exceeded",
                             )
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail=rate_error or "Rate limit exceeded",
+                        )
             finally:
                 await _decrement_active_request(user_id)
 
@@ -1748,13 +1892,14 @@ async def create_chat_completion(
 
             # Centralized provider capabilities
             try:
-                from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+                from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
             except Exception:
-                PROVIDER_REQUIRES_KEY = {}
+                def provider_requires_api_key(_provider: str) -> bool:  # type: ignore[misc]
+                    return True
             # Allow explicit mock forcing in tests even if provider key is absent
             _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
             _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
-            if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
+            if provider_requires_api_key(target_api_provider) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 record_byok_missing_credentials(target_api_provider, operation="chat")
                 raise HTTPException(
@@ -1766,7 +1911,7 @@ async def create_chat_completion(
                 )
             # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
             # This avoids depending on external network calls in CI and matches integration test expectations.
-            if _test_mode_flag and provider_api_key and PROVIDER_REQUIRES_KEY.get(target_api_provider, False):
+            if _test_mode_flag and provider_api_key and provider_requires_api_key(target_api_provider):
                 # Treat keys with obvious invalid patterns as authentication failures in test mode.
                 invalid_patterns = ("invalid-", "test-invalid-", "bad-key-", "dummy-invalid-")
                 if any(str(provider_api_key).lower().startswith(p) for p in invalid_patterns):
@@ -1790,6 +1935,16 @@ async def create_chat_completion(
                 llm_payload_messages=llm_payload_messages,
             )
 
+            system_message_id: Optional[str] = None
+            if should_persist and final_conversation_id:
+                system_message_id = await _persist_system_message_if_needed(
+                    db=chat_db,
+                    conversation_id=final_conversation_id,
+                    system_message=final_system_message,
+                    save_message_fn=_save_message_turn_to_db,
+                    loop=current_loop,
+                )
+
             # --- LLM Call ---
             cleaned_args = build_call_params_from_request(
                 request_data=request_data,
@@ -1799,6 +1954,7 @@ async def create_chat_completion(
                 final_system_message=final_system_message,
                 app_config=app_config_override,
             )
+            cleaned_args["request"] = request
 
             def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
                 override_default = get_override_default_model(target_provider)
@@ -1839,7 +1995,7 @@ async def create_chat_completion(
             async def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
                 refreshed_resolution = await _resolve_byok(target_provider)
                 provider_api_key_new = refreshed_resolution.api_key
-                if PROVIDER_REQUIRES_KEY.get(target_provider, False) and not provider_api_key_new:
+                if provider_requires_api_key(target_provider) and not provider_api_key_new:
                     logger.error(
                         f"API key for provider '{target_provider}' is missing or not configured (fallback)."
                     )
@@ -1860,6 +2016,7 @@ async def create_chat_completion(
                     final_system_message=final_system_message,
                     app_config=refreshed_resolution.app_config,
                 )
+                refreshed_args["request"] = request
                 refreshed_model = refreshed_args.get("model")
                 use_default_model = False
                 if not refreshed_model:
@@ -1998,7 +2155,10 @@ async def create_chat_completion(
                     logger.warning(
                         "Queue admission rejected for request_id=%s: %s", request_id, e
                     )
-                    raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Rate limit exceeded. Please retry.",
+                    ) from e
                 except Exception as e:
                     # Treat unexpected queue errors as service unavailable
                     logger.error(
@@ -2126,6 +2286,7 @@ async def create_chat_completion(
                     character_card_for_context=character_card_for_context,
                     chat_db=chat_db,
                     save_message_fn=_save_message_turn_to_db,
+                    system_message_id=system_message_id,
                     audit_service=audit_service,
                     audit_context=context,
                     client_id=user_id,
@@ -2162,6 +2323,7 @@ async def create_chat_completion(
                     character_card_for_context=character_card_for_context,
                     chat_db=chat_db,
                     save_message_fn=_save_message_turn_to_db,
+                    system_message_id=system_message_id,
                     audit_service=audit_service,
                     audit_context=context,
                     client_id=user_id,
@@ -2280,7 +2442,26 @@ async def create_chat_completion(
                 )
 
             # Tests expect detail to be a string; expose safe user_message when available
-            safe_detail = getattr(e_chat, 'user_message', None) or str(e_chat)
+            safe_detail = getattr(e_chat, "user_message", None)
+            if not safe_detail:
+                if http_status == status.HTTP_400_BAD_REQUEST:
+                    safe_detail = "Invalid request."
+                elif http_status == status.HTTP_401_UNAUTHORIZED:
+                    safe_detail = "Unauthorized."
+                elif http_status == status.HTTP_403_FORBIDDEN:
+                    safe_detail = "Forbidden."
+                elif http_status == status.HTTP_404_NOT_FOUND:
+                    safe_detail = "Not found."
+                elif http_status == status.HTTP_409_CONFLICT:
+                    safe_detail = "Conflict."
+                elif http_status == status.HTTP_429_TOO_MANY_REQUESTS:
+                    safe_detail = "Rate limit exceeded. Please retry."
+                else:
+                    safe_detail = "An unexpected internal server error occurred."
+                logger.error(
+                    "ChatModuleException missing user_message: {}",
+                    repr(e_chat),
+                )
             raise HTTPException(
                 status_code=http_status,
                 detail=safe_detail
@@ -2309,9 +2490,12 @@ async def create_chat_completion(
                     status.HTTP_409_CONFLICT if isinstance(e_chat, ConflictError) else
                     status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
-                client_detail = (
-                    (str(e_chat) or type(e_chat).__name__) if db_status < 500 else "A database error occurred. Please try again later."
-                )
+                if db_status == status.HTTP_400_BAD_REQUEST:
+                    client_detail = "Invalid request."
+                elif db_status == status.HTTP_409_CONFLICT:
+                    client_detail = "Conflict."
+                else:
+                    client_detail = "A database error occurred. Please try again later."
                 raise HTTPException(status_code=db_status, detail=client_detail)
             # Handle legacy chat library exceptions robustly, even if class identity differs.
             # For non-library exceptions, return a generic 500 rather than leaking the raw exception.
@@ -2391,8 +2575,21 @@ async def create_chat_completion(
                     pass
             # Standardize error messages - never expose internal details for 5xx errors
             if err_status < 500:
-                # Client errors can have more detail; ensure non-empty
-                client_detail = getattr(e_chat, 'message', None) or str(e_chat) or type(e_chat).__name__
+                # Keep client errors generic to avoid leaking provider details.
+                if err_status == status.HTTP_400_BAD_REQUEST:
+                    client_detail = "Invalid request."
+                elif err_status == status.HTTP_401_UNAUTHORIZED:
+                    client_detail = "Unauthorized."
+                elif err_status == status.HTTP_403_FORBIDDEN:
+                    client_detail = "Forbidden."
+                elif err_status == status.HTTP_404_NOT_FOUND:
+                    client_detail = "Not found."
+                elif err_status == status.HTTP_409_CONFLICT:
+                    client_detail = "Conflict."
+                elif err_status == status.HTTP_429_TOO_MANY_REQUESTS:
+                    client_detail = "Rate limit exceeded. Please retry."
+                else:
+                    client_detail = "Request failed."
             else:
                 # Server errors should be generic
                 if err_status == 502:
@@ -2445,8 +2642,8 @@ async def get_chat_queue_status():
         queue_status = queue.get_queue_status()
         return {"enabled": True, **queue_status}
     except Exception as e:
-        logger.warning("Chat queue status inspection failed: {}", e)
-        return {"enabled": True, "error": str(e)}
+        logger.exception("Chat queue status inspection failed")
+        return {"enabled": True, "error": "Queue status unavailable"}
 
 
 @router.get(
@@ -2478,8 +2675,8 @@ async def get_chat_queue_activity(
         activity = queue.get_recent_activity(limit=limit)
         return {"enabled": True, "limit": limit, "activity": activity}
     except Exception as e:
-        logger.warning("Chat queue activity inspection failed: {}", e)
-        return {"enabled": True, "error": str(e)}
+        logger.exception("Chat queue activity inspection failed")
+        return {"enabled": True, "error": "Queue activity unavailable"}
 
 def _sanitize_json_for_rate_limit(request_json: str) -> str:
     """Redact base64 image payloads to avoid inflating token estimates.
@@ -2501,6 +2698,107 @@ def _estimate_tokens_for_queue(request_json: str) -> int:
         return max(1, len(sanitized) // 4)
     except Exception:
         return 1
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value).strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _parse_iso_datetime(value: str, field_name: str) -> datetime:
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be ISO-8601 timestamp",
+        ) from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_weights(w_bm25: float, w_recency: float) -> Tuple[float, float]:
+    total = (w_bm25 or 0.0) + (w_recency or 0.0)
+    if total <= 0:
+        return 0.65, 0.35
+    return (w_bm25 / total), (w_recency / total)
+
+
+def _calculate_recency(dt_value: Optional[datetime], half_life_days: float) -> float:
+    if dt_value is None or half_life_days <= 0:
+        return 0.0
+    now = datetime.now(timezone.utc)
+    age_days = max(0.0, (now - dt_value).total_seconds() / 86400.0)
+    return math.exp(-age_days / half_life_days)
+
+
+def _verify_conversation_ownership(
+    db: CharactersRAGDB,
+    conversation_id: str,
+    current_user: User,
+) -> Dict[str, Any]:
+    conversation = db.get_conversation_by_id(conversation_id)
+    if not conversation or conversation.get("deleted"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    conv_client_id = conversation.get("client_id")
+    user_id = current_user.id
+    if conv_client_id is None or user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+    try:
+        if int(conv_client_id) != int(user_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+    except (TypeError, ValueError):
+        if str(conv_client_id) != str(user_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+    return conversation
+
+
+def _replace_conversation_keywords(
+    db: CharactersRAGDB,
+    conversation_id: str,
+    keywords: List[str],
+) -> None:
+    existing = db.get_keywords_for_conversation(conversation_id)
+    existing_map = {str(k.get("keyword") or "").strip().lower(): int(k.get("id")) for k in existing if k.get("id")}
+    target = {str(k).strip() for k in keywords if k is not None and str(k).strip()}
+    target_map = {t.lower(): t for t in target}
+
+    for key, kw_id in existing_map.items():
+        if key not in target_map:
+            try:
+                db.unlink_conversation_from_keyword(conversation_id, kw_id)
+            except Exception as exc:
+                logger.warning("Failed to unlink keyword %s from %s: %s", kw_id, conversation_id, exc)
+
+    for key, original in target_map.items():
+        if key in existing_map:
+            continue
+        try:
+            kw = db.get_keyword_by_text(original)
+            if not kw:
+                kw_id = db.add_keyword(original)
+                kw = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+            if kw and kw.get("id") is not None:
+                db.link_conversation_to_keyword(conversation_id, int(kw["id"]))
+        except Exception as exc:
+            logger.warning("Failed to link keyword %s to %s: %s", original, conversation_id, exc)
 
 
 @router.post(
@@ -2546,11 +2844,13 @@ async def save_chat_knowledge(
             if message.get("conversation_id") != payload.conversation_id:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is not in conversation")
 
-        if payload.export_to != "none" and not _chat_connectors_enabled():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Chat connectors v2 are disabled; enable CHAT_CONNECTORS_V2_ENABLED to export.",
-            )
+        export_status = "not_requested"
+        export_job_id: Optional[str] = None
+        if payload.export_to != "none":
+            if _chat_connectors_enabled():
+                export_status = "queued"
+            else:
+                export_status = "skipped_disabled"
 
         conv_title = conversation.get("title") or f"Conversation {payload.conversation_id}"
         safe_title = conv_title[:200]
@@ -2588,6 +2888,8 @@ async def save_chat_knowledge(
                         "notes": f"From {safe_title}",
                         "source_ref_type": "note",
                         "source_ref_id": note_id,
+                        "conversation_id": payload.conversation_id,
+                        "message_id": payload.message_id,
                         "model_type": "basic",
                     }
                 )
@@ -2597,9 +2899,526 @@ async def save_chat_knowledge(
             flashcard_id=flashcard_id,
             conversation_id=payload.conversation_id,
             message_id=payload.message_id,
+            export_status=export_status,
+            export_job_id=export_job_id,
         )
     except HTTPException:
         raise
     except Exception as exc:
         logger.error(f"Failed to save chat knowledge snippet: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snippet") from exc
+
+
+@router.get(
+    "/conversations",
+    response_model=ConversationListResponse,
+    summary="List/search conversations with filters and ranking",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
+    ],
+)
+@conversations_alias_router.get(
+    "/conversations",
+    response_model=ConversationListResponse,
+    summary="List/search conversations with filters and ranking [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
+    ],
+    include_in_schema=False,
+)
+async def list_chat_conversations(
+    query: Optional[str] = Query(None, description="Search term for conversation title"),
+    state: Optional[str] = Query(None, description="Conversation state"),
+    topic_label: Optional[str] = Query(None, description="Topic label filter (use * for prefix)"),
+    keywords: Optional[List[str]] = Query(None, description="Keyword filters (repeatable)"),
+    cluster_id: Optional[str] = Query(None, description="Cluster ID filter"),
+    character_id: Optional[int] = Query(None, description="Character ID filter"),
+    start_date: Optional[str] = Query(None, description="ISO-8601 start date"),
+    end_date: Optional[str] = Query(None, description="ISO-8601 end date"),
+    date_field: Literal["last_modified", "created_at"] = Query("last_modified", description="Date field for filtering"),
+    order_by: Literal["bm25", "recency", "hybrid", "topic"] = Query("recency", description="Ranking mode"),
+    limit: int = Query(50, ge=1, le=200, description="Items per page"),
+    offset: int = Query(0, ge=0, description="Offset"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        topic_filter = topic_label.strip() if topic_label else None
+        topic_prefix = False
+        if topic_filter and topic_filter.endswith("*"):
+            topic_prefix = True
+            topic_filter = topic_filter[:-1]
+        if topic_filter is not None and topic_filter.strip() == "":
+            topic_filter = None
+
+        kw_list = [k.strip() for k in (keywords or []) if k and k.strip()]
+        kw_list = kw_list or None
+
+        start_iso = _parse_iso_datetime(start_date, "start_date").isoformat() if start_date else None
+        end_iso = _parse_iso_datetime(end_date, "end_date").isoformat() if end_date else None
+
+        rows = db.search_conversations(
+            query,
+            client_id=str(current_user.id),
+            character_id=character_id,
+            state=state,
+            topic_label=topic_filter,
+            topic_prefix=topic_prefix,
+            cluster_id=cluster_id,
+            keywords=kw_list,
+            start_date=start_iso,
+            end_date=end_iso,
+            date_field=date_field,
+        )
+
+        max_bm25 = max((row.get("bm25_raw") or 0.0) for row in rows) if rows else 0.0
+        w_bm25, w_recency = _normalize_weights(CHAT_BM25_WEIGHT, CHAT_RECENCY_WEIGHT)
+
+        for row in rows:
+            bm25_raw = row.get("bm25_raw") or 0.0
+            bm25_norm = min((bm25_raw / max_bm25), 1.0) if max_bm25 else 0.0
+            dt = _coerce_datetime(row.get("last_modified")) or _coerce_datetime(row.get("created_at"))
+            recency = _calculate_recency(dt, RECENCY_HALF_LIFE_DAYS)
+            row["_bm25_norm"] = bm25_norm
+            row["_recency"] = recency
+            row["_hybrid"] = (w_bm25 * bm25_norm) + (w_recency * recency)
+            row["_sort_dt"] = dt or datetime.fromtimestamp(0, tz=timezone.utc)
+            label = row.get("topic_label")
+            row["_topic_sort"] = str(label).strip().lower() if label else None
+
+        if order_by == "bm25":
+            rows.sort(
+                key=lambda r: (
+                    -(r.get("_bm25_norm") or 0.0),
+                    -(r.get("_sort_dt").timestamp()),
+                    r.get("id") or "",
+                )
+            )
+        elif order_by == "hybrid":
+            rows.sort(
+                key=lambda r: (
+                    -(r.get("_hybrid") or 0.0),
+                    -(r.get("_sort_dt").timestamp()),
+                    r.get("id") or "",
+                )
+            )
+        elif order_by == "topic":
+            rows.sort(
+                key=lambda r: (
+                    r.get("_topic_sort") is None,
+                    r.get("_topic_sort") or "",
+                    -(r.get("_bm25_norm") or 0.0),
+                    -(r.get("_recency") or 0.0),
+                    r.get("id") or "",
+                )
+            )
+        else:
+            rows.sort(
+                key=lambda r: (
+                    -(r.get("_recency") or 0.0),
+                    -(r.get("_sort_dt").timestamp()),
+                    r.get("id") or "",
+                )
+            )
+
+        total = len(rows)
+        page_rows = rows[offset: offset + limit]
+        items: List[ConversationListItem] = []
+        for row in page_rows:
+            conv_id = row.get("id") or ""
+            keyword_rows = db.get_keywords_for_conversation(conv_id)
+            keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
+            try:
+                message_count = db.count_messages_for_conversation(conv_id)
+            except Exception:
+                message_count = 0
+
+            bm25_norm = row.get("_bm25_norm") if order_by in {"bm25", "hybrid"} else None
+            items.append(
+                ConversationListItem(
+                    id=conv_id,
+                    character_id=row.get("character_id"),
+                    title=row.get("title"),
+                    state=row.get("state") or "in-progress",
+                    topic_label=row.get("topic_label"),
+                    bm25_norm=bm25_norm,
+                    last_modified=_coerce_datetime(row.get("last_modified")) or datetime.now(timezone.utc),
+                    created_at=_coerce_datetime(row.get("created_at")) or datetime.now(timezone.utc),
+                    message_count=message_count,
+                    keywords=keywords_list,
+                    cluster_id=row.get("cluster_id"),
+                    source=row.get("source"),
+                    external_ref=row.get("external_ref"),
+                    version=row.get("version") or 1,
+                )
+            )
+
+        pagination = ConversationListPagination(
+            limit=limit,
+            offset=offset,
+            total=total,
+            has_more=(offset + limit) < total,
+        )
+        return ConversationListResponse(items=items, pagination=pagination)
+    except InputError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Conversation list failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list conversations") from exc
+
+
+@router.patch(
+    "/conversations/{conversation_id}",
+    response_model=ConversationListItem,
+    summary="Update conversation metadata",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.update")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.update")),
+    ],
+)
+@conversations_alias_router.patch(
+    "/conversations/{conversation_id}",
+    response_model=ConversationListItem,
+    summary="Update conversation metadata [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.update")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.update")),
+    ],
+    include_in_schema=False,
+)
+async def update_chat_conversation(
+    payload: ConversationUpdateRequest,
+    conversation_id: str = Path(..., description="Conversation ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+        if conversation.get("version", 1) != payload.version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Version mismatch. Expected {payload.version}, found {conversation.get('version', 1)}",
+            )
+
+        update_fields = payload.model_dump(exclude_unset=True)
+        keywords_payload = update_fields.pop("keywords", None)
+        update_fields.pop("version", None)
+
+        topic_label_changed = "topic_label" in payload.model_fields_set
+        if topic_label_changed:
+            raw_label = update_fields.get("topic_label")
+            normalized_label = str(raw_label).strip() if raw_label is not None else ""
+            latest_message = db.get_latest_message_for_conversation(conversation_id)
+            latest_message_id = latest_message.get("id") if latest_message else None
+            if normalized_label:
+                update_fields["topic_label"] = normalized_label
+                update_fields["topic_label_source"] = "manual"
+                update_fields["topic_last_tagged_at"] = datetime.now(timezone.utc).isoformat()
+                update_fields["topic_last_tagged_message_id"] = latest_message_id
+            else:
+                update_fields["topic_label"] = None
+                update_fields["topic_label_source"] = None
+                update_fields["topic_last_tagged_at"] = None
+                update_fields["topic_last_tagged_message_id"] = None
+
+        allowed_fields = {
+            "state",
+            "topic_label",
+            "topic_label_source",
+            "topic_last_tagged_at",
+            "topic_last_tagged_message_id",
+            "cluster_id",
+            "external_ref",
+            "source",
+        }
+        update_data = {k: v for k, v in update_fields.items() if k in allowed_fields}
+        db.update_conversation(conversation_id, update_data, payload.version)
+
+        if "keywords" in payload.model_fields_set:
+            _replace_conversation_keywords(db, conversation_id, keywords_payload or [])
+
+        if topic_label_changed:
+            try:
+                from tldw_Server_API.app.core.Chat.conversation_enrichment import schedule_conversation_clustering
+
+                schedule_conversation_clustering(db)
+            except Exception as exc:
+                logger.debug("Conversation clustering skipped after manual topic update: %s", exc)
+
+        updated = db.get_conversation_by_id(conversation_id) or conversation
+        keyword_rows = db.get_keywords_for_conversation(conversation_id)
+        keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
+        try:
+            message_count = db.count_messages_for_conversation(conversation_id)
+        except Exception:
+            message_count = 0
+
+        return ConversationListItem(
+            id=updated.get("id") or conversation_id,
+            character_id=updated.get("character_id"),
+            title=updated.get("title"),
+            state=updated.get("state") or "in-progress",
+            topic_label=updated.get("topic_label"),
+            bm25_norm=None,
+            last_modified=_coerce_datetime(updated.get("last_modified")) or datetime.now(timezone.utc),
+            created_at=_coerce_datetime(updated.get("created_at")) or datetime.now(timezone.utc),
+            message_count=message_count,
+            keywords=keywords_list,
+            cluster_id=updated.get("cluster_id"),
+            source=updated.get("source"),
+            external_ref=updated.get("external_ref"),
+            version=updated.get("version") or payload.version + 1,
+        )
+    except ConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InputError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Conversation update failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update conversation") from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}/tree",
+    response_model=ConversationTreeResponse,
+    summary="Get conversation message tree",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.tree")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.tree")),
+    ],
+)
+@conversations_alias_router.get(
+    "/conversations/{conversation_id}/tree",
+    response_model=ConversationTreeResponse,
+    summary="Get conversation message tree [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.tree")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.tree")),
+    ],
+    include_in_schema=False,
+)
+async def get_conversation_tree(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    limit: int = Query(50, ge=1, le=200, description="Root threads per page"),
+    offset: int = Query(0, ge=0, description="Root thread offset"),
+    max_depth: int = Query(4, ge=1, le=20, description="Max depth for the tree"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+        character_name = None
+        if conversation.get("character_id"):
+            card = db.get_character_card_by_id(int(conversation.get("character_id")))
+            character_name = card.get("name") if card else None
+
+        total_messages = db.count_messages_for_conversation(conversation_id)
+        messages: List[Dict[str, Any]] = []
+        batch_size = 1000
+        current_offset = 0
+        while current_offset < total_messages:
+            batch = db.get_messages_for_conversation(
+                conversation_id,
+                limit=batch_size,
+                offset=current_offset,
+                order_by_timestamp="ASC",
+            )
+            if not batch:
+                break
+            messages.extend(batch)
+            current_offset += len(batch)
+
+        nodes: Dict[str, ConversationTreeNode] = {}
+        roots: List[ConversationTreeNode] = []
+        for msg in messages:
+            msg_id = msg.get("id")
+            if not msg_id:
+                continue
+            created_at = _coerce_datetime(msg.get("timestamp")) or datetime.now(timezone.utc)
+            node = ConversationTreeNode(
+                id=msg_id,
+                role=map_sender_to_role(msg.get("sender"), character_name),
+                content=msg.get("content") or "",
+                created_at=created_at,
+                children=[],
+                truncated=False,
+            )
+            nodes[msg_id] = node
+
+        for msg in messages:
+            msg_id = msg.get("id")
+            if not msg_id or msg_id not in nodes:
+                continue
+            parent_id = msg.get("parent_message_id")
+            if parent_id and parent_id in nodes:
+                nodes[parent_id].children.append(nodes[msg_id])
+            else:
+                roots.append(nodes[msg_id])
+
+        total_root_threads = len(roots)
+        root_page = roots[offset: offset + limit]
+
+        message_cap = min(max(TREE_MESSAGE_CAP_DEFAULT, 1), TREE_MESSAGE_CAP_MAX)
+        count = 0
+
+        def prune_node(node: ConversationTreeNode, depth: int) -> Optional[ConversationTreeNode]:
+            nonlocal count
+            if count >= message_cap:
+                return None
+            count += 1
+            if depth >= max_depth:
+                if node.children:
+                    node.truncated = True
+                    node.children = []
+                return node
+            pruned_children: List[ConversationTreeNode] = []
+            for child in node.children:
+                if count >= message_cap:
+                    node.truncated = True
+                    break
+                pruned = prune_node(child, depth + 1)
+                if pruned:
+                    pruned_children.append(pruned)
+                else:
+                    node.truncated = True
+                    break
+            if len(pruned_children) < len(node.children):
+                node.truncated = True
+            node.children = pruned_children
+            return node
+
+        pruned_roots: List[ConversationTreeNode] = []
+        for root in root_page:
+            if count >= message_cap:
+                break
+            pruned = prune_node(root, 1)
+            if pruned:
+                pruned_roots.append(pruned)
+
+        pagination = ConversationTreePagination(
+            limit=limit,
+            offset=offset,
+            total_root_threads=total_root_threads,
+            has_more=(offset + len(pruned_roots)) < total_root_threads,
+        )
+
+        metadata = ConversationMetadata(
+            id=conversation.get("id") or conversation_id,
+            title=conversation.get("title"),
+            state=conversation.get("state") or "in-progress",
+            topic_label=conversation.get("topic_label"),
+            last_modified=_coerce_datetime(conversation.get("last_modified")) or datetime.now(timezone.utc),
+        )
+
+        return ConversationTreeResponse(
+            conversation=metadata,
+            root_threads=pruned_roots,
+            pagination=pagination,
+            depth_cap=max_depth,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Conversation tree failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load conversation tree") from exc
+
+
+@router.get(
+    "/analytics",
+    response_model=ChatAnalyticsResponse,
+    summary="Conversation analytics histogram",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.analytics")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.analytics")),
+    ],
+)
+async def get_chat_analytics(
+    start_date: str = Query(..., description="ISO-8601 start date"),
+    end_date: str = Query(..., description="ISO-8601 end date"),
+    bucket_granularity: Literal["day", "week"] = Query("day", description="Bucket granularity"),
+    limit: int = Query(100, ge=1, le=1000, description="Buckets per page"),
+    offset: int = Query(0, ge=0, description="Bucket offset"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        start_dt = _parse_iso_datetime(start_date, "start_date")
+        end_dt = _parse_iso_datetime(end_date, "end_date")
+        if end_dt < start_dt:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_date must be >= start_date")
+        if (end_dt - start_dt).days > ANALYTICS_MAX_RANGE_DAYS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Date range exceeds maximum of {ANALYTICS_MAX_RANGE_DAYS} days",
+            )
+
+        rows = db.search_conversations(
+            None,
+            client_id=str(current_user.id),
+            start_date=start_dt.isoformat(),
+            end_date=end_dt.isoformat(),
+            date_field="last_modified",
+        )
+
+        buckets: Dict[Tuple[datetime, Optional[str], str], int] = {}
+        for row in rows:
+            dt = _coerce_datetime(row.get("last_modified")) or _coerce_datetime(row.get("created_at"))
+            if not dt:
+                continue
+            if dt < start_dt or dt > end_dt:
+                continue
+            if bucket_granularity == "week":
+                bucket_date = (dt - timedelta(days=dt.weekday())).date()
+            else:
+                bucket_date = dt.date()
+            bucket_start = datetime.combine(bucket_date, datetime.min.time(), tzinfo=timezone.utc)
+            state_val = row.get("state") or "in-progress"
+            topic_val = row.get("topic_label")
+            key = (bucket_start, topic_val, state_val)
+            buckets[key] = buckets.get(key, 0) + 1
+
+        sorted_keys = sorted(
+            buckets.keys(),
+            key=lambda k: (k[0], k[1] is None, k[1] or "", k[2]),
+        )
+        total = len(sorted_keys)
+        page_keys = sorted_keys[offset: offset + limit]
+        bucket_items = [
+            ChatAnalyticsBucket(
+                bucket_start=key[0],
+                topic_label=key[1],
+                state=key[2],
+                count=buckets[key],
+            )
+            for key in page_keys
+        ]
+
+        pagination = ChatAnalyticsPagination(
+            limit=limit,
+            offset=offset,
+            total=total,
+            has_more=(offset + limit) < total,
+        )
+        return ChatAnalyticsResponse(
+            buckets=bucket_items,
+            pagination=pagination,
+            bucket_granularity=bucket_granularity,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Chat analytics failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch analytics") from exc

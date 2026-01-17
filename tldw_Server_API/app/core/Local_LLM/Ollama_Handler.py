@@ -11,7 +11,6 @@ from typing import List, Optional, Dict, Any
 #
 # Third-party Imports
 import asyncio
-import httpx
 
 try:
     import psutil
@@ -28,6 +27,7 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import (
 )
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import OllamaConfig
 from tldw_Server_API.app.core.Local_LLM import http_utils
+from tldw_Server_API.app.core.Local_LLM import handler_utils
 
 
 def create_async_client(*args, **kwargs):
@@ -143,6 +143,7 @@ class OllamaHandler(BaseLLMHandler):
             raise ServerError(msg)
 
         port = port or self.config.default_port
+        client_host = handler_utils.resolve_client_host(host)
         ollama_env = os.environ.copy()
         ollama_env["OLLAMA_HOST"] = f"{host}:{port}"
 
@@ -196,7 +197,11 @@ class OllamaHandler(BaseLLMHandler):
                 stderr=asyncio.subprocess.PIPE
             )
             # Confirm server is up by polling common Ollama endpoints
-            ready = await wait_for_http_ready(f"http://{host}:{port}", timeout_total=30.0, interval=0.5)
+            ready = await wait_for_http_ready(
+                handler_utils.build_base_url(client_host, port),
+                timeout_total=30.0,
+                interval=0.5,
+            )
 
             if process.returncode is not None and process.returncode != 0:
                 stderr_output = (await process.stderr.read()).decode() if process.stderr else "Unknown error"
@@ -325,7 +330,8 @@ class OllamaHandler(BaseLLMHandler):
         Uses the Ollama REST API.
         """
         port = port or self.config.default_port
-        api_url = f"http://{host}:{port}/api/generate"
+        client_host = handler_utils.resolve_client_host(host)
+        api_url = f"{handler_utils.build_base_url(client_host, port)}/api/generate"
 
         # Pull model if not available, with configurable retry logic
         if not await self.is_model_available(model_name):
@@ -362,28 +368,32 @@ class OllamaHandler(BaseLLMHandler):
                 result = await request_json(client, "POST", api_url, json=payload)
                 self.logger.debug(f"Ollama inference successful for {model_name}.")
                 return result
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                text = e.response.text
-                self.logger.error(f"Ollama API error ({status}): {text}")
-                # Attempt model pull on 404 or message indicating not found
-                if status == 404 or (isinstance(text, str) and "model not found" in text.lower()):
-                    self.logger.info(f"Model {model_name} not found on server, attempting to pull.")
-                    try:
-                        await self.pull_model(model_name)
-                        # retry once
-                        return await request_json(client, "POST", api_url, json=payload)
-                    except ModelDownloadError as e_pull:
-                        raise InferenceError(
-                            f"Model {model_name} could not be pulled: {e_pull}. Original API error: {text}")
-                raise InferenceError(f"Ollama API error ({status}): {text}")
             except Exception as e:
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    text = http_utils.get_http_error_text(e)
+                    self.logger.error(f"Ollama API error ({status}): {text}")
+                    # Attempt model pull on 404 or message indicating not found
+                    if status == 404 or (isinstance(text, str) and "model not found" in text.lower()):
+                        self.logger.info(f"Model {model_name} not found on server, attempting to pull.")
+                        try:
+                            await self.pull_model(model_name)
+                            # retry once
+                            return await request_json(client, "POST", api_url, json=payload)
+                        except ModelDownloadError as e_pull:
+                            raise InferenceError(
+                                f"Model {model_name} could not be pulled: {e_pull}. Original API error: {text}")
+                    raise InferenceError(f"Ollama API error ({status}): {text}")
                 # Likely connection error; attempt to start server then retry
                 self.logger.error(f"Could not connect to Ollama server at {api_url}: {e}")
                 self.logger.info("Attempting to start Ollama server...")
                 try:
                     await self.serve_model(model_name, port=port, host=host)
-                    ready = await wait_for_http_ready(f"http://{host}:{port}", timeout_total=30.0, interval=0.5)
+                    ready = await wait_for_http_ready(
+                        handler_utils.build_base_url(client_host, port),
+                        timeout_total=30.0,
+                        interval=0.5,
+                    )
                     if not ready:
                         raise InferenceError("Ollama server did not become ready in time")
                     return await request_json(client, "POST", api_url, json=payload)

@@ -4,7 +4,6 @@
 # Imports
 import os
 import yaml
-import configparser
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 #
@@ -19,6 +18,12 @@ except Exception:
 # Local Imports
 from .adapters.base import AudioFormat
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config_utils import (
+    apply_default_sources,
+    load_module_yaml,
+    merge_config_layers,
+)
 from .utils import parse_bool
 #
 #######################################################################################################################
@@ -137,149 +142,77 @@ class TTSConfigManager:
             yaml_path: Path to YAML configuration file
             config_txt_path: Path to config.txt file
         """
-        self.yaml_path = yaml_path or self._find_yaml_config()
-        self.config_txt_path = config_txt_path or self._find_config_txt()
+        self.yaml_path = Path(yaml_path).expanduser() if yaml_path else None
+        self.config_txt_path = Path(config_txt_path).expanduser() if config_txt_path else None
         self._config: Optional[TTSConfig] = None
         self._env_overrides: Dict[str, Any] = {}
+        self._sources: Dict[str, Any] = {}
 
         # Load configurations
         self.reload()
 
-    def _find_yaml_config(self) -> Optional[Path]:
-        """Find YAML configuration file"""
-        search_paths = [
-            # Preferred project location: tldw_Server_API/Config_Files/tts_providers_config.yaml
-            Path(__file__).parent.parent.parent.parent / "Config_Files" / "tts_providers_config.yaml",
-            # Legacy/default locations kept for compatibility
-            Path(__file__).parent / "tts_providers_config.yaml",
-            Path.cwd() / "tts_providers_config.yaml",
-            Path.home() / ".config" / "tldw" / "tts_providers_config.yaml"
-        ]
-
-        for path in search_paths:
-            if path.exists():
-                logger.info(f"Found TTS YAML config at: {path}")
-                return path
-
-        logger.warning("No TTS YAML configuration file found")
-        return None
-
-    def _find_config_txt(self) -> Optional[Path]:
-        """Find config.txt file"""
-        search_paths = [
-            Path.cwd() / "Config_Files" / "config.txt",
-            Path(__file__).parent.parent.parent.parent / "Config_Files" / "config.txt",
-            Path.home() / ".config" / "tldw" / "config.txt"
-        ]
-
-        for path in search_paths:
-            if path.exists():
-                logger.info(f"Found config.txt at: {path}")
-                return path
-
-        logger.warning("No config.txt file found")
-        return None
-
     def reload(self):
         """Reload configuration from all sources"""
-        config_dict = {}
+        yaml_override = str(self.yaml_path) if self.yaml_path else None
+        yaml_config, yaml_path = load_module_yaml("tts", filename_override=yaml_override)
+        if self.yaml_path is None:
+            self.yaml_path = yaml_path
 
-        # 1. Load YAML configuration
-        if self.yaml_path and self.yaml_path.exists():
-            config_dict.update(self._load_yaml())
-
-        # 2. Load config.txt settings
-        if self.config_txt_path and self.config_txt_path.exists():
-            cfg_txt = self._load_config_txt()
-            if "providers" in cfg_txt and "providers" in config_dict:
-                # Deep-merge provider settings instead of clobbering the YAML list
-                providers = config_dict.get("providers", {}).copy()
-                for prov, prov_cfg in cfg_txt.get("providers", {}).items():
-                    base = providers.get(prov, {})
-                    # Normalize ProviderConfig instances to plain dicts before merging
-                    if isinstance(base, ProviderConfig):
-                        base = model_dump_compat(base)
-                    if isinstance(prov_cfg, ProviderConfig):
-                        prov_cfg = model_dump_compat(prov_cfg)
-                    if isinstance(base, dict) and isinstance(prov_cfg, dict):
-                        merged = base.copy()
-                        merged.update(prov_cfg)
-                        providers[prov] = merged
-                    else:
-                        providers[prov] = prov_cfg
-                config_dict["providers"] = providers
-                cfg_txt = {k: v for k, v in cfg_txt.items() if k != "providers"}
-            config_dict.update(cfg_txt)
-
-        # 3. Apply environment variable overrides
+        cfg_txt = self._load_config_txt()
         cfg_env = self._load_env_overrides()
-        if "providers" in cfg_env and "providers" in config_dict:
-            providers = config_dict.get("providers", {}).copy()
-            for prov, prov_cfg in cfg_env.get("providers", {}).items():
-                base = providers.get(prov, {})
-                # Normalize ProviderConfig instances to plain dicts before merging
-                if isinstance(base, ProviderConfig):
-                    base = model_dump_compat(base)
-                if isinstance(prov_cfg, ProviderConfig):
-                    prov_cfg = model_dump_compat(prov_cfg)
-                if isinstance(base, dict) and isinstance(prov_cfg, dict):
-                    merged = base.copy()
-                    merged.update(prov_cfg)
-                    providers[prov] = merged
-                else:
-                    providers[prov] = prov_cfg
-            config_dict["providers"] = providers
-            cfg_env = {k: v for k, v in cfg_env.items() if k != "providers"}
-        config_dict.update(cfg_env)
 
-        # 4. Create configuration object
-        self._config = TTSConfig(**config_dict)
+        merged, sources = merge_config_layers(
+            [
+                ("yaml", yaml_config),
+                ("config", cfg_txt),
+                ("env", cfg_env),
+            ]
+        )
 
+        self._config = TTSConfig(**merged)
+        sources = apply_default_sources(model_dump_compat(self._config), sources)
+        self._sources = sources
         logger.info(f"TTS configuration loaded with {len(self._config.providers)} providers")
-
-    def _load_yaml(self) -> Dict[str, Any]:
-        """Load YAML configuration"""
-        try:
-            with open(self.yaml_path, 'r') as f:
-                yaml_config = yaml.safe_load(f)
-
-            # Convert provider configs to ProviderConfig objects
-            if 'providers' in yaml_config:
-                for provider_name, provider_cfg in yaml_config['providers'].items():
-                    if isinstance(provider_cfg, dict):
-                        yaml_config['providers'][provider_name] = ProviderConfig(**provider_cfg)
-
-            return yaml_config
-        except Exception as e:
-            logger.error(f"Error loading YAML config: {e}")
-            return {}
+        logger.debug(f"TTS config sources: {sources}")
 
     def _load_config_txt(self) -> Dict[str, Any]:
         """Load settings from config.txt"""
         config_dict = {}
 
         try:
-            config = configparser.ConfigParser()
-            config.read(self.config_txt_path)
+            if self.config_txt_path:
+                if not self.config_txt_path.exists():
+                    logger.warning(f"Config.txt override not found at {self.config_txt_path}")
+                    return {}
+                import configparser
+
+                config = configparser.ConfigParser()
+                config.read(self.config_txt_path)
+            else:
+                config = load_comprehensive_config()
 
             # Check for TTS-Settings section
-            if 'TTS-Settings' in config:
-                tts_section = config['TTS-Settings']
+            tts_section = None
+            if hasattr(config, "has_section") and config.has_section("TTS-Settings"):
+                tts_section = config["TTS-Settings"]
+            elif isinstance(config, dict):
+                tts_section = config.get("TTS-Settings")
 
+            if tts_section:
                 # Map config.txt settings to our schema
-                if 'default_tts_provider' in tts_section:
+                if "default_tts_provider" in tts_section:
                     config_dict['default_provider'] = tts_section['default_tts_provider']
 
-                if 'default_tts_voice' in tts_section:
+                if "default_tts_voice" in tts_section:
                     config_dict['default_voice'] = tts_section['default_tts_voice']
 
-                if 'default_tts_speed' in tts_section:
+                if "default_tts_speed" in tts_section:
                     try:
                         config_dict['default_speed'] = float(tts_section['default_tts_speed'])
                     except ValueError:
                         pass
 
-                if 'local_tts_device' in tts_section:
+                if "local_tts_device" in tts_section:
                     config_dict['local_device'] = tts_section['local_tts_device']
 
                     # Apply device setting to local providers
@@ -292,7 +225,7 @@ class TTSConfigManager:
                         config_dict['providers'][provider]['device'] = tts_section['local_tts_device']
 
                 # Global switch: auto download local models
-                if 'auto_download_local_models' in tts_section:
+                if "auto_download_local_models" in tts_section:
                     val = str(tts_section['auto_download_local_models']).strip().lower()
                     auto_dl = val in ("1", "true", "yes", "on")
                     if 'providers' not in config_dict:
@@ -322,28 +255,34 @@ class TTSConfigManager:
                         config_dict['providers'].setdefault(prov, {})['auto_download'] = bv
 
                 # Optional: global strict_validation toggle
-                sv = _bool_from_section('strict_validation')
+                sv = _bool_from_section("strict_validation")
                 if sv is not None:
                     config_dict['strict_validation'] = sv
 
             # Check for API keys in main section
-            for key in config:
-                if key != 'TTS-Settings':
-                    section = config[key]
-                    # Look for API keys
-                    if 'openai_api_key' in section:
-                        if 'providers' not in config_dict:
-                            config_dict['providers'] = {}
-                        if 'openai' not in config_dict['providers']:
-                            config_dict['providers']['openai'] = {}
-                        config_dict['providers']['openai']['api_key'] = section['openai_api_key']
+            if hasattr(config, "sections"):
+                sections = config.sections()
+            elif isinstance(config, dict):
+                sections = list(config.keys())
+            else:
+                sections = []
 
-                    if 'elevenlabs_api_key' in section:
-                        if 'providers' not in config_dict:
-                            config_dict['providers'] = {}
-                        if 'elevenlabs' not in config_dict['providers']:
-                            config_dict['providers']['elevenlabs'] = {}
-                        config_dict['providers']['elevenlabs']['api_key'] = section['elevenlabs_api_key']
+            for section_name in sections:
+                if section_name == "TTS-Settings":
+                    continue
+                section = config[section_name] if isinstance(config, dict) or hasattr(config, "__getitem__") else {}
+                if not section:
+                    continue
+                # Look for API keys
+                if "openai_api_key" in section:
+                    config_dict.setdefault("providers", {}).setdefault("openai", {})[
+                        "api_key"
+                    ] = section["openai_api_key"]
+
+                if "elevenlabs_api_key" in section:
+                    config_dict.setdefault("providers", {}).setdefault("elevenlabs", {})[
+                        "api_key"
+                    ] = section["elevenlabs_api_key"]
 
             return config_dict
 
@@ -395,6 +334,12 @@ class TTSConfigManager:
         if self._config is None:
             self.reload()
         return self._config
+
+    def get_sources(self) -> Dict[str, Any]:
+        """Return source tags for the current configuration."""
+        if not self._sources:
+            self.reload()
+        return dict(self._sources)
 
     def get_provider_config(self, provider: str) -> Optional[ProviderConfig]:
         """Get configuration for a specific provider"""

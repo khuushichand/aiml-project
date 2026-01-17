@@ -1,8 +1,6 @@
 import json
 import pytest
 
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import JobType
-
 
 class _StubMM:
     def __init__(self):

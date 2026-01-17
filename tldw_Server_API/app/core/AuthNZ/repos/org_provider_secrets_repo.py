@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import json
 
@@ -66,6 +66,8 @@ class AuthnzOrgProviderSecretsRepo:
         key_hint: Optional[str],
         metadata: Optional[Dict[str, Any]],
         updated_at: datetime,
+        created_by: Optional[int] = None,
+        updated_by: Optional[int] = None,
     ) -> Dict[str, Any]:
         scope_norm = _normalize_scope_type(scope_type)
         provider_norm = normalize_provider_name(provider)
@@ -76,14 +78,19 @@ class AuthnzOrgProviderSecretsRepo:
                 row = await self.db_pool.fetchone(
                     """
                     INSERT INTO org_provider_secrets (
-                        scope_type, scope_id, provider, encrypted_blob, key_hint, metadata, created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+                        scope_type, scope_id, provider, encrypted_blob, key_hint, metadata,
+                        created_by, updated_by, created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
                     ON CONFLICT (scope_type, scope_id, provider) DO UPDATE SET
                         encrypted_blob = EXCLUDED.encrypted_blob,
                         key_hint = EXCLUDED.key_hint,
                         metadata = EXCLUDED.metadata,
-                        updated_at = EXCLUDED.updated_at
-                    RETURNING id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at, last_used_at
+                        updated_at = EXCLUDED.updated_at,
+                        updated_by = EXCLUDED.updated_by,
+                        revoked_at = NULL,
+                        revoked_by = NULL
+                    RETURNING id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at,
+                              last_used_at, created_by, updated_by, revoked_by, revoked_at
                     """,
                     scope_norm,
                     int(scope_id),
@@ -91,6 +98,8 @@ class AuthnzOrgProviderSecretsRepo:
                     encrypted_blob,
                     key_hint,
                     metadata_json,
+                    created_by,
+                    updated_by,
                     ts,
                 )
                 return dict(row) if row else {}
@@ -98,13 +107,17 @@ class AuthnzOrgProviderSecretsRepo:
             await self.db_pool.execute(
                 """
                 INSERT INTO org_provider_secrets (
-                    scope_type, scope_id, provider, encrypted_blob, key_hint, metadata, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    scope_type, scope_id, provider, encrypted_blob, key_hint, metadata,
+                    created_by, updated_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(scope_type, scope_id, provider) DO UPDATE SET
                     encrypted_blob = excluded.encrypted_blob,
                     key_hint = excluded.key_hint,
                     metadata = excluded.metadata,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by,
+                    revoked_at = NULL,
+                    revoked_by = NULL
                 """,
                 (
                     scope_norm,
@@ -113,13 +126,16 @@ class AuthnzOrgProviderSecretsRepo:
                     encrypted_blob,
                     key_hint,
                     metadata_json,
+                    created_by,
+                    updated_by,
                     updated_at.isoformat(),
                     updated_at.isoformat(),
                 ),
             )
             row = await self.db_pool.fetchone(
                 """
-                SELECT id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at, last_used_at
+                SELECT id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
+                       created_by, updated_by, revoked_by, revoked_at
                 FROM org_provider_secrets
                 WHERE scope_type = ? AND scope_id = ? AND provider = ?
                 """,
@@ -130,29 +146,38 @@ class AuthnzOrgProviderSecretsRepo:
             logger.error(f"AuthnzOrgProviderSecretsRepo.upsert_secret failed: {exc}")
             raise
 
-    async def fetch_secret(self, scope_type: str, scope_id: int, provider: str) -> Optional[Dict[str, Any]]:
+    async def fetch_secret(
+        self,
+        scope_type: str,
+        scope_id: int,
+        provider: str,
+        *,
+        include_revoked: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         scope_norm = _normalize_scope_type(scope_type)
         provider_norm = normalize_provider_name(provider)
         try:
             if getattr(self.db_pool, "pool", None) is not None:
+                revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
                 row = await self.db_pool.fetchone(
-                    """
+                    f"""
                     SELECT id, scope_type, scope_id, provider, encrypted_blob, key_hint, metadata,
-                           created_at, updated_at, last_used_at
+                           created_at, updated_at, last_used_at, created_by, updated_by, revoked_by, revoked_at
                     FROM org_provider_secrets
-                    WHERE scope_type = $1 AND scope_id = $2 AND provider = $3
+                    WHERE scope_type = $1 AND scope_id = $2 AND provider = $3{revoked_clause}
                     """,
                     scope_norm,
                     int(scope_id),
                     provider_norm,
                 )
             else:
+                revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
                 row = await self.db_pool.fetchone(
-                    """
+                    f"""
                     SELECT id, scope_type, scope_id, provider, encrypted_blob, key_hint, metadata,
-                           created_at, updated_at, last_used_at
+                           created_at, updated_at, last_used_at, created_by, updated_by, revoked_by, revoked_at
                     FROM org_provider_secrets
-                    WHERE scope_type = ? AND scope_id = ? AND provider = ?
+                    WHERE scope_type = ? AND scope_id = ? AND provider = ?{revoked_clause}
                     """,
                     (scope_norm, int(scope_id), provider_norm),
                 )
@@ -167,6 +192,7 @@ class AuthnzOrgProviderSecretsRepo:
         scope_type: Optional[str] = None,
         scope_id: Optional[int] = None,
         provider: Optional[str] = None,
+        include_revoked: bool = False,
     ) -> List[Dict[str, Any]]:
         if scope_id is not None and not scope_type:
             raise ValueError("scope_type is required when scope_id is provided")
@@ -191,10 +217,13 @@ class AuthnzOrgProviderSecretsRepo:
                     clauses.append(f"provider = ${idx}")
                     params.append(provider_norm)
                     idx += 1
+                if not include_revoked:
+                    clauses.append("revoked_at IS NULL")
                 where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
                 rows = await self.db_pool.fetchall(
                     f"""
-                    SELECT id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at, last_used_at
+                    SELECT id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
+                           created_by, updated_by, revoked_by, revoked_at
                     FROM org_provider_secrets
                     {where}
                     ORDER BY scope_type, scope_id, provider
@@ -213,10 +242,13 @@ class AuthnzOrgProviderSecretsRepo:
                 if provider_norm:
                     clauses.append("provider = ?")
                     params.append(provider_norm)
+                if not include_revoked:
+                    clauses.append("revoked_at IS NULL")
                 where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
                 rows = await self.db_pool.fetchall(
                     f"""
-                    SELECT id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at, last_used_at
+                    SELECT id, scope_type, scope_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
+                           created_by, updated_by, revoked_by, revoked_at
                     FROM org_provider_secrets
                     {where}
                     ORDER BY scope_type, scope_id, provider
@@ -229,13 +261,30 @@ class AuthnzOrgProviderSecretsRepo:
             logger.error(f"AuthnzOrgProviderSecretsRepo.list_secrets failed: {exc}")
             raise
 
-    async def delete_secret(self, scope_type: str, scope_id: int, provider: str) -> bool:
+    async def delete_secret(
+        self,
+        scope_type: str,
+        scope_id: int,
+        provider: str,
+        *,
+        revoked_by: Optional[int] = None,
+        revoked_at: Optional[datetime] = None,
+    ) -> bool:
         scope_norm = _normalize_scope_type(scope_type)
         provider_norm = normalize_provider_name(provider)
+        revoked_ts = revoked_at or datetime.now(timezone.utc)
         try:
             if getattr(self.db_pool, "pool", None) is not None:
+                ts = self._normalize_datetime_for_postgres(revoked_ts)
                 result = await self.db_pool.execute(
-                    "DELETE FROM org_provider_secrets WHERE scope_type = $1 AND scope_id = $2 AND provider = $3",
+                    """
+                    UPDATE org_provider_secrets
+                    SET revoked_at = $1, revoked_by = $2, updated_at = $1, updated_by = $3
+                    WHERE scope_type = $4 AND scope_id = $5 AND provider = $6 AND revoked_at IS NULL
+                    """,
+                    ts,
+                    revoked_by,
+                    revoked_by,
                     scope_norm,
                     int(scope_id),
                     provider_norm,
@@ -247,8 +296,20 @@ class AuthnzOrgProviderSecretsRepo:
                 return True
 
             cursor = await self.db_pool.execute(
-                "DELETE FROM org_provider_secrets WHERE scope_type = ? AND scope_id = ? AND provider = ?",
-                (scope_norm, int(scope_id), provider_norm),
+                """
+                UPDATE org_provider_secrets
+                SET revoked_at = ?, revoked_by = ?, updated_at = ?, updated_by = ?
+                WHERE scope_type = ? AND scope_id = ? AND provider = ? AND revoked_at IS NULL
+                """,
+                (
+                    revoked_ts.isoformat(),
+                    revoked_by,
+                    revoked_ts.isoformat(),
+                    revoked_by,
+                    scope_norm,
+                    int(scope_id),
+                    provider_norm,
+                ),
             )
             rowcount = getattr(cursor, "rowcount", 0)
             return rowcount > 0

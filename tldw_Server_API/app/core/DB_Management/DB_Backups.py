@@ -13,12 +13,66 @@ from loguru import logger
 # Local Imports:
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
+from tldw_Server_API.app.core.Utils.path_utils import safe_join
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseBackend, BackendType
 #
 # End of Imports
+
+
+def _safe_join(base_dir: str, name: str) -> Optional[str]:
+    """
+    Safely join a base directory and a path component, preventing directory traversal
+    and symlink-based escapes.
+
+    Rejects empty components and absolute paths.
+
+    Returns the normalized, real path on success, or None on failure.
+    """
+    return safe_join(base_dir, name)
 #######################################################################################################################
 #
 # Functions:
+
+_SQLITE_BACKUP_EXTS = (".db", ".sqlib")
+_POSTGRES_BACKUP_EXTS = (".dump",)
+
+
+def _sanitize_backup_label(label: str, fallback: str) -> str:
+    """
+    Sanitize a backup label so it is safe to use as a single path component.
+
+    - Only allow alphanumerics, '-' and '_'.
+    - Strip surrounding whitespace and '_' characters.
+    - Truncate to a reasonable maximum length.
+    - Fall back to the provided default if the result is empty or malformed.
+    """
+    raw = str(label or "").strip()
+    # Allow only safe filename characters
+    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in raw)
+    # Trim leading/trailing underscores to avoid odd-looking names
+    cleaned = cleaned.strip("_")
+    # Enforce a maximum length to avoid pathological names
+    if len(cleaned) > 100:
+        cleaned = cleaned[:100]
+    # Ensure we end up with a non-empty, sane label
+    if not cleaned or not cleaned[0].isalnum():
+        return fallback
+    return cleaned
+
+
+def _validate_backup_name(backup_name: str, allowed_exts: tuple[str, ...]) -> Optional[str]:
+    """Validate a backup filename for safety and allowed extensions."""
+    name = str(backup_name or "").strip()
+    if not name:
+        return None
+    if os.path.basename(name) != name:
+        return None
+    if name.startswith("-"):
+        return None
+    if not name.endswith(allowed_exts):
+        return None
+    return name
+
 
 def init_backup_directory(backup_base_dir: str, db_name: str) -> str:
     """Initialize backup directory for a specific database."""
@@ -45,10 +99,15 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
         logger.info("Creating backup:")
         logger.info(f"  DB Path: {db_path}")
         logger.info(f"  Backup Dir: {backup_dir}")
-        logger.info(f"  DB Name: {db_name}")
+        safe_db_name = _sanitize_backup_label(db_name, "db")
+        logger.info(f"  DB Name: {safe_db_name}")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = os.path.join(backup_dir, f"{db_name}_backup_{timestamp}.db")
+        backup_file = _safe_join(backup_dir, f"{safe_db_name}_backup_{timestamp}.db")
+        if not backup_file:
+            error_msg = "Invalid backup path"
+            logger.error(error_msg)
+            return error_msg
         logger.info(f"  Full backup path: {backup_file}")
 
         # Create a backup using SQLite's backup API
@@ -87,8 +146,15 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
         os.makedirs(backup_dir, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = os.path.join(backup_dir,
-                                   f"{db_name}_incremental_{timestamp}.sqlib")
+        safe_db_name = _sanitize_backup_label(db_name, "db")
+        backup_file = _safe_join(
+            backup_dir,
+            f"{safe_db_name}_incremental_{timestamp}.sqlib",
+        )
+        if not backup_file:
+            error_msg = "Invalid backup path"
+            logger.error(error_msg)
+            return error_msg
 
         with sqlite3.connect(db_path) as conn:
             try:
@@ -108,6 +174,7 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
 def list_backups(backup_dir: str) -> str:
     """List all available backups."""
     try:
+        backup_dir = os.path.abspath(backup_dir)
         backups = [f for f in os.listdir(backup_dir)
                    if f.endswith(('.db', '.sqlib'))]
         backups.sort(reverse=True)  # Most recent first
@@ -121,8 +188,19 @@ def list_backups(backup_dir: str) -> str:
 def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup_name: str) -> str:
     """Restore database from a backup file."""
     try:
-        logger.info(f"Restoring backup: {backup_name}")
-        backup_path = os.path.join(backup_dir, backup_name)
+        safe_backup_name = _validate_backup_name(backup_name, _SQLITE_BACKUP_EXTS)
+        if not safe_backup_name:
+            error_msg = "Invalid backup name"
+            logger.error(f"{error_msg}: {backup_name}")
+            return error_msg
+        db_path = os.path.abspath(db_path)
+        backup_dir = os.path.abspath(backup_dir)
+        logger.info(f"Restoring backup: {safe_backup_name}")
+        backup_path = _safe_join(backup_dir, safe_backup_name)
+        if not backup_path:
+            error_msg = "Invalid backup path"
+            logger.error(f"{error_msg}: {safe_backup_name}")
+            return error_msg
         if not os.path.exists(backup_path):
             logger.error(f"Backup file not found: {backup_name}")
             return f"Backup file not found: {backup_name}"
@@ -134,8 +212,9 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
         if os.path.exists(db_path):
             # Create a timestamp for the current db
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_db_name = _sanitize_backup_label(db_name, "db")
             current_backup = os.path.join(
-                backup_dir, f"{db_name}_pre_restore_{timestamp}.db"
+                backup_dir, f"{safe_db_name}_pre_restore_{timestamp}.db"
             )
 
             # Backup current database before restore
@@ -172,6 +251,7 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
         error_msg = f"Failed to restore backup: {str(e)}"
         logger.error(error_msg)
         return error_msg
+
 
 def setup_backup_config(user_id: Optional[int] = None) -> Dict[str, Dict[str, str]]:
     """Setup configuration for database backups using centralized path utils.
@@ -258,9 +338,21 @@ def create_postgres_backup(
     user = config.pg_user or "postgres"
     password = config.pg_password or None
 
-    os.makedirs(backup_dir, exist_ok=True)
+    # Normalize and validate backup directory, anchoring it to the backup base path
+    backup_base = get_project_relative_path("tldw_DB_Backups")
+    backup_dir_real = _safe_join(backup_base, backup_dir)
+    if not backup_dir_real:
+        msg = "Invalid backup directory"
+        logger.error(msg)
+        return msg
+    os.makedirs(backup_dir_real, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_file = os.path.join(backup_dir, f"{label}_pgdump_{timestamp}.dump")
+    safe_label = _sanitize_backup_label(label, "content")
+    out_file = _safe_join(backup_dir_real, f"{safe_label}_pgdump_{timestamp}.dump")
+    if not out_file:
+        msg = "Invalid backup path"
+        logger.error(msg)
+        return msg
 
     # Build pg_dump command
     cmd = [
@@ -272,6 +364,7 @@ def create_postgres_backup(
         "--no-owner",
         "--no-privileges",
         "-f", out_file,
+        "--",
         dbname,
     ]
 
@@ -294,6 +387,20 @@ def create_postgres_backup(
     except Exception as exc:  # noqa: BLE001
         logger.error(f"pg_dump error: {exc}")
         return f"pg_dump error: {exc}"
+
+
+def _get_postgres_backup_base_dir(config) -> str:
+    """
+    Determine the base directory where PostgreSQL backups are stored for
+    the given database configuration. This keeps restores confined to the
+    expected backup root on disk instead of trusting user input paths.
+    """
+    # Reuse the same project-relative backup root used elsewhere.
+    base_dir = get_project_relative_path("tldw_DB_Backups")
+    db_name = getattr(config, "pg_database", None) or "postgres"
+    # Use a sanitized database name to avoid introducing path separators.
+    safe_db_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(db_name))
+    return os.path.join(base_dir, safe_db_name)
 
 
 def restore_postgres_backup(
@@ -323,14 +430,28 @@ def restore_postgres_backup(
         logger.error(msg)
         return msg
 
-    if not os.path.exists(dump_file):
-        msg = f"dump not found: {dump_file}"
-        logger.error(msg)
+    # Treat dump_file as a logical backup identifier/filename, not as a full path.
+    backup_id = str(dump_file or "").strip()
+    backup_name = _validate_backup_name(os.path.basename(backup_id), _POSTGRES_BACKUP_EXTS)
+    if not backup_name:
+        msg = "Invalid dump file name"
+        logger.error(f"{msg}: {dump_file}")
         return msg
 
     config = getattr(backend, "config", None)
     if not config:
         msg = "PostgreSQL backend missing configuration; cannot perform restore"
+        logger.error(msg)
+        return msg
+
+    backup_dir = _get_postgres_backup_base_dir(config)
+    safe_dump_path = _safe_join(backup_dir, backup_name)
+    if not safe_dump_path:
+        msg = "Invalid dump file path"
+        logger.error(f"{msg}: {dump_file}")
+        return msg
+    if not os.path.exists(safe_dump_path):
+        msg = f"dump not found: {safe_dump_path}"
         logger.error(msg)
         return msg
 
@@ -350,14 +471,15 @@ def restore_postgres_backup(
     ]
     if drop_first:
         cmd.append("-c")    # clean (drop) database objects before recreating
-    cmd.append(dump_file)
+    cmd.append("--")
+    cmd.append(safe_dump_path)
 
     env = os.environ.copy()
     if password:
         env["PGPASSWORD"] = str(password)
 
     try:
-        logger.info(f"Running pg_restore on {dump_file} into database '{dbname}'")
+        logger.info(f"Running pg_restore on {safe_dump_path} into database '{dbname}'")
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
         if proc.returncode != 0:
             logger.error(f"pg_restore failed ({proc.returncode}): {proc.stderr.strip()}")

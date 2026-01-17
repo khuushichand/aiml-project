@@ -23,11 +23,11 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 @pytest.mark.unit
 def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_validation():
     # Configure strict request JSON size but allow endpoint to accept due to redaction
-    os.environ['CHAT_REQUEST_MAX_SIZE'] = '1000'  # tight cap
-    os.environ['CHAT_IMAGE_MAX_MB'] = '1'        # small image limit to trigger validation failure
+    os.environ["CHAT_REQUEST_MAX_SIZE"] = "1000"  # tight cap
+    os.environ["CHAT_IMAGE_MAX_MB"] = "1"  # small image limit to trigger validation failure
 
     # Create temp DB
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
     db = CharactersRAGDB(db_path, "test_client")
     # Enable WAL mode and a generous busy timeout for concurrent test access
@@ -41,15 +41,17 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
         pass
     try:
         # Add default character required by chat endpoint
-        db.add_character_card({
-            "name": DEFAULT_CHARACTER_NAME,
-            "description": "Default",
-            "personality": "Helpful",
-            "scenario": "Testing",
-            "system_prompt": "You are helpful",
-            "first_message": "Hello",
-            "creator_notes": "test"
-        })
+        db.add_character_card(
+            {
+                "name": DEFAULT_CHARACTER_NAME,
+                "description": "Default",
+                "personality": "Helpful",
+                "scenario": "Testing",
+                "system_prompt": "You are helpful",
+                "first_message": "Hello",
+                "creator_notes": "test",
+            }
+        )
 
         with TestClient(app) as client:
             # CSRF token
@@ -63,6 +65,7 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
 
             # Ensure auth header
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
             settings = get_settings()
             api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
             headers = {"X-API-KEY": api_key, "X-CSRF-Token": csrf}
@@ -117,7 +120,8 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
                 # There should be at least one user message (with placeholder) and one assistant message
                 assert len(msgs) >= 1
                 found_placeholder = any(
-                    isinstance(m.get("content"), str) and ("<Image failed" in m.get("content") or "<Image failed validation" in m.get("content"))
+                    isinstance(m.get("content"), str)
+                    and ("<Image failed" in m.get("content") or "<Image failed validation" in m.get("content"))
                     for m in msgs
                     if m.get("sender", "").lower() == "user"
                 )
@@ -126,8 +130,10 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
         # Cleanup db files
         try:
             os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
         except Exception:
             pass
         # Restore overrides
@@ -138,13 +144,147 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
 
 
 @pytest.mark.unit
+def test_chat_endpoint_rejects_oversized_image_when_enforcement_enabled(monkeypatch):
+    monkeypatch.setenv("CHAT_ENFORCE_BASE64_IMAGE_LIMIT", "1")
+    monkeypatch.setenv("CHAT_IMAGE_MAX_MB", "1")
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = CharactersRAGDB(db_path, "test_client_enforce")
+    try:
+        db.add_character_card(
+            {
+                "name": DEFAULT_CHARACTER_NAME,
+                "description": "Default",
+                "personality": "Helpful",
+                "scenario": "Testing",
+                "system_prompt": "You are helpful",
+                "first_message": "Hello",
+                "creator_notes": "test",
+            }
+        )
+
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/health")
+            csrf = resp.cookies.get("csrf_token", "")
+            client.csrf_token = csrf
+
+            _app = app
+            _app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+            settings = get_settings()
+            api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
+            headers = {"X-API-KEY": api_key, "X-CSRF-Token": csrf}
+
+            too_long_b64_len = int(1 * 1024 * 1024 * 4 / 3) + 200
+            big_b64 = "A" * too_long_b64_len
+            body = {
+                "api_provider": "openai",
+                "model": "gpt-4o-mini",
+                "save_to_db": True,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Please analyze this image"},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{big_b64}"}},
+                        ],
+                    }
+                ],
+            }
+
+            r = client.post("/api/v1/chat/completions", json=body, headers=headers)
+            assert r.status_code == 413, f"Unexpected status: {r.status_code}, {r.text}"
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
+        except Exception:
+            pass
+        try:
+            getattr(app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_chat_endpoint_request_size_returns_413(monkeypatch):
+    monkeypatch.setenv("CHAT_REQUEST_MAX_SIZE", "200")
+    from tldw_Server_API.app.api.v1.schemas import chat_validators
+    monkeypatch.setattr(chat_validators, "MAX_REQUEST_SIZE", 200)
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = CharactersRAGDB(db_path, "test_client_req_size")
+    try:
+        db.add_character_card(
+            {
+                "name": DEFAULT_CHARACTER_NAME,
+                "description": "Default",
+                "personality": "Helpful",
+                "scenario": "Testing",
+                "system_prompt": "You are helpful",
+                "first_message": "Hello",
+                "creator_notes": "test",
+            }
+        )
+
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/health")
+            csrf = resp.cookies.get("csrf_token", "")
+            client.csrf_token = csrf
+
+            _app = app
+            _app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+            settings = get_settings()
+            api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
+            headers = {"X-API-KEY": api_key, "X-CSRF-Token": csrf}
+
+            body = {
+                "api_provider": "openai",
+                "model": "gpt-4o-mini",
+                "save_to_db": True,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "X" * 500,
+                    }
+                ],
+            }
+
+            r = client.post("/api/v1/chat/completions", json=body, headers=headers)
+            assert r.status_code == 413, f"Unexpected status: {r.status_code}, {r.text}"
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
+        except Exception:
+            pass
+        try:
+            getattr(app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
 def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
     # Configure strict request JSON size but allow endpoint to accept due to redaction
-    os.environ['CHAT_REQUEST_MAX_SIZE'] = '1000'  # tight cap
-    os.environ['CHAT_IMAGE_MAX_MB'] = '1'        # small image limit to trigger validation failure
+    os.environ["CHAT_REQUEST_MAX_SIZE"] = "1000"  # tight cap
+    os.environ["CHAT_IMAGE_MAX_MB"] = "1"  # small image limit to trigger validation failure
 
     # Create temp DB
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
     db = CharactersRAGDB(db_path, "test_client_stream")
     try:
@@ -157,15 +297,17 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
         pass
     try:
         # Add default character required by chat endpoint
-        db.add_character_card({
-            "name": DEFAULT_CHARACTER_NAME,
-            "description": "Default",
-            "personality": "Helpful",
-            "scenario": "Testing",
-            "system_prompt": "You are helpful",
-            "first_message": "Hello",
-            "creator_notes": "test"
-        })
+        db.add_character_card(
+            {
+                "name": DEFAULT_CHARACTER_NAME,
+                "description": "Default",
+                "personality": "Helpful",
+                "scenario": "Testing",
+                "system_prompt": "You are helpful",
+                "first_message": "Hello",
+                "creator_notes": "test",
+            }
+        )
 
         with TestClient(app) as client:
             # CSRF token
@@ -179,6 +321,7 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
 
             # Auth header
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
             settings = get_settings()
             api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
             headers = {"X-API-KEY": api_key, "X-CSRF-Token": csrf}
@@ -210,7 +353,9 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
                 yield f"data: {json.dumps(chunk2)}\n\n"
                 yield "data: [DONE]\n\n"
 
-            with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=upstream_stream()):
+            with patch(
+                "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=upstream_stream()
+            ):
                 r = client.post("/api/v1/chat/completions", json=body, headers=headers)
                 assert r.status_code == 200, f"Unexpected status: {r.status_code}"
                 ctype = r.headers.get("content-type", "").lower()
@@ -253,7 +398,8 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
                 msgs = db.get_messages_for_conversation(conv_id, 50, 0, "ASC")
                 assert len(msgs) >= 1
                 found_placeholder = any(
-                    isinstance(m.get("content"), str) and ("<Image failed" in m.get("content") or "<Image failed validation" in m.get("content"))
+                    isinstance(m.get("content"), str)
+                    and ("<Image failed" in m.get("content") or "<Image failed validation" in m.get("content"))
                     for m in msgs
                     if m.get("sender", "").lower() == "user"
                 )
@@ -262,8 +408,10 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
         # Cleanup db files
         try:
             os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
         except Exception:
             pass
         try:

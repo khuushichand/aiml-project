@@ -37,6 +37,7 @@ def _build_app_with_overrides(
             return []
 
     def _fake_get_topic_monitoring_service() -> _FakeMonitoringService:
+
         return _FakeMonitoringService()
 
     monitoring_mod.get_topic_monitoring_service = _fake_get_topic_monitoring_service  # type: ignore[assignment]

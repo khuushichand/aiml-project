@@ -29,10 +29,13 @@ import sqlite3
 import threading
 import uuid as uuid_module
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths, _is_test_context
+from tldw_Server_API.app.core.exceptions import StorageUnavailableError
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -43,6 +46,65 @@ def _utcnow_iso() -> str:
 def _generate_uuid() -> str:
     """Generate a lowercase hex UUID."""
     return uuid_module.uuid4().hex.lower()
+
+
+def _normalize_user_id_for_records(user_id: str) -> str:
+    """Normalize user IDs for storage; in tests, prefix numeric IDs with test_user_."""
+    raw = str(user_id).strip()
+    if _is_test_context() and raw.isdigit():
+        return f"test_user_{raw}"
+    return raw
+
+
+def _normalize_db_path(
+    db_path: str,
+    user_id: str,
+) -> Tuple[str, bool]:
+    """Normalize db_path and always enforce user directory containment."""
+    if not db_path or not str(db_path).strip():
+        raise InputError("db_path is required")
+
+    if db_path == ":memory:":
+        return db_path, True
+
+    try:
+        resolved = Path(db_path).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        raise InputError(f"Invalid db_path: {db_path}") from exc
+
+    # Always enforce that the database path stays within the user's base directory
+    # when a user_id is provided. This guards against directory traversal or use
+    # of unexpected locations.
+    if user_id:
+        try:
+            user_dir = DatabasePaths.get_user_base_directory(user_id).resolve()
+        except StorageUnavailableError as exc:
+            raise KanbanDBError("storage_unavailable") from exc
+        except ValueError as exc:
+            raise InputError("invalid_user_id") from exc
+        try:
+            resolved.relative_to(user_dir)
+        except ValueError as exc:
+            raise InputError("db_path must be within the user database directory") from exc
+
+    return str(resolved), False
+
+
+# --- SQLite Connection Helpers ---
+class _KanbanMemoryConnection(sqlite3.Connection):
+    """SQLite connection that keeps :memory: databases alive across operations."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._allow_close = False
+
+    def close(self) -> None:
+        if self._allow_close:
+            super().close()
+
+    def force_close(self) -> None:
+        self._allow_close = True
+        super().close()
 
 
 # --- Custom Exceptions ---
@@ -120,33 +182,83 @@ class KanbanDB:
         Initialize the KanbanDB instance.
 
         Args:
-            db_path: Path to the SQLite database file.
-            user_id: The user ID for this database instance.
+            db_path: Path to the SQLite database file. Must resolve within the
+                user-scoped database directory.
+            user_id: The user ID for this database instance. In test context,
+                purely numeric IDs are stored as test_user_<id>.
         """
-        self.db_path = db_path
-        self.user_id = str(user_id)
+        raw_user_id = str(user_id)
+        if not raw_user_id.strip():
+            raise InputError("user_id is required")
+        self.user_id = _normalize_user_id_for_records(raw_user_id)
         self._lock = threading.RLock()
+        self.db_path, self._is_memory_db = _normalize_db_path(
+            db_path,
+            raw_user_id,
+        )
+        self._memory_conn: Optional[_KanbanMemoryConnection] = None
 
         # Ensure directory exists
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        if not self._is_memory_db:
+            db_dir = os.path.dirname(self.db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
 
         # Initialize schema
         self._ensure_schema()
-        logger.debug(f"KanbanDB initialized for user {user_id} at {db_path}")
+        logger.debug(f"KanbanDB initialized for user {self.user_id} at {self.db_path}")
+
+    def _configure_connection(self, conn: sqlite3.Connection, *, enable_wal: bool = True) -> None:
+        conn.row_factory = sqlite3.Row
+        # Foreign keys and timeout are required for integrity and responsiveness.
+        for statement in ("PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=30000"):
+            try:
+                conn.execute(statement)
+            except sqlite3.Error as e:
+                logger.error(f"Failed to set critical PRAGMA option {statement}: {e}")
+                raise KanbanDBError(
+                    f"Failed to set critical PRAGMA option {statement}: {e}"
+                ) from e
+
+        # Performance pragmas are best-effort; log failures for investigation.
+        try:
+            if enable_wal:
+                conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+        except sqlite3.Error as e:
+            logger.error(f"Failed to set performance PRAGMA options: {e}")
 
     def _connect(self) -> sqlite3.Connection:
         """Create and configure a database connection."""
-        conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("PRAGMA busy_timeout=30000")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
-        except Exception as e:
-            logger.warning(f"Failed to set PRAGMA options: {e}")
-        return conn
+        with self._lock:
+            if self._is_memory_db:
+                if self._memory_conn is None:
+                    # Keep a single shared connection so :memory: schema/data persist.
+                    conn = sqlite3.connect(
+                        self.db_path,
+                        timeout=30,
+                        isolation_level=None,
+                        check_same_thread=False,
+                        factory=_KanbanMemoryConnection,
+                    )
+                    try:
+                        self._configure_connection(conn, enable_wal=False)
+                    except Exception:
+                        try:
+                            conn.force_close()
+                        finally:
+                            raise
+                    self._memory_conn = conn
+                return self._memory_conn
+
+            conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+            try:
+                self._configure_connection(conn)
+            except Exception:
+                conn.close()
+                raise
+            return conn
 
     def _ensure_schema(self) -> None:
         """Create all tables, indexes, and triggers if they don't exist."""
@@ -161,6 +273,40 @@ class KanbanDB:
                 raise KanbanDBError(f"Schema creation failed: {e}") from e
             finally:
                 conn.close()
+
+    def close(self) -> None:
+        """
+        Close any persistent in-memory connection.
+
+        This is only needed for :memory: databases. File-based databases are a
+        no-op. Call this when finished with the KanbanDB instance to free
+        resources.
+        """
+        with self._lock:
+            if self._memory_conn is None:
+                return
+            try:
+                self._memory_conn.force_close()
+            except sqlite3.Error as e:
+                logger.warning(f"Error closing memory connection: {e}")
+            finally:
+                self._memory_conn = None
+
+    def __del__(self) -> None:
+        """Cleanup on garbage collection."""
+        try:
+            self.close()
+        except Exception as e:
+            # Ignore errors during cleanup - object is being destroyed anyway.
+            logger.debug(f"KanbanDB __del__ cleanup failed: {e}")
+
+    def __enter__(self) -> "KanbanDB":
+        """Enable context-manager use for automatic cleanup."""
+        return self
+
+    def __exit__(self, exc_type, exc, exc_tb) -> None:
+        """Ensure persistent resources are released on exit."""
+        self.close()
 
     def _get_schema_sql(self) -> str:
         """Return the complete schema SQL."""

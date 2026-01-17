@@ -8,6 +8,7 @@ BYOK lets multi-user deployments store per-user provider keys, with optional org
 - `BYOK_ENABLED=true`.
 - `BYOK_ENCRYPTION_KEY` set (base64-encoded 32-byte key).
 - Optional: `BYOK_ALLOWED_PROVIDERS` allowlist (comma-separated).
+- Optional: `BYOK_ALLOWED_BASE_URL_PROVIDERS` allowlist for BYOK `base_url` overrides.
 - Optional: `BYOK_LAST_USED_THROTTLE_SECONDS` (default `300`) to throttle runtime `last_used_at` updates.
 
 Example key generation:
@@ -52,16 +53,16 @@ If the provider requires auth and no key resolves, the API returns:
 
 ## Credential Fields
 
-Supported `credential_fields` keys:
-
-- `base_url`
-- `org_id`
-- `project_id`
+Credential fields are validated per provider. By default, unknown providers only
+allow `org_id` and `project_id`, and `base_url` is only allowed for providers
+listed in `BYOK_ALLOWED_BASE_URL_PROVIDERS` and when the caller is a trusted
+principal (admin/service).
 
 Notes:
 
 - Empty strings are rejected.
-- `base_url` overrides provider `api_base_url` when non-empty.
+- Allowed fields must be provided explicitly; they are not inherited from server defaults.
+- `base_url` overrides the provider `api_base_url` when permitted.
 - `org_id` / `project_id` are applied when not `null`.
 - Unsupported fields return `400`.
 
@@ -103,7 +104,7 @@ GET /api/v1/users/keys
 
 Response item fields:
 
-- `source`: `user | shared | server_default | none | disabled`
+- `source`: `user | team | org | server_default | none | disabled`
 - `has_key`: `true` if the user stored a key
 
 Test a key:
@@ -163,9 +164,25 @@ DELETE /api/v1/admin/keys/shared/{scope_type}/{scope_id}/{provider}
 - `keys/test` endpoints update `last_used_at` only if the tested key matches the stored key.
 - Responses never include plaintext keys; `key_hint` shows the last 4 characters only.
 
+## Key Rotation
+
+Rotate BYOK encryption keys using the maintenance helper:
+
+1. Set `BYOK_ENCRYPTION_KEY` to the new primary key.
+2. Set `BYOK_SECONDARY_ENCRYPTION_KEY` to the old key.
+3. Run the rotation helper (dry-run first recommended):
+
+```bash
+python -m Helper_Scripts.AuthNZ.rotate_byok_keys --dry-run
+python -m Helper_Scripts.AuthNZ.rotate_byok_keys
+```
+
+After a successful run, remove `BYOK_SECONDARY_ENCRYPTION_KEY` to enforce the new key.
+
 ## Error Codes
 
-- `400` invalid payloads or missing provider credentials.
+- `400` invalid payloads.
+- `503` missing provider credentials (`error_code=missing_provider_credentials`).
 - `403` BYOK disabled or provider disallowed.
 - `404` deleting a key that does not exist.
 - `401/403` for `/keys/test` when provider rejects credentials.

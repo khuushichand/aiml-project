@@ -33,7 +33,7 @@ def test_normalize_message_rejects_bad_stage():
 
 @pytest.mark.unit
 def test_normalize_message_invalid_chunking_config():
-    # chunk_size below minimum should raise
+     # chunk_size below minimum should raise
     raw = {
         "job_id": "j2",
         "user_id": "u",

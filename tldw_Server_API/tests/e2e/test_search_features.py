@@ -31,6 +31,7 @@ class TestFTS5SearchFeatures:
     """Test SQLite FTS5 full-text search capabilities."""
 
     def test_phrase_search(self, api_client, data_tracker):
+
         """Test exact phrase searching with quotes."""
         # Create content with specific phrases
         content1 = "The quick brown fox jumps over the lazy dog"
@@ -68,6 +69,7 @@ class TestFTS5SearchFeatures:
             print("⚠ No results for phrase search (FTS5 might not be configured)")
 
     def test_boolean_operators(self, api_client, data_tracker):
+
         """Test AND, OR, NOT boolean operators in search."""
         # Create test content
         content1 = "Python programming with machine learning"
@@ -121,6 +123,7 @@ class TestFTS5SearchFeatures:
                 break
 
     def test_prefix_search(self, api_client, data_tracker):
+
         """Test prefix/wildcard searching."""
         # Create content with related terms
         content1 = "Testing machine learning algorithms"
@@ -158,6 +161,7 @@ class TestFTS5SearchFeatures:
                 print(f"⚠ Prefix search found limited variations: {found_variations}")
 
     def test_search_result_ranking(self, api_client, data_tracker):
+
         """Test search result relevance ranking."""
         # Create content with varying relevance
         content1 = "machine learning " * 10  # High frequency
@@ -247,6 +251,7 @@ class TestVectorSearch:
     """Test ChromaDB vector search capabilities."""
 
     def test_semantic_similarity_search(self, api_client, data_tracker):
+
         """Test semantic similarity search using embeddings."""
         # Create semantically related content
         content1 = "Artificial intelligence and machine learning are transforming technology"
@@ -302,7 +307,7 @@ class TestVectorSearch:
                     has_tech_terms = any(term in top_content for term in
                                         ["artificial", "intelligence", "machine", "learning", "ai", "ml", "technology"])
                     has_cooking_terms = any(term in top_content for term in
-                                          ["cooking", "recipes", "pasta", "dishes"])
+                                        ["cooking", "recipes", "pasta", "dishes"])
 
                     if has_tech_terms and not has_cooking_terms:
                         print("✓ Semantic search found relevant content")
@@ -316,6 +321,7 @@ class TestVectorSearch:
             print("⚠ RAG/semantic search not available")
 
     def test_vector_search_with_metadata_filtering(self, api_client, data_tracker):
+
         """Test vector search with metadata filters."""
         # Create content with different metadata
         test_data = [
@@ -379,6 +385,7 @@ class TestHybridSearch:
     """Test hybrid BM25 + vector search."""
 
     def test_hybrid_search_accuracy(self, api_client, data_tracker):
+
         """Test that hybrid search combines both keyword and semantic matching."""
         # Create test content
         content1 = "The Python programming language is excellent for data science"
@@ -446,6 +453,7 @@ class TestHybridSearch:
             print("⚠ Search functionality limited")
 
     def test_reranking_effectiveness(self, api_client, data_tracker):
+
         """Test that reranking improves search results."""
         # Create content with varying relevance
         contents = [
@@ -546,6 +554,7 @@ class TestRAGContextRetrieval:
     """Test RAG context retrieval and expansion."""
 
     def test_simple_endpoint_returns_results(self, api_client, data_tracker):
+
         """Ensure /rag/simple returns results for freshly ingested content."""
         token = f"rag-simple-{int(time.time())}"
         file_path = self._create_temp_file(f"Simple endpoint content {token}")
@@ -588,6 +597,7 @@ class TestRAGContextRetrieval:
         assert last_response.get("count", 0) > 0
 
     def test_context_window_optimization(self, api_client, data_tracker):
+
         """Test that RAG optimizes context window usage."""
         # Create a long document
         long_content = "\n\n".join([
@@ -631,6 +641,7 @@ class TestRAGContextRetrieval:
             print("⚠ Context optimization not testable")
 
     def test_citation_generation(self, api_client, data_tracker):
+
         """Test that RAG generates proper citations."""
         # Create identifiable content
         contents = [
@@ -687,6 +698,7 @@ class TestRAGContextRetrieval:
             print("⚠ Citation generation not available")
 
     def test_multi_database_search(self, api_client, data_tracker):
+
         """Test searching across multiple databases."""
         # Add delay to avoid rate limiting from previous tests
         time.sleep(1.0)

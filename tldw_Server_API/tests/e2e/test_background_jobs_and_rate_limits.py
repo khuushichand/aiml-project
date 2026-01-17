@@ -13,7 +13,7 @@ import uuid
 import pytest
 import httpx
 
-from .fixtures import api_client, create_test_file, cleanup_test_file, AssertionHelpers, APIClient
+from .fixtures import api_client, create_test_file, cleanup_test_file, AssertionHelpers, APIClient, NO_RETRY_HEADER
 
 
 @pytest.mark.critical
@@ -80,7 +80,11 @@ def test_rate_limit_backoff_retry_envelope(api_client):
     # First, quickly burst until we see a 429 or a few successes
     hit_429 = False
     for _ in range(8):
-        r = api_client.client.post("/api/v1/chatbooks/export", json=payload)
+        r = api_client.client.post(
+            "/api/v1/chatbooks/export",
+            json=payload,
+            headers={NO_RETRY_HEADER: "1"},
+        )
         if r.status_code == 429:
             hit_429 = True
             break
@@ -90,7 +94,11 @@ def test_rate_limit_backoff_retry_envelope(api_client):
     # Now call through the backoff wrapper
     start = time.time()
     def _call():
-        resp = api_client.client.post("/api/v1/chatbooks/export", json=payload)
+        resp = api_client.client.post(
+            "/api/v1/chatbooks/export",
+            json=payload,
+            headers={NO_RETRY_HEADER: "1"},
+        )
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:

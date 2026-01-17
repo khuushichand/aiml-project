@@ -134,11 +134,10 @@ async def test_can_start_stream_and_finish_stream_via_rg_integration(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_can_start_job_fails_closed_when_rg_unavailable(monkeypatch):
+async def test_can_start_job_fails_open_when_rg_unavailable(monkeypatch):
     """
     Legacy concurrency counters are retired. If RG is enabled but the governor
-    accessor returns None, can_start_job should fail closed to surface the
-    misconfiguration.
+    accessor returns None, can_start_job should fail open to avoid blocking jobs.
     """
     from tldw_Server_API.app.core.Usage import audio_quota
 
@@ -152,5 +151,5 @@ async def test_can_start_job_fails_closed_when_rg_unavailable(monkeypatch):
 
     user_id = 99
     ok1, msg1 = await audio_quota.can_start_job(user_id)
-    assert ok1 is False
-    assert "unavailable" in (msg1 or "").lower()
+    assert ok1 is True
+    assert msg1 in (None, "OK")

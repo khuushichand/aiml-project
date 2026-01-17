@@ -58,6 +58,7 @@ class MockDatabase(Protocol):
     """Protocol for mock database implementations"""
 
     def connect(self) -> None:
+
         """Connect to database"""
         ...
 
@@ -66,6 +67,7 @@ class MockDatabase(Protocol):
         ...
 
     def close(self) -> None:
+
         """Close connection"""
         ...
 
@@ -95,14 +97,17 @@ class TestFixture:
     """Base class for test fixtures"""
 
     def __init__(self):
+
         self.setup_complete = False
         self.teardown_complete = False
 
     def setup(self) -> None:
+
         """Setup test fixture"""
         self.setup_complete = True
 
     def teardown(self) -> None:
+
         """Teardown test fixture"""
         self.teardown_complete = True
 

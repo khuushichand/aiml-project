@@ -19,6 +19,8 @@ def _assert_create_limit_pg(jm: JobManager, *, domain: str, user: str, limit: in
 
 
 def test_max_queued_precedence_postgres(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
@@ -34,6 +36,8 @@ def test_max_queued_precedence_postgres(monkeypatch, jobs_pg_dsn):
 
 
 def test_inflight_precedence_postgres(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
@@ -62,6 +66,8 @@ def test_inflight_precedence_postgres(monkeypatch, jobs_pg_dsn):
 
 
 def test_submits_per_minute_precedence_postgres(monkeypatch, jobs_pg_dsn):
+
+
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 

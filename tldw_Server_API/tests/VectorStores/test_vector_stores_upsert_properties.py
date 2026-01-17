@@ -24,15 +24,18 @@ def client(monkeypatch):
     class FakeCol:
         def __init__(self):
             self.ids=[]; self.emb=[]; self.docs=[]; self.metas=[]
-        def count(self): return len(self.ids)
-        def get(self, **kw): return {'ids': self.ids[:1]}
+        def count(self):
+            return len(self.ids)
+        def get(self, **kw):
+            return {'ids': self.ids[:1]}
     class FakeAdapter:
         def __init__(self):
             self._initialized=False
             self.config=types.SimpleNamespace(embedding_dim=1536)
             self.col = FakeCol()
             self.manager = types.SimpleNamespace(get_or_create_collection=lambda name: self.col)
-        async def initialize(self): self._initialized=True
+        async def initialize(self):
+            self._initialized=True
         async def get_collection_stats(self, name):
             dim = self.config.embedding_dim
             if self.col.emb:

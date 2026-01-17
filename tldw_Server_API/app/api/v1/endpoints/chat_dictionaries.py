@@ -5,7 +5,7 @@ import time
 import warnings
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -240,6 +240,7 @@ async def update_chat_dictionary(
 @router.delete(
     "/dictionaries/{dictionary_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a dictionary",
     description="Delete a dictionary and its entries.",
     tags=["chat-dictionaries"],
@@ -248,7 +249,7 @@ async def delete_chat_dictionary(
     dictionary_id: int,
     hard_delete: bool = Query(False, description="Permanently delete instead of soft delete"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-) -> None:
+) -> Response:
     """Delete a dictionary (soft delete by default)."""
     service = ChatDictionaryService(db)
     try:
@@ -261,6 +262,7 @@ async def delete_chat_dictionary(
 
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -484,6 +486,7 @@ async def update_dictionary_entry(
 @router.delete(
     "/dictionaries/entries/{entry_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete dictionary entry",
     description="Delete a single dictionary entry by ID.",
     tags=["chat-dictionaries"],
@@ -491,7 +494,7 @@ async def update_dictionary_entry(
 async def delete_dictionary_entry(
     entry_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-) -> None:
+) -> Response:
     """Delete a dictionary entry."""
     service = ChatDictionaryService(db)
     try:
@@ -504,6 +507,7 @@ async def delete_dictionary_entry(
 
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -552,6 +556,8 @@ async def process_text_with_dictionaries(
             token_budget_exceeded=stats.get("token_budget_exceeded", False),
             processing_time_ms=processing_time_ms,
         )
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error processing text: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e

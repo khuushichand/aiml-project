@@ -11,26 +11,38 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from loguru import logger
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import NextTokenCapture
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
-    chat_with_openai, chat_with_anthropic, chat_with_local_llm
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
 )
 
 logger = logger
+
+_PROVIDER_ALIASES = {
+    "local": "local-llm",
+    "local_llm": "local-llm",
+}
 
 
 class WordBenchRunner:
     """Runner for WordBench next token prediction analysis."""
 
-    def __init__(self, api_name: str = "openai", api_key: Optional[str] = None):
+    def __init__(self, api_name: str = "openai", api_key: Optional[str] = None, model: Optional[str] = None):
         """Initialize WordBench runner.
 
         Args:
             api_name: Name of the API to use (openai, local-llm, etc.)
             api_key: API key if required
+            model: Optional model override for adapter-backed providers
         """
         self.api_name = api_name
         self.api_key = api_key
+        self.model = model
         self.capture = NextTokenCapture(top_k=10)
 
     async def analyze_prompt(self, prompt: str) -> Dict[str, Any]:
@@ -47,12 +59,8 @@ class WordBenchRunner:
             request = self.capture.format_request(prompt)
 
             # Call the appropriate API
-            if self.api_name == "openai":
-                response = await self._call_openai(request)
-            elif self.api_name.startswith("local"):
-                response = await self._call_local_llm(request)
-            else:
-                raise ValueError(f"Unsupported API: {self.api_name}")
+            provider = self._resolve_provider_name()
+            response = await self._call_provider(provider, request)
 
             # Parse logprobs from response
             logprobs_data = self.capture.parse_logprobs(response)
@@ -76,52 +84,46 @@ class WordBenchRunner:
                 "analysis": None
             }
 
-    async def _call_openai(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Call OpenAI API with logprob request.
+    def _resolve_provider_name(self) -> str:
+        provider = normalize_provider(self.api_name)
+        return _PROVIDER_ALIASES.get(provider, provider)
 
-        Note: OpenAI's newer models may not support logprobs directly.
-        This would need to use the completions API (not chat completions)
-        for models that support it.
-        """
-        # Format for OpenAI completions API (not chat)
-        import openai
+    async def _call_provider(self, provider: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Call an adapter-backed provider with logprob capture enabled."""
+        adapter = get_adapter_or_raise(provider)
+        app_config = ensure_app_config()
+        model = self.model or resolve_provider_model(provider, app_config)
+        if not model and provider == "openai":
+            model = "gpt-4o-mini"
+        if not model:
+            raise ChatConfigurationError(provider=provider, message="Model is required for WordBench.")
 
-        if self.api_key:
-            openai.api_key = self.api_key
+        logprobs_val = request.get("logprobs")
+        top_logprobs = None
+        logprobs_flag: Optional[bool] = None
+        if isinstance(logprobs_val, int):
+            top_logprobs = logprobs_val
+            logprobs_flag = True
+        elif isinstance(logprobs_val, bool):
+            logprobs_flag = logprobs_val
 
-        # Use completions endpoint for logprobs support
-        response = await asyncio.to_thread(
-            openai.Completion.create,
-            model="text-davinci-003",  # Or another model that supports logprobs
-            prompt=request["prompt"],
-            max_tokens=request["max_tokens"],
-            temperature=request["temperature"],
-            logprobs=request["logprobs"],
-            echo=request.get("echo", False)
-        )
+        payload = {
+            "messages": [{"role": "user", "content": request["prompt"]}],
+            "model": model,
+            "api_key": self.api_key or resolve_provider_api_key_from_config(provider, app_config),
+            "temperature": request.get("temperature"),
+            "max_tokens": request.get("max_tokens"),
+            "logprobs": logprobs_flag,
+            "top_logprobs": top_logprobs,
+            "stop": request.get("stop"),
+            "stream": False,
+            "app_config": app_config,
+        }
 
-        return response
-
-    async def _call_local_llm(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Call local LLM with logprob request.
-
-        This assumes the local LLM supports logprob return.
-        """
-        # Format for local LLM that supports logprobs
-        response = await asyncio.to_thread(
-            chat_with_local_llm,
-            request["prompt"],
-            "",  # No system message
-            "",  # No API endpoint override
-            model_name="",  # Use default
-            temperature=request["temperature"],
-            max_tokens=request["max_tokens"],
-            custom_prompt_input="",
-            stream=False,
-            logprobs=request.get("logprobs", 0)  # Request logprobs
-        )
-
-        return response
+        try:
+            return await adapter.achat(payload)
+        except NotImplementedError:
+            return await asyncio.to_thread(adapter.chat, payload)
 
     async def run_benchmark(self, prompts: List[str],
                            output_file: Optional[str] = None) -> List[Dict[str, Any]]:

@@ -111,6 +111,7 @@ class WorkerSDK:
         handler: JobHandler,
         cancel_check: Optional[CancelCheck] = None,
         progress_cb: Optional[Callable[[], Dict[str, Any]]] = None,
+        acquire_guard: Optional[Callable[[Dict[str, Any]], Awaitable[bool]]] = None,
         owner_user_id: Optional[str] = None,
     ) -> None:
         """Run the worker loop until stop() is called.
@@ -145,6 +146,28 @@ class WorkerSDK:
             # Only start auto-renew after we know we will actually handle the job
             renew_task = None
             try:
+                if acquire_guard is not None:
+                    try:
+                        guard_ok = await acquire_guard(job)
+                    except Exception as exc:
+                        logger.debug("Acquire guard failed for job {}: {}", job_id, exc)
+                        guard_ok = True
+                    if not guard_ok:
+                        try:
+                            self.jm.release_job(
+                                job_id,
+                                worker_id=self.cfg.worker_id,
+                                lease_id=lease_id_str,
+                                reason="guard_reject",
+                                enforce=enforce,
+                            )
+                        except Exception as exc:
+                            logger.debug("Release job failed for {}: {}", job_id, exc)
+                        try:
+                            await self._sleep(0)
+                        except Exception:
+                            pass
+                        continue
                 # Cancellation check (optional)
                 if cancel_check is not None:
                     try:

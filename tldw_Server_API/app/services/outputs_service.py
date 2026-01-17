@@ -1,12 +1,41 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional
+
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.db_path_utils import (
+    DatabasePaths,
+    normalize_output_storage_filename,
+)
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
+
+
+def normalize_output_storage_path(user_id: int, storage_path: str) -> str:
+    """Normalize legacy storage paths to a safe filename under the user outputs directory."""
+    if not storage_path:
+        raise InvalidStoragePathError("invalid_path")
+
+    try:
+        base_dir = DatabasePaths.get_user_outputs_dir(user_id)
+        base_resolved = base_dir.resolve(strict=False)
+    except Exception as exc:
+        raise InvalidStoragePathError("invalid_path") from exc
+
+    return normalize_output_storage_filename(
+        storage_path=storage_path,
+        allow_absolute=True,
+        reject_relative_with_separators=True,
+        expand_user=True,
+        base_resolved=base_resolved,
+        check_relative_containment=True,
+        require_parent_base=True,
+    )
+
 
 def update_output_artifact_db(
     cdb,
     output_id: int,
-    user_id: int,
     new_title: Optional[str],
     new_path: Optional[str],
     new_format: Optional[str],
@@ -22,6 +51,7 @@ def update_output_artifact_db(
         sets.append("title = ?")
         params.append(new_title)
     if new_path is not None:
+        new_path = cdb.resolve_output_storage_path(new_path)
         sets.append("storage_path = ?")
         params.append(new_path)
     if new_format is not None:
@@ -31,7 +61,7 @@ def update_output_artifact_db(
         sets.append("retention_until = ?")
         params.append(retention_until)
     if sets:
-        params.extend([output_id, user_id])
+        params.extend([output_id, cdb.user_id])
         q = f"UPDATE outputs SET {', '.join(sets)} WHERE id = ? AND user_id = ? AND deleted = 0"
         try:
             cdb.backend.execute(q, tuple(params))

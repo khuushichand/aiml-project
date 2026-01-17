@@ -6,6 +6,8 @@ pytestmark = pytest.mark.unit
 
 
 def test_idempotency_lookup_scoped_by_user_sqlite(prompt_studio_dual_backend_db):
+
+
     label, db = prompt_studio_dual_backend_db
     if label != "sqlite":
         pytest.skip("SQLite-specific lookup test")

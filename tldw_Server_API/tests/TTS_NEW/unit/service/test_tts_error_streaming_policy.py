@@ -103,6 +103,8 @@ async def test_stream_errors_as_audio_false_raises_exception():
 
 
 def test_tts_service_default_stream_errors_as_audio_false(monkeypatch):
+
+
     """
     When no environment override or registry config is present,
     TTSServiceV2 should default to _stream_errors_as_audio == False so

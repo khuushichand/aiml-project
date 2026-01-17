@@ -10,6 +10,8 @@ import pytest
 
 
 def _ffmpeg_available() -> bool:
+
+
     return shutil.which("ffmpeg") is not None
 
 

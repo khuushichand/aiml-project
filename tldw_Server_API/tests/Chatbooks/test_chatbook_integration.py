@@ -77,7 +77,7 @@ def service(test_db, tmp_path):
     """Create ChatbookService with real database."""
     # Set up test environment
     os.environ['PYTEST_CURRENT_TEST'] = 'test'
-    os.environ['TLDW_USER_DATA_PATH'] = str(tmp_path)
+    os.environ['USER_DB_BASE_DIR'] = str(tmp_path)
 
     service = ChatbookService(user_id="test_user", db=test_db)
 

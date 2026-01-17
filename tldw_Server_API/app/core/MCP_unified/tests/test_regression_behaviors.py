@@ -1,4 +1,3 @@
-import asyncio
 from typing import Dict
 
 import pytest
@@ -65,15 +64,6 @@ async def test_module_registry_restarts_health_monitoring():
 async def protocol(monkeypatch: pytest.MonkeyPatch):
     _prepare_env(monkeypatch, {"MCP_RATE_LIMIT_ENABLED": "false"})
 
-    existing = getattr(rate_limiter_module, "_rate_limiter", None)
-    if existing is not None:
-        handle = getattr(existing, "_cleanup_task_handle", None)
-        if handle:
-            handle.cancel()
-            try:
-                await handle
-            except asyncio.CancelledError:
-                pass
     rate_limiter_module._rate_limiter = None  # type: ignore[attr-defined]
 
     await reset_mcp_server()
@@ -141,32 +131,8 @@ async def test_protocol_maps_invalid_inputs(protocol, request_payload, expected_
 
 
 @pytest.mark.asyncio
-async def test_rate_limiter_schedules_cleanup_on_first_use(monkeypatch: pytest.MonkeyPatch):
-    _prepare_env(
-        monkeypatch,
-        {
-            "MCP_RATE_LIMIT_ENABLED": "true",
-            "MCP_RATE_LIMIT_USE_REDIS": "false",
-            "MCP_REDIS_URL": "",
-        },
-    )
+async def test_rate_limiter_noop_without_rg(monkeypatch: pytest.MonkeyPatch):
+    _prepare_env(monkeypatch, {"MCP_RATE_LIMIT_ENABLED": "true"})
 
-    def _raise_no_loop():
-        raise RuntimeError("no running loop")
-
-    with monkeypatch.context() as m:
-        m.setattr(asyncio, "get_running_loop", _raise_no_loop)
-        limiter = RateLimiter()
-
-    assert limiter._defer_cleanup is True
-    assert limiter._cleanup_task_handle is None
-
+    limiter = RateLimiter()
     await limiter.check_rate_limit("user:test")
-    assert limiter._cleanup_task_handle is not None
-    assert not limiter._cleanup_task_handle.done()
-
-    limiter._cleanup_task_handle.cancel()
-    try:
-        await limiter._cleanup_task_handle
-    except asyncio.CancelledError:
-        pass

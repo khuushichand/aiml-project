@@ -139,6 +139,7 @@ async def test_character_chat_flow_sessions_messages_worldbooks():
 
 # --- Unit Tests for Helper Functions (Regression Tests) ---
 
+
 def test_extract_text_with_none():
     """
     Regression test for Issue #1: Malformed _extract_text function.

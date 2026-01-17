@@ -36,8 +36,6 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from starlette import status  # For status codes
-from slowapi.util import get_remote_address
-from fastapi import Request as _FastAPIRequest  # for rate limit key typing
 from loguru import logger
 
 #
@@ -78,7 +76,6 @@ from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
     bytes_to_seconds,
 )
-
 # Quota helpers for status/limits and TTL heartbeat
 try:
     from tldw_Server_API.app.core.Usage.audio_quota import (
@@ -287,53 +284,26 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import (
     MetricDefinition,
     MetricType,
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call_async as chat_api_call_async,
+)
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+)
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_token_scope
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Streaming import speech_chat_service
-
-# Initialize rate limiter
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
-    limiter,
-    get_test_aware_remote_address as _test_mode_key_func,
-)
-
-
-def _rate_limit_key(request: _FastAPIRequest) -> Optional[str]:
-    """Rate limit key that prefers authenticated user id over IP.
-
-    - Multi-user: per-user limits (fairness across users)
-    - Single-user or unauthenticated: fall back to client IP
-    """
-    # Keep SlowAPI as a pure config carrier when RGSimpleMiddleware is installed
-    # (and bypass limits entirely in TEST_MODE) by delegating to the shared
-    # test/RG-aware key resolver first.
-    try:
-        key = _test_mode_key_func(request)
-        if key is None:
-            return None
-    except Exception as exc:
-        logger.debug(f"rate_limit_key: shared key resolver failed; falling back to local resolution: {exc}")
-        key = None
-    try:
-        uid = getattr(request.state, "user_id", None)
-        if uid is not None:
-            return f"user:{uid}"
-    except Exception as e:
-        logger.debug(f"rate_limit_key: failed to read user_id from request.state: error={e}")
-    return key or get_remote_address(request)
-
-
-# Use central limiter instance; override key_func per-route where needed
-
 
 router = APIRouter(
     tags=["Audio"],
@@ -442,6 +412,8 @@ def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
         return "elevenlabs"
     if m.startswith("index_tts") or m.startswith("indextts"):
         return "index_tts"
+    if m.startswith("supertonic2") or m.startswith("supertonic-2") or m.startswith("tts-supertonic2"):
+        return "supertonic2"
     if m.startswith("supertonic") or m.startswith("tts-supertonic"):
         return "supertonic"
     return None
@@ -521,10 +493,10 @@ async def get_tts_service() -> TTSServiceV2:
     "/speech",
     summary="Generates audio from text input.",
     dependencies=[
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call"))
+        Depends(check_rate_limit),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
     ],
 )
-@limiter.limit("10/minute", key_func=_rate_limit_key)  # Rate limit: 10 requests per minute per user/IP
 async def create_speech(
     request_data: OpenAISpeechRequest,  # FastAPI will parse JSON body into this
     request: Request,  # Required for rate limiter and to check for client disconnects
@@ -626,7 +598,7 @@ async def create_speech(
             if tts_provider_hint in {"openai", "elevenlabs"}:
                 record_byok_missing_credentials(tts_provider_hint, operation="audio_tts")
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={
                         "error_code": "missing_provider_credentials",
                         "message": f"TTS provider '{tts_provider_hint}' requires an API key.",
@@ -827,16 +799,19 @@ async def create_speech(
     "/transcriptions",
     summary="Transcribes audio into text (OpenAI Compatible)",
     dependencies=[
+        Depends(check_rate_limit),
         Depends(
             require_token_scope("any", require_if_present=True, endpoint_id="audio.transcriptions", count_as="call")
         )
     ],
 )
-@limiter.limit("20/minute", key_func=_rate_limit_key)  # Rate limit: 20 requests per minute
 async def create_transcription(
     request: Request,
     file: UploadFile = File(..., description="The audio file to transcribe"),
-    model: str = Form(default="whisper-1", description="Model to use for transcription"),
+    model: Optional[str] = Form(
+        default=None,
+        description="Model to use for transcription (defaults to config when omitted)",
+    ),
     language: Optional[str] = Form(default=None, description="Language of the audio in ISO-639-1 format"),
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
@@ -868,7 +843,7 @@ async def create_transcription(
     Supports multiple transcription models including Whisper, Parakeet, and Canary.
 
     Models:
-    - whisper-1: Uses faster-whisper (default)
+    - whisper-1: Uses faster-whisper (default when config uses Whisper)
     - parakeet: NVIDIA Parakeet model (efficient)
     - canary: NVIDIA Canary model (multilingual)
     - qwen2audio: Qwen2 Audio model
@@ -978,6 +953,14 @@ async def create_transcription(
             detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB",
         )
 
+    # Resolve default model from config when omitted.
+    if not (model or "").strip():
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            resolve_default_transcription_model,
+        )
+
+        model = resolve_default_transcription_model("whisper-1")
+
     # Before any heavy work, enforce concurrent jobs cap per user
     ok_job, msg_job = await can_start_job(current_user.id)
     if not ok_job:
@@ -997,6 +980,7 @@ async def create_transcription(
 
     # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
+    canonical_path = None
     try:
         # Create temporary file with proper extension
         file_extension = os.path.splitext(file.filename)[1] if file.filename else ".wav"
@@ -1004,16 +988,32 @@ async def create_transcription(
             tmp_file.write(contents)
             temp_audio_path = tmp_file.name
 
-        # Convert to canonical 16k mono WAV for consistent processing
+        # Convert to canonical 16k mono WAV for consistent processing; base_dir constrains output location.
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
                 convert_to_wav as _convert_to_wav,
+                ConversionError,
             )
-
-            canonical_path = _convert_to_wav(temp_audio_path, offset=0, overwrite=False)
-        except Exception as e:
-            logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
+        except ImportError as e:
+            logger.debug(f"convert_to_wav import failed; using original temp file: path={temp_audio_path}, error={e}")
             canonical_path = temp_audio_path
+        else:
+            try:
+                canonical_path = _convert_to_wav(
+                    temp_audio_path,
+                    offset=0,
+                    overwrite=False,
+                    base_dir=PathLib(temp_audio_path).parent,
+                )
+            except (ConversionError, OSError, RuntimeError, ValueError) as e:
+                logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
+                canonical_path = temp_audio_path
+
+        if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+            source_label = "converted" if canonical_path != temp_audio_path else "original"
+            logger.debug(f"TEST_MODE: canonical audio path resolved: path={canonical_path}, source={source_label}")
+
+        # Always recalculate base_dir from the path we'll actually use
         base_dir = PathLib(canonical_path).parent
 
         # Load canonical audio
@@ -1059,6 +1059,7 @@ async def create_transcription(
             speech_to_text as fw_speech_to_text,
             strip_whisper_metadata_header,
             is_transcription_error_message as _is_transcription_error_message,
+            validate_whisper_model_identifier,
         )
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import (
             Audio_Files as audio_files,
@@ -1116,6 +1117,14 @@ async def create_transcription(
         detected_language: Optional[str] = None
         segments_for_timing: Optional[List[Dict[str, Any]]] = None
         whisper_model_name = _map_openai_audio_model_to_whisper(model)
+        if provider == "faster-whisper":
+            try:
+                whisper_model_name = validate_whisper_model_identifier(whisper_model_name)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(exc),
+                ) from exc
         # Wrap the heavy work to ensure we always release the job slot
         try:
             if provider == "faster-whisper":
@@ -1181,11 +1190,12 @@ async def create_transcription(
             else:
                 # Non-Whisper providers: delegate to adapter which wraps the
                 # existing Parakeet/Canary/Qwen2Audio/external implementations.
+                model_for_provider = model or provider_model_name
                 try:
                     adapter = stt_registry.get_adapter(provider)
                     artifact = adapter.transcribe_batch(
                         canonical_path,
-                        model=provider_model_name or model,
+                        model=model_for_provider,
                         language=language,
                         task=task_normalized,
                         word_timestamps=("word" in granularity_tokens),
@@ -1197,13 +1207,13 @@ async def create_transcription(
                     transcribed_text = artifact.get("text", "")
                 except Exception as e:
                     logger.error(
-                        f"Transcription failed for provider={provider}, model={provider_model_name or model}: {e}"
+                        f"Transcription failed for provider={provider}, model={model_for_provider}: {e}"
                     )
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail=(
                             f"Transcription failed for provider '{provider}' "
-                            f"and model '{provider_model_name or model}'"
+                            f"and model '{model_for_provider}'"
                         ),
                     ) from e
         finally:
@@ -1423,6 +1433,11 @@ async def create_transcription(
         logger.error(f"Error during transcription: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Transcription failed: {str(e)}")
     finally:
+        if canonical_path and canonical_path != temp_audio_path and os.path.exists(canonical_path):
+            try:
+                os.remove(canonical_path)
+            except OSError as e:
+                logger.warning(f"Failed to remove canonical audio file: path={canonical_path}, error={e}")
         # Clean up temporary file
         if temp_audio_path and os.path.exists(temp_audio_path):
             try:
@@ -1441,14 +1456,17 @@ async def create_transcription(
     "/translations",
     summary="Translates audio into English (OpenAI Compatible)",
     dependencies=[
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.translations", count_as="call"))
+        Depends(check_rate_limit),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.translations", count_as="call")),
     ],
 )
-@limiter.limit("20/minute", key_func=_rate_limit_key)
 async def create_translation(
     request: Request,
     file: UploadFile = File(..., description="The audio file to translate"),
-    model: str = Form(default="whisper-1", description="Model to use for translation"),
+    model: Optional[str] = Form(
+        default=None,
+        description="Model to use for translation (defaults to config when omitted)",
+    ),
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
@@ -1466,6 +1484,13 @@ async def create_translation(
     Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
           `Docs/API-related/Audio_Transcription_API.md`
     """
+    if not (model or "").strip():
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            resolve_default_transcription_model,
+        )
+
+        model = resolve_default_transcription_model("whisper-1")
+
     try:
         usage_log.log_event(
             "audio.transcriptions",
@@ -1511,7 +1536,6 @@ async def create_translation(
         )
     ],
 )
-@limiter.limit("10/minute", key_func=_rate_limit_key)
 async def audio_chat_turn(
     request_data: SpeechChatRequest,
     request: Request,
@@ -1561,6 +1585,7 @@ async def audio_chat_turn(
         try:
             return await speech_chat_service.run_speech_chat_turn(
                 request_data=request_data,
+                request=request,
                 current_user=current_user,
                 chat_db=chat_db,
                 tts_service=tts_service,
@@ -1586,7 +1611,6 @@ async def audio_chat_turn(
 
 
 @router.post("/segment/transcript", summary="Segment a transcript into coherent blocks (TreeSeg)")
-@limiter.limit("30/minute", key_func=_rate_limit_key)
 async def segment_transcript(
     req: TranscriptSegmentationRequest,
     request: Request,
@@ -1723,8 +1747,11 @@ async def get_tts_health(tts_service: TTSServiceV2 = Depends(get_tts_service)):
 @router.get("/transcriptions/health", summary="Check STT transcription model health")
 async def get_stt_health(
     model: Optional[str] = Query(
-        default="whisper-1",
-        description="Transcription model to check (OpenAI-style id or internal STT model name).",
+        default=None,
+        description=(
+            "Transcription model to check (OpenAI-style id or internal STT model name). "
+            "Defaults to the configured STT provider when omitted."
+        ),
     ),
     warm: bool = Query(
         default=False,
@@ -1745,7 +1772,13 @@ async def get_stt_health(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as stt_lib
 
-    raw_model = model or "whisper-1"
+    raw_model = (model or "").strip()
+    if not raw_model:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            resolve_default_transcription_model,
+        )
+
+        raw_model = resolve_default_transcription_model("whisper-1")
     # Determine provider using the same parser as the main STT pipeline.
     provider_raw, _, _ = stt_lib.parse_transcription_model(raw_model)
 
@@ -1753,6 +1786,13 @@ async def get_stt_health(
     # internal faster-whisper model name so health checks align with /transcriptions.
     if provider_raw == "whisper":
         resolved_model = _map_openai_audio_model_to_whisper(raw_model)
+        try:
+            resolved_model = stt_lib.validate_whisper_model_identifier(resolved_model)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
     else:
         resolved_model = raw_model
 
@@ -2960,23 +3000,76 @@ async def websocket_audio_chat_stream(
                 request=websocket,
                 fallback_resolver=_fallback_resolver,
             )
-            provider_api_key = byok_resolution.api_key
+            app_config = ensure_app_config(byok_resolution.app_config)
+            provider_api_key = byok_resolution.api_key or resolve_provider_api_key_from_config(
+                llm_provider,
+                app_config,
+            )
+            if not provider_api_key:
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {
+                            "type": "error",
+                            "error_type": "missing_provider_credentials",
+                            "message": "No API key available for provider",
+                            "provider": llm_provider,
+                        }
+                    )
+                return "", "missing_provider_credentials", None
             messages_payload = list(chat_history)
             messages_payload.append({"role": "user", "content": transcript_text})
             try:
-                llm_stream = await chat_api_call_async(
-                    api_endpoint=llm_provider,
-                    messages_payload=messages_payload,
-                    api_key=provider_api_key,
-                    temp=llm_temperature,
-                    model=llm_model,
-                    max_tokens=llm_max_tokens,
-                    streaming=True,
-                    system_message=llm_system_prompt,
-                    user_identifier=str(user_id_for_usage),
-                    extra_body=llm_extra_params,
-                    app_config=byok_resolution.app_config,
-                )
+                adapter = get_registry().get_adapter(normalize_provider(llm_provider))
+                if adapter is None:
+                    llm_stream = await chat_api_call_async(
+                        api_endpoint=llm_provider,
+                        messages_payload=messages_payload,
+                        api_key=provider_api_key,
+                        temp=llm_temperature,
+                        model=llm_model,
+                        max_tokens=llm_max_tokens,
+                        streaming=True,
+                        system_message=llm_system_prompt,
+                        user_identifier=str(user_id_for_usage),
+                        extra_body=llm_extra_params,
+                        app_config=app_config,
+                    )
+                else:
+                    request_payload = {
+                        "messages": messages_payload,
+                        "system_message": llm_system_prompt,
+                        "model": llm_model,
+                        "api_key": provider_api_key,
+                        "temperature": llm_temperature,
+                        "max_tokens": llm_max_tokens,
+                        "stream": True,
+                        "user": str(user_id_for_usage),
+                        "app_config": app_config,
+                    }
+                    if llm_extra_params:
+                        for key, value in llm_extra_params.items():
+                            if request_payload.get(key) is None:
+                                request_payload[key] = value
+                    stream_candidate = adapter.astream(request_payload)
+                    if asyncio.iscoroutine(stream_candidate):
+                        try:
+                            llm_stream = await stream_candidate
+                        except NotImplementedError:
+                            llm_stream = await chat_api_call_async(
+                                api_endpoint=llm_provider,
+                                messages_payload=messages_payload,
+                                api_key=provider_api_key,
+                                temp=llm_temperature,
+                                model=llm_model,
+                                max_tokens=llm_max_tokens,
+                                streaming=True,
+                                system_message=llm_system_prompt,
+                                user_identifier=str(user_id_for_usage),
+                                extra_body=llm_extra_params,
+                                app_config=app_config,
+                            )
+                    else:
+                        llm_stream = stream_candidate
             except Exception as exc:
                 if _outer_stream:
                     await _outer_stream.send_json(
@@ -3787,7 +3880,6 @@ async def test_streaming():
 
 
 @router.post("/voices/upload", summary="Upload a custom voice sample")
-@limiter.limit("5/hour", key_func=_rate_limit_key)  # Rate limit: 5 uploads per hour
 async def upload_voice(
     request: Request,
     file: UploadFile = File(..., description="Voice sample audio file (WAV, MP3, FLAC, OGG)"),
@@ -3930,7 +4022,6 @@ async def delete_voice(
 
 
 @router.post("/voices/{voice_id}/preview", summary="Generate voice preview")
-@limiter.limit("10/minute", key_func=_rate_limit_key)  # Rate limit: 10 previews per minute
 async def preview_voice(
     request: Request,
     voice_id: str = Path(..., description="Voice ID to preview"),

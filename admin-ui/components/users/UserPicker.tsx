@@ -22,14 +22,6 @@ type UserPickerProps = {
 const MIN_QUERY_LENGTH = 2;
 const SEARCH_DEBOUNCE_MS = 300;
 
-const normalizeUsers = (data: unknown): User[] => {
-  if (Array.isArray(data)) return data as User[];
-  if (data && typeof data === 'object' && Array.isArray((data as { users?: User[] }).users)) {
-    return (data as { users: User[] }).users;
-  }
-  return [];
-};
-
 export function UserPicker({
   label = 'User',
   placeholder = 'Search by username or email',
@@ -64,7 +56,7 @@ export function UserPicker({
         setLoading(true);
         setError('');
         const data = await api.getUsers({ search: trimmed, limit: '20' });
-        setResults(normalizeUsers(data));
+        setResults(data);
       } catch (err: unknown) {
         console.error('Failed to search users:', err);
         setResults([]);

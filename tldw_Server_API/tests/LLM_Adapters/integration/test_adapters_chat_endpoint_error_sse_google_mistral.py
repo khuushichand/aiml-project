@@ -16,7 +16,6 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _enable_adapters(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.setenv("STREAMS_UNIFIED", "1")
     # Disable TEST_MODE shunts
     monkeypatch.delenv("TEST_MODE", raising=False)

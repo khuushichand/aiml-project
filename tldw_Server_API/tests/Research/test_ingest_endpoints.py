@@ -9,6 +9,7 @@ class _FakeResp:
         self.headers = {"Content-Disposition": "attachment; filename=\"file.pdf\""}
 
     def raise_for_status(self):
+
         if not (200 <= self._status < 300):
             raise Exception("HTTPError")
 
@@ -18,6 +19,7 @@ class _FakeSession:
         self._content = content
 
     def get(self, url, timeout=30):
+
         return _FakeResp(self._content)
 
 
@@ -95,6 +97,7 @@ async def test_s2_ingest_success(monkeypatch, paper_search_app):
     from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as _S2
 
     def _fake_s2_details(paper_id):
+
         return {
             "paperId": paper_id,
             "title": "Graph Neural Networks",

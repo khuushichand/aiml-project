@@ -46,6 +46,7 @@ def test_save_chat_knowledge_creates_note_and_flashcard(
     assert chacha_db.count_notes() == 0
 
     def override_get_db():
+
         return chacha_db
 
     test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db
@@ -115,6 +116,7 @@ def test_save_chat_knowledge_rolls_back_on_flashcard_error(
     assert chacha_db.count_notes() == 0
 
     def override_get_db():
+
         return chacha_db
 
     test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db

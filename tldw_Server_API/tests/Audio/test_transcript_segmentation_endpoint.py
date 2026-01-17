@@ -9,6 +9,8 @@ pytestmark = pytest.mark.unit
 
 
 def _req_entries(n_a=5, n_b=5):
+
+
     entries = []
     for i in range(n_a):
         entries.append({"composite": f"TOPIC_A {i}", "speaker": "A"})
@@ -52,6 +54,8 @@ async def _stub_embedder(chunks):
 
 
 def test_segment_transcript_endpoint(monkeypatch):
+
+
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Transcript_TreeSegmentation import TreeSegmenter
 
     # Preserve original classmethod to avoid recursion

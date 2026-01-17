@@ -11,6 +11,8 @@ pytestmark = pytest.mark.integration
 
 
 def _install_stub_serve_engine():
+
+
     """Install a stubbed boson_multimodal.serve.serve_engine module into sys.modules."""
     # Root package
     bm = types.ModuleType("boson_multimodal")
@@ -42,6 +44,7 @@ def _install_stub_serve_engine():
             self.hamming_window_len = 2 * self.audio_num_codebooks * self.samples_per_token
 
         def generate(self, **kwargs):
+
             # capture the chat_ml_sample for assertions
             self.last_chat_ml_sample = kwargs.get("chat_ml_sample")
             audio = np.zeros(8000, dtype=np.float32)
@@ -119,6 +122,7 @@ async def test_voice_reference_integration_message_injection():
                     return getattr(m, "role", m.get("role") if isinstance(m, dict) else None)
 
                 def _content(m):
+
                     return getattr(m, "content", m.get("content") if isinstance(m, dict) else None)
 
                 assistant = next((m for m in messages if _role(m) == "assistant"), None)

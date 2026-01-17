@@ -641,6 +641,8 @@ def generate_unique_id(prefix: str = "test") -> str:
 
 
 def generate_test_user() -> Dict[str, str]:
+
+
     """Generate a complete test user profile."""
     username = TestDataGenerator.random_username()
     return {

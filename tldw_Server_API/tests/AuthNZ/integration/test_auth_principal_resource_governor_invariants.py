@@ -72,6 +72,8 @@ def _restore_auth_capture(app: FastAPI, original_get_auth_principal: Any) -> Non
 
 
 def test_resource_governor_policy_jwt_principal_and_state_alignment(isolated_test_environment):
+
+
     """
     Multi-user JWT happy path for a representative Resource-Governor admin route:
 

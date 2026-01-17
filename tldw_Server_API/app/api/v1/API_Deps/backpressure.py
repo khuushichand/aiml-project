@@ -63,7 +63,7 @@ def _bp_limits() -> Tuple[int, float]:
 
 
 async def _orchestrator_depth_and_age(client: aioredis.Redis) -> Tuple[int, float]:
-    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
+    queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
     depths = []
     ages = []
     now = time.time()

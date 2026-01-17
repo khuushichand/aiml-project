@@ -17,6 +17,7 @@ class _Loader:
         self._snap = _Snap(route_map)
 
     def get_snapshot(self):
+
         return self._snap
 
 
@@ -49,6 +50,8 @@ class _Gov:
 
 
 def _make_app(route_map):
+
+
     app = FastAPI()
     app.add_middleware(RGSimpleMiddleware)
 

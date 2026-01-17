@@ -118,7 +118,6 @@ class _FakeClient:
 )
 def test_adapter_stream_normalizes_httpx_errors(monkeypatch, provider_key: str, adapter_cls_path: str, status_code: int, expected_err: str):
     # Force native HTTP path (under pytest adapters typically opt-in already)
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.setenv("STREAMS_UNIFIED", "1")
     try:
         monkeypatch.setenv(f"LLM_ADAPTERS_NATIVE_HTTP_{provider_key.upper()}", "1")

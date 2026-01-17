@@ -466,6 +466,7 @@ class RAGStateMachine(RuleBasedStateMachine):
     """Stateful testing for RAG pipeline operations."""
 
     def __init__(self):
+
         super().__init__()
         self.queries = []
         self.documents = {}

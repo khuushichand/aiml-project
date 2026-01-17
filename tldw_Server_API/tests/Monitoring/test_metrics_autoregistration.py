@@ -10,6 +10,8 @@ pytestmark = pytest.mark.monitoring
 
 
 def _make_test_app() -> FastAPI:
+
+
     app = FastAPI()
 
     @app.get("/metrics", include_in_schema=False)
@@ -29,6 +31,8 @@ def client():
 
 
 def test_track_metrics_autoregisters_metrics(client):
+
+
     # Use a unique base name to avoid interference
     @track_metrics(name="test_auto_reg.myop")
     def sample_op():
@@ -44,5 +48,5 @@ def test_track_metrics_autoregisters_metrics(client):
     text = resp.text
 
     # Ensure both counter and histogram appear in exposition
-    assert "test_auto_reg.myop_calls_total" in text
-    assert "test_auto_reg.myop_duration_seconds_bucket" in text
+    assert "test_auto_reg_myop_calls_total" in text
+    assert "test_auto_reg_myop_duration_seconds_bucket" in text

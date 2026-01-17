@@ -60,6 +60,7 @@ class TestServiceInitialization:
         results = []
 
         def get_db(user_id):
+
             db = service._get_db(user_id)
             results.append(db)
 

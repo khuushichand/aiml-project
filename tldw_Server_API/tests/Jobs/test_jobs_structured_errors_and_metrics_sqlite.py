@@ -12,15 +12,19 @@ class StubRegistry:
         self.gauges = []
 
     def register_metric(self, *_args, **_kwargs):
+
         return None
 
     def increment(self, name, value, labels):
+
         self.increments.append((name, value, dict(labels)))
 
     def observe(self, name, value, labels):
+
         self.observes.append((name, float(value), dict(labels)))
 
     def set_gauge(self, name, value, labels):
+
         self.gauges.append((name, float(value), dict(labels)))
 
 
@@ -32,7 +36,9 @@ def jobs_db(tmp_path):
 
 
 def test_structured_error_fields_and_metrics_sqlite(monkeypatch, jobs_db):
-    # Attach a stub metrics registry
+
+
+     # Attach a stub metrics registry
     from tldw_Server_API.app.core.Jobs import metrics as jobs_metrics
     stub = StubRegistry()
     monkeypatch.setattr(jobs_metrics, "get_metrics_registry", lambda: stub, raising=False)

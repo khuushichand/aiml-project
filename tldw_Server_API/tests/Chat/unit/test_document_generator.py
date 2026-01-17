@@ -125,6 +125,7 @@ class TestDocumentGeneratorService:
     """Test suite for DocumentGeneratorService."""
 
     def test_init_creates_tables(self, real_db):
+
         """Test that initialization creates necessary tables."""
         service = DocumentGeneratorService(real_db, "test_user")
 
@@ -139,6 +140,7 @@ class TestDocumentGeneratorService:
         assert len(table_names) >= 2  # Should have at least some tables
 
     def test_generate_timeline(self, service, real_db):
+
         """Test timeline document generation."""
         # Use the real conversation created in the fixture
         conv_id = real_db.test_conversation_id
@@ -160,6 +162,7 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_generate_study_guide(self, service, real_db):
+
         """Test study guide document generation."""
         # Use the real conversation created in the fixture
         conv_id = real_db.test_conversation_id
@@ -179,6 +182,7 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_generate_briefing(self, service, real_db):
+
         """Test executive briefing document generation."""
         conv_id = real_db.test_conversation_id
 
@@ -197,6 +201,7 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_generate_summary(self, service, real_db):
+
         """Test summary document generation."""
         conv_id = real_db.test_conversation_id
 
@@ -214,7 +219,29 @@ class TestDocumentGeneratorService:
         assert result is not None
         mock_llm.assert_called_once()
 
+    def test_generate_summary_extracts_openai_content(self, service, real_db):
+
+        """Ensure OpenAI-style responses are reduced to message content."""
+        conv_id = real_db.test_conversation_id
+
+        with patch('tldw_Server_API.app.core.Chat.document_generator.chat_api_call') as mock_llm:
+            mock_llm.return_value = {
+                "choices": [{"message": {"content": "Summary content"}}]
+            }
+
+            result = service.generate_document(
+                conversation_id=conv_id,
+                document_type=DocumentType.SUMMARY,
+                provider="openai",
+                model="gpt-3.5-turbo",
+                api_key="test_key"
+            )
+
+        assert result == "Summary content"
+        mock_llm.assert_called_once()
+
     def test_generate_qa_pairs(self, service, real_db):
+
         """Test Q&A pairs document generation."""
         conv_id = real_db.test_conversation_id
 
@@ -233,6 +260,7 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_generate_meeting_notes(self, service, real_db):
+
         """Test meeting notes document generation."""
         conv_id = real_db.test_conversation_id
 
@@ -251,6 +279,7 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_custom_prompt(self, service, real_db):
+
         """Test using custom prompt for generation."""
         conv_id = real_db.test_conversation_id
         custom_prompt = "Extract only the technical terms mentioned"
@@ -271,6 +300,7 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_async_job_creation(self, service, real_db):
+
         """Test creating an async generation job."""
         conv_id = real_db.test_conversation_id
 
@@ -290,42 +320,49 @@ class TestDocumentGeneratorService:
         assert result is not None
 
     def test_get_job_status(self, service, real_db):
+
         """Test retrieving job status."""
         # Skip if method doesn't exist
         if not hasattr(service, 'get_job_status'):
             pytest.skip("get_job_status not implemented")
 
     def test_cancel_job(self, service, real_db):
+
         """Test cancelling a generation job."""
         # Skip if method doesn't exist
         if not hasattr(service, 'cancel_job'):
             pytest.skip("cancel_job not implemented")
 
     def test_get_document(self, service, real_db):
+
         """Test retrieving a generated document."""
         # Skip if method doesn't exist
         if not hasattr(service, 'get_document'):
             pytest.skip("get_document not implemented")
 
     def test_list_documents(self, service, real_db):
+
         """Test listing generated documents."""
         # Skip if method doesn't exist
         if not hasattr(service, 'list_documents'):
             pytest.skip("list_documents not implemented")
 
     def test_delete_document(self, service, real_db):
+
         """Test deleting a generated document."""
         # Skip if method doesn't exist
         if not hasattr(service, 'delete_document'):
             pytest.skip("delete_document not implemented")
 
     def test_save_custom_prompt_config(self, service, real_db):
+
         """Test saving custom prompt configuration."""
         # Skip if method doesn't exist
         if not hasattr(service, 'save_prompt_config'):
             pytest.skip("save_prompt_config not implemented")
 
     def test_get_prompt_config(self, service, real_db):
+
         """Test retrieving custom prompt configuration."""
         # Skip if method doesn't exist
         if not hasattr(service, 'get_prompt_config'):
@@ -339,12 +376,14 @@ class TestDocumentGeneratorService:
             pytest.skip("bulk_generate not implemented")
 
     def test_get_statistics(self, service, real_db):
+
         """Test getting generation statistics."""
         # Skip if method doesn't exist
         if not hasattr(service, 'get_statistics'):
             pytest.skip("get_statistics not implemented")
 
     def test_error_handling(self, service, real_db):
+
         """Test error handling during generation."""
         conv_id = "invalid_conversation_id"
 
@@ -363,6 +402,7 @@ class TestDocumentGeneratorService:
         assert result is not None
 
     def test_conversation_not_found(self, service, real_db):
+
         """Test handling when conversation doesn't exist."""
         result = service.generate_document(
             conversation_id="nonexistent",

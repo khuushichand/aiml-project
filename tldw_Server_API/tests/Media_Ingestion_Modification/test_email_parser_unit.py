@@ -18,6 +18,8 @@ def build_simple_eml(subject: str = "Test Email") -> bytes:
 
 
 def build_nested_eml() -> bytes:
+
+
     # Inner message
     inner = EmailMessage()
     inner["From"] = "Inner <inner@example.com>"
@@ -36,6 +38,8 @@ def build_nested_eml() -> bytes:
 
 
 def test_parse_eml_bytes_basic():
+
+
     data = build_simple_eml()
     content, meta, children = parse_eml_bytes(data, filename="simple.eml", return_children=True)
     assert "Hello Bob" in content
@@ -45,6 +49,8 @@ def test_parse_eml_bytes_basic():
 
 
 def test_parse_eml_html_only_chunking_alignment():
+
+
     # Build HTML-only email to ensure HTML->text fallback and chunking compatibility
     msg = EmailMessage()
     msg["From"] = "Alice <alice@example.com>"
@@ -72,6 +78,8 @@ def test_parse_eml_html_only_chunking_alignment():
 
 
 def test_process_email_task_with_nested_children():
+
+
     data = build_nested_eml()
     res = process_email_task(
         file_bytes=data,

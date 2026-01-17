@@ -49,11 +49,13 @@ Database migrations
 
 What to back up
 - AuthNZ DB: Postgres (`pg_dump`) or SQLite file at `Databases/users.db`.
-- Content DBs: per-user `Databases/user_databases/<user_id>/Media_DB_v2.db` (root-level path deprecated) or Postgres content DBs if you’ve migrated.
-- Per-user data: `Databases/user_databases/<user_id>/ChaChaNotes.db` and associated files.
+- Content DBs: per-user `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db` (root-level path deprecated) or Postgres content DBs if you’ve migrated.
+- Per-user data: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db` and associated files.
 - Chroma/vector data: volume/directory you configured (default under `Databases/user_databases`).
 - Config: `.env`, `tldw_Server_API/Config_Files/config.txt`.
 - Optional: `logs/`, `server.log`, `Samples/` if you modified.
+
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 PostgreSQL (example)
 ```bash
@@ -72,6 +74,8 @@ SQLite (file copy)
 # Quiesce app, then copy DB files
 cp Databases/*.db /backups/sqlite_$(date +%F)/
 ```
+
+Admin Data Ops backups (per-dataset) are available via `/api/v1/admin/backups` for `media`, `chacha`, `prompts`, `evaluations`, `audit`, and `authnz`. A full bundle export/import workflow is planned; see `Docs/Product/DB_Exports_SQLite_PRD.md`.
 
 Disaster recovery (Compose)
 1. Provision a new host with Docker/Compose, same `.env` and volumes.

@@ -94,13 +94,10 @@ async def process_web_scraping_endpoint(
     except HTTPException:
         # Preserve downstream HTTP status codes (validation, upstream errors).
         raise
-    except Exception as exc:  # pragma: no cover - defensive path
-        import traceback
-
-        error_detail = f"Web scraping failed: {str(exc)}"
-        logger.error("Web scraping endpoint error: {}", error_detail)
+    except Exception:  # pragma: no cover - defensive path
+        error_detail = "Web scraping failed due to an internal error."
+        logger.exception("Web scraping endpoint error")
         try:
-            logger.error("Traceback: {}", traceback.format_exc())
             logger.error(
                 "Request details - scrape_method: {}, url_input: {}",
                 payload.scrape_method,

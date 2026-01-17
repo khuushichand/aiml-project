@@ -10,6 +10,7 @@ class FakeTime:
         self.t = t0
 
     def __call__(self) -> float:
+
         return self.t
 
     def advance(self, s: float) -> None:
@@ -20,7 +21,7 @@ class FakeTime:
 async def test_atomic_multi_category_rollback_on_denial():
     class _Loader:
         def get_policy(self, pid):
-            # requests allow 1 per minute; tokens allow 1 per minute.
+                     # requests allow 1 per minute; tokens allow 1 per minute.
             # We pre-consume the tokens budget, then attempt a combined reserve.
             return {"requests": {"rpm": 1}, "tokens": {"per_min": 1}, "scopes": ["global", "user"]}
 
@@ -102,7 +103,7 @@ async def test_requests_retry_after_monotonic_and_burst_vs_steady():
     pytest.xfail("FIXME: stabilize Redis requests RA monotonicity across burst/steady patterns")
     class _Loader:
         def get_policy(self, pid):
-            # Allow 3 req/min; default scopes global+user
+                     # Allow 3 req/min; default scopes global+user
             return {"requests": {"rpm": 3}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
@@ -148,7 +149,7 @@ async def test_requests_retry_after_monotonic_and_burst_vs_steady():
 async def test_tokens_steady_rate_no_denials():
     class _Loader:
         def get_policy(self, pid):
-            # 6 tokens per minute → one every 10s should always pass
+                     # 6 tokens per minute → one every 10s should always pass
             return {"tokens": {"per_min": 6}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)

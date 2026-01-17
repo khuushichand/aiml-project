@@ -5,6 +5,7 @@ Description: Prompt Studio E2E - create project, create test case, subscribe WS,
 
 import os
 import json
+import uuid
 import pytest
 import httpx
 
@@ -39,7 +40,7 @@ def test_prompt_studio_project_and_ws(api_client):
     # 2) Create a simple test case
     tc_payload = {
         "project_id": int(project_id),
-        "name": "Smoke test case",
+        "name": f"Smoke test case {uuid.uuid4().hex[:8]}",
         "inputs": {"text": "Hello world"},
         "expected_outputs": {"summary": "Hello world"},
         "tags": ["e2e"],

@@ -7,6 +7,18 @@ from .base import ChatProvider
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_done,
+)
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+
+
+http_client_factory = _hc_create_client
 
 
 class CustomOpenAIAdapter(ChatProvider):
@@ -57,10 +69,12 @@ class CustomOpenAIAdapter(ChatProvider):
         import os
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_CUSTOM_OPENAI") or "").strip().lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        if v in {"1", "true", "yes", "on"}:
             return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_CUSTOM_OPENAI")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        return True
 
     def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
         h = {"Content-Type": "application/json"}
@@ -69,6 +83,9 @@ class CustomOpenAIAdapter(ChatProvider):
         return h
 
     def _resolve_base(self, request: Dict[str, Any], cfg_section: str) -> str:
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip().rstrip("/")
         cfg = request.get("app_config") or {}
         section = cfg.get(cfg_section) or {}
         base = section.get("api_ip") or os.getenv("CUSTOM_OPENAI_API_IP_1")
@@ -123,26 +140,7 @@ class CustomOpenAIAdapter(ChatProvider):
         return data
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        # If tests monkeypatched legacy callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
-            fn = getattr(_legacy_local, "chat_with_custom_openai", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or "tests" in mod or name.startswith("_Fake") or name.startswith("_fake")):
-                    kwargs = self._to_handler_args(request)
-                    if "stream" in request or "streaming" in request:
-                        streaming_raw = request.get("stream")
-                        if streaming_raw is None:
-                            streaming_raw = request.get("streaming")
-                        kwargs["streaming"] = streaming_raw
-                    else:
-                        kwargs["streaming"] = None
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
+        request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
@@ -157,35 +155,19 @@ class CustomOpenAIAdapter(ChatProvider):
                 url = f"{base}/v1/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = False
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                with http_client_factory(timeout=timeout or 120.0) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return self._normalize_response(resp.json())
             except Exception as e:
                 raise self.normalize_error(e)
-        # Legacy
-        kwargs = self._to_handler_args(request)
-        if "stream" not in request and "streaming" not in request:
-            kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
-        return _legacy_local.chat_with_custom_openai(**kwargs)
+        raise RuntimeError("CustomOpenAIAdapter native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
-        # If tests monkeypatched legacy callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
-            fn = getattr(_legacy_local, "chat_with_custom_openai", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or "tests" in mod or name.startswith("_Fake") or name.startswith("_fake")):
-                    kwargs = self._to_handler_args(request)
-                    kwargs["streaming"] = True
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
+        request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
@@ -199,36 +181,50 @@ class CustomOpenAIAdapter(ChatProvider):
                 url = f"{base}/v1/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = True
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                with http_client_factory(timeout=timeout or 120.0) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
-                        for line in resp.iter_lines():
-                            if not line:
+                        seen_done = False
+                        for raw in resp.iter_lines():
+                            if not raw:
                                 continue
-                            yield line
+                            try:
+                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                            except Exception:
+                                line = str(raw)
+                            if is_done_line(line):
+                                if not seen_done:
+                                    seen_done = True
+                                    yield sse_done()
+                                continue
+                            normalized = normalize_provider_line(line)
+                            if normalized is not None:
+                                yield normalized
+                        for tail in finalize_stream(response=resp, done_already=seen_done):
+                            yield tail
                 return
             except Exception as e:
                 raise self.normalize_error(e)
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
-        return _legacy_local.chat_with_custom_openai(**kwargs)
+        raise RuntimeError("CustomOpenAIAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
-        gen = self.stream(request, timeout=timeout)
-        for item in gen:
+        async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ( ))):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+            log_http_400_body,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -237,12 +233,13 @@ class CustomOpenAIAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             detail = None
             try:
                 body = resp.json() if resp is not None else None
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             if isinstance(body, dict):
                 err = body.get("error")
                 if isinstance(err, dict):
@@ -250,10 +247,7 @@ class CustomOpenAIAdapter(ChatProvider):
                     typ = (err.get("type") or "").strip()
                     detail = (f"{typ} {msg}" if typ else msg) or None
             if not detail:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):
@@ -270,26 +264,7 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
     name = "custom-openai-api-2"
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        # If tests monkeypatched legacy callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
-            fn = getattr(_legacy_local, "chat_with_custom_openai_2", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or "tests" in mod or name.startswith("_Fake") or name.startswith("_fake")):
-                    kwargs = self._to_handler_args(request)
-                    if "stream" in request or "streaming" in request:
-                        streaming_raw = request.get("stream")
-                        if streaming_raw is None:
-                            streaming_raw = request.get("streaming")
-                        kwargs["streaming"] = streaming_raw
-                    else:
-                        kwargs["streaming"] = None
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
+        request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
@@ -303,34 +278,19 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                 url = f"{base}/v1/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = False
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                with http_client_factory(timeout=timeout or 120.0) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return self._normalize_response(resp.json())
             except Exception as e:
                 raise self.normalize_error(e)
-        kwargs = self._to_handler_args(request)
-        if "stream" not in request and "streaming" not in request:
-            kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
-        return _legacy_local.chat_with_custom_openai_2(**kwargs)
+        raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
-        # If tests monkeypatched legacy callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
-            fn = getattr(_legacy_local, "chat_with_custom_openai_2", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or "tests" in mod or name.startswith("_Fake") or name.startswith("_fake")):
-                    kwargs = self._to_handler_args(request)
-                    kwargs["streaming"] = True
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
+        request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
@@ -344,18 +304,31 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                 url = f"{base}/v1/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = True
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                with http_client_factory(timeout=timeout or 120.0) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
-                        for line in resp.iter_lines():
-                            if not line:
+                        seen_done = False
+                        for raw in resp.iter_lines():
+                            if not raw:
                                 continue
-                            yield line
+                            try:
+                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                            except Exception:
+                                line = str(raw)
+                            if is_done_line(line):
+                                if not seen_done:
+                                    seen_done = True
+                                    yield sse_done()
+                                continue
+                            normalized = normalize_provider_line(line)
+                            if normalized is not None:
+                                yield normalized
+                        for tail in finalize_stream(response=resp, done_already=seen_done):
+                            yield tail
                 return
             except Exception as e:
                 raise self.normalize_error(e)
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
-        return _legacy_local.chat_with_custom_openai_2(**kwargs)
+        raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")

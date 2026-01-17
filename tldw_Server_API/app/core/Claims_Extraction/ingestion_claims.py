@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from tldw_Server_API.app.core.config import settings as _settings
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Claims_Extraction.review_assignment import apply_review_rules
 from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import (
     LLM_PROVIDER_MODES,
@@ -37,6 +38,14 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     should_throttle_claims_provider,
 )
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 
 try:
     # Local import for DB helper
@@ -114,16 +123,9 @@ def extract_claims_for_chunks(
                 import concurrent.futures as _futures
                 import threading as _threading
 
-                # Resolve chat API call with a module-level override for tests
-                def _resolve_chat_call():
-                    fn = globals().get("chat_api_call")
-                    if callable(fn):
-                        return fn
-                    from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call as _cac  # type: ignore
-                    return _cac
-
                 # Determine provider: explicit mode may be a provider name; otherwise use config
                 provider = mode if mode in LLM_PROVIDER_MODES else str(_settings.get("CLAIMS_LLM_PROVIDER", "openai")).lower()
+                provider_name = normalize_provider(provider)
 
                 model_override = str(_settings.get("CLAIMS_LLM_MODEL", "") or "") or None
                 try:
@@ -157,7 +159,41 @@ def extract_claims_for_chunks(
                     timeout_sec = 8.0
 
                 def _call_provider():
-                    _cac = _resolve_chat_call()
+                    override = globals().get("chat_api_call")
+                    if callable(override):
+                        return override(
+                            api_endpoint=provider,
+                            messages_payload=messages,
+                            api_key=None,
+                            temp=temperature,
+                            system_message=system,
+                            streaming=False,
+                            model=model_override,
+                        )
+
+                    adapter = get_registry().get_adapter(provider_name)
+                    if adapter is not None:
+                        app_config = ensure_app_config()
+                        resolved_model = model_override or resolve_provider_model(provider_name, app_config)
+                        if not resolved_model:
+                            raise ChatConfigurationError(
+                                provider=provider_name,
+                                message="Model is required for provider.",
+                            )
+                        system_message, cleaned_messages = split_system_message(
+                            [{"role": "system", "content": system}] + messages if system else messages
+                        )
+                        request = {
+                            "messages": cleaned_messages,
+                            "system_message": system_message,
+                            "model": resolved_model,
+                            "api_key": resolve_provider_api_key_from_config(provider_name, app_config),
+                            "temperature": temperature,
+                            "app_config": app_config,
+                        }
+                        return adapter.chat(request, timeout=timeout_sec)
+
+                    from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call as _cac  # type: ignore
                     return _cac(
                         api_endpoint=provider,
                         messages_payload=messages,

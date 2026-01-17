@@ -6,6 +6,8 @@ from tldw_Server_API.app.api.v1.endpoints import prompt_studio_optimization as p
 
 
 def test_beam_search_length_penalty_and_reranker_ok():
+
+
     cfg = {
         "strategy_params": {
             "beam_width": 4,
@@ -32,6 +34,8 @@ def test_beam_search_length_penalty_and_reranker_invalid(cfg):
 
 
 def test_anneal_step_schedule_consistency_ok():
+
+
     cfg = {
         "strategy_params": {
             "schedule": "linear",
@@ -46,6 +50,8 @@ def test_anneal_step_schedule_consistency_ok():
 
 
 def test_anneal_step_schedule_consistency_invalid():
+
+
     cfg = {
         "strategy_params": {
             "schedule": "linear",
@@ -61,11 +67,15 @@ def test_anneal_step_schedule_consistency_invalid():
 
 
 def test_genetic_crossover_operator_ok():
+
+
     cfg = {"strategy_params": {"crossover_operator": "two_point"}}
     pso._validate_strategy_config("genetic", cfg)
 
 
 def test_genetic_crossover_operator_invalid():
+
+
     cfg = {"strategy_params": {"crossover_operator": "bad"}}
     with pytest.raises(HTTPException):
         pso._validate_strategy_config("genetic", cfg)

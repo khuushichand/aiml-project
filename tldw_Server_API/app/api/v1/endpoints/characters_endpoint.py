@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Any, Dict, Optional, Tuple
 #
 # Third-party Libraries
-from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath
+from fastapi import HTTPException, Depends, Query, UploadFile, File, Form, APIRouter, Path as FastAPIPath
 from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette import status
@@ -114,6 +114,7 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
+from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
 from tldw_Server_API.app.api.v1.schemas.character_schemas import CharacterResponse, CharacterImportResponse, \
     CharacterCreate, CharacterUpdate, DeletionResponse
 from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
@@ -203,6 +204,7 @@ def _build_conflict_import_response(
              status_code=status.HTTP_201_CREATED)
 async def import_character_endpoint(
         character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
+        allow_image_only: bool = Form(False),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         current_user: User = Depends(get_request_user),
 ):
@@ -218,12 +220,20 @@ async def import_character_endpoint(
     For JSON data, you can upload a .json file or a text file containing JSON.
     """
     try:
+        try:
+            limits = get_character_limits()
+            max_import_size_mb = int(limits.max_import_size_mb)
+            max_import_bytes = max_import_size_mb * 1024 * 1024
+        except Exception:
+            max_import_bytes = MAX_CHARACTER_FILE_SIZE
+            max_import_size_mb = MAX_CHARACTER_FILE_SIZE // (1024 * 1024)
+
         # Pre-size check using content-length header (if available)
         # This prevents loading very large files into memory
-        if character_file.size is not None and character_file.size > MAX_CHARACTER_FILE_SIZE:
+        if character_file.size is not None and character_file.size > max_import_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File too large. Maximum allowed size is {MAX_CHARACTER_FILE_SIZE // (1024 * 1024)}MB"
+                detail=f"File too large. Maximum allowed size is {max_import_size_mb}MB"
             )
 
         # Read file with size limit
@@ -235,10 +245,10 @@ async def import_character_endpoint(
             )
 
         # Post-read size check (in case content-length was not accurate)
-        if len(file_content_bytes) > MAX_CHARACTER_FILE_SIZE:
+        if len(file_content_bytes) > max_import_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File too large. Maximum allowed size is {MAX_CHARACTER_FILE_SIZE // (1024 * 1024)}MB"
+                detail=f"File too large. Maximum allowed size is {max_import_size_mb}MB"
             )
 
         # Validate file type via magic bytes and extension
@@ -267,10 +277,26 @@ async def import_character_endpoint(
         file_type_validated = detected_type
 
         success, message, char_id = import_and_save_character_from_file(
-            db, file_content=file_content_bytes, file_type=file_type_validated
+            db,
+            file_content=file_content_bytes,
+            file_type=file_type_validated,
+            file_name=character_file.filename,
+            allow_image_only=allow_image_only
         )
 
         if not success or not char_id:
+            if message == "missing_character_data":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "missing_character_data",
+                        "message": (
+                            "No character data detected in image metadata. "
+                            "Continue to create an image-only character?"
+                        ),
+                        "can_import_image_only": True
+                    }
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=message or "Failed to import character"

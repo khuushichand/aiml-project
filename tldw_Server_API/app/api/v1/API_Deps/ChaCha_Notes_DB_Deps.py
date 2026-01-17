@@ -1,4 +1,4 @@
-# tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB_Deps.py
+# tldw_Server_API/app/api/v1/API_Deps/ChaCha_Notes_DB_Deps.py
 import asyncio
 import faulthandler
 import inspect
@@ -11,14 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
-from cachetools import LRUCache
 from fastapi import Depends, HTTPException, status
 from loguru import logger
+from cachetools import LRUCache
 
-#
-#    logging.warning("cachetools not found. ChaChaNotes DB instance cache will grow indefinitely. "
-#                    "Install with: pip install cachetools")
-#
 # Local Imports
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -31,15 +27,12 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
 #
 #######################################################################################################################
 
 
 # --- Configuration ---
-_HAS_CACHETOOLS = True
-DEFAULT_CHACHA_DB_SUBDIR = "chachanotes_user_dbs"  # This will be a sub-directory within the user's main DB directory
 _CHACHA_EXECUTOR: ThreadPoolExecutor | None = None
 _CHACHA_EXECUTOR_SHUTDOWN: bool = False
 _CHACHA_EXECUTOR_LOCK = threading.Lock()
@@ -57,6 +50,23 @@ _CHACHA_HEALTH: Dict[str, Any] = {
     "default_char_failures": 0,
     "warm_startups": 0,
 }
+_CHACHA_SHUTTING_DOWN = False
+_CHACHA_SHUTDOWN_LOCK = threading.Lock()
+
+
+def _set_chacha_shutting_down(value: bool) -> None:
+    global _CHACHA_SHUTTING_DOWN
+    with _CHACHA_SHUTDOWN_LOCK:
+        _CHACHA_SHUTTING_DOWN = value
+
+
+def _is_chacha_shutting_down() -> bool:
+    with _CHACHA_SHUTDOWN_LOCK:
+        return _CHACHA_SHUTTING_DOWN
+
+
+def reset_chacha_shutdown_state() -> None:
+    _set_chacha_shutting_down(False)
 
 
 def _get_chacha_executor() -> ThreadPoolExecutor:
@@ -77,54 +87,6 @@ def _get_chacha_executor() -> ThreadPoolExecutor:
             )
             _CHACHA_EXECUTOR_SHUTDOWN = False
         return _CHACHA_EXECUTOR
-
-
-def _normalise_user_base_path(raw_path: Path) -> Path:
-    """
-    Normalise a configured user database base path.
-
-    Matches the behaviour used by DatabasePaths helpers: expand user home,
-    resolve relative paths against the project root, and return an absolute Path.
-    """
-    try:
-        candidate = raw_path.expanduser()
-    except Exception:
-        candidate = raw_path
-
-    if not candidate.is_absolute():
-        project_root = Path(get_project_root())
-        candidate = (project_root / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-    return candidate
-
-
-def _resolve_main_user_base_dir() -> Path:
-    """Resolve the per-user databases base directory dynamically.
-
-    Priority:
-    1) Environment variable USER_DB_BASE_DIR (useful for tests)
-    2) Project settings (config.txt via core.config)
-    3) Emergency fallback path
-    """
-    env_base = os.environ.get("USER_DB_BASE_DIR")
-    if env_base:
-        try:
-            return _normalise_user_base_path(Path(env_base))
-        except Exception:
-            pass
-    base = settings.get("USER_DB_BASE_DIR")
-    if base:
-        try:
-            return _normalise_user_base_path(Path(base))
-        except Exception:
-            pass
-    logger.critical("CRITICAL: USER_DB_BASE_DIR is not configured in settings or environment. Using fallback.")
-    return _normalise_user_base_path(Path("./app_data/user_databases_fallback"))
-
-
-# USER_CHACHA_DB_BASE_DIR will now be defined *per user* inside _get_chacha_db_path_for_user
-# We only need the main base directory here at the module level.
 
 
 def _record_init(duration_ms: float, success: bool, error: Exception | None = None) -> None:
@@ -162,6 +124,16 @@ def _maybe_dump_traceback(reason: str) -> None:
         logger.debug(f"Faulthandler dump failed: {dump_err}")
 
 
+def _track_default_character_future(future: asyncio.Future) -> None:
+    def _cleanup(_future: asyncio.Future) -> None:
+        with _chacha_default_char_futures_lock:
+            _chacha_default_char_futures.discard(_future)
+
+    with _chacha_default_char_futures_lock:
+        _chacha_default_char_futures.add(future)
+    future.add_done_callback(_cleanup)
+
+
 def get_chacha_health_snapshot() -> Dict[str, Any]:
     status = "healthy"
     if _CHACHA_HEALTH.get("init_failures"):
@@ -180,7 +152,7 @@ def get_chacha_health_snapshot() -> Dict[str, Any]:
 
 def resolve_chacha_user_base_dir() -> Path:
     """Public helper to expose the resolved user database base directory."""
-    return _resolve_main_user_base_dir()
+    return DatabasePaths.get_user_db_base_dir()
 
 
 SERVER_CLIENT_ID = settings.get("SERVER_CLIENT_ID")
@@ -197,16 +169,15 @@ DEFAULT_CHARACTER_NAME = "Helpful AI Assistant"
 DEFAULT_CHARACTER_DESCRIPTION = "A default, friendly assistant created automatically by the system."
 
 # --- Global Cache for ChaChaNotes DB Instances ---
-MAX_CACHED_CHACHA_DB_INSTANCES = settings.get("MAX_CACHED_CHACHA_DB_INSTANCES", 20)
+MAX_CACHED_CHACHA_DB_INSTANCES = int(settings.get("MAX_CACHED_CHACHA_DB_INSTANCES", "20"))
 
-if _HAS_CACHETOOLS:
-    _chacha_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_CHACHA_DB_INSTANCES)
-    logger.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_CHACHA_DB_INSTANCES}).")
-else:
-    _chacha_db_instances: Dict[str, CharactersRAGDB] = {}
+_chacha_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_CHACHA_DB_INSTANCES)
+logger.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_CHACHA_DB_INSTANCES}).")
 
 _chacha_db_lock = threading.Lock()
 _chacha_default_char_tasks: Set[asyncio.Task] = set()
+_chacha_default_char_futures: Set[asyncio.Future] = set()
+_chacha_default_char_futures_lock = threading.Lock()
 
 
 #######################################################################################################################
@@ -224,26 +195,9 @@ def _get_chacha_db_path_for_user(user_id: int) -> Path:
     Notes:
     - USER_DB_BASE_DIR is read from global settings and can be overridden by env.
     - This per-user layout is intentional to isolate data and simplify backups.
-    - A fallback path is used only when USER_DB_BASE_DIR is misconfigured; logs at CRITICAL/ERROR.
+    - Falls back to the default `Databases/user_databases` under repo root when unset.
     """
-    # Build path from the current effective base directory, preferring env override.
-    base_dir = _resolve_main_user_base_dir()
-    user_dir = Path(base_dir) / str(user_id)
-    try:
-        user_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        logger.error(
-            f"Failed to create user directory for ChaChaNotes at {user_dir}: {e}",
-            exc_info=True,
-        )
-        raise IOError(f"Could not initialize ChaChaNotes storage directory for user {user_id}.") from e
-
-    db_file = user_dir / DatabasePaths.CHACHA_DB_NAME
-    # Extra safety: ensure parent exists even if upstream helpers change
-    try:
-        db_file.parent.mkdir(parents=True, exist_ok=True)
-    except Exception as _mk_e:
-        logger.debug(f"Parent ensure for ChaChaNotes path failed softly: { _mk_e }")
+    db_file = DatabasePaths.get_chacha_db_path(user_id)
     logger.info(f"Ensured ChaChaNotes DB directory for user {user_id}: {db_file.parent}")
     return db_file
 
@@ -288,8 +242,10 @@ def _create_and_prepare_db(user_id: int, client_id: str) -> CharactersRAGDB:
 async def _ensure_default_character_async(db_instance: CharactersRAGDB, user_id: int) -> None:
     loop = asyncio.get_running_loop()
     try:
+        future = loop.run_in_executor(_get_chacha_executor(), _ensure_default_character, db_instance)
+        _track_default_character_future(future)
         await asyncio.wait_for(
-            loop.run_in_executor(_get_chacha_executor(), _ensure_default_character, db_instance),
+            asyncio.shield(future),
             timeout=5,
         )
         _record_default_character(True)
@@ -377,8 +333,8 @@ async def _is_instance_healthy(db_instance: CharactersRAGDB) -> bool:
 
 
 async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRAGDB:
-    base_dir = _resolve_main_user_base_dir()
-    cache_key = f"{base_dir!s}::{user_id}"
+    user_dir = DatabasePaths.get_user_base_directory(user_id)
+    cache_key = str(user_dir)
     with _chacha_db_lock:
         db_instance = _chacha_db_instances.get(cache_key)
     if db_instance:
@@ -422,6 +378,9 @@ async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRA
 
 
 async def warm_chacha_db_for_user(user_id: int, client_id: str | None = None) -> None:
+    if _is_chacha_shutting_down():
+        logger.debug("ChaChaNotes shutdown in progress; skipping warmup for user %s", user_id)
+        return
     try:
         db_instance = await _get_or_init_db_instance(user_id, client_id or str(user_id))
         _CHACHA_HEALTH["warm_startups"] += 1
@@ -470,9 +429,10 @@ async def get_chacha_db_for_user(current_user: User = Depends(get_request_user))
 
     user_id = current_user.id
     db_instance = await _get_or_init_db_instance(user_id, str(current_user.id))
-    task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
-    _chacha_default_char_tasks.add(task)
-    task.add_done_callback(_chacha_default_char_tasks.discard)
+    if not _is_chacha_shutting_down():
+        task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
+        _chacha_default_char_tasks.add(task)
+        task.add_done_callback(_chacha_default_char_tasks.discard)
     return db_instance
 
 
@@ -488,6 +448,50 @@ def close_all_chacha_db_instances():
                 logger.error(f"Error closing ChaChaNotesDB instance for user {user_id}: {e}", exc_info=True)
         _chacha_db_instances.clear()
         logger.info("All ChaChaNotesDB instances closed and cache cleared.")
+
+
+async def _drain_default_character_tasks(timeout: float = 5.0) -> None:
+    tasks = [task for task in list(_chacha_default_char_tasks) if not task.done()]
+    if not tasks:
+        return
+    done, pending = await asyncio.wait(tasks, timeout=timeout)
+    if pending:
+        logger.warning(
+            "ChaChaNotes shutdown: %d default-character tasks still running; cancelling.",
+            len(pending),
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.wait(pending, timeout=1.0)
+    _chacha_default_char_tasks.difference_update(done)
+    _chacha_default_char_tasks.difference_update(pending)
+
+
+async def _drain_default_character_futures(timeout: float = 5.0) -> None:
+    with _chacha_default_char_futures_lock:
+        futures = [future for future in list(_chacha_default_char_futures) if not future.done()]
+    if not futures:
+        return
+    done, pending = await asyncio.wait(futures, timeout=timeout)
+    if pending:
+        logger.warning(
+            "ChaChaNotes shutdown: %d default-character futures still running; waiting on executor shutdown.",
+            len(pending),
+        )
+    with _chacha_default_char_futures_lock:
+        for future in done:
+            _chacha_default_char_futures.discard(future)
+
+
+async def shutdown_chacha_resources(wait_timeout: float = 5.0) -> None:
+    """Drain ChaChaNotes tasks and close resources without racing active threads."""
+    _set_chacha_shutting_down(True)
+    await _drain_default_character_tasks(timeout=wait_timeout)
+    await _drain_default_character_futures(timeout=wait_timeout)
+    # Block the shutdown path until worker threads complete to avoid closing
+    # SQLite connections mid-query during test teardown.
+    shutdown_chacha_executor(wait=True)
+    close_all_chacha_db_instances()
 
 
 def shutdown_chacha_executor(wait: bool = False) -> None:

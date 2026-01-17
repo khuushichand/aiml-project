@@ -8,6 +8,8 @@ pytestmark = [pytest.mark.integration]
 
 
 def _local_model_paths():
+
+
     """Resolve local model/tokenizer paths from environment variables.
 
     Set env vars:
@@ -27,6 +29,8 @@ def _local_model_paths():
 
 
 def _boson_available():
+
+
     try:
         import boson_multimodal  # noqa: F401
         return True

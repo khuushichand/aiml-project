@@ -11,7 +11,6 @@ import time
 from typing import Optional, Dict, Any, List, TypedDict
 from urllib.parse import urlparse, urlencode, unquote
 #
-import requests
 # 3rd-Party Imports
 from lxml.etree import _Element
 from lxml.html import document_fromstring
@@ -20,10 +19,41 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.http_client import fetch, fetch_json, RetryPolicy
 #
 # Local Imports
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
+    build_browser_headers,
+    pick_ua_profile,
+)
+
+
+def _websearch_browser_headers(
+        *,
+        accept_lang: str = "en-US,en;q=0.5",
+        referer: str = "https://www.google.com/",
+) -> Dict[str, str]:
+    profile = pick_ua_profile("fixed")
+    headers = build_browser_headers(
+        profile=profile,
+        accept_lang=accept_lang,
+        accept_encoding="gzip, deflate",
+    )
+    headers.update({
+        "Referer": referer,
+        "Connection": "keep-alive",
+    })
+    return headers
 
 
 def summarize(
@@ -66,6 +96,38 @@ def _build_messages(
     if user_prompt:
         messages.append({"role": "user", "content": user_prompt})
     return messages
+
+
+def _call_adapter_text(
+        *,
+        api_endpoint: str,
+        messages_payload: List[Dict[str, Any]],
+        temperature: Optional[float] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+        **extra_kwargs: Any,
+) -> str:
+    provider = normalize_provider(api_endpoint)
+    if not provider:
+        raise ChatConfigurationError(provider=api_endpoint, message="LLM provider is required.")
+    cfg = ensure_app_config(app_config or loaded_config_data)
+    resolved_model = model or resolve_provider_model(provider, cfg)
+    if not resolved_model:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+    system_message, cleaned_messages = split_system_message(messages_payload or [])
+    request: Dict[str, Any] = {
+        "messages": cleaned_messages,
+        "system_message": system_message,
+        "model": resolved_model,
+        "api_key": api_key or resolve_provider_api_key_from_config(provider, cfg),
+        "temperature": temperature,
+        "app_config": cfg,
+    }
+    request.update(extra_kwargs)
+    response = get_adapter_or_raise(provider).chat(request, timeout=timeout)
+    return extract_response_content(response) or str(response)
 
 
 #
@@ -321,15 +383,11 @@ def analyze_question(question: str, api_endpoint) -> Dict:
                 system_prompt=sub_question_generation_prompt,
                 user_prompt=input_data,
             )
-            response = chat_api_call(
+            response = _call_adapter_text(
                 api_endpoint=api_endpoint,
                 messages_payload=messages_payload,
-                temp=0.7,
-                system_message=None,
-                streaming=False,
-                minp=None,
-                maxp=None,
-                model=None,
+                temperature=0.7,
+                app_config=loaded_config_data,
             )
             if response:
                 try:
@@ -446,18 +504,11 @@ async def search_result_relevance(
                 break
 
             # Evaluate relevance
-            relevancy_result = chat_api_call(
+            relevancy_result = _call_adapter_text(
                 api_endpoint=api_endpoint,
                 messages_payload=messages_payload,
-                api_key=None,
-                temp=0.7,
-                system_message=None,
-                streaming=False,
-                minp=None,
-                maxp=None,
-                model=None,
-                topk=None,
-                topp=None,
+                temperature=0.7,
+                app_config=loaded_config_data,
             )
 
             logging.debug(f"[DEBUG] Relevancy LLM response for index {idx}:\n{relevancy_result}\n---")
@@ -871,18 +922,11 @@ def aggregate_results(
 
     try:
         logging.info("Generating the report")
-        returned_response = chat_api_call(
+        returned_response = _call_adapter_text(
             api_endpoint=api_endpoint,
             messages_payload=messages_payload,
-            api_key=None,
-            temp=0.7,
-            system_message=None,
-            streaming=False,
-            minp=None,
-            maxp=None,
-            model=None,
-            topk=None,
-            topp=None,
+            temperature=0.7,
+            app_config=loaded_config_data,
         )
         logging.debug("Returned response from LLM for aggregation: %s", returned_response)
         if returned_response:
@@ -1986,15 +2030,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
 
     # Perform the search request
     try:
-        # Mimic browser headers
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': 'https://www.google.com/',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-        }
+        headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5")
 
         # Add a random delay to mimic human behavior
         delay = random.uniform(2, 5)  # Random delay between 2 and 5 seconds
@@ -2078,10 +2114,10 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
 
     # Perform the search request
     try:
-        headers = {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0'
-        }
+        headers = {'Content-Type': 'application/json'}
+        ua_headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5")
+        if "User-Agent" in ua_headers:
+            headers["User-Agent"] = ua_headers["User-Agent"]
 
         response = fetch(method="POST", url=tavily_api_url, headers=headers, data=json.dumps(payload))
         return response.json()

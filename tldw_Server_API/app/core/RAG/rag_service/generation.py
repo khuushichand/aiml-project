@@ -18,15 +18,8 @@ from enum import Enum
 from loguru import logger
 
 # Import LLM infrastructure
-from ...LLM_Calls.LLM_API_Calls import (
-    chat_with_openai,
-    chat_with_anthropic,
-    chat_with_groq,
-    chat_with_openrouter,
-    chat_with_deepseek,
-    chat_with_huggingface,
-    chat_with_cohere
-)
+from ...Chat.Chat_Deps import ChatConfigurationError
+from ...LLM_Calls.adapter_registry import get_registry
 
 from .types import Document
 try:
@@ -152,6 +145,69 @@ Let me explain:"""
         return templates.get(name, cls.DEFAULT)
 
 
+def _extract_openai_content(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        choices = response.get("choices") or []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+                    if parts:
+                        return "".join(parts)
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                delta_content = delta.get("content")
+                if isinstance(delta_content, str):
+                    return delta_content
+                if isinstance(delta_content, list):
+                    parts = [part.get("text", "") for part in delta_content if isinstance(part, dict)]
+                    if parts:
+                        return "".join(parts)
+            text = choice.get("text")
+            if isinstance(text, str):
+                return text
+        content = response.get("content") or response.get("text")
+        if isinstance(content, str):
+            return content
+    return str(response)
+
+
+def _extract_stream_text(chunk: Any) -> Optional[str]:
+    if isinstance(chunk, dict):
+        return _extract_openai_content(chunk)
+    if isinstance(chunk, (bytes, bytearray)):
+        try:
+            chunk = chunk.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+    if isinstance(chunk, str):
+        stripped = chunk.strip()
+        if not stripped:
+            return None
+        if stripped.lower().startswith("data:"):
+            data = stripped[5:].strip()
+            if data.lower() == "[done]":
+                return None
+            try:
+                payload = json.loads(data)
+            except Exception:
+                return data or None
+            return _extract_openai_content(payload) or None
+        return stripped
+    try:
+        return str(chunk)
+    except Exception:
+        return None
+
+
 class BaseGenerator(ABC):
     """Base class for response generators."""
 
@@ -238,11 +294,10 @@ class LLMGenerator(BaseGenerator):
             response = await self._call_llm(full_prompt, **kwargs)
 
             # Extract text from response
+            response_text = _extract_openai_content(response)
             if isinstance(response, dict):
-                response_text = response.get("content", response.get("text", str(response)))
                 tokens_used = response.get("usage", {}).get("total_tokens", 0)
             else:
-                response_text = str(response)
                 tokens_used = len(response_text.split()) * 1.3  # Rough estimate
 
             generation_time = time.time() - start_time
@@ -277,94 +332,31 @@ class LLMGenerator(BaseGenerator):
 
     async def _call_llm(self, prompt: str, **kwargs) -> Any:
         """Call the appropriate LLM provider."""
-        provider = self.config.provider.lower()
+        provider = (self.config.provider or "").lower()
+        streaming = bool(kwargs.get("streaming", self.config.streaming))
+        model = kwargs.get("model", self.config.model)
+        api_key = kwargs.get("api_key", self.config.api_key)
+        temperature = kwargs.get("temperature", self.config.temperature)
+        max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
+        timeout = kwargs.get("timeout", self.config.timeout)
 
-        # Prepare common parameters
-        params = {
-            "custom_prompt_arg": prompt,
-            "streaming": self.config.streaming,
-            "system_prompt": self.config.system_prompt
+        request: Dict[str, Any] = {
+            "messages": [{"role": "user", "content": prompt}],
+            "model": model,
+            "api_key": api_key,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
+        if streaming:
+            request["stream"] = True
 
-        # Add API key if provided
-        if self.config.api_key:
-            params["api_key"] = self.config.api_key
+        adapter = get_registry().get_adapter(provider)
+        if adapter is not None:
+            if streaming:
+                return adapter.astream(request, timeout=timeout)
+            return await adapter.achat(request, timeout=timeout)
 
-        # Override with kwargs
-        params.update(kwargs)
-
-        # Call appropriate provider
-        if provider == "openai":
-            return await asyncio.to_thread(
-                chat_with_openai,
-                api_key=params.get("api_key"),
-                file_path="",  # Not used for direct prompt
-                custom_prompt_arg=prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "anthropic":
-            return await asyncio.to_thread(
-                chat_with_anthropic,
-                api_key=params.get("api_key"),
-                file_path="",
-                model=self.config.model,
-                custom_prompt_arg=prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "groq":
-            return await asyncio.to_thread(
-                chat_with_groq,
-                api_key=params.get("api_key"),
-                input_data=prompt,
-                custom_prompt_arg="",
-                system_prompt=self.config.system_prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "openrouter":
-            return await asyncio.to_thread(
-                chat_with_openrouter,
-                api_key=params.get("api_key"),
-                input_data=prompt,
-                custom_prompt_arg="",
-                system_prompt=self.config.system_prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "deepseek":
-            return await asyncio.to_thread(
-                chat_with_deepseek,
-                api_key=params.get("api_key"),
-                input_data=prompt,
-                custom_prompt_arg="",
-                system_prompt=self.config.system_prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "huggingface":
-            return await asyncio.to_thread(
-                chat_with_huggingface,
-                api_key=params.get("api_key"),
-                input_data=prompt,
-                custom_prompt_arg="",
-                system_prompt=self.config.system_prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "cohere":
-            return await asyncio.to_thread(
-                chat_with_cohere,
-                api_key=params.get("api_key"),
-                file_path="",
-                model=self.config.model,
-                custom_prompt_arg=prompt,
-                streaming=self.config.streaming
-            )
-
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+        raise ChatConfigurationError(provider=provider, message="No adapter available for provider.")
 
 
 class StreamingGenerator(LLMGenerator):
@@ -404,28 +396,19 @@ class StreamingGenerator(LLMGenerator):
             if hasattr(response, '__aiter__'):
                 # Async iterator
                 async for chunk in response:
-                    if isinstance(chunk, dict):
-                        text = chunk.get("content", chunk.get("text", ""))
-                    else:
-                        text = str(chunk)
+                    text = _extract_stream_text(chunk)
                     if text:
                         yield text
             elif hasattr(response, '__iter__'):
                 # Sync iterator - convert to async
                 for chunk in response:
-                    if isinstance(chunk, dict):
-                        text = chunk.get("content", chunk.get("text", ""))
-                    else:
-                        text = str(chunk)
+                    text = _extract_stream_text(chunk)
                     if text:
                         yield text
                     await asyncio.sleep(0)  # Allow other tasks
             else:
                 # Non-streaming response
-                if isinstance(response, dict):
-                    text = response.get("content", response.get("text", str(response)))
-                else:
-                    text = str(response)
+                text = _extract_openai_content(response)
 
                 # Simulate streaming by yielding in chunks
                 chunk_size = 50  # characters

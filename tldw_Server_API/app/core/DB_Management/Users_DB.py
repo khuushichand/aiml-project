@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import hashlib
 import uuid
 import sqlite3
+import asyncio
 
 # Guarded optional imports for async drivers. Users_DB relies on the
 # unified DatabasePool abstraction and should not hard-depend on these
@@ -94,115 +95,134 @@ class UsersDB:
 
     async def _create_tables(self):
         """Create users and related tables if they don't exist"""
-        try:
-            async with self.db_pool.transaction() as conn:
-                is_postgres = getattr(self.db_pool, "pool", None) is not None
-                if is_postgres:
-                    # PostgreSQL
-                    # Prefer pgcrypto (gen_random_uuid); gracefully fall back to uuid-ossp if unavailable.
-                    try:
-                        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-                    except Exception as ext_err:  # pragma: no cover - env dependent
-                        logger.warning(f"pgcrypto extension not available: {ext_err}. Trying uuid-ossp as fallback.")
+        attempts = 3
+        delay = 0.1
+        for attempt in range(attempts):
+            try:
+                async with self.db_pool.transaction() as conn:
+                    is_postgres = getattr(self.db_pool, "pool", None) is not None
+                    if is_postgres:
+                        # PostgreSQL
+                        # Prefer pgcrypto (gen_random_uuid); gracefully fall back to uuid-ossp if unavailable.
                         try:
-                            await conn.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
-                        except Exception as ext2_err:
-                            logger.warning(f"uuid-ossp extension also unavailable: {ext2_err}. Proceeding without extension; UUID defaults may be set separately if functions exist.")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS users (
-                            id SERIAL PRIMARY KEY,
-                            uuid UUID UNIQUE,
-                            username VARCHAR(50) UNIQUE NOT NULL,
-                            email VARCHAR(255) UNIQUE NOT NULL,
-                            password_hash TEXT NOT NULL,
-                            metadata JSONB,
-                            is_active BOOLEAN DEFAULT TRUE,
-                            is_superuser BOOLEAN DEFAULT FALSE,
-                            role VARCHAR(50) DEFAULT 'user',
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            last_login TIMESTAMP,
-                            email_verified BOOLEAN DEFAULT FALSE,
-                            is_verified BOOLEAN DEFAULT FALSE,
-                            storage_quota_mb INTEGER DEFAULT 5120,
-                            storage_used_mb INTEGER DEFAULT 0
+                            await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+                        except Exception as ext_err:  # pragma: no cover - env dependent
+                            logger.warning(f"pgcrypto extension not available: {ext_err}. Trying uuid-ossp as fallback.")
+                            try:
+                                await conn.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+                            except Exception as ext2_err:
+                                logger.warning(
+                                    f"uuid-ossp extension also unavailable: {ext2_err}. Proceeding without extension; "
+                                    "UUID defaults may be set separately if functions exist."
+                                )
+                        await conn.execute("""
+                            CREATE TABLE IF NOT EXISTS users (
+                                id SERIAL PRIMARY KEY,
+                                uuid UUID UNIQUE,
+                                username VARCHAR(50) UNIQUE NOT NULL,
+                                email VARCHAR(255) UNIQUE NOT NULL,
+                                password_hash TEXT NOT NULL,
+                                metadata JSONB,
+                                is_active BOOLEAN DEFAULT TRUE,
+                                is_superuser BOOLEAN DEFAULT FALSE,
+                                role VARCHAR(50) DEFAULT 'user',
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                last_login TIMESTAMP,
+                                email_verified BOOLEAN DEFAULT FALSE,
+                                is_verified BOOLEAN DEFAULT FALSE,
+                                storage_quota_mb INTEGER DEFAULT 5120,
+                                storage_used_mb INTEGER DEFAULT 0
+                            )
+                        """)
+
+                        # Create indexes
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+                        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS metadata JSONB")
+                        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS uuid UUID")
+                        await conn.execute(
+                            "ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_quota_mb INTEGER DEFAULT 5120"
                         )
-                    """)
-
-                    # Create indexes
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
-                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS metadata JSONB")
-                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS uuid UUID")
-                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_quota_mb INTEGER DEFAULT 5120")
-                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_used_mb INTEGER DEFAULT 0")
-                    # Populate missing UUIDs using available function
-                    try:
-                        await conn.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
-                    except Exception:
-                        try:
-                            await conn.execute("UPDATE users SET uuid = uuid_generate_v4() WHERE uuid IS NULL")
-                        except Exception as uuid_err:
-                            logger.warning(f"Unable to populate UUIDs with gen_random_uuid or uuid_generate_v4: {uuid_err}")
-                    await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET NOT NULL")
-                    try:
-                        await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT gen_random_uuid()")
-                    except Exception:
-                        try:
-                            await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT uuid_generate_v4()")
-                        except Exception as def_err:
-                            logger.warning(f"Could not set UUID default via pgcrypto/uuid-ossp: {def_err}")
-
-                else:
-                    # SQLite
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS users (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
-                            username TEXT UNIQUE NOT NULL,
-                            email TEXT UNIQUE NOT NULL,
-                            password_hash TEXT NOT NULL,
-                            metadata TEXT,
-                            is_active INTEGER DEFAULT 1,
-                            is_superuser INTEGER DEFAULT 0,
-                            role TEXT DEFAULT 'user',
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            last_login TIMESTAMP,
-                            email_verified INTEGER DEFAULT 0,
-                            is_verified INTEGER DEFAULT 0,
-                            storage_quota_mb INTEGER DEFAULT 5120,
-                            storage_used_mb INTEGER DEFAULT 0
+                        await conn.execute(
+                            "ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_used_mb INTEGER DEFAULT 0"
                         )
-                    """)
+                        # Populate missing UUIDs using available function
+                        try:
+                            await conn.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
+                        except Exception:
+                            try:
+                                await conn.execute("UPDATE users SET uuid = uuid_generate_v4() WHERE uuid IS NULL")
+                            except Exception as uuid_err:
+                                logger.warning(
+                                    "Unable to populate UUIDs with gen_random_uuid or uuid_generate_v4: "
+                                    f"{uuid_err}"
+                                )
+                        await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET NOT NULL")
+                        try:
+                            await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT gen_random_uuid()")
+                        except Exception:
+                            try:
+                                await conn.execute(
+                                    "ALTER TABLE users ALTER COLUMN uuid SET DEFAULT uuid_generate_v4()"
+                                )
+                            except Exception as def_err:
+                                logger.warning(f"Could not set UUID default via pgcrypto/uuid-ossp: {def_err}")
 
-                    # Create indexes
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
-                    cursor = await conn.execute("PRAGMA table_info(users)")
-                    columns_info = await cursor.fetchall()
-                    columns = {row[1] for row in columns_info}
-                    if "metadata" not in columns:
-                        await conn.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
-                    if "uuid" not in columns:
-                        await conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
-                    if "storage_quota_mb" not in columns:
-                        await conn.execute("ALTER TABLE users ADD COLUMN storage_quota_mb INTEGER DEFAULT 5120")
-                    if "storage_used_mb" not in columns:
-                        await conn.execute("ALTER TABLE users ADD COLUMN storage_used_mb INTEGER DEFAULT 0")
-                    await conn.execute(
-                        "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
-                    )
+                    else:
+                        # SQLite
+                        await conn.execute("""
+                            CREATE TABLE IF NOT EXISTS users (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+                                username TEXT UNIQUE NOT NULL,
+                                email TEXT UNIQUE NOT NULL,
+                                password_hash TEXT NOT NULL,
+                                metadata TEXT,
+                                is_active INTEGER DEFAULT 1,
+                                is_superuser INTEGER DEFAULT 0,
+                                role TEXT DEFAULT 'user',
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                last_login TIMESTAMP,
+                                email_verified INTEGER DEFAULT 0,
+                                is_verified INTEGER DEFAULT 0,
+                                storage_quota_mb INTEGER DEFAULT 5120,
+                                storage_used_mb INTEGER DEFAULT 0
+                            )
+                        """)
 
-                    await conn.commit()
+                        # Create indexes
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+                        cursor = await conn.execute("PRAGMA table_info(users)")
+                        columns_info = await cursor.fetchall()
+                        columns = {row[1] for row in columns_info}
+                        if "metadata" not in columns:
+                            await conn.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
+                        if "uuid" not in columns:
+                            await conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
+                        if "storage_quota_mb" not in columns:
+                            await conn.execute("ALTER TABLE users ADD COLUMN storage_quota_mb INTEGER DEFAULT 5120")
+                        if "storage_used_mb" not in columns:
+                            await conn.execute("ALTER TABLE users ADD COLUMN storage_used_mb INTEGER DEFAULT 0")
+                        await conn.execute(
+                            "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
+                        )
 
-                logger.debug("Users table and indexes created/verified")
+                        await conn.commit()
 
-        except Exception as e:
-            logger.error(f"Failed to create users table: {e}")
-            raise DatabaseError(f"Failed to create users table: {e}")
+                    logger.debug("Users table and indexes created/verified")
+                return
+            except Exception as e:
+                if attempt < attempts - 1 and "locked" in str(e).lower():
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 1.0)
+                    continue
+                logger.error(f"Failed to create users table: {e}")
+                raise DatabaseError(f"Failed to create users table: {e}")
 
     async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -759,10 +779,7 @@ def get_user_chromadb_path(user_id: int) -> str:
     Returns:
         Path to the user's ChromaDB directory
     """
-    base_dir = DatabasePaths.get_user_base_directory(user_id)
-    chroma_path = base_dir / "chroma_storage"
-    chroma_path.mkdir(parents=True, exist_ok=True)
-    return str(chroma_path)
+    return str(DatabasePaths.get_user_chroma_dir(user_id))
 
 
 async def get_user_media_db(user_id: int, db_name: str = "media"):

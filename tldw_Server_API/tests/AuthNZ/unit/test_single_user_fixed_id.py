@@ -5,6 +5,8 @@ from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 def _reset_single_user_instance():
+
+
     user_handling._single_user_instance = None  # type: ignore[attr-defined]
 
 

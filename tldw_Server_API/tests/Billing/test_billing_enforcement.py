@@ -7,25 +7,26 @@ This module tests the billing limit enforcement system at the unit level.
 Tests are organized into logical groups:
 
 1. **LimitCheckResult tests**: Verify the dataclass correctly determines
-   blocking and warning states based on enforcement actions.
+    blocking and warning states based on enforcement actions.
 
 2. **PlanLimits tests**: Verify default plan tier definitions and the
-   `get_plan_limits` function handles edge cases (unknown plans, case sensitivity).
+    `get_plan_limits` function handles edge cases (unknown plans, case sensitivity).
 
 3. **CheckLimit tests**: Verify the utility function correctly categorizes
-   usage into unlimited, under-limit, soft-limit (warning), and hard-limit states.
+    usage into unlimited, under-limit, soft-limit (warning), and hard-limit states.
 
 4. **BillingEnforcer tests**: Verify the main enforcement class handles:
-   - Cache invalidation (single org and all orgs)
-   - Limit checking with mocked usage/limits data
-   - Feature access checks
+    - Cache invalidation (single org and all orgs)
+    - Limit checking with mocked usage/limits data
+    - Feature access checks
 
 5. **Module function tests**: Verify environment-based feature flags
-   (billing_enabled, enforcement_enabled) and singleton behavior.
+    (billing_enabled, enforcement_enabled) and singleton behavior.
 
 All tests use mocking to isolate from database dependencies. For integration
 tests with real database, see test_billing_endpoints_integration.py.
 """
+import re
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -53,6 +54,7 @@ class TestLimitCheckResult:
     """Tests for LimitCheckResult dataclass."""
 
     def test_should_block_soft_block(self):
+
         """SOFT_BLOCK should indicate blocking."""
         result = LimitCheckResult(
             category="api_calls_day",
@@ -64,6 +66,7 @@ class TestLimitCheckResult:
         assert result.should_block is True
 
     def test_should_block_hard_block(self):
+
         """HARD_BLOCK should indicate blocking."""
         result = LimitCheckResult(
             category="api_calls_day",
@@ -75,6 +78,7 @@ class TestLimitCheckResult:
         assert result.should_block is True
 
     def test_should_not_block_allow(self):
+
         """ALLOW should not indicate blocking."""
         result = LimitCheckResult(
             category="api_calls_day",
@@ -86,6 +90,7 @@ class TestLimitCheckResult:
         assert result.should_block is False
 
     def test_should_not_block_warn(self):
+
         """WARN should not indicate blocking."""
         result = LimitCheckResult(
             category="api_calls_day",
@@ -97,6 +102,7 @@ class TestLimitCheckResult:
         assert result.should_block is False
 
     def test_should_warn(self):
+
         """WARN action should indicate warning."""
         result = LimitCheckResult(
             category="api_calls_day",
@@ -108,6 +114,7 @@ class TestLimitCheckResult:
         assert result.should_warn is True
 
     def test_should_not_warn_allow(self):
+
         """ALLOW action should not indicate warning."""
         result = LimitCheckResult(
             category="api_calls_day",
@@ -123,6 +130,7 @@ class TestPlanLimits:
     """Tests for plan limit definitions."""
 
     def test_free_tier_has_limits(self):
+
         """Free tier should have restrictive limits."""
         limits = DEFAULT_LIMITS[PlanTier.FREE]
         assert limits.storage_mb == 1024
@@ -131,6 +139,7 @@ class TestPlanLimits:
         assert limits.advanced_analytics is False
 
     def test_pro_tier_has_higher_limits(self):
+
         """Pro tier should have higher limits than Free."""
         free_limits = DEFAULT_LIMITS[PlanTier.FREE]
         pro_limits = DEFAULT_LIMITS[PlanTier.PRO]
@@ -139,23 +148,27 @@ class TestPlanLimits:
         assert pro_limits.advanced_analytics is True
 
     def test_enterprise_has_unlimited_members(self):
+
         """Enterprise tier should have unlimited team members."""
         limits = DEFAULT_LIMITS[PlanTier.ENTERPRISE]
         assert limits.team_members == -1  # -1 means unlimited
 
     def test_get_plan_limits_free(self):
+
         """get_plan_limits should return correct limits for free tier."""
         limits = get_plan_limits("free")
         assert limits["storage_mb"] == 1024
         assert limits["api_calls_day"] == 100
 
     def test_get_plan_limits_unknown_defaults_to_free(self):
+
         """Unknown plan names should default to free tier."""
         limits = get_plan_limits("unknown_plan")
         free_limits = get_plan_limits("free")
         assert limits == free_limits
 
     def test_get_plan_limits_case_insensitive(self):
+
         """Plan names should be case insensitive."""
         lower = get_plan_limits("pro")
         upper = get_plan_limits("PRO")
@@ -167,6 +180,7 @@ class TestCheckLimit:
     """Tests for the check_limit utility function."""
 
     def test_unlimited_returns_no_warning(self):
+
         """Unlimited limits (-1) should never warn or exceed."""
         result = check_limit(current_value=1000000, limit_value=-1, limit_name="test")
         assert result["unlimited"] is True
@@ -175,6 +189,7 @@ class TestCheckLimit:
         assert result["percent_used"] == 0
 
     def test_under_limit_no_warning(self):
+
         """Usage well under limit should not warn."""
         result = check_limit(current_value=50, limit_value=100, limit_name="test")
         assert result["exceeded"] is False
@@ -182,6 +197,7 @@ class TestCheckLimit:
         assert result["percent_used"] == 50
 
     def test_at_soft_limit_warns(self):
+
         """Usage at soft limit (80%) should warn but not exceed."""
         result = check_limit(current_value=80, limit_value=100, limit_name="test")
         assert result["exceeded"] is False
@@ -189,6 +205,7 @@ class TestCheckLimit:
         assert result["percent_used"] == 80
 
     def test_at_hard_limit_exceeds(self):
+
         """Usage at hard limit should exceed."""
         result = check_limit(current_value=100, limit_value=100, limit_name="test")
         assert result["exceeded"] is True
@@ -196,6 +213,7 @@ class TestCheckLimit:
         assert result["percent_used"] == 100
 
     def test_over_limit_exceeds(self):
+
         """Usage over limit should exceed."""
         result = check_limit(current_value=150, limit_value=100, limit_name="test")
         assert result["exceeded"] is True
@@ -211,6 +229,7 @@ class TestBillingEnforcer:
         return BillingEnforcer(soft_limit_percent=80)
 
     def test_cache_invalidation_single_org(self, enforcer):
+
         """Cache invalidation should work for single org."""
         # Populate cache
         enforcer._usage_cache[1] = (UsageSummary(org_id=1), 0)
@@ -225,6 +244,7 @@ class TestBillingEnforcer:
         assert 2 in enforcer._usage_cache
 
     def test_cache_invalidation_all_orgs(self, enforcer):
+
         """Cache invalidation should work for all orgs."""
         # Populate cache
         enforcer._usage_cache[1] = (UsageSummary(org_id=1), 0)
@@ -326,6 +346,54 @@ class TestBillingEnforcer:
 
                 assert result.action == EnforcementAction.ALLOW
                 assert result.unlimited is True
+
+    @pytest.mark.asyncio
+    async def test_llm_tokens_month_sqlite_uses_sqlite_timestamp_format(self, monkeypatch):
+        """SQLite LLM usage queries should use space-delimited UTC timestamps."""
+
+        class _FakeConn:
+            def __init__(self) -> None:
+                self.params = None
+
+            async def execute(self, _query, params):
+                self.params = params
+                return self
+
+            async def fetchone(self):
+                return (0,)
+
+        fake_conn = _FakeConn()
+
+        class _Acquire:
+            async def __aenter__(self_inner):
+                return fake_conn
+
+            async def __aexit__(self_inner, exc_type, exc, tb):
+                return False
+
+        class _FakePool:
+            def acquire(self):
+                return _Acquire()
+
+        async def _fake_get_db_pool():
+            return _FakePool()
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.AuthNZ.database.get_db_pool",
+            _fake_get_db_pool,
+            raising=False,
+        )
+
+        enforcer = BillingEnforcer()
+        await enforcer._get_llm_tokens_month(org_id=1)
+
+        assert fake_conn.params is not None
+        assert len(fake_conn.params) == 4
+
+        ts_params = [fake_conn.params[1], fake_conn.params[3]]
+        for ts_param in ts_params:
+            assert isinstance(ts_param, str)
+            assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", ts_param)
 
     @pytest.mark.asyncio
     async def test_check_feature_access_enabled(self, enforcer):
@@ -434,26 +502,31 @@ class TestModuleFunctions:
     """Tests for module-level functions."""
 
     def test_billing_enabled_false_by_default(self, monkeypatch):
+
         """billing_enabled should be False by default."""
         monkeypatch.delenv("BILLING_ENABLED", raising=False)
         assert billing_enabled() is False
 
     def test_billing_enabled_true(self, monkeypatch):
+
         """billing_enabled should be True when env var is set."""
         monkeypatch.setenv("BILLING_ENABLED", "true")
         assert billing_enabled() is True
 
     def test_enforcement_enabled_true_by_default(self, monkeypatch):
+
         """enforcement_enabled should be True by default."""
         monkeypatch.delenv("LIMIT_ENFORCEMENT_ENABLED", raising=False)
         assert enforcement_enabled() is True
 
     def test_enforcement_enabled_false(self, monkeypatch):
+
         """enforcement_enabled should be False when env var is set."""
         monkeypatch.setenv("LIMIT_ENFORCEMENT_ENABLED", "false")
         assert enforcement_enabled() is False
 
     def test_get_billing_enforcer_singleton(self):
+
         """get_billing_enforcer should return singleton instance."""
         enforcer1 = get_billing_enforcer()
         enforcer2 = get_billing_enforcer()

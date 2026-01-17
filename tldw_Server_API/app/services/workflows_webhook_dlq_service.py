@@ -9,11 +9,7 @@ from urllib.parse import urlparse
 
 from loguru import logger
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
-
-try:
-    import httpx
-except Exception:  # pragma: no cover - httpx may not be present in minimal envs
-    httpx = None  # type: ignore
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
@@ -135,20 +131,27 @@ def _compute_next_backoff(attempts: int) -> int:
     return max(1, int(jitter))
 
 
-async def _attempt_delivery(client: httpx.AsyncClient, url: str, payload: Dict[str, Any], timeout: float) -> Tuple[bool, Optional[str]]:
+async def _attempt_delivery(url: str, payload: Dict[str, Any], timeout: float) -> Tuple[bool, Optional[str]]:
     try:
-        # Use centralized afetch to enforce egress and retries
-        from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
         policy = RetryPolicy()
-        resp = await afetch(method="POST", url=url, client=client, json=payload, timeout=timeout, retry=policy)
-        if resp.status_code < 400:
-            return True, None
-        # Consume body text safely
+        resp = await afetch(method="POST", url=url, json=payload, timeout=timeout, retry=policy)
         try:
-            body_text = resp.text[:200]
-        except Exception:
-            body_text = ""
-        return False, f"status={resp.status_code}: {body_text}"
+            if resp.status_code < 400:
+                return True, None
+            # Consume body text safely
+            try:
+                body_text = resp.text[:200]
+            except Exception:
+                body_text = ""
+            return False, f"status={resp.status_code}: {body_text}"
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
+            else:
+                close = getattr(resp, "close", None)
+                if callable(close):
+                    close()
     except Exception as e:  # network or other error
         return False, str(e)
 
@@ -165,10 +168,6 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
       WORKFLOWS_WEBHOOK_ALLOWLIST(_<TENANT>): comma-separated hostnames (supports '*.domain')
       WORKFLOWS_WEBHOOK_DENYLIST(_<TENANT>): comma-separated hostnames
     """
-    if httpx is None:
-        logger.warning("Workflows DLQ worker disabled: httpx not available")
-        return
-
     backend = get_content_backend_instance()
     db: WorkflowsDatabase = create_workflows_database(backend=backend)
 
@@ -181,123 +180,109 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
         f"Starting Workflows webhook DLQ worker (interval={interval}s, batch={batch}, timeout={timeout_sec}s, max_attempts={max_attempts})"
     )
 
-    # Prefer a monkeypatched httpx.AsyncClient (tests inject a dummy SimpleNamespace)
-    # and fall back to the standard client factory for production.
-    from tldw_Server_API.app.core.http_client import create_async_client
-    _client_ctx = None
-    try:
-        import types as _types
-        if isinstance(httpx, _types.SimpleNamespace) and hasattr(httpx, "AsyncClient"):
-            _client_ctx = httpx.AsyncClient()  # type: ignore[call-arg]
-    except Exception:
-        _client_ctx = None
-    if _client_ctx is None:
-        _client_ctx = create_async_client()
-
-    async with _client_ctx as client:  # type: ignore[call-arg]
-        while not stop_event.is_set():
+    while not stop_event.is_set():
+        try:
+            rows = db.list_webhook_dlq_due(limit=batch)
+        except Exception as e:
+            logger.warning(f"DLQ fetch failed: {e}")
             try:
-                rows = db.list_webhook_dlq_due(limit=batch)
-            except Exception as e:
-                logger.warning(f"DLQ fetch failed: {e}")
-                try:
-                    get_metrics_registry().increment(
-                        "app_exception_events_total",
-                        labels={"component": "workflows_dlq", "event": "fetch_failed"},
-                    )
-                except Exception:
-                    logger.debug("metrics increment failed for workflows_dlq fetch_failed")
-                rows = []
+                get_metrics_registry().increment(
+                    "app_exception_events_total",
+                    labels={"component": "workflows_dlq", "event": "fetch_failed"},
+                )
+            except Exception:
+                logger.debug("metrics increment failed for workflows_dlq fetch_failed")
+            rows = []
 
-            if not rows:
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=interval)
-                except asyncio.TimeoutError:
-                    pass
-                continue
+        if not rows:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+            continue
 
-            for r in rows:
-                if stop_event.is_set():
-                    break
-                dlq_id = int(r.get("id"))
-                tenant_id = str(r.get("tenant_id") or "default")
-                url = str(r.get("url") or "")
-                attempts = int(r.get("attempts") or 0)
-                # Mark that we are attempting a delivery now so callers observing mid-loop
-                # see attempts >= 1 even before backoff bookkeeping is applied.
-                current_attempt = attempts + 1
-                try:
-                    db.update_webhook_dlq_failure(
-                        dlq_id=dlq_id,
-                        last_error=r.get("last_error") or "",
-                        next_attempt_at_iso=None,
-                        attempts=current_attempt,
-                    )
-                except Exception:
-                    current_attempt = attempts + 1
-                try:
-                    body = json.loads(r.get("body_json") or "{}")
-                except Exception as e:
-                    logger.debug(f"DLQ: invalid body_json for id={dlq_id}: {e}")
-                    try:
-                        get_metrics_registry().increment(
-                            "app_warning_events_total",
-                            labels={"component": "workflows_dlq", "event": "bad_body_json"},
-                        )
-                    except Exception:
-                        logger.debug("metrics increment failed for workflows_dlq bad_body_json")
-                    body = {}
-
-                if not _host_allowed(url, tenant_id):
-                    logger.warning(f"DLQ drop (denied host): id={dlq_id} tenant={tenant_id} url={url}")
-                    db.update_webhook_dlq_failure(
-                        dlq_id=dlq_id,
-                        last_error="denied_by_policy",
-                        next_attempt_at_iso=None,
-                        attempts=current_attempt,
-                    )
-                    continue
-
-                try:
-                    ok, err = await _attempt_delivery(client, url, body, timeout=timeout_sec)
-                except Exception as e:
-                    ok, err = False, str(e)
-                if ok:
-                    try:
-                        db.delete_webhook_dlq(dlq_id=dlq_id)
-                    except Exception as _e:
-                        logger.warning(f"Failed to delete DLQ id={dlq_id} after success: {_e}")
-                        try:
-                            get_metrics_registry().increment(
-                                "app_warning_events_total",
-                                labels={"component": "workflows_dlq", "event": "delete_after_success_failed"},
-                            )
-                        except Exception:
-                            logger.debug("metrics increment failed for workflows_dlq delete_after_success_failed")
-                    continue
-
-                # Failure: compute next backoff
-                next_delay = _compute_next_backoff(current_attempt)
-                try:
-                    import datetime as _dt
-                    next_at = (_dt.datetime.utcnow() + _dt.timedelta(seconds=next_delay)).isoformat()
-                except Exception as e:
-                    logger.debug(f"DLQ: failed to compute next_attempt_at for id={dlq_id}: {e}")
-                    try:
-                        get_metrics_registry().increment(
-                            "app_warning_events_total",
-                            labels={"component": "workflows_dlq", "event": "next_attempt_compute_failed"},
-                        )
-                    except Exception:
-                        logger.debug("metrics increment failed for workflows_dlq next_attempt_compute_failed")
-                    next_at = None
-
+        for r in rows:
+            if stop_event.is_set():
+                break
+            dlq_id = int(r.get("id"))
+            tenant_id = str(r.get("tenant_id") or "default")
+            url = str(r.get("url") or "")
+            attempts = int(r.get("attempts") or 0)
+            # Mark that we are attempting a delivery now so callers observing mid-loop
+            # see attempts >= 1 even before backoff bookkeeping is applied.
+            current_attempt = attempts + 1
+            try:
                 db.update_webhook_dlq_failure(
                     dlq_id=dlq_id,
-                    last_error=err or "unknown_error",
-                    next_attempt_at_iso=next_at,
-                    attempts=attempts + 1,
+                    last_error=r.get("last_error") or "",
+                    next_attempt_at_iso=None,
+                    attempts=current_attempt,
                 )
-                logger.debug(f"DLQ retry scheduled in {next_delay}s (id={dlq_id} attempts={attempts+1}): {err}")
+            except Exception:
+                current_attempt = attempts + 1
+            try:
+                body = json.loads(r.get("body_json") or "{}")
+            except Exception as e:
+                logger.debug(f"DLQ: invalid body_json for id={dlq_id}: {e}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_warning_events_total",
+                        labels={"component": "workflows_dlq", "event": "bad_body_json"},
+                    )
+                except Exception:
+                    logger.debug("metrics increment failed for workflows_dlq bad_body_json")
+                body = {}
+
+            if not _host_allowed(url, tenant_id):
+                logger.warning(f"DLQ drop (denied host): id={dlq_id} tenant={tenant_id} url={url}")
+                db.update_webhook_dlq_failure(
+                    dlq_id=dlq_id,
+                    last_error="denied_by_policy",
+                    next_attempt_at_iso=None,
+                    attempts=current_attempt,
+                )
+                continue
+
+            try:
+                ok, err = await _attempt_delivery(url, body, timeout=timeout_sec)
+            except Exception as e:
+                ok, err = False, str(e)
+            if ok:
+                try:
+                    db.delete_webhook_dlq(dlq_id=dlq_id)
+                except Exception as _e:
+                    logger.warning(f"Failed to delete DLQ id={dlq_id} after success: {_e}")
+                    try:
+                        get_metrics_registry().increment(
+                            "app_warning_events_total",
+                            labels={"component": "workflows_dlq", "event": "delete_after_success_failed"},
+                        )
+                    except Exception:
+                        logger.debug("metrics increment failed for workflows_dlq delete_after_success_failed")
+                continue
+
+            # Failure: compute next backoff
+            next_delay = _compute_next_backoff(current_attempt)
+            try:
+                import datetime as _dt
+                next_at = (_dt.datetime.utcnow() + _dt.timedelta(seconds=next_delay)).isoformat()
+            except Exception as e:
+                logger.debug(f"DLQ: failed to compute next_attempt_at for id={dlq_id}: {e}")
+                try:
+                    get_metrics_registry().increment(
+                        "app_warning_events_total",
+                        labels={"component": "workflows_dlq", "event": "next_attempt_compute_failed"},
+                    )
+                except Exception:
+                    logger.debug("metrics increment failed for workflows_dlq next_attempt_compute_failed")
+                next_at = None
+
+            db.update_webhook_dlq_failure(
+                dlq_id=dlq_id,
+                last_error=err or "unknown_error",
+                next_attempt_at_iso=next_at,
+                attempts=attempts + 1,
+            )
+            logger.debug(f"DLQ retry scheduled in {next_delay}s (id={dlq_id} attempts={attempts+1}): {err}")
 
     logger.info("Workflows webhook DLQ worker stopped")

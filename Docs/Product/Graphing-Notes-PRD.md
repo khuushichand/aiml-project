@@ -118,8 +118,8 @@ Derived indices (computed at note save/update):
   - `center_note_id?`: UUID of focal note.
   - `radius`: integer, default 1; 2 allowed with stricter caps (see Limits). Expansion uses BFS with deterministic ordering.
   - `edge_types`: repeated or CSV; allowed values (enum): `manual`, `wikilink`, `backlink`, `tag_membership`, `source_membership` (default: all visible types).
-  - `tag?`, `source?`: filter to notes with a specific tag or source id.
-  - `time_range?`: `start`, `end` ISO-8601; applied to `note.updated_at` by default.
+  - `tag?`, `source?`: filter to notes with a specific tag or source identifier. Prefer canonical node-style ids (`tag:<tag_slug_or_id>`, `source:<source_id>`). For `tag`, bare values are accepted and normalized to `tag:<value>`; for `source`, the canonical `source:` id is required (labels are not unique).
+  - `time_range?`: `start`, `end` ISO-8601; applied to `note.updated_at` by default (soft-deleted notes are included unless explicitly filtered in a future option).
   - `time_range_field?`: `created_at` | `updated_at`; default `updated_at`.
   - `max_nodes?`, `max_edges?`, `max_degree?`: override within bounds.
   - `format?`: `default` | `cytoscape`.
@@ -189,9 +189,9 @@ Example (Cytoscape format):
 ### 9.2 Schemas (Pydantic)
 
 - `NoteLinkCreate`: `{ to_note_id: str, directed: bool = false, weight?: float, metadata?: dict }`
-- `NoteGraphRequest`: `{ center_note_id?: str, radius: int = 1, edge_types?: List[Literal["manual","wikilink","backlink","tag_membership","source_membership"]], tag?: str, source?: str, time_range?: {start?: datetime, end?: datetime}, time_range_field?: Literal["created_at","updated_at"] = "updated_at", max_nodes?: int, max_edges?: int, max_degree?: int, format?: Literal["default","cytoscape"], cursor?: str, allow_heavy?: bool }`
+- `NoteGraphRequest`: `{ center_note_id?: str, radius: int = 1, edge_types?: List[Literal["manual","wikilink","backlink","tag_membership","source_membership"]], tag?: str, source?: str, time_range?: {start?: datetime, end?: datetime}, time_range_field?: Literal["created_at","updated_at"] = "updated_at", max_nodes?: int, max_edges?: int, max_degree?: int, format?: Literal["default","cytoscape"], cursor?: str, allow_heavy?: bool }` where `tag` and `source` follow the identifier rules above.
 - `NoteGraphResponse`: `{ nodes: List[Node], edges: List[Edge], truncated: bool, truncated_by: List[str], has_more: bool, cursor?: str, limits: {...} }`
-- `Node`: `{ id: str, type: Literal["note","tag","source"], label: str, created_at?: str, degree?: int, tag_count?: int, primary_source_id?: str }`
+- `Node`: `{ id: str, type: Literal["note","tag","source"], label: str, created_at?: str, degree?: int, tag_count?: int, primary_source_id?: str, deleted?: bool }` (`deleted` applies to soft-deleted notes and defaults to false/omitted; clients should dim/mark deleted notes. Hard-deleted notes are not returned.)
 - `Edge`: `{ id: str, source: str, target: str, type: str, directed: bool, weight?: float, label?: str }`
 
 ### 9.3 Errors
@@ -246,6 +246,7 @@ Config keys (env → config.txt → defaults):
 ## 12. Security, AuthNZ, RBAC, Rate Limits
 
 - Per-user isolation: all queries scoped to the authenticated user; validate note ownership for manual link writes.
+- Soft-deleted notes are included in graph results by default and must be flagged on the node (e.g., `deleted=true`) so clients can dim/mark them. Hard-deleted notes are excluded.
 - Required privileges (add to `tldw_Server_API/Config_Files/privilege_catalog.yaml`):
   - `notes.graph.read` (standard rate limit class)
   - `notes.graph.write` (stricter rate limit class)
@@ -268,6 +269,7 @@ Token scopes:
 - Manual link creation from graph UI posts to `POST /notes/{note_id}/links`.
 - Layouts: client-managed (no server persistence). Provide `format=cytoscape` for direct rendering.
 - Interactions: click node → open note; double-click/command-click → expand neighbors; chips/toggles for edge types.
+- Deleted notes: client should dim/mark nodes with `deleted=true`; hard-deleted notes should not appear in results.
 
 ## 15. Dependencies & Integration Points
 
@@ -324,6 +326,7 @@ Resolution details:
 - Similarity edges (embedding-based kNN) with `NOTES_GRAPH_SIMILARITY_ENABLED`, `K`, and `THRESHOLD` settings.
 - LLM/heuristic link suggestions: `POST /api/v1/notes/graph/suggest` with strategy flag and rate limit `notes.graph.suggest`.
 - Optional NER/topic co-mention edges.
+- Explicit `include_deleted` flag to include/exclude soft-deleted notes (default remains include).
 - WebSocket for realtime upserts of nodes/edges.
 - Server-side saved views (filters/layout seeds) if demanded by users.
 
@@ -353,3 +356,41 @@ Resolution details:
 
 - Query parsing (edge_types)
   - Accept both repeated query params and CSV. Normalize to the enum set {manual, wikilink, backlink, tag_membership, source_membership}.
+
+## 22. Design Doc (Appended)
+
+### 22.1 Architecture Overview
+- Graph builder pipeline: load seed notes -> expand BFS (note-only expansion by default) -> attach tag/source nodes -> apply pruning -> emit nodes/edges.
+- Derived edges are computed on demand (wikilinks/backlinks, tag/source membership) and are not persisted.
+- Manual links are persisted in `note_edges` and merged into the graph as explicit edges.
+
+### 22.2 Data Model and Storage
+- `note_edges` table as defined in section 8 (per-user, explicit manual links only).
+- Canonicalize undirected links on insert to enforce uniqueness.
+- Soft-deleted notes remain addressable and must be flagged on node output; hard-deleted notes are excluded.
+
+### 22.3 API and Schemas
+- Endpoints and schemas as defined in section 9.
+- `tag` and `source` query params use canonical identifiers (`tag:<...>`, `source:<...>`); bare tag values are normalized.
+- `time_range` applies to note timestamps; soft-deleted notes are included by default.
+
+### 22.4 Graph Generation Details
+- Seed set:
+  - If `center_note_id` is provided, use it as the root.
+  - If `tag` or `source` filters are provided without a center, use the filtered note set as layer 0.
+  - If no seed is provided, return 400 to avoid full-graph scans.
+- Expansion:
+  - Expand only from note nodes in MVP; tag/source nodes do not fan out to keep radius bounded.
+  - Neighbor ordering is deterministic (notes by `updated_at DESC, id ASC`; tags/sources by `label ASC, id ASC`).
+- Pruning:
+  - Apply per-type caps and `max_degree` during expansion.
+  - Enforce global caps; emit truncation metadata and cursor on pruning.
+
+### 22.5 Caching and Performance
+- Cache graph results by query key for 10-30 seconds.
+- Track metrics: counts per edge type, pruning reason, latency.
+- Maintain hard caps and `allow_heavy` gating.
+
+### 22.6 UX Notes
+- Clients should dim/mark nodes with `deleted=true`; hard-deleted notes are not returned.
+- Clients can coalesce multigraph edges for rendering if desired.

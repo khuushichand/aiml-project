@@ -18,6 +18,8 @@ def _z(dt: datetime) -> str:
 
 
 def test_sqlite_idempotency_filters_accept_z_suffix(tmp_path) -> None:
+
+
     db_path = tmp_path / "sandbox_store.db"
     store = SQLiteStore(db_path=str(db_path), idem_ttl_sec=600)
 
@@ -78,6 +80,8 @@ def test_sqlite_idempotency_filters_invalid_inputs_raise(tmp_path, bad) -> None:
 
 
 def test_memory_idempotency_filters_accept_z_suffix() -> None:
+
+
     store = InMemoryStore(idem_ttl_sec=600)
 
     # Insert a sample idempotency record

@@ -64,6 +64,29 @@ Settings Reference
   - Default: 70
   - Example: `.env: AUDIT_HIGH_RISK_SCORE=80`
 
+Storage & Shared Mode
+---------------------
+
+- AUDIT_STORAGE_MODE
+  - Type: str
+  - Purpose: Storage mode selector (`per_user` default, `shared` for shared DB + tenant scoping).
+  - Example: `.env: AUDIT_STORAGE_MODE=shared`
+
+- AUDIT_SHARED_DB_PATH
+  - Type: str (path)
+  - Purpose: Override shared audit DB path (default `Databases/audit_shared.db`).
+  - Example: `.env: AUDIT_SHARED_DB_PATH=/var/lib/tldw/audit_shared.db`
+
+- AUDIT_STORAGE_ROLLBACK
+  - Type: bool
+  - Purpose: Force per-user behavior even when shared mode is configured.
+  - Example: `.env: AUDIT_STORAGE_ROLLBACK=true`
+
+- AUDIT_ETL_USER_SUBPATH
+  - Type: str
+  - Purpose: Optional subpath appended to `USER_DB_BASE_DIR` for migration discovery.
+  - Example: `.env: AUDIT_ETL_USER_SUBPATH=nested_users`
+
 Notes
 -----
 - Settings are read via the project’s `settings` mapping (LazySettings). They can be set in `.env` or programmatically in tests.

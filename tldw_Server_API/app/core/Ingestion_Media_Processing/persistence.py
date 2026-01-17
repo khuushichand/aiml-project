@@ -12,7 +12,6 @@ import hashlib
 from pathlib import Path as FilePath
 
 import aiofiles
-import httpx
 from fastapi import BackgroundTasks, HTTPException, Path, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
@@ -25,6 +24,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import DownloadError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
     prepare_common_options,
@@ -52,6 +52,13 @@ def _ensure_warnings_list(result: Dict[str, Any]) -> List[str]:
         warnings = []
         result["warnings"] = warnings
     return warnings
+
+
+def _is_httpx_request_error(exc: Exception) -> bool:
+    module = getattr(exc.__class__, "__module__", "")
+    if not module.startswith("httpx"):
+        return False
+    return exc.__class__.__name__ in {"HTTPStatusError", "RequestError"}
 
 
 def _compute_source_hash_safe(
@@ -500,8 +507,43 @@ async def add_media_orchestrate(
             # Map input sources back to original refs (URL or original filename)
             source_to_ref_map: Dict[str, str] = {src: src for src in url_list}
             source_to_ref_map.update(
-                {str(pf["path"]): pf["original_filename"] for pf in saved_files_info}
+                {
+                    str(path): pf["original_filename"]
+                    for pf in saved_files_info
+                    if (path := pf.get("path"))
+                }
             )
+            for pf in saved_files_info:
+                path = pf.get("path")
+                if not path:
+                    continue
+                try:
+                    resolved_path = resolve_safe_local_path(
+                        FilePath(path),
+                        temp_dir_path,
+                    )
+                    if resolved_path is None:
+                        logger.warning(
+                            "Skipping source path %s outside temp dir %s",
+                            path,
+                            temp_dir_path,
+                        )
+                        continue
+                except OSError as exc:
+                    logger.warning(
+                        "Skipping source path %s due to resolve error: %s",
+                        path,
+                        exc,
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping source path %s due to unexpected resolve error: %s",
+                        path,
+                        exc,
+                    )
+                    continue
+                source_to_ref_map[str(resolved_path)] = pf["original_filename"]
 
             # --- 6. Process Media based on Type ---
             db_path_for_workers = db.db_path_str
@@ -549,8 +591,55 @@ async def add_media_orchestrate(
                     )
                     for source in all_valid_input_sources
                 ]
-                individual_results = await asyncio.gather(*tasks)
-                results.extend(individual_results)
+                individual_results = await asyncio.gather(
+                    *tasks,
+                    return_exceptions=True,
+                )
+                for source, result in zip(all_valid_input_sources, individual_results):
+                    if isinstance(result, Exception):
+                        ref_info = source_to_ref_map.get(source, source)
+                        input_ref = ref_info[0] if isinstance(ref_info, tuple) else ref_info
+                        detail = getattr(result, "detail", None)
+                        status_code = getattr(result, "status_code", None)
+                        detail_text = str(detail) if detail else str(result)
+                        if status_code:
+                            error_msg = (
+                                f"Processing failed (HTTP {status_code}): {detail_text}"
+                            )
+                        else:
+                            error_msg = (
+                                f"Processing failed: {type(result).__name__}: {detail_text}"
+                            )
+                        logger.error(
+                            "Document-like processing failed for %s: %s",
+                            source,
+                            error_msg,
+                            exc_info=True,
+                        )
+                        results.append(
+                            {
+                                "status": "Error",
+                                "input_ref": input_ref,
+                                "processing_source": source,
+                                "media_type": form_data.media_type,
+                                "metadata": {},
+                                "content": None,
+                                "transcript": None,
+                                "segments": None,
+                                "chunks": None,
+                                "analysis": None,
+                                "summary": None,
+                                "analysis_details": None,
+                                "error": error_msg,
+                                "warnings": None,
+                                "db_id": None,
+                                "db_message": "DB operation skipped (processing failed).",
+                                "message": None,
+                                "media_uuid": None,
+                            }
+                        )
+                    else:
+                        results.append(result)
 
             # --- 6a. Store Original Files if Requested ---
             # For PDFs and documents, save originals to permanent storage when keep_original_file=True
@@ -632,21 +721,33 @@ async def add_media_orchestrate(
                             handle = open_safe_local_path(source_file, temp_dir_path, mode="rb")
                             if handle is None:
                                 raise InputError("Original file path rejected outside temp directory.")
-                            with handle:
-                                file_bytes = handle.read()
+                            try:
+                                # Compute checksum without loading the entire file into memory
+                                hasher = hashlib.sha256()
+                                while True:
+                                    chunk = handle.read(1024 * 1024)
+                                    if not chunk:
+                                        break
+                                    hasher.update(chunk)
+                                checksum = hasher.hexdigest()
+                                try:
+                                    handle.seek(0)
+                                except Exception:
+                                    raise InputError("Original file stream is not seekable for storage.")
 
-                            # Compute checksum
-                            import hashlib
-                            checksum = hashlib.sha256(file_bytes).hexdigest()
-
-                            # Store in permanent storage
-                            storage_path = await storage.store(
-                                user_id=user_id_str,
-                                media_id=media_id,
-                                filename="original" + source_file.suffix,
-                                data=file_bytes,
-                                mime_type=mime_type,
-                            )
+                                # Store in permanent storage
+                                storage_path = await storage.store(
+                                    user_id=user_id_str,
+                                    media_id=media_id,
+                                    filename="original" + source_file.suffix,
+                                    data=handle,
+                                    mime_type=mime_type,
+                                )
+                            finally:
+                                try:
+                                    handle.close()
+                                except Exception:
+                                    logger.debug("Failed to close original file handle for %s", source_file)
 
                             # Insert database record
                             db.insert_media_file(
@@ -701,12 +802,16 @@ async def add_media_orchestrate(
                             )
 
                             media_content = await get_media_content(media_id, db)
+                            embedding_settings = settings.get("EMBEDDING_CONFIG", {}) or {}
                             embedding_model = (
                                 form_data.embedding_model
-                                or "Qwen/Qwen3-Embedding-4B-GGUF"
+                                or embedding_settings.get("embedding_model")
+                                or "sentence-transformers/all-MiniLM-L6-v2"
                             )
                             embedding_provider = (
-                                form_data.embedding_provider or "huggingface"
+                                form_data.embedding_provider
+                                or embedding_settings.get("embedding_provider")
+                                or "huggingface"
                             )
 
                             result_emb = await generate_embeddings_for_media(
@@ -1012,19 +1117,10 @@ async def persist_primary_av_item(
                     max_size=_opts.get("max_size") or 500,
                     overlap=_opts.get("overlap") or 50,
                 )
-                _kind_map = {
-                    "paragraph": "text",
-                    "list_unordered": "list",
-                    "list_ordered": "list",
-                    "code_fence": "code",
-                    "table_md": "table",
-                    "header_line": "heading",
-                    "header_atx": "heading",
-                }
                 chunks_for_sql = []
                 for _it in _flat:
                     _md = _it.get("metadata") or {}
-                    _ctype = _kind_map.get(str(_md.get("paragraph_kind") or "").lower(), "text")
+                    _ctype = _ck.normalize_chunk_type(_md.get("chunk_type") or _md.get("paragraph_kind")) or "text"
                     _small: Dict[str, Any] = {}
                     if _md.get("ancestry_titles"):
                         _small["ancestry_titles"] = _md.get("ancestry_titles")
@@ -1051,12 +1147,23 @@ async def persist_primary_av_item(
                 for ec in extra_chunks_any:
                     if not isinstance(ec, dict) or "text" not in ec:
                         continue
+                    raw_chunk_type = ec.get("chunk_type") or "vlm"
+                    try:
+                        normalized_chunk_type = _ck.normalize_chunk_type(raw_chunk_type)  # type: ignore[name-defined]
+                    except Exception:
+                        try:
+                            from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
+                                Chunker as _Chunker,
+                            )
+                            normalized_chunk_type = _Chunker.normalize_chunk_type(raw_chunk_type)
+                        except Exception:
+                            normalized_chunk_type = raw_chunk_type
                     chunks_for_sql.append(
                         {
                             "text": ec.get("text", ""),
                             "start_char": ec.get("start_char"),
                             "end_char": ec.get("end_char"),
-                            "chunk_type": ec.get("chunk_type") or "vlm",
+                            "chunk_type": normalized_chunk_type or raw_chunk_type,
                             "metadata": ec.get("metadata")
                             if isinstance(ec.get("metadata"), dict)
                             else {},
@@ -1134,6 +1241,7 @@ async def persist_primary_av_item(
                     provider=provider_name,
                     model=provider_model or str(transcription_model_used),
                 )
+                serialized_artifact = json.dumps(artifact, default=str)
 
                 def _upsert_worker() -> None:
                     db = _MediaDBForStt(db_path=db_path, client_id=client_id)
@@ -1141,7 +1249,7 @@ async def persist_primary_av_item(
                         upsert_transcript(
                             db_instance=db,
                             media_id=int(media_id_result),
-                            transcription=artifact["text"],
+                            transcription=serialized_artifact,
                             whisper_model=artifact["metadata"]["model"],
                         )
                     finally:
@@ -1266,6 +1374,7 @@ async def process_batch_media(
     db_path: str,
     client_id: str,
     temp_dir: FilePath,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Core implementation of the audio/video batch processing helper used by `/media/add`.
@@ -1280,6 +1389,14 @@ async def process_batch_media(
     source_hash_by_ref: Dict[str, List[str]] = {}
     source_hash_by_source: Dict[str, str] = {}
     source_hash_column_available: Optional[bool] = None
+
+    def _is_cancelled() -> bool:
+        if cancel_check is None:
+            return False
+        try:
+            return bool(cancel_check())
+        except Exception:
+            return False
 
     logger.debug(
         "Starting pre-check for %d %s items...",
@@ -1551,6 +1668,38 @@ async def process_batch_media(
         logging.info("No items require processing after pre-checks.")
         return combined_results
 
+    if _is_cancelled():
+        for item in items_to_process:
+            ref_info = source_to_ref_map.get(item)
+            if isinstance(ref_info, tuple):
+                err_input_ref = ref_info[0]
+            elif isinstance(ref_info, str):
+                err_input_ref = ref_info
+            else:
+                err_input_ref = item
+            combined_results.append(
+                {
+                    "status": "Cancelled",
+                    "input_ref": err_input_ref,
+                    "processing_source": item,
+                    "media_type": media_type,
+                    "error": "Cancelled by user",
+                    "metadata": {},
+                    "content": None,
+                    "transcript": None,
+                    "segments": None,
+                    "chunks": None,
+                    "analysis": None,
+                    "summary": None,
+                    "analysis_details": None,
+                    "warnings": None,
+                    "db_id": None,
+                    "db_message": "DB operation skipped (cancelled).",
+                    "media_uuid": None,
+                }
+            )
+        return combined_results
+
     processing_output: Optional[Dict[str, Any]] = None
     try:
         if str(media_type) == "video":
@@ -1816,6 +1965,15 @@ async def process_batch_media(
             metadata.setdefault("source_hash", source_hash)
             process_result["metadata"] = metadata
 
+        if _is_cancelled():
+            process_result["status"] = "Cancelled"
+            process_result["error"] = "Cancelled by user"
+            process_result["db_message"] = "DB operation skipped (cancelled)."
+            process_result["db_id"] = None
+            process_result["media_uuid"] = None
+            final_batch_results.append(process_result)
+            continue
+
         claims_context: Optional[Dict[str, Any]] = None
         if process_result.get("status") in ("Success", "Warning"):
             try:
@@ -1901,6 +2059,7 @@ async def process_document_like_item(
     db_path: str,
     client_id: str,
     user_id: Optional[int] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """
     Core helper that handles download/prep, processing, and DB persistence for
@@ -2117,23 +2276,18 @@ async def process_document_like_item(
 
             final_result["processing_source"] = processing_source
 
-    except (
-        httpx.HTTPStatusError,
-        httpx.RequestError,
-        IOError,
-        OSError,
-        FileNotFoundError,
-    ) as prep_err:
+    except Exception as prep_err:
+        error_detail = str(getattr(prep_err, "detail", prep_err))
         logging.error(
             "File preparation/download error for %s: %s",
             item_input_ref,
-            prep_err,
+            error_detail,
             exc_info=True,
         )
         final_result.update(
             {
                 "status": "Error",
-                "error": f"File preparation/download failed: {prep_err}",
+                "error": f"File preparation/download failed: {error_detail}",
             },
         )
         if not final_result.get("warnings"):
@@ -2508,12 +2662,41 @@ async def process_document_like_item(
     final_result["input_ref"] = item_input_ref
     final_result["media_type"] = media_type
 
+    if cancel_check is not None:
+        try:
+            if cancel_check():
+                final_result.update(
+                    {
+                        "status": "Cancelled",
+                        "error": "Cancelled by user",
+                        "db_message": "DB operation skipped (cancelled).",
+                        "db_id": None,
+                        "media_uuid": None,
+                    },
+                )
+                if not final_result.get("warnings"):
+                    final_result["warnings"] = None
+                return final_result
+        except Exception:
+            pass
+
     if final_result.get("status") in ["Success", "Warning"]:
-        claims_context = await extract_claims_if_requested(
-            final_result,
-            form_data,
-            loop,
-        )
+        try:
+            claims_context = await extract_claims_if_requested(
+                final_result,
+                form_data,
+                loop,
+            )
+        except Exception as claims_err:
+            logger.debug(
+                "Claim extraction failed for %s: %s",
+                item_input_ref,
+                claims_err,
+            )
+            _ensure_warnings_list(final_result).append(
+                f"Claim extraction failed: {claims_err}",
+            )
+            claims_context = None
         await persist_doc_item_and_children(
             final_result=final_result,
             form_data=form_data,
@@ -2747,21 +2930,12 @@ async def persist_doc_item_and_children(
                         max_size=opts.get("max_size") or 500,
                         overlap=opts.get("overlap") or 50,
                     )
-                    kind_map = {
-                        "paragraph": "text",
-                        "list_unordered": "list",
-                        "list_ordered": "list",
-                        "code_fence": "code",
-                        "table_md": "table",
-                        "header_line": "heading",
-                        "header_atx": "heading",
-                    }
                     chunks_for_sql = []
                     for item in flat_chunks:
                         meta = item.get("metadata") or {}
-                        chunk_type = kind_map.get(
-                            str(meta.get("paragraph_kind") or "").lower(), "text"
-                        )
+                        chunk_type = chunker.normalize_chunk_type(
+                            meta.get("chunk_type") or meta.get("paragraph_kind")
+                        ) or "text"
                         small_meta: Dict[str, Any] = {}
                         if meta.get("ancestry_titles"):
                             small_meta["ancestry_titles"] = meta.get("ancestry_titles")
@@ -2909,24 +3083,12 @@ async def persist_doc_item_and_children(
                                                     or 50,
                                                 )
                                             )
-                                            kind_map_child = {
-                                                "paragraph": "text",
-                                                "list_unordered": "list",
-                                                "list_ordered": "list",
-                                                "code_fence": "code",
-                                                "table_md": "table",
-                                                "header_line": "heading",
-                                                "header_atx": "heading",
-                                            }
                                             child_chunks_for_sql = []
                                             for item in flat_child:
                                                 meta = item.get("metadata") or {}
-                                                chunk_type = kind_map_child.get(
-                                                    str(
-                                                        meta.get("paragraph_kind") or ""
-                                                    ).lower(),
-                                                    "text",
-                                                )
+                                                chunk_type = chunker_child.normalize_chunk_type(
+                                                    meta.get("chunk_type") or meta.get("paragraph_kind")
+                                                ) or "text"
                                                 small_meta: Dict[str, Any] = {}
                                                 if meta.get("ancestry_titles"):
                                                     small_meta["ancestry_titles"] = meta.get(
@@ -3160,22 +3322,12 @@ async def persist_doc_item_and_children(
                                                 overlap=opts_child.get("overlap") or 50,
                                             )
                                         )
-                                        kind_map_child = {
-                                            "paragraph": "text",
-                                            "list_unordered": "list",
-                                            "list_ordered": "list",
-                                            "code_fence": "code",
-                                            "table_md": "table",
-                                            "header_line": "heading",
-                                            "header_atx": "heading",
-                                        }
                                         child_chunks_for_sql = []
                                         for item in flat_child:
                                             meta = item.get("metadata") or {}
-                                            chunk_type = kind_map_child.get(
-                                                str(meta.get("paragraph_kind") or "").lower(),
-                                                "text",
-                                            )
+                                            chunk_type = chunker_child.normalize_chunk_type(
+                                                meta.get("chunk_type") or meta.get("paragraph_kind")
+                                            ) or "text"
                                             small_meta: Dict[str, Any] = {}
                                             if meta.get("ancestry_titles"):
                                                 small_meta["ancestry_titles"] = meta.get(

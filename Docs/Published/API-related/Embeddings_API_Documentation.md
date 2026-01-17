@@ -354,8 +354,9 @@ print(decoded)  # "Hello, world!"
 ### Example: Using Token Arrays with the API
 
 ```python
-import requests
 import tiktoken
+import json
+from urllib.request import Request, urlopen
 
 # Prepare token arrays
 encoding = tiktoken.encoding_for_model("text-embedding-3-small")
@@ -363,17 +364,23 @@ texts = ["Hello, world!", "This is a test", "of the embeddings API"]
 token_arrays = [encoding.encode(text) for text in texts]
 
 # Send to API
-response = requests.post(
+payload = {
+    "input": token_arrays,
+    "model": "text-embedding-3-small",
+    "dimensions": 512,
+}
+req = Request(
     "http://localhost:8000/api/v1/embeddings",
-    json={
-        "input": token_arrays,
-        "model": "text-embedding-3-small",
-        "dimensions": 512
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer YOUR_JWT_OR_API_KEY",
+        "X-API-KEY": "YOUR_API_KEY_IF_SINGLE_USER",
     },
-    headers={"Authorization": "Bearer YOUR_JWT_OR_API_KEY", "X-API-KEY": "YOUR_API_KEY_IF_SINGLE_USER"}
+    method="POST",
 )
-
-embeddings = response.json()["data"]
+with urlopen(req) as resp:
+    embeddings = json.loads(resp.read().decode("utf-8"))["data"]
 ```
 
 ## Errors
@@ -471,16 +478,28 @@ This API is OpenAI-compatible. In most cases you can:
 ### Python Client Example
 
 ```python
-import requests
+import json
 from typing import List, Union
+from urllib.request import Request, urlopen
 
 class EmbeddingsClient:
     def __init__(self, base_url: str, api_key: str):
-        self.base_url = base_url
+        self.base_url = base_url.rstrip("/")
         # For single-user mode, set X-API-KEY. For multi-user, set Authorization: Bearer <JWT>.
         # Choose exactly one of the lines below based on your deployment:
-        # self.headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
-        # self.headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        # self.headers = {"Content-Type": "application/json", "X-API-KEY": api_key}
+        # self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+        self.headers = {"Content-Type": "application/json"}
+
+    def _request_json(self, payload):
+        req = Request(
+            f"{self.base_url}/api/v1/embeddings",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self.headers,
+            method="POST",
+        )
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
     def create_embeddings(
         self,
@@ -498,14 +517,7 @@ class EmbeddingsClient:
         if dimensions:
             payload["dimensions"] = dimensions
 
-        response = requests.post(
-            f"{self.base_url}/api/v1/embeddings",
-            json=payload,
-            headers=self.headers
-        )
-        response.raise_for_status()
-
-        data = response.json()
+        data = self._request_json(payload)
         return [item["embedding"] for item in data["data"]]
 
 # Usage

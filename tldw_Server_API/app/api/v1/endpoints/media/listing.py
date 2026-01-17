@@ -18,20 +18,25 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import (
     get_media_db_for_user,
     try_get_media_db_for_user,
 )
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from tldw_Server_API.app.api.v1.schemas.media_request_models import SearchRequest
 from tldw_Server_API.app.api.v1.schemas.media_response_models import (
     MediaListItem,
     MediaListResponse,
 )
 from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
+from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.DB_Manager import get_paginated_files
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    get_paginated_files,
+    get_paginated_trash_files,
+)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     DatabaseError,
     InputError,
     MediaDatabase,
     fetch_keywords_for_media_batch,
+    permanently_delete_item,
 )
 from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
 
@@ -235,6 +240,240 @@ async def list_media_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list media",
+        ) from exc
+
+
+@router.get(
+    "/trash",
+    summary="List trashed media items",
+)
+async def list_media_trash_endpoint(
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_request_user),
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    results_per_page: int = Query(10, ge=1, description="Items per page"),
+    include_keywords: bool = Query(
+        False,
+        description="Include associated keywords for each media item.",
+    ),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    if_none_match: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """
+    Return paginated list of trashed media items (basic fields only).
+    """
+    try:
+        try:
+            if _is_test_mode():
+                db_path = getattr(db, "db_path_str", getattr(db, "db_path", "?"))
+                headers = getattr(request, "headers", {}) or {}
+                logger.warning(
+                    "TEST_MODE: list_media_trash db_path={} user_id={} auth_headers="
+                    "{{'X-API-KEY': {{'present': {}}}}, 'Authorization': {{'present': {}}}}}",
+                    db_path,
+                    getattr(current_user, "id", "?"),
+                    bool(headers.get("X-API-KEY")),
+                    bool(headers.get("authorization")),
+                )
+        except Exception:
+            pass
+
+        rows, total_pages, current_page, total_items = get_paginated_trash_files(
+            db_instance=db,
+            page=page,
+            results_per_page=results_per_page,
+        )
+
+        try:
+            if _is_test_mode():
+                logger.warning(
+                    "TEST_MODE: list_media_trash summary page={} rpp={} total_items={} rows_returned={}",
+                    page,
+                    results_per_page,
+                    total_items,
+                    len(rows or []),
+                )
+                if response is not None:
+                    db_path = getattr(db, "db_path_str", getattr(db, "db_path", "?"))
+                    try:
+                        response.headers["X-TLDW-DB-Path"] = str(db_path)
+                        response.headers["X-TLDW-List-Total"] = str(int(total_items))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        base_items: List[Dict[str, Any]] = []
+        media_ids: List[int] = []
+        skipped_count = 0
+        for r in rows or []:
+            rid_raw = r["id"] if isinstance(r, dict) else r[0]
+            title = r["title"] if isinstance(r, dict) else r[1]
+            rtype = r["type"] if isinstance(r, dict) else r[2]
+            try:
+                rid = int(rid_raw)
+            except (TypeError, ValueError):
+                logger.error("Skipping trashed media row with invalid id: {}", rid_raw)
+                skipped_count += 1
+                continue
+            media_ids.append(rid)
+            base_items.append(
+                {
+                    "id": rid,
+                    "title": str(title),
+                    "type": str(rtype),
+                }
+            )
+
+        keywords_map: Dict[int, List[str]] = {}
+        keywords_available: Optional[bool] = None
+        if include_keywords and media_ids:
+            try:
+                keywords_map = fetch_keywords_for_media_batch(
+                    media_ids=media_ids,
+                    db_instance=db,
+                )
+                keywords_available = True
+            except (TypeError, InputError, DatabaseError) as exc:
+                logger.error(
+                    "Error fetching keywords for media trash list page={} rpp={}: {}",
+                    page,
+                    results_per_page,
+                    exc,
+                    exc_info=True,
+                )
+                keywords_map = {}
+                keywords_available = False
+            except Exception as exc:  # pragma: no cover
+                logger.error(
+                    "Unexpected error fetching keywords for media trash list page={} rpp={}: {}",
+                    page,
+                    results_per_page,
+                    exc,
+                    exc_info=True,
+                )
+                keywords_map = {}
+                keywords_available = False
+        elif include_keywords:
+            keywords_available = True
+
+        items: List[Dict[str, Any]] = []
+        for item in base_items:
+            mid = item["id"]
+            base_payload: Dict[str, Any] = {
+                "id": mid,
+                "title": item["title"],
+                "type": item["type"],
+                "url": f"/api/v1/media/{mid}",
+            }
+            if include_keywords:
+                base_payload["keywords"] = keywords_map.get(mid, [])
+            items.append(base_payload)
+
+        payload: Dict[str, Any] = {
+            "items": items,
+            "pagination": {
+                "page": int(current_page),
+                "results_per_page": int(results_per_page),
+                "total_pages": int(total_pages),
+                "total_items": int(total_items),
+            },
+        }
+
+        if include_keywords and keywords_available is not None:
+            payload["keywords_available"] = keywords_available
+
+        if skipped_count > 0:
+            payload["skipped_count"] = skipped_count
+
+        etag = generate_etag(payload)
+        response.headers["ETag"] = etag
+        if is_not_modified(etag, if_none_match):
+            response.status_code = status.HTTP_304_NOT_MODIFIED
+            return {}
+
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error listing trashed media: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list trashed media",
+        ) from exc
+
+
+@router.post(
+    "/trash/empty",
+    summary="Empty media trash",
+    dependencies=[
+        Depends(require_permissions(MEDIA_DELETE)),
+        Depends(rbac_rate_limit("media.delete")),
+    ],
+)
+async def empty_media_trash_endpoint(
+    response: Response,
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
+    """
+    Permanently delete all items currently in trash.
+    """
+    try:
+        cursor = db.execute_query(
+            "SELECT id FROM Media WHERE deleted = 0 AND is_trash = 1"
+        )
+        rows = cursor.fetchall()
+        media_ids = [row["id"] for row in rows] if rows else []
+
+        deleted_count = 0
+        failed_ids: List[int] = []
+        for media_id in media_ids:
+            try:
+                deleted = permanently_delete_item(db, int(media_id))
+                if deleted:
+                    deleted_count += 1
+                else:
+                    failed_ids.append(int(media_id))
+            except Exception as exc:
+                logger.error(
+                    "Error permanently deleting trashed media {}: {}",
+                    media_id,
+                    exc,
+                    exc_info=True,
+                )
+                failed_ids.append(int(media_id))
+
+        remaining_count = -1
+        try:
+            count_cursor = db.execute_query(
+                "SELECT COUNT(*) AS total_items FROM Media WHERE deleted = 0 AND is_trash = 1"
+            )
+            count_row = count_cursor.fetchone()
+            remaining_count = count_row["total_items"] if count_row else 0
+        except Exception:
+            pass
+
+        logger.warning(
+            "User {} emptied trash: deleted_count={} failed_count={} remaining_count={}",
+            getattr(current_user, "id", "?"),
+            deleted_count,
+            len(failed_ids),
+            remaining_count,
+        )
+
+        return {
+            "deleted_count": deleted_count,
+            "failed_count": len(failed_ids),
+            "failed_ids": failed_ids,
+            "remaining_count": remaining_count,
+        }
+    except Exception as exc:
+        logger.error("Error emptying media trash: {}", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to empty media trash",
         ) from exc
 
 
@@ -534,7 +773,6 @@ async def get_by_identifier(
     summary="Search Media Items",
     response_model=MediaListResponse,
 )
-@limiter.limit(_SEARCH_RATE_LIMIT)
 async def search_media_items(
     request: Request,
     search_params: SearchRequest = Body(...),

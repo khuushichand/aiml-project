@@ -9,6 +9,7 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
 
 
 def test_convert_placeholders_ignores_single_quoted_literals():
+
     sql = "SELECT '? literal ?' as txt, id FROM table WHERE id = ? AND note = '?keep?'"
     converted = convert_sqlite_placeholders_to_postgres(sql)
     # Only the WHERE id = ? should be converted
@@ -18,6 +19,7 @@ def test_convert_placeholders_ignores_single_quoted_literals():
 
 
 def test_convert_placeholders_ignores_double_quoted_identifiers_or_literals():
+
     sql = 'SELECT id, "weird?col" FROM "my?table" WHERE id = ?'
     converted = convert_sqlite_placeholders_to_postgres(sql)
     assert '"weird?col"' in converted
@@ -26,6 +28,7 @@ def test_convert_placeholders_ignores_double_quoted_identifiers_or_literals():
 
 
 def test_prepare_backend_statement_positional_params():
+
     sql = "UPDATE users SET name = ? WHERE id = ?"
     params = ("Alice", 7)
     converted, prepared = prepare_backend_statement(BackendType.POSTGRESQL, sql, params)
@@ -34,11 +37,10 @@ def test_prepare_backend_statement_positional_params():
 
 
 def test_prepare_backend_many_statement_batch_params():
+
     sql = "INSERT INTO items (sku, qty) VALUES (?, ?)"
     params_list = [("A", 1), ("B", 2)]
-    converted, prepared_list = prepare_backend_many_statement(
-        BackendType.POSTGRESQL, sql, params_list
-    )
+    converted, prepared_list = prepare_backend_many_statement(BackendType.POSTGRESQL, sql, params_list)
     assert converted == "INSERT INTO items (sku, qty) VALUES (%s, %s)"
     assert prepared_list == params_list
 
@@ -47,7 +49,8 @@ def test_prepare_backend_many_statement_batch_params():
     pytest.importorskip(
         "tldw_Server_API.app.core.DB_Management.backends.postgresql_backend",
         reason="psycopg not available",
-    ) is None,
+    )
+    is None,
     reason="psycopg not available",
 )
 def test_postgres_backend_prepare_query_no_replace_inside_literals():

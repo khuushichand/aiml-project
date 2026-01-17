@@ -10,6 +10,8 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
 
 def _make_app() -> FastAPI:
+
+
     app = FastAPI()
 
     @app.get("/ps/me")
@@ -60,6 +62,8 @@ def test_get_prompt_studio_user_header_forwarding(monkeypatch, headers, expected
 
 
 def test_get_prompt_studio_user_unauthenticated_401(monkeypatch):
+
+
     async def fake_get_request_user(*_args, **_kwargs):
         raise RuntimeError("should_not_be_called")
 

@@ -10,17 +10,15 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 
 
 def _prefer_httpx_in_tests() -> bool:
-    try:
-        import httpx  # type: ignore
-        cls = getattr(httpx, "Client", None)
-        mod = getattr(cls, "__module__", "") or ""
-        name = getattr(cls, "__name__", "") or ""
-        return ("tests" in mod) or name.startswith("_Fake")
-    except Exception:
-        return False
+    return bool(os.getenv("PYTEST_CURRENT_TEST"))
+
+
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
@@ -53,6 +51,9 @@ class OpenRouterAdapter(ChatProvider):
         return os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
     def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip()
         try:
             cfg = (request or {}).get("app_config") or {}
             or_cfg = cfg.get("openrouter_api") or {}
@@ -154,12 +155,15 @@ class OpenRouterAdapter(ChatProvider):
         return payload
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key, request)
             url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = False
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
@@ -173,12 +177,15 @@ class OpenRouterAdapter(ChatProvider):
         raise RuntimeError("OpenRouterAdapter native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key, request)
             url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = True
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
@@ -209,8 +216,7 @@ class OpenRouterAdapter(ChatProvider):
         return self.chat(request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
-        gen = self.stream(request, timeout=timeout)
-        for item in gen:
+        async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
@@ -218,11 +224,13 @@ class OpenRouterAdapter(ChatProvider):
 
         OpenRouter is OpenAI-compatible; error bodies often match {error: {message, type}}.
         """
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ())):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+            log_http_400_body,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -231,12 +239,13 @@ class OpenRouterAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             detail = None
             if isinstance(body, dict) and isinstance(body.get("error"), dict):
                 eobj = body["error"]
@@ -244,10 +253,7 @@ class OpenRouterAdapter(ChatProvider):
                 typ = (eobj.get("type") or "").strip()
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):

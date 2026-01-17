@@ -6,7 +6,9 @@ from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import MediaDB
 
 
 def build_content_and_chunks():
-    # Minimal two-section document with one paragraph each
+
+
+     # Minimal two-section document with one paragraph each
     content = (
         "# Introduction\n"
         "Intro para one.\n\n"
@@ -40,7 +42,9 @@ def build_content_and_chunks():
 
 
 def test_structure_index_write_and_lookup(monkeypatch):
-    # Enable structure index population
+
+
+     # Enable structure index population
     monkeypatch.setenv("RAG_ENABLE_STRUCTURE_INDEX", "1")
     db = MediaDatabase(db_path=":memory:", client_id="test")
 

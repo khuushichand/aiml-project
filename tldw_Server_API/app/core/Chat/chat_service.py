@@ -18,6 +18,8 @@ import asyncio
 import time
 import json as _json
 import os
+import inspect
+import re
 from pathlib import Path
 from functools import lru_cache
 
@@ -27,16 +29,18 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
     get_or_create_conversation,
 )
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
-from tldw_Server_API.app.core.Character_Chat.modules.character_utils import sanitize_sender_name
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    map_sender_to_role,
+    sanitize_sender_name,
+)
+from tldw_Server_API.app.core.Chat.message_utils import should_persist_message_role
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
     load_template,
     apply_template_to_string,
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import (
-    chat_api_call as perform_chat_api_call,
-    chat_api_call_async as perform_chat_api_call_async,
-)
+from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     create_streaming_response_with_timeout,
 )
@@ -52,6 +56,8 @@ from tldw_Server_API.app.core.Moderation.moderation_service import get_moderatio
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
+    ChatBadRequestError,
+    ChatConfigurationError,
     ChatProviderError,
 )
 from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
@@ -79,6 +85,12 @@ def _coerce_int(value: Optional[str], default: int) -> int:
         return default
 
 
+def _coerce_bool(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
 
 _default_history_limit = 20
@@ -104,6 +116,26 @@ if _env_history_order:
     if _env_history_order_val in {"asc", "desc"}:
         _default_history_order = _env_history_order_val
 DEFAULT_HISTORY_MESSAGE_ORDER = _default_history_order
+
+_inject_assistant_name = _coerce_bool(_chat_config.get("inject_assistant_name"), False)
+_env_inject_assistant_name = os.getenv("CHAT_INJECT_ASSISTANT_NAME")
+if _env_inject_assistant_name is not None:
+    _inject_assistant_name = _coerce_bool(_env_inject_assistant_name, _inject_assistant_name)
+INJECT_ASSISTANT_NAME = _inject_assistant_name
+
+_force_normalize_strings = _coerce_bool(_chat_config.get("force_normalize_string_responses"), False)
+_env_force_normalize = os.getenv("CHAT_FORCE_NORMALIZE_STRING_RESPONSES")
+if _env_force_normalize is not None:
+    _force_normalize_strings = _coerce_bool(_env_force_normalize, _force_normalize_strings)
+FORCE_NORMALIZE_STRING_RESPONSES = _force_normalize_strings
+
+
+def should_force_normalize_string_responses() -> bool:
+    """Return True when raw-string LLM responses should be wrapped in OpenAI format."""
+    raw = os.getenv("CHAT_FORCE_NORMALIZE_STRING_RESPONSES")
+    if raw is not None:
+        return _coerce_bool(raw, FORCE_NORMALIZE_STRING_RESPONSES)
+    return FORCE_NORMALIZE_STRING_RESPONSES
 
 
 # --- Cached helpers (module scope) -------------------------------------------
@@ -227,6 +259,20 @@ def queue_is_active(queue: Any) -> bool:
         return bool(fallback_state)
     # Assume truthy for lightweight test stubs that do not expose state
     return True
+
+
+def _attach_queue_future_logger(future: "asyncio.Future[Any]", request_id: str) -> None:
+    """Consume queue future exceptions to avoid unhandled warnings in streaming mode."""
+
+    def _consume(fut: "asyncio.Future[Any]") -> None:
+        try:
+            fut.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.debug("Queue streaming job {} failed: {}", request_id, exc)
+
+    future.add_done_callback(_consume)
 
 
 def parse_provider_model_for_metrics(
@@ -372,16 +418,14 @@ def normalize_request_provider_and_model(
                 # In this case, strip the inline provider prefix from the model
                 setattr(request_data, "model", actual_model)
             else:
-                # api_provider is explicitly set on the request. For OpenRouter, many valid
-                # model IDs include a provider namespace (e.g., "openai/gpt-4o-mini",
-                # "z-ai/glm-4.6"). OpenRouter expects that namespace to be preserved.
-                # Only strip when the inline namespace is literally "openrouter";
-                # otherwise, keep the full "namespace/model" string.
-                if provider == "openrouter":
-                    if inline_provider_lower == "openrouter":
+                # api_provider is explicitly set on the request. For OpenRouter and
+                # Hugging Face, many valid model IDs include a namespace
+                # (e.g., "openai/gpt-4o-mini", "z-ai/glm-4.6"). Preserve the full
+                # namespaced model id unless the inline namespace matches "openrouter".
+                if provider in {"openrouter", "huggingface"}:
+                    if provider == "openrouter" and inline_provider_lower == "openrouter":
                         setattr(request_data, "model", actual_model)
                     else:
-                        # Keep the namespaced model id as-is for OpenRouter
                         setattr(request_data, "model", model_str)
                 else:
                     # Non-OpenRouter providers do not use namespaced model ids; strip prefix
@@ -568,6 +612,186 @@ def resolve_provider_api_key(
     return normalized_value, debug_info
 
 
+def _resolve_base_url_override(provider: str, chat_args: Dict[str, Any]) -> Optional[str]:
+    base_url = chat_args.get("base_url")
+    if base_url is None:
+        base_url = chat_args.get("api_base_url")
+    if base_url is None:
+        return None
+    provider_key = (provider or "").strip().lower()
+    from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
+        is_trusted_base_url_request,
+        resolve_byok_base_url_allowlist,
+        validate_base_url_override,
+    )
+
+    allowlist = resolve_byok_base_url_allowlist()
+    if provider_key not in allowlist:
+        raise ChatBadRequestError(
+            provider=provider_key or None,
+            message=f"base_url override is not enabled for provider '{provider_key}'",
+        )
+    trusted_override = bool(chat_args.get("trusted_base_url_override"))
+    if not trusted_override:
+        request_obj = chat_args.get("request") or chat_args.get("caller_request")
+        principal = chat_args.get("principal")
+        user = chat_args.get("auth_user")
+        trusted_override = is_trusted_base_url_request(request_obj, principal=principal, user=user)
+    if not trusted_override:
+        raise ChatBadRequestError(
+            provider=provider_key or None,
+            message="base_url override requires a trusted caller",
+        )
+    try:
+        return validate_base_url_override(base_url)
+    except ValueError as exc:
+        raise ChatBadRequestError(provider=provider_key or None, message=str(exc)) from exc
+
+
+def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+    """Translate chat_api_call-style args into an adapter request payload."""
+    from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+        ensure_app_config,
+        normalize_provider,
+        resolve_provider_api_key_from_config,
+        resolve_provider_model,
+    )
+
+    provider = normalize_provider(
+        chat_args.get("api_endpoint")
+        or chat_args.get("api_provider")
+        or chat_args.get("provider")
+    )
+    if provider in {"local", "local_llm"}:
+        provider = "local-llm"
+    if not provider:
+        raise ChatConfigurationError(provider=str(chat_args.get("api_endpoint")), message="LLM provider is required.")
+
+    local_like = {
+        "local-llm",
+        "llama.cpp",
+        "kobold",
+        "ooba",
+        "tabbyapi",
+        "vllm",
+        "ollama",
+        "aphrodite",
+        "mlx",
+    }
+    explicit_app_config = chat_args.get("app_config")
+    app_config = explicit_app_config if explicit_app_config is not None else (
+        None if provider in local_like else ensure_app_config(None)
+    )
+    model = chat_args.get("model")
+    if model is None and app_config is not None:
+        model = resolve_provider_model(provider, app_config)
+    if not model and provider not in local_like:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+
+    api_key = chat_args.get("api_key") or resolve_provider_api_key_from_config(provider, app_config)
+    messages_payload = chat_args.get("messages_payload") or chat_args.get("messages") or []
+
+    request: Dict[str, Any] = {
+        "messages": messages_payload,
+        "system_message": chat_args.get("system_message"),
+        "model": model,
+        "api_key": api_key,
+        "app_config": app_config,
+    }
+
+    base_url_override = _resolve_base_url_override(provider, chat_args)
+    if base_url_override:
+        request["base_url"] = base_url_override
+
+    stream_value = chat_args.get("stream")
+    if stream_value is None:
+        stream_value = chat_args.get("streaming")
+    if stream_value is not None:
+        request["stream"] = bool(stream_value)
+
+    skip_keys = {
+        "api_endpoint",
+        "api_provider",
+        "provider",
+        "messages_payload",
+        "messages",
+        "system_message",
+        "model",
+        "api_key",
+        "app_config",
+        "base_url",
+        "api_base_url",
+        "request",
+        "caller_request",
+        "principal",
+        "auth_user",
+        "trusted_base_url_override",
+        "stream",
+        "streaming",
+    }
+    for key, value in chat_args.items():
+        if key in skip_keys or value is None:
+            continue
+        if key not in request:
+            request[key] = value
+
+    internal: Dict[str, Any] = {}
+    for key in ("http_client_factory", "http_fetcher"):
+        if chat_args.get(key) is not None:
+            internal[key] = chat_args[key]
+
+    return provider, request, internal
+
+
+def _attach_internal_http_hooks(adapter: Any, request: Dict[str, Any], internal: Dict[str, Any]) -> None:
+    """Attach http_client_factory/http_fetcher only for adapters that opt in."""
+    if not internal:
+        return
+    if getattr(adapter, "accepts_internal_http_hooks", False):
+        request.update(internal)
+
+
+def _get_llm_registry():
+    """Resolve the adapter registry at call time to honor test monkeypatching."""
+    return _adapter_registry.get_registry()
+
+
+def perform_chat_api_call(**kwargs: Any) -> Any:
+    """Adapter-backed replacement for chat_orchestrator.chat_api_call."""
+    provider, request, internal = _build_adapter_request_from_chat_args(kwargs)
+    adapter = _get_llm_registry().get_adapter(provider)
+    if adapter is None:
+        raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
+    _attach_internal_http_hooks(adapter, request, internal)
+    if request.get("stream"):
+        return adapter.stream(request)
+    return adapter.chat(request)
+
+
+async def perform_chat_api_call_async(**kwargs: Any) -> Any:
+    """Async adapter-backed replacement for chat_orchestrator.chat_api_call_async."""
+    provider, request, internal = _build_adapter_request_from_chat_args(kwargs)
+    adapter = _get_llm_registry().get_adapter(provider)
+    if adapter is None:
+        raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
+    _attach_internal_http_hooks(adapter, request, internal)
+
+    if request.get("stream"):
+        try:
+            stream_iter = adapter.astream(request)
+            if inspect.isawaitable(stream_iter):
+                stream_iter = await stream_iter
+            return stream_iter
+        except NotImplementedError:
+            stream_iter = adapter.stream(request)
+            return wrap_sync_stream(stream_iter)
+
+    try:
+        return await adapter.achat(request)
+    except NotImplementedError:
+        return await asyncio.to_thread(adapter.chat, request)
+
+
 def merge_api_keys_for_provider(
     provider: str,
     module_keys: Optional[Dict[str, Optional[str]]],
@@ -665,9 +889,79 @@ def estimate_tokens_from_json(request_json: str) -> int:
     This matches the existing heuristic in the endpoint.
     """
     try:
-        return max(1, len(request_json) // 4)
+        sanitized = _sanitize_data_uris(request_json)
+        return max(1, len(sanitized) // 4)
     except Exception:
         return 1
+
+
+_DATA_URI_RE = re.compile(r"(data:image[^,]*,)[^\"\\s]+", re.IGNORECASE)
+
+
+def _sanitize_data_uris(text: str) -> str:
+    """Redact data URI payloads to avoid inflating token estimates."""
+    try:
+        return _DATA_URI_RE.sub(r"\1<omitted>", text)
+    except Exception:
+        return text
+
+
+def _sanitize_messages_for_token_estimate(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return a copy of messages with base64 image payloads replaced."""
+    sanitized: List[Dict[str, Any]] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        msg_copy = msg.copy()
+        content = msg_copy.get("content")
+        if isinstance(content, list):
+            new_parts: List[Any] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    new_parts.append(part)
+                    continue
+                if part.get("type") == "image_url":
+                    image_url = part.get("image_url") or {}
+                    if isinstance(image_url, dict):
+                        url_val = image_url.get("url")
+                        if isinstance(url_val, str) and url_val.startswith("data:image"):
+                            new_image_url = dict(image_url)
+                            new_image_url["url"] = "data:image/omitted"
+                            new_parts.append({**part, "image_url": new_image_url})
+                            continue
+                new_parts.append(part)
+            msg_copy["content"] = new_parts
+        elif isinstance(content, str):
+            msg_copy["content"] = _sanitize_data_uris(content)
+        sanitized.append(msg_copy)
+    return sanitized
+
+
+def _estimate_tokens_from_messages(messages: List[Dict[str, Any]]) -> int:
+    """Estimate tokens from message payloads with base64 redaction."""
+    try:
+        sanitized = _sanitize_messages_for_token_estimate(messages)
+        return max(1, len(_json.dumps(sanitized)) // 4)
+    except Exception:
+        return 1
+
+
+def _wrap_raw_string_response(content: str, model: Optional[str]) -> Dict[str, Any]:
+    """Wrap raw string responses in an OpenAI-compatible payload."""
+    model_name = model or "unknown"
+    return {
+        "id": f"chatcmpl-{_uuid.uuid4().hex[:12]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model_name,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+    }
 
 
 async def moderate_input_messages(
@@ -696,6 +990,11 @@ async def moderate_input_messages(
         req_user_id = None
 
     eff_policy = moderation_service.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+    conv_id = None
+    try:
+        conv_id = getattr(request_data, "conversation_id", None)
+    except Exception:
+        conv_id = None
 
     async def _moderate_text_in_place(text: str) -> str:
         # Topic monitoring (non-blocking)
@@ -718,6 +1017,7 @@ async def moderate_input_messages(
                     scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                     team_ids=team_ids,
                     org_ids=org_ids,
+                    source_id=str(conv_id) if conv_id is not None else None,
                 )
         except Exception as _e:
             logger.debug(f"Topic monitoring (input) skipped: {_e}")
@@ -744,7 +1044,11 @@ async def moderate_input_messages(
             if not flagged:
                 return text
             resolved_action = eff_policy.input_action
-            redacted = moderation_service.redact_text(text, eff_policy) if resolved_action == "redact" else None
+            redacted = (
+                moderation_service.redact_text(text, eff_policy)
+                if resolved_action == "redact"
+                else None
+            )
 
         if resolved_action == "pass" or (resolved_action == "warn" and sample is None):
             return text
@@ -771,7 +1075,7 @@ async def moderate_input_messages(
         if resolved_action == "block":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input violates moderation policy")
         if resolved_action == "redact":
-            return moderation_service.redact_text(text, eff_policy)
+            return redacted if isinstance(redacted, str) else moderation_service.redact_text(text, eff_policy)
         return text
 
     # Apply moderation across request messages
@@ -870,7 +1174,7 @@ async def build_context_and_messages(
     if not conv_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
 
-    # History loading (configurable limit/order)
+    # History loading (configurable limit/order; filter missing roles, normalize assistant names)
     requested_history_limit = getattr(request_data, "history_message_limit", None)
     if requested_history_limit is None:
         history_limit = DEFAULT_HISTORY_MESSAGE_LIMIT
@@ -904,13 +1208,9 @@ async def build_context_and_messages(
             raw_hist = list(reversed(raw_hist))
         for db_msg in raw_hist:
             sender_val = str(db_msg.get("sender", "") or "")
-            sender_lower = sender_val.lower()
-            if sender_lower == "user":
-                role = "user"
-            elif sender_lower == "tool":
-                role = "tool"
-            else:
-                role = "assistant"
+            role = map_sender_to_role(sender_val, character_card.get("name") if character_card else None)
+            if not should_persist_message_role(role):
+                continue
             char_name_hist = character_card.get("name", "Char") if character_card else "Char"
             text_content = db_msg.get("content", "")
             if text_content and role != "tool":
@@ -956,7 +1256,7 @@ async def build_context_and_messages(
                 try:
                     metadata = await loop.run_in_executor(None, chat_db.get_message_metadata, db_msg.get("id"))
                 except Exception as meta_err:
-                    logger.debug("Metadata lookup failed for message %s: %s", db_msg.get("id"), meta_err)
+                    logger.debug("Metadata lookup failed for message {}: {}", db_msg.get("id"), meta_err)
 
                 tool_calls_meta = None
                 function_call_meta = None
@@ -983,7 +1283,7 @@ async def build_context_and_messages(
     # Process current turn messages (persist if needed)
     request_messages: List[Dict[str, Any]] = []
     for msg_model in request_data.messages:
-        if msg_model.role == "system":
+        if not should_persist_message_role(msg_model.role):
             continue
         request_messages.append(msg_model.model_dump(exclude_none=True))
 
@@ -1060,6 +1360,35 @@ async def build_context_and_messages(
     return character_card, character_db_id, conv_id, conversation_created, llm_payload_messages, should_persist
 
 
+def _extract_system_messages(messages: List[Dict[str, Any]]) -> List[str]:
+    """Extract system message text content from OpenAI-style message payloads."""
+    system_messages: List[str] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") != "system":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            text_val = content.strip()
+            if text_val:
+                system_messages.append(text_val)
+            continue
+        if isinstance(content, list):
+            text_parts: List[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text":
+                    text_val = part.get("text")
+                    if isinstance(text_val, str) and text_val.strip():
+                        text_parts.append(text_val)
+            combined = "\n".join(text_parts).strip()
+            if combined:
+                system_messages.append(combined)
+    return system_messages
+
+
 def apply_prompt_templating(
     request_data: Any,
     character_card: Dict[str, Any],
@@ -1076,8 +1405,13 @@ def apply_prompt_templating(
         template_data["char_name"] = character_card.get("name", "Character")
         template_data["character_system_prompt"] = character_card.get("system_prompt", "")
 
-    sys_msg_from_req = next((m.content for m in request_data.messages if m.role == "system" and isinstance(m.content, str)), None)
+    sys_msg_from_req = next(
+        (m.content for m in request_data.messages if m.role == "system" and isinstance(m.content, str)),
+        None,
+    )
     template_data["original_system_message_from_request"] = sys_msg_from_req or ""
+    system_msgs_from_payload = _extract_system_messages(llm_payload_messages)
+    payload_system_message = system_msgs_from_payload[-1] if system_msgs_from_payload else None
 
     final_system_message: Optional[str] = None
     logger.debug(
@@ -1085,18 +1419,27 @@ def apply_prompt_templating(
     )
     if active_template and active_template.system_message_template:
         final_system_message = apply_template_to_string(active_template.system_message_template, template_data)
+        if not final_system_message and payload_system_message:
+            final_system_message = payload_system_message
+            system_prompt_preview = final_system_message[:50] if final_system_message else ""
+            logger.debug(f"Template empty, using payload system message: {repr(system_prompt_preview)}...")
         if not final_system_message and character_card and character_card.get("system_prompt"):
             final_system_message = character_card.get("system_prompt")
             system_prompt_preview = final_system_message[:50] if final_system_message else ""
             logger.debug(f"Template empty, using character system prompt: {repr(system_prompt_preview)}...")
     elif sys_msg_from_req:
         final_system_message = sys_msg_from_req
+    elif payload_system_message:
+        final_system_message = payload_system_message
     elif character_card and character_card.get("system_prompt"):
         final_system_message = character_card.get("system_prompt")
         system_prompt_preview = final_system_message[:50] if final_system_message else ""
         logger.debug(f"Using character system prompt: {repr(system_prompt_preview)}...")
 
     logger.debug(f"Final system message: {repr(final_system_message)}")
+
+    if final_system_message:
+        llm_payload_messages = [m for m in llm_payload_messages if m.get("role") != "system"]
 
     templated_llm_payload: List[Dict[str, Any]] = []
     if active_template:
@@ -1132,6 +1475,23 @@ def apply_prompt_templating(
     return final_system_message, templated_llm_payload
 
 
+async def _maybe_refund_streaming_rg(
+    rg_refund_cb: Optional[Callable[..., Any]],
+    *,
+    cancelled: bool = False,
+    error: bool = True,
+) -> None:
+    """Best-effort RG refund hook for streaming failures before stream setup."""
+    if not callable(rg_refund_cb):
+        return
+    try:
+        res = rg_refund_cb(cancelled=cancelled, error=error)
+        if hasattr(res, "__await__"):
+            await res  # type: ignore[misc]
+    except Exception:
+        pass
+
+
 async def execute_streaming_call(
     *,
     current_loop: Any,
@@ -1149,6 +1509,7 @@ async def execute_streaming_call(
     character_card_for_context: Optional[Dict[str, Any]],
     chat_db: Any,
     save_message_fn: Callable[..., Any],
+    system_message_id: Optional[str] = None,
     audit_service: Optional[Any],
     audit_context: Optional[Any],
     client_id: str,
@@ -1231,9 +1592,10 @@ async def execute_streaming_call(
                         provider_manager.record_failure(selected_provider, proc_error)
                     raise
 
+            queue_request_id = get_request_id() or "unknown"
             try:
-                await queue_for_exec.enqueue(
-                    request_id=(get_request_id() or "unknown"),
+                queue_future = await queue_for_exec.enqueue(
+                    request_id=queue_request_id,
                     request_data={"endpoint": "/api/v1/chat/completions", "mode": "stream"},
                     client_id=str(client_id),
                     priority=RequestPriority.HIGH,
@@ -1244,6 +1606,7 @@ async def execute_streaming_call(
                     streaming=True,
                     stream_channel=stream_channel,
                 )
+                _attach_queue_future_logger(queue_future, queue_request_id)
             except (ValueError, TimeoutError) as admission_error:
                 try:
                     metrics.track_rate_limit(str(client_id))
@@ -1325,6 +1688,7 @@ async def execute_streaming_call(
                 # Fallback string serialization
                 yield f"data: {{\"error\":{{\"message\":\"{msg}\",\"type\":\"{typ}\"}}}}\n\n"
             yield "data: [DONE]\n\n"
+        await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
         return StreamingResponse(
             _err_gen(),
             media_type="text/event-stream",
@@ -1417,6 +1781,7 @@ async def execute_streaming_call(
                 yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
             yield "data: [DONE]\n\n"
 
+        await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
         return StreamingResponse(
             _safe_err_stream(),
             media_type="text/event-stream",
@@ -1436,6 +1801,7 @@ async def execute_streaming_call(
         tool_calls: Optional[List[Dict[str, Any]]],
         function_call: Optional[Dict[str, Any]],
     ):
+        saved_message_id: Optional[str] = None
         full_reply_to_save = full_reply
         post_stream_blocked = False
         try:
@@ -1536,14 +1902,8 @@ async def execute_streaming_call(
         if should_persist and final_conversation_id and not post_stream_blocked and (
             full_reply_to_save or tool_calls or function_call
         ):
-            asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
-            asst_name = (
-                asst_name.replace(" ", "_")
-                .replace("<", "")
-                .replace(">", "")
-                .replace("|", "")
-                .replace("\\", "")
-                .replace("/", "")
+            asst_name = sanitize_sender_name(
+                character_card_for_context.get("name") if character_card_for_context else None
             )
             message_payload: Dict[str, Any] = {
                 "role": "assistant",
@@ -1555,17 +1915,18 @@ async def execute_streaming_call(
                 message_payload["tool_calls"] = tool_calls
             if function_call:
                 message_payload["function_call"] = function_call
-            await save_message_fn(
+            saved_message_id = await save_message_fn(
                 chat_db,
                 final_conversation_id,
                 message_payload,
                 use_transaction=True,
             )
         # Usage logging (estimated) after stream completes
+        total_est = 0
         try:
             pt_est = 0
             try:
-                pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
+                pt_est = _estimate_tokens_from_messages(templated_llm_payload)
             except Exception:
                 pt_est = 0
             ct_est = max(0, len(full_reply or "") // 4)
@@ -1628,6 +1989,7 @@ async def execute_streaming_call(
                 await on_success(selected_provider)
         except Exception:
             pass
+        return saved_message_id
 
     async def tracked_streaming_generator():
         async with metrics.track_streaming(final_conversation_id) as stream_tracker:
@@ -1644,6 +2006,8 @@ async def execute_streaming_call(
             from tldw_Server_API.app.core.Chat.streaming_utils import StopStreamWithError
 
             pending_audit_tasks: list[asyncio.Task[Any]] = []
+            stream_id = _uuid.uuid4().hex
+            chunk_seq = 0
 
             def _track_audit_task(task: "asyncio.Task[Any]") -> None:
                 pending_audit_tasks.append(task)
@@ -1654,7 +2018,38 @@ async def execute_streaming_call(
                         pass
                 task.add_done_callback(_cleanup)
 
+            stream_mod_buffer = ""
+            try:
+                stream_buffer_limit = int(os.getenv("MODERATION_STREAM_BUFFER_CHARS", "1024"))
+            except Exception:
+                stream_buffer_limit = 1024
+            if stream_buffer_limit < 0:
+                stream_buffer_limit = 0
+
+            def _update_stream_buffer(emitted: str) -> None:
+                nonlocal stream_mod_buffer
+                if stream_buffer_limit <= 0:
+                    stream_mod_buffer = ""
+                    return
+                if emitted:
+                    stream_mod_buffer = (stream_mod_buffer + emitted)[-stream_buffer_limit:]
+
+            def _resolve_replacement(pattern: Optional[str]) -> str:
+                if not pattern:
+                    return eff_policy.redact_replacement
+                for rule in eff_policy.block_patterns or []:
+                    regex = getattr(rule, "regex", None)
+                    if regex is None:
+                        continue
+                    if getattr(regex, "pattern", None) != pattern:
+                        continue
+                    replacement = getattr(rule, "replacement", None)
+                    if replacement:
+                        return replacement
+                return eff_policy.redact_replacement
+
             def _out_transform(s: str) -> str:
+                nonlocal chunk_seq
                 try:
                     mon = None
                     try:
@@ -1670,6 +2065,8 @@ async def execute_streaming_call(
                     except Exception:
                         pass
                     if mon is not None and s:
+                        chunk_seq += 1
+                        chunk_id = f"{stream_id}:{chunk_seq}"
                         mon.schedule_evaluate_and_alert(
                             user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                             text=s,
@@ -1678,16 +2075,49 @@ async def execute_streaming_call(
                             scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                             team_ids=team_ids,
                             org_ids=org_ids,
+                            source_id=stream_id,
+                            chunk_id=chunk_id,
+                            chunk_seq=chunk_seq,
                         )
                 except Exception as _e:
                     logger.debug(f"Topic monitoring (stream chunk) skipped: {_e}")
                 if not eff_policy.enabled or not eff_policy.output_enabled:
+                    _update_stream_buffer(s)
                     return s
                 resolved_action = None
                 sample = None
                 redacted_s = None
                 out_category = None
-                if hasattr(moderation, "evaluate_action"):
+                match_span = None
+                buffer_len = len(stream_mod_buffer)
+                if hasattr(moderation, "evaluate_action_with_match"):
+                    combined = f"{stream_mod_buffer}{s}" if stream_mod_buffer else s
+                    try:
+                        eval_res = moderation.evaluate_action_with_match(combined, eff_policy, "output")
+                        if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                            resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
+                            out_category = eval_res[3] if len(eval_res) >= 4 else None
+                            match_span = eval_res[4] if len(eval_res) >= 5 else None
+                        else:
+                            resolved_action, redacted_s, sample = eval_res  # type: ignore
+                    except Exception:
+                        resolved_action = None
+                    # If the match is entirely in the buffer, re-evaluate on the current chunk only.
+                    if match_span and buffer_len > 0 and match_span[1] <= buffer_len:
+                        try:
+                            eval_res = moderation.evaluate_action_with_match(s, eff_policy, "output")
+                            if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                                resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
+                                out_category = eval_res[3] if len(eval_res) >= 4 else None
+                                match_span = eval_res[4] if len(eval_res) >= 5 else None
+                            else:
+                                resolved_action, redacted_s, sample = eval_res  # type: ignore
+                                match_span = None
+                            buffer_len = 0
+                        except Exception:
+                            resolved_action = None
+                            match_span = None
+                elif hasattr(moderation, "evaluate_action"):
                     try:
                         eval_res = moderation.evaluate_action(s, eff_policy, "output")
                         if isinstance(eval_res, tuple) and len(eval_res) >= 3:
@@ -1700,9 +2130,11 @@ async def execute_streaming_call(
                 if not resolved_action:
                     flagged, sample = moderation.check_text(s, eff_policy)
                     if not flagged:
+                        _update_stream_buffer(s)
                         return s
                     resolved_action = eff_policy.output_action
                     redacted_s = moderation.redact_text(s, eff_policy) if resolved_action == "redact" else None
+                crosses_boundary = bool(match_span and buffer_len > 0 and match_span[0] < buffer_len < match_span[1])
                 if resolved_action == "block":
                     if not stream_mod_state["block_logged"]:
                         try:
@@ -1758,7 +2190,18 @@ async def execute_streaming_call(
                         except Exception:
                             pass
                         stream_mod_state["redact_logged"] = True
-                    return moderation.redact_text(s, eff_policy)
+                    if crosses_boundary and match_span:
+                        replacement = _resolve_replacement(sample)
+                        overlap_start = max(0, match_span[0] - buffer_len)
+                        overlap_end = max(0, match_span[1] - buffer_len)
+                        overlap_start = min(len(s), overlap_start)
+                        overlap_end = min(len(s), overlap_end)
+                        redacted_out = f"{s[:overlap_start]}{replacement}{s[overlap_end:]}"
+                    else:
+                        redacted_out = moderation.redact_text(s, eff_policy)
+                    _update_stream_buffer(redacted_out)
+                    return redacted_out
+                _update_stream_buffer(s)
                 return s
 
             async def _finalize_stream(*, success: bool, cancelled: bool, error: bool) -> None:
@@ -1778,6 +2221,7 @@ async def execute_streaming_call(
                 idle_timeout=CHAT_IDLE_TIMEOUT,
                 heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform,
+                system_message_id=system_message_id,
             )
             try:
                 async for chunk in generator:
@@ -1888,6 +2332,7 @@ async def execute_non_stream_call(
     character_card_for_context: Optional[Dict[str, Any]],
     chat_db: Any,
     save_message_fn: Callable[..., Any],
+    system_message_id: Optional[str] = None,
     audit_service: Optional[Any],
     audit_context: Optional[Any],
     client_id: str,
@@ -2069,6 +2514,9 @@ async def execute_non_stream_call(
         else:
             raise
 
+    if isinstance(llm_response, str) and should_force_normalize_string_responses():
+        llm_response = _wrap_raw_string_response(llm_response, model)
+
     content_to_save: Optional[str] = None
     tool_calls_to_save: Optional[Any] = None
     function_call_to_save: Optional[Any] = None
@@ -2120,7 +2568,7 @@ async def execute_non_stream_call(
             try:
                 pt_est = 0
                 try:
-                    pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
+                    pt_est = _estimate_tokens_from_messages(templated_llm_payload)
                 except Exception:
                     pt_est = 0
                 ct_est = max(0, len((content_to_save or "")) // 4)
@@ -2210,6 +2658,7 @@ async def execute_non_stream_call(
                             scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                             team_ids=team_ids,
                             org_ids=org_ids,
+                            source_id=str(final_conversation_id) if final_conversation_id else None,
                         )
                 except Exception as _ex:
                     logger.debug(f"Topic monitoring (non-stream final) skipped: {_ex}")
@@ -2238,7 +2687,11 @@ async def execute_non_stream_call(
                             )
                     except Exception:
                         pass
-                    content_to_save = moderation.redact_text(content_to_save, eff_policy)
+                    content_to_save = (
+                        redacted_val
+                        if isinstance(redacted_val, str)
+                        else moderation.redact_text(content_to_save, eff_policy)
+                    )
                     # Update llm_response dict if applicable
                     try:
                         if isinstance(llm_response, dict):
@@ -2253,20 +2706,15 @@ async def execute_non_stream_call(
     except Exception as e:
         logger.warning(f"Moderation output processing error: {e}")
 
+    assistant_message_id: Optional[str] = None
     should_save_response = (
         should_persist
         and final_conversation_id
         and (content_to_save or tool_calls_to_save or function_call_to_save)
     )
     if should_save_response:
-        asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
-        asst_name = (
-            asst_name.replace(" ", "_")
-            .replace("<", "")
-            .replace(">", "")
-            .replace("|", "")
-            .replace("\\", "")
-            .replace("/", "")
+        asst_name = sanitize_sender_name(
+            character_card_for_context.get("name") if character_card_for_context else None
         )
         message_payload: Dict[str, Any] = {"role": "assistant", "name": asst_name}
         if content_to_save is not None:
@@ -2275,12 +2723,26 @@ async def execute_non_stream_call(
             message_payload["tool_calls"] = tool_calls_to_save
         if function_call_to_save is not None:
             message_payload["function_call"] = function_call_to_save
-        await save_message_fn(
+        assistant_message_id = await save_message_fn(
             chat_db,
             final_conversation_id,
             message_payload,
             use_transaction=True,
         )
+
+    if INJECT_ASSISTANT_NAME and isinstance(llm_response, dict):
+        try:
+            choices = llm_response.get("choices")
+            if choices and isinstance(choices, list):
+                message_block = choices[0].get("message") or {}
+                if isinstance(message_block, dict) and not message_block.get("name"):
+                    asst_name = sanitize_sender_name(
+                        character_card_for_context.get("name") if character_card_for_context else None
+                    )
+                    if asst_name:
+                        message_block["name"] = asst_name
+        except Exception:
+            pass
 
     # Encode payload (large responses via CPU-bound handler)
     if llm_response and isinstance(llm_response, dict) and len(str(llm_response)) > 10000:
@@ -2290,7 +2752,24 @@ async def execute_non_stream_call(
         encoded_payload = await current_loop.run_in_executor(None, jsonable_encoder, llm_response)
 
     if isinstance(encoded_payload, dict):
+        if INJECT_ASSISTANT_NAME:
+            try:
+                choices = encoded_payload.get("choices")
+                if choices and isinstance(choices, list):
+                    message_block = choices[0].get("message") or {}
+                    if isinstance(message_block, dict) and not message_block.get("name"):
+                        asst_name = sanitize_sender_name(
+                            character_card_for_context.get("name") if character_card_for_context else None
+                        )
+                        if asst_name:
+                            message_block["name"] = asst_name
+            except Exception:
+                pass
         encoded_payload["tldw_conversation_id"] = final_conversation_id
+        if assistant_message_id:
+            encoded_payload["tldw_message_id"] = assistant_message_id
+        if system_message_id:
+            encoded_payload["tldw_system_message_id"] = system_message_id
 
     # Audit success
     if audit_service and audit_context:

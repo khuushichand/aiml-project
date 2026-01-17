@@ -23,7 +23,7 @@ pytestmark = pytest.mark.pg_jobs
 
 @pytest.mark.integration
 def test_outbox_list_and_sse_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
-    # Ensure outbox is enabled and polling is snappy for the test
+     # Ensure outbox is enabled and polling is snappy for the test
     monkeypatch.setenv("JOBS_EVENTS_OUTBOX", "true")
     monkeypatch.setenv("JOBS_EVENTS_POLL_INTERVAL", "0.05")
     os.environ["JOBS_DB_URL"] = jobs_pg_dsn
@@ -42,7 +42,14 @@ def test_outbox_list_and_sse_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u1")
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="w1")
     assert acq is not None
-    jm.fail_job(int(acq["id"]), error="boom", retryable=True, backoff_seconds=0)
+    jm.fail_job(
+        int(acq["id"]),
+        error="boom",
+        retryable=True,
+        backoff_seconds=1,
+        worker_id="w1",
+        lease_id=str(acq.get("lease_id")),
+    )
 
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
@@ -77,10 +84,11 @@ def test_outbox_list_and_sse_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
             assert ok
 
         # Create and complete a job and assert exactly one job.completed event
-        j3 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u3")
+        j3 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u3", priority=1)
         acq3 = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="w3")
         assert acq3 is not None
-        jm.complete_job(int(acq3["id"]))
+        completed_job_id = int(acq3["id"])
+        jm.complete_job(completed_job_id, worker_id="w3", lease_id=str(acq3.get("lease_id")))
 
         # Poll list endpoint to find job.completed for this job
         deadline2 = time.time() + 3.0
@@ -89,10 +97,10 @@ def test_outbox_list_and_sse_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
             r = client.get("/api/v1/jobs/events", params={"after_id": 0, "domain": "chatbooks"})
             assert r.status_code == 200
             rows = r.json()
-            count = sum(1 for ev in rows if ev.get("event_type") == "job.completed" and int(ev.get("job_id") or 0) == int(j3["id"]))
+            count = sum(1 for ev in rows if ev.get("event_type") == "job.completed" and int(ev.get("job_id") or 0) == completed_job_id)
             if count == 0:
                 time.sleep(0.05)
-        assert count == 1, f"expected 1 job.completed event for job {j3['id']}, found {count}"
+        assert count == 1, f"expected 1 job.completed event for job {completed_job_id}, found {count}"
 
 
 @pytest.mark.integration

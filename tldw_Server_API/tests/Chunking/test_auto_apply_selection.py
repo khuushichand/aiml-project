@@ -2,6 +2,7 @@ from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
 
 
 def test_auto_apply_selects_higher_score():
+
     t1 = {"classifier": {"media_types": ["document"], "title_regex": r"^Doc", "min_score": 0.0, "priority": 0}}
     t2 = {"classifier": {"media_types": ["document"], "filename_regex": r"\.pdf$", "min_score": 0.0, "priority": 0}}
     s1 = TemplateClassifier.score(t1, media_type="document", title="Doc Title", url=None, filename=None)

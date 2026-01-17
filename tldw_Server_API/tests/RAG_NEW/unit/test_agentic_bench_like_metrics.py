@@ -5,6 +5,8 @@ from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 
 
 def _make_doc() -> Document:
+
+
     return Document(
         id="bm_doc",
         content=(

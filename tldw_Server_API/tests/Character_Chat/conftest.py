@@ -20,6 +20,7 @@ def _override_character_chat_rate_limits_for_character_chat(monkeypatch):
 
     try:
         from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as _crl
+
         _crl._rate_limiter = None  # type: ignore[attr-defined]
     except Exception:
         pass
@@ -28,6 +29,7 @@ def _override_character_chat_rate_limits_for_character_chat(monkeypatch):
 
     try:
         from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as _crl
+
         _crl._rate_limiter = None  # type: ignore[attr-defined]
     except Exception:
         pass

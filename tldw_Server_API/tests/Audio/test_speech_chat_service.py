@@ -76,6 +76,11 @@ class _StubTTSService:
         yield b"stub-audio"
 
 
+class _NoAdapterRegistry:
+    def get_adapter(self, _name: str):
+        return None
+
+
 class _DummyActionModule(BaseModule):
     def __init__(self, config: ModuleConfig):
         super().__init__(config)
@@ -108,12 +113,17 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     # Stub STT to return fixed transcript
     from tldw_Server_API.app.core.Streaming import speech_chat_service
 
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
     async def _fake_transcribe_audio(**_kwargs):
         return "hello from audio"
 
     # transcribe_audio is synchronous in the module; patch to simple function
     monkeypatch.setattr(
         speech_chat_service, "transcribe_audio", lambda *a, **k: "hello from audio"
+    )
+    monkeypatch.setattr(
+        speech_chat_service, "get_registry", lambda: _NoAdapterRegistry(), raising=True
     )
 
     # Stub character/conv helpers to avoid touching real DB schema
@@ -260,6 +270,8 @@ async def test_run_speech_chat_turn_stt_error_sentinel_raises(monkeypatch):
 async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
     from tldw_Server_API.app.core.Streaming import speech_chat_service
 
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
     # Enable actions for the duration of the test
     monkeypatch.setenv("AUDIO_CHAT_ENABLE_ACTIONS", "1")
     monkeypatch.setenv("AUDIO_CHAT_ALLOWED_ACTIONS", "play_music")
@@ -271,6 +283,9 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
         speech_chat_service,
         "transcribe_audio",
         lambda *_args, **_kwargs: "action transcript",
+    )
+    monkeypatch.setattr(
+        speech_chat_service, "get_registry", lambda: _NoAdapterRegistry(), raising=True
     )
 
     async def _fake_get_or_create_character_context(*_args, **_kwargs):
@@ -341,6 +356,8 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
 async def test_run_speech_chat_turn_blocks_disallowed_action(monkeypatch):
     from tldw_Server_API.app.core.Streaming import speech_chat_service
 
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
     monkeypatch.setenv("AUDIO_CHAT_ENABLE_ACTIONS", "1")
     monkeypatch.setenv("AUDIO_CHAT_ALLOWED_ACTIONS", "do_this")
     await reset_module_registry()
@@ -351,6 +368,9 @@ async def test_run_speech_chat_turn_blocks_disallowed_action(monkeypatch):
         speech_chat_service,
         "transcribe_audio",
         lambda *_args, **_kwargs: "blocked transcript",
+    )
+    monkeypatch.setattr(
+        speech_chat_service, "get_registry", lambda: _NoAdapterRegistry(), raising=True
     )
 
     async def _fake_get_or_create_character_context(*_args, **_kwargs):

@@ -16,17 +16,15 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
 ## Module Map
 | File / Folder | Purpose |
 | --- | --- |
-| `chat_orchestrator.py` | Single entry point for provider calls (`chat_api_call`, `chat_api_call_async`). Maps generic parameters to provider-specific handlers defined in `provider_config`. |
+| `chat_orchestrator.py` | Orchestrates chat flows: canonical async `achat`, sync wrapper `chat`, plus provider helpers (`chat_api_call`, `chat_api_call_async`). |
 | `chat_service.py` | High-level helpers used by the FastAPI endpoint: request normalization, moderation, persistence, logging, streaming orchestration. |
 | `chat_helpers.py` | Validation, character + conversation loading/creation, history assembly, ensuring default persona, etc. |
 | `prompt_template_manager.py` + `prompt_templates/` | Jinja2-based templating for system/user/assistant messages with sandboxed rendering and bundled defaults. |
-| `provider_config.py` | Declarative provider handler map, async support, and parameter translation tables. |
 | `provider_manager.py` | Circuit breaker + health tracking for providers; used for fallback and observability scenarios. |
 | `rate_limiter.py` | Token-bucket rate limiter covering global, per-user, per-conversation, and token budgets. |
 | `request_queue.py` | Priority queue with backpressure, streaming pipe support, and worker pool management. |
 | `streaming_utils.py` | SSE utilities (heartbeat, idle timeout, chunk normalization, cancellation). |
 | `chat_metrics.py` | Prometheus/OpenTelemetry metric definitions specific to chat workflows. |
-| `Chat_Functions.py` | Backwards-compatible shim that now only exposes `chat`, `chat_api_call`, `DEFAULT_CHARACTER_NAME`, and `approximate_token_count`; import other helpers from their dedicated modules. |
 | `chat_exceptions.py` / `Chat_Deps.py` | Exception types used across the stack for consistent error handling. |
 | `chat_metrics.py`, `document_generator.py`, `Workflows.py` | Secondary features: telemetry, document production, and workflow automation (delegating to `chat_orchestrator`). |
 
@@ -55,8 +53,8 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
       ├─► Provider call
       │       └─ `chat_service.build_call_params_from_request`
       │       └─ `chat_orchestrator.chat_api_call` or async variant
-      │                ◦ parameter translation via `PROVIDER_PARAM_MAP`
-      │                ◦ handler from `API_CALL_HANDLERS`
+      │                ◦ adapter registry validation + aliasing
+      │                ◦ adapter from registry
       │
       ├─► Streaming or blocking response handling (`streaming_utils`)
       │
@@ -72,8 +70,8 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 ---
 
 ## Provider & Resiliency Layer
-- Handlers live in `tldw_Server_API.app.core.LLM_Calls.*` and are mapped via `provider_config.API_CALL_HANDLERS` (sync) and `ASYNC_API_CALL_HANDLERS`.
-- `PROVIDER_PARAM_MAP` translates neutral `chat_api_call` kwargs to provider-specific names (e.g., `stop` → `stop_sequences` for Anthropic).
+- Handlers live in `tldw_Server_API.app.core.LLM_Calls.*`; adapter registry is the primary entry point.
+- Parameter translation/validation is enforced by the adapter capability registry.
 - `provider_manager.ProviderManager` tracks success/failure counts, response times, and integrates circuit breakers (`CircuitBreaker`) for degraded providers. Fallback logic is typically applied in the endpoint/service layer.
 - Dynamic API keys are merged with module-level overrides via `chat_service.merge_api_keys_for_provider`, honouring providers that require a key.
 
@@ -109,7 +107,7 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 - `chat_helpers.get_or_create_conversation` stores transcript metadata in `ChaChaNotes_DB`.
 - `chat_service.save_conversation_message` (see file) persists message payloads, with placeholder resolution and per-message metadata.
 - `document_generator.DocumentGeneratorService` uses chat history to produce timeline, study guide, briefing, summary, Q&A, and meeting notes documents, delegating to `chat_orchestrator.chat_api_call`.
-- `Workflows.py` calls into `chat_orchestrator.chat` to execute legacy scripted flows without relying on deprecated `App_Function_Libraries` paths.
+- `Workflows.py` calls into `chat_orchestrator.chat` to execute legacy scripted flows without relying on deprecated `App_Function_Libraries` paths (sync context only).
 
 ---
 
@@ -121,10 +119,11 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 ---
 
 ## Configuration & Settings
-- Provider defaults and fallbacks read from `Config_Files/config.txt` via `config.load_and_log_configs()` and `provider_config`.
+- Provider defaults and fallbacks read from `Config_Files/config.txt` via `config.load_and_log_configs()` and adapter/provider metadata.
 - Rate limiter defaults are set in `rate_limiter.RateLimitConfig`; override via environment variables or injecting custom configs when instantiating the limiter.
 - Streaming idle/heartbeat intervals are read from the `[Chat-Module]` section in the config file (see `streaming_utils` constants).
 - Prompt template directory is relative to the module but can be extended by writing new JSON files.
+- `CHAT_COMMANDS_ASYNC_ONLY=1` forces async orchestration (`achat`) and blocks sync `chat(...)` usage.
 
 ---
 
@@ -145,14 +144,14 @@ Set `TEST_MODE=1` in the environment when running tests to disable background lo
 ---
 
 ## Extending the Module
-1. **Add a new provider**: implement handler(s) in `LLM_Calls`, register sync/async functions in `provider_config.API_CALL_HANDLERS`, and map parameters in `PROVIDER_PARAM_MAP`. Update tests to cover the new provider.
+1. **Add a new provider**: implement an adapter in `LLM_Calls/providers`, register it in the adapter registry, and update the capability registry. Update tests to cover the new provider.
 2. **Adjust request processing**: modify `chat_service` or `chat_helpers`; keep endpoint logic thin and maintain placeholder, template, and moderation flows.
 3. **Enhance rate limiting**: extend `RateLimitConfig` and the FastAPI dependency that instantiates `ConversationRateLimiter`. Ensure metrics reflect new counters.
 4. **Introduce new templates**: drop JSON files into `prompt_templates/` and reference them in requests via `prompt_template_name`.
 5. **Streaming changes**: update `StreamingResponseHandler` to handle new SSE formats; keep `_extract_text_from_upstream_sse` tolerant to provider quirks.
 6. **Document generator**: extend `DocumentType` and default prompts, ensure chat history retrieval is efficient (batch DB reads).
 
-Always update this README and `REFACTORING_PLAN.md` when architectural decisions change. Treat `Chat_Functions.py` as a minimal compatibility shim; import from the focused modules (`chat_orchestrator`, `chat_history`, `chat_dictionary`, `chat_characters`) for new work and plan to retire the shim once remaining callers migrate.
+Always update this README and `REFACTORING_PLAN.md` when architectural decisions change. Import from the focused modules (`chat_orchestrator`, `chat_history`, `chat_dictionary`, `chat_characters`) for new work and keep compatibility paths in the registry as the single legacy surface.
 
 ---
 
@@ -167,6 +166,19 @@ response = chat_api_call(
     model="gpt-4o-mini",
     temp=0.7,
     streaming=False,
+)
+
+# Prefer async orchestration in async contexts
+from tldw_Server_API.app.core.Chat.chat_orchestrator import achat
+resp = await achat(
+    message="Hello",
+    history=[],
+    media_content=None,
+    selected_parts=[],
+    api_endpoint="openai",
+    api_key=None,
+    custom_prompt=None,
+    temperature=0.7,
 )
 
 # Apply a prompt template
@@ -271,7 +283,7 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
   - Additional: character dictionary unit tests and integration suites targeting `/chat/completions`
 
 - Extension Points
-  - Add providers in `LLM_Calls/` and register in `provider_config` + param map
+  - Add providers in `LLM_Calls/providers` and register in adapter + capability registries
   - Extend rate limiting in `rate_limiter.py` and DI layer; update metrics
   - Add/adjust templates in `prompt_templates/`
 

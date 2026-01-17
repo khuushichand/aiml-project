@@ -10,6 +10,8 @@ from tldw_Server_API.app.main import app
 
 
 def _setup_env():
+
+
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key"
 
@@ -64,6 +66,18 @@ async def test_admin_system_ops_endpoints():
         flags_list = client.get("/api/v1/admin/feature-flags")
         assert flags_list.status_code == 200, flags_list.text
         assert any(item["key"] == "ops-test" for item in flags_list.json()["items"])
+
+        missing_org = client.get("/api/v1/admin/feature-flags", params={"scope": "org"})
+        assert missing_org.status_code == 400, missing_org.text
+        assert missing_org.json().get("detail") == "missing_org_id"
+
+        missing_user = client.get("/api/v1/admin/feature-flags", params={"scope": "user"})
+        assert missing_user.status_code == 400, missing_user.text
+        assert missing_user.json().get("detail") == "missing_user_id"
+
+        missing_org_delete = client.delete("/api/v1/admin/feature-flags/ops-test", params={"scope": "org"})
+        assert missing_org_delete.status_code == 400, missing_org_delete.text
+        assert missing_org_delete.json().get("detail") == "missing_org_id"
 
         del_flag = client.delete("/api/v1/admin/feature-flags/ops-test", params={"scope": "global"})
         assert del_flag.status_code == 200, del_flag.text

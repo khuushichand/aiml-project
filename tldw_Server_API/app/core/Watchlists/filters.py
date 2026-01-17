@@ -76,7 +76,15 @@ def _match_keyword(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     if not keywords:
         return False
     fields = value.get("fields")
-    field_names = [str(x) for x in fields] if isinstance(fields, list) else ["title", "summary", "content", "author"]
+    field_names: List[str]
+    if isinstance(fields, list) and fields:
+        field_names = [str(x) for x in fields if str(x).strip()]
+    else:
+        field = value.get("field")
+        if isinstance(field, str) and field.strip():
+            field_names = [field.strip()]
+        else:
+            field_names = ["title", "summary", "content", "author"]
     haystack = "\n".join(_get_text_fields(candidate, field_names)).lower()
     if not haystack:
         return False
@@ -103,12 +111,16 @@ def _compile_regex(pattern: str, flags: Optional[str]) -> Optional[re.Pattern[st
     if not pattern:
         return None
     f = 0
-    if isinstance(flags, str):
-        if "i" in flags.lower():
+    flag_text = flags if isinstance(flags, str) else None
+    if flag_text is None:
+        flag_text = "i"
+    if isinstance(flag_text, str):
+        flag_text = flag_text.lower()
+        if "i" in flag_text:
             f |= re.IGNORECASE
-        if "m" in flags.lower():
+        if "m" in flag_text:
             f |= re.MULTILINE
-        if "s" in flags.lower():
+        if "s" in flag_text:
             f |= re.DOTALL
     try:
         return re.compile(pattern, f)
@@ -123,6 +135,16 @@ def _match_regex(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     flags = value.get("flags")
     rx = _compile_regex(pattern, flags)
     if rx is None:
+        return False
+    fields = value.get("fields")
+    if isinstance(fields, list) and fields:
+        for name in fields:
+            try:
+                hay = str(candidate.get(name) or "")
+            except Exception:
+                continue
+            if rx.search(hay):
+                return True
         return False
     field = value.get("field")
     if isinstance(field, str) and field:
@@ -166,7 +188,11 @@ def _parse_iso(dt: str) -> Optional[datetime]:
 
 def _match_date_range(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     max_age_days = value.get("max_age_days")
-    if not isinstance(max_age_days, int):
+    since_raw = value.get("since")
+    until_raw = value.get("until")
+    if max_age_days is None and not since_raw and not until_raw:
+        return False
+    if max_age_days is not None and not isinstance(max_age_days, int):
         try:
             max_age_days = int(max_age_days)
         except Exception:
@@ -178,8 +204,20 @@ def _match_date_range(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     if not dt:
         return False
     try:
-        delta = datetime.now(timezone.utc) - dt
-        return delta <= timedelta(days=max_age_days)
+        now = datetime.now(timezone.utc)
+        if max_age_days is not None:
+            delta = now - dt
+            if delta > timedelta(days=max_age_days):
+                return False
+        if since_raw:
+            since_dt = _parse_iso(str(since_raw))
+            if since_dt is None or dt < since_dt:
+                return False
+        if until_raw:
+            until_dt = _parse_iso(str(until_raw))
+            if until_dt is None or dt > until_dt:
+                return False
+        return True
     except Exception:
         return False
 

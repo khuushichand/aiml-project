@@ -14,7 +14,9 @@ def _enable_test_mode(monkeypatch):
 
 
 def test_unified_endpoint_strict_extractive_with_nli_gate(monkeypatch):
-    # Patch retriever to return one document with the keyword and short sentences
+
+
+     # Patch retriever to return one document with the keyword and short sentences
     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 
     class FakeRetriever:

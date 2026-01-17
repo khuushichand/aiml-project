@@ -69,7 +69,7 @@ tldw_Server_API/app/core/Chatbooks/
 ├── chatbook_models.py        # Data models and enums
 ├── chatbook_validators.py    # Input validation
 ├── quota_manager.py          # User quota management
-├── job_queue_shim.py        # Temporary job queue implementation (global queue via get_job_queue)
+├── jobs_adapter.py          # Core Jobs adapter (queue/status integration)
 └── exceptions.py             # Custom exceptions
 
 tldw_Server_API/app/api/v1/
@@ -85,7 +85,7 @@ tldw_Server_API/app/api/v1/
 - **chatbook_models.py**: Defines ChatbookManifest, ExportJob, ImportJob models
 - **chatbook_validators.py**: Input validation and sanitization
 - **quota_manager.py**: Manages user quotas and rate limiting
-- **job_queue_shim.py**: Temporary implementation of job queue (to be replaced)
+- **jobs_adapter.py**: Core Jobs integration for enqueueing and status mapping
 
 ## Database Schema
 
@@ -391,20 +391,14 @@ Use `ChatbookValidator.validate_zip_file(path)` which performs:
 
 2. **Directory Setup** (in `ChatbookService.__init__`):
 ```python
-import tempfile, os, re
-from pathlib import Path
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
-safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(user_id))[:255]
-if os.environ.get('TLDW_USER_DATA_PATH'):
-    base_data_dir = Path(os.environ['TLDW_USER_DATA_PATH'])
-elif os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI'):
-    base_data_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
-else:
-    base_data_dir = Path('/var/lib/tldw/user_data')
-
-user_data_dir = base_data_dir / 'users' / safe_user_id / 'chatbooks'
-for sub in ('exports','imports','temp'):
-    (user_data_dir / sub).mkdir(parents=True, exist_ok=True, mode=0o700)
+user_data_dir = DatabasePaths.get_user_chatbooks_dir(user_id)
+exports_dir = DatabasePaths.get_user_chatbooks_exports_dir(user_id)
+imports_dir = DatabasePaths.get_user_chatbooks_imports_dir(user_id)
+temp_dir = DatabasePaths.get_user_chatbooks_temp_dir(user_id)
+for directory in (user_data_dir, exports_dir, imports_dir, temp_dir):
+    directory.chmod(0o700)
 ```
 
 3. **Filename Sanitization**:
@@ -528,7 +522,7 @@ async def create_chatbook(
 ### Rate Limiting
 - Export/Import endpoints: 5 requests per minute (per IP)
 - Download endpoint: 20 requests per minute (per IP)
-- Implemented via SlowAPI; disabled in tests by `TEST_MODE`/`TESTING` envs
+- Implemented via Resource Governor (RG) ingress policies; tests typically disable RG via `TEST_MODE`
 
 ## Testing
 
@@ -1033,8 +1027,8 @@ async def health_check(
 
 ```bash
 # Required
-TLDW_USER_DATA_PATH=/var/lib/tldw/user_data
-DATABASE_URL=sqlite:///var/lib/tldw/db/main.db
+USER_DB_BASE_DIR=/app/Databases/user_databases
+DATABASE_URL=sqlite:////app/Databases/users.db
 
 # Optional
 CHATBOOK_MAX_FILE_SIZE=104857600  # 100MB
@@ -1044,14 +1038,16 @@ CHATBOOK_ENABLE_COMPRESSION=true
 CHATBOOK_COMPRESSION_LEVEL=6
 ```
 
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+
 ### Docker Configuration
 
 ```dockerfile
 # In Dockerfile
-RUN mkdir -p /var/lib/tldw/user_data && \
-    chmod 700 /var/lib/tldw/user_data
+RUN mkdir -p /app/Databases/user_databases && \
+    chmod 700 /app/Databases/user_databases
 
-VOLUME ["/var/lib/tldw/user_data"]
+VOLUME ["/app/Databases/user_databases"]
 ```
 
 ### Backup Strategy

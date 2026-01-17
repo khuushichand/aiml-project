@@ -62,9 +62,7 @@ def test_build_voice_samples_fallbacks_to_reference_then_files(tmp_path):
 @pytest.mark.unit
 def test_default_mapping_merged_with_request_overrides():
     # Adapter with default mapping in config
-    adapter = VibeVoiceAdapter({
-        "vibevoice_speakers_to_voices": {"1": "en-Alice_woman"}
-    })
+    adapter = VibeVoiceAdapter({"vibevoice_speakers_to_voices": {"1": "en-Alice_woman"}})
     adapter.available_voices = {
         "en-Alice_woman": "/voices/alice.wav",
         "en-Frank_man": "/voices/frank.wav",
@@ -89,9 +87,7 @@ def test_default_mapping_merged_with_request_overrides():
 
 @pytest.mark.unit
 def test_request_overrides_default_for_same_speaker():
-    adapter = VibeVoiceAdapter({
-        "vibevoice_speakers_to_voices": {"1": "en-Alice_woman"}
-    })
+    adapter = VibeVoiceAdapter({"vibevoice_speakers_to_voices": {"1": "en-Alice_woman"}})
     adapter.available_voices = {
         "en-Alice_woman": "/voices/alice.wav",
     }

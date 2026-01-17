@@ -49,10 +49,12 @@ class TestContextualChunking:
                 return manager
 
     def test_contextual_chunking_disabled_by_default(self, mock_chroma_manager):
+
         """Test that contextual chunking is disabled by default."""
         assert mock_chroma_manager.embedding_config.get("enable_contextual_chunking", False) == False
 
     def test_contextual_chunking_config_override(self, mock_config):
+
         """Test that config settings can override contextual chunking default."""
         mock_config["embedding_config"]["enable_contextual_chunking"] = True
 
@@ -184,6 +186,7 @@ class TestContextualChunking:
             mock_situate.assert_called()
 
     def test_situate_context_generates_summary(self, mock_chroma_manager):
+
         """Test that situate_context generates appropriate context."""
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.analyze') as mock_analyze:
             mock_analyze.return_value = "This chunk discusses machine learning concepts."
@@ -203,6 +206,7 @@ class TestContextualChunking:
             assert "Neural networks are..." in str(call_args)
 
     def test_situate_context_handles_errors_gracefully(self, mock_chroma_manager):
+
         """Test that situate_context handles LLM errors gracefully."""
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.analyze') as mock_analyze:
             mock_analyze.side_effect = Exception("LLM API error")
@@ -217,6 +221,7 @@ class TestContextualChunking:
             assert result == ""
 
     def test_contextual_llm_model_selection(self, mock_chroma_manager):
+
         """Test that the correct LLM model is selected for contextualization."""
         # Test default model
         assert mock_chroma_manager.embedding_config.get("contextual_llm_model", "gpt-3.5-turbo") == "gpt-3.5-turbo"

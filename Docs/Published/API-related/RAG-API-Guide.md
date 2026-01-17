@@ -521,10 +521,13 @@ for await (const chunk of rag.streamSearch('Explain quantum computing')) {
 ### Python
 
 ```python
-import requests
 import json
+import socket
+import sys
 from typing import List, Dict, Optional, Generator
-from requests import Session
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 class RAGClient:
     def __init__(self, base_url: str, api_key: str):
@@ -552,13 +555,21 @@ class RAGClient:
             'keyword_filter': keywords
         }
 
-        response = requests.post(
+        req = Request(
             f'{self.base_url}/search',
+            data=json.dumps(data).encode('utf-8'),
             headers=self.headers,
-            json=data
+            method='POST',
         )
-        response.raise_for_status()
-        return response.json()
+        try:
+            with urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except HTTPError as exc:
+            raise RuntimeError(f"RAG search failed with HTTPError: {exc.code} {exc.reason}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"RAG search failed with URLError: {exc.reason}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"RAG search failed with unexpected error: {exc}") from exc
 
     def ask(self, message: str, databases: List[str] = None) -> Dict:
         """Generate an answer using unified search with generation enabled."""
@@ -567,13 +578,21 @@ class RAGClient:
             'sources': databases or ['media_db'],
             'enable_generation': True
         }
-        response = requests.post(
+        req = Request(
             f'{self.base_url}/search',
+            data=json.dumps(data).encode('utf-8'),
             headers=self.headers,
-            json=data
+            method='POST',
         )
-        response.raise_for_status()
-        return response.json()
+        try:
+            with urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except HTTPError as exc:
+            raise RuntimeError(f"RAG ask failed with HTTPError: {exc.code} {exc.reason}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"RAG ask failed with URLError: {exc.reason}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"RAG ask failed with unexpected error: {exc}") from exc
 
     def stream(self, query: str) -> Generator[str, None, None]:
         """Stream NDJSON answer chunks from unified search."""
@@ -581,34 +600,70 @@ class RAGClient:
             'query': query,
             'enable_generation': True
         }
-        with Session() as s:
-            with s.post(
-                f'{self.base_url}/search/stream',
-                headers=self.headers,
-                data=json.dumps(data),
-                stream=True
-            ) as r:
-                r.raise_for_status()
-                for line in r.iter_lines(decode_unicode=True):
-                    if not line:
-                        continue
-                    evt = json.loads(line)
-                    if evt.get('type') == 'delta':
-                        yield evt.get('text', '')
+        req = Request(
+            f'{self.base_url}/search/stream',
+            data=json.dumps(data).encode('utf-8'),
+            headers=self.headers,
+            method='POST',
+        )
+        try:
+            with urlopen(req, timeout=30) as resp:
+                status = resp.status if hasattr(resp, 'status') else resp.getcode()
+                if status < 200 or status >= 300:
+                    error_body = resp.read().decode('utf-8', errors='replace')
+                    raise RuntimeError(f"RAG stream failed with HTTP {status}: {error_body}")
+                buffer = ''
+                for raw in resp:
+                    buffer += raw.decode('utf-8', errors='replace')
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            evt = json.loads(line)
+                        except json.JSONDecodeError:
+                            print(f"Skipping malformed NDJSON line: {line!r}", file=sys.stderr)
+                            continue
+                        if not isinstance(evt, dict):
+                            print(f"Skipping non-object NDJSON event: {evt!r}", file=sys.stderr)
+                            continue
+                        if evt.get('type') == 'delta':
+                            yield evt.get('text', '')
+                if buffer.strip():
+                    print(f"Skipping trailing partial NDJSON fragment: {buffer!r}", file=sys.stderr)
+        except HTTPError as exc:
+            raise RuntimeError(f"RAG stream failed with HTTPError: {exc.code} {exc.reason}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"RAG stream failed with URLError: {exc.reason}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"RAG stream failed with unexpected error: {exc}") from exc
 
     def advanced_search(self, query: str, with_citations: bool = True, with_answer: bool = True) -> Dict:
         """Perform an advanced search with common features enabled."""
-        response = requests.get(
-            f'{self.base_url}/advanced',
+        params = urlencode({
+            'query': query,
+            'with_citations': str(with_citations).lower(),
+            'with_answer': str(with_answer).lower()
+        })
+        req = Request(
+            f'{self.base_url}/advanced?{params}',
             headers=self.headers,
-            params={
-                'query': query,
-                'with_citations': str(with_citations).lower(),
-                'with_answer': str(with_answer).lower()
-            }
+            method='GET',
         )
-        response.raise_for_status()
-        return response.json()
+        try:
+            with urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except HTTPError as exc:
+            raise RuntimeError(f"RAG advanced search failed with HTTPError: {exc.code} {exc.reason}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"RAG advanced search failed with URLError: {exc.reason}") from exc
+        except socket.timeout as exc:
+            raise RuntimeError("RAG advanced search timed out after 30s") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"RAG advanced search failed to parse JSON: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"RAG advanced search failed with unexpected error: {exc}") from exc
 
 
 # Usage example

@@ -6,7 +6,9 @@ from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
 
 
 def test_audit_bridge_logs_job_create(monkeypatch, tmp_path):
-    # Skip gracefully if unified audit is unavailable (optional dependency)
+
+
+     # Skip gracefully if unified audit is unavailable (optional dependency)
     try:
         from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService  # noqa: F401
     except Exception:

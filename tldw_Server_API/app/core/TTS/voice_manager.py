@@ -16,10 +16,10 @@ from datetime import datetime, timedelta
 # Third-party Imports
 import aiofiles
 from loguru import logger
-from tldw_Server_API.app.core.config import settings
 from pydantic import BaseModel, Field, field_validator
 #
 # Local Imports
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from .tts_exceptions import (
     TTSError,
     TTSInvalidInputError,
@@ -249,37 +249,13 @@ class VoiceManager:
         self.cleanup_interval = 3600  # 1 hour
         self.user_upload_counts: Dict[int, List[datetime]] = {}
         self._processing_tasks: Dict[str, asyncio.Task] = {}
-        self._warned_user_db_base_dir_fallback: bool = False
 
     def get_user_voices_path(self, user_id: int) -> Path:
         """Get the voices directory path for a user.
 
-        By default this is `<USER_DB_BASE_DIR>/<user_id>/voices`. When
-        `USER_DB_BASE_DIR` is not configured, it falls back to
-        `<repo_root>/Databases/user_databases/<user_id>/voices`, which is
-        suitable for local/dev but should be overridden in production.
+        Uses DatabasePaths to resolve `<USER_DB_BASE_DIR>/<user_id>/voices`.
         """
-        try:
-            base_dir: Path = settings.get("USER_DB_BASE_DIR")
-            base_path = base_dir / str(user_id) / "voices"
-        except Exception:
-            # Anchor to package root as last resort to avoid CWD effects
-            base_path = Path(__file__).resolve().parents[4] / "Databases" / "user_databases" / str(user_id) / "voices"
-            if not self._warned_user_db_base_dir_fallback:
-                logger.warning(
-                    "VoiceManager: USER_DB_BASE_DIR is not configured; using fallback path "
-                    f"{base_path.parent}. For production deployments, configure USER_DB_BASE_DIR "
-                    "to point at a volume with sufficient capacity, backup, and appropriate ACLs."
-                )
-                self._warned_user_db_base_dir_fallback = True
-        base_path.mkdir(parents=True, exist_ok=True)
-
-        # Create subdirectories
-        (base_path / "uploads").mkdir(exist_ok=True)
-        (base_path / "processed").mkdir(exist_ok=True)
-        (base_path / "temp").mkdir(exist_ok=True)
-
-        return base_path
+        return DatabasePaths.get_user_voices_dir(user_id)
 
     async def check_rate_limits(self, user_id: int) -> Tuple[bool, str]:
         """Check if user is within rate limits"""
@@ -620,10 +596,7 @@ class VoiceManager:
         """Clean up old temporary files"""
         try:
             # Clean all user temp directories
-            try:
-                base_path: Path = settings.get("USER_DB_BASE_DIR")
-            except Exception:
-                base_path = Path(__file__).resolve().parents[4] / "Databases" / "user_databases"
+            base_path = DatabasePaths.get_user_db_base_dir()
             if base_path.exists():
                 for user_dir in base_path.iterdir():
                     if user_dir.is_dir():

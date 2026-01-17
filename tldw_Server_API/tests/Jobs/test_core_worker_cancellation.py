@@ -64,7 +64,7 @@ async def test_core_worker_honors_mid_processing_cancellation(monkeypatch, tmp_p
     # Ensure the worker built in module will find the ej when it constructs svc anew
     # by monkeypatching _get_export_job to always refer to our seeded state
     def _fake_get_export_job(self, jid):
-        # Avoid recursion by reading from the seeded instance dictionary directly
+             # Avoid recursion by reading from the seeded instance dictionary directly
         return svc._jobs.get(jid)
     monkeypatch.setattr(FakeChatbookService, "_get_export_job", _fake_get_export_job)
 

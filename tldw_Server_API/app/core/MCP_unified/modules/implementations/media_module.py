@@ -6,6 +6,7 @@ Production-ready media management module with full MCP compliance.
 
 import os
 import asyncio
+import threading
 import uuid
 import socket
 import ipaddress
@@ -19,7 +20,13 @@ from pathlib import Path
 from loguru import logger
 
 from ..base import BaseModule, ModuleConfig, create_tool_definition, create_resource_definition
-from ....DB_Management.Media_DB_v2 import MediaDatabase
+from ....DB_Management.Media_DB_v2 import (
+    MediaDatabase,
+    get_latest_transcription,
+    get_media_transcripts,
+    get_document_version,
+    permanently_delete_item,
+)
 from ....DB_Management.db_path_utils import DatabasePaths
 
 
@@ -63,6 +70,8 @@ class MediaModule(BaseModule):
             self._semantic_retrievers: Dict[Tuple[Optional[str], Optional[str]], Any] = {}
             self._ingestion_jobs: Dict[str, Dict[str, Any]] = {}
             self._ingestion_jobs_lock = asyncio.Lock()
+            self._user_db_cache: Dict[str, MediaDatabase] = {}
+            self._user_db_cache_lock = threading.Lock()
 
             logger.info(f"Media module initialized with database: {db_path}")
 
@@ -85,6 +94,14 @@ class MediaModule(BaseModule):
                             except Exception:
                                 pass
                     self._semantic_retrievers.clear()
+            except Exception:
+                pass
+
+            try:
+                if hasattr(self, "_user_db_cache"):
+                    for db in self._user_db_cache.values():
+                        self._close_media_db_instance(db)
+                    self._user_db_cache.clear()
             except Exception:
                 pass
 
@@ -165,7 +182,7 @@ class MediaModule(BaseModule):
                     },
                     "required": ["query"],
                 },
-                metadata={"category": "search", "readOnlyHint": True},
+                metadata={"category": "search", "readOnlyHint": True, "auth_required": True},
             ),
             create_tool_definition(
                 name="media.get",
@@ -183,7 +200,7 @@ class MediaModule(BaseModule):
                     },
                     "required": ["media_id"],
                 },
-                metadata={"category": "retrieval", "readOnlyHint": True},
+                metadata={"category": "retrieval", "readOnlyHint": True, "auth_required": True},
             ),
             create_tool_definition(
                 name="search_media",
@@ -218,7 +235,7 @@ class MediaModule(BaseModule):
                     },
                     "required": ["query"]
                 },
-                metadata={"category": "search", "auth_required": False}
+                metadata={"category": "search", "auth_required": True}
             ),
 
             create_tool_definition(
@@ -264,7 +281,7 @@ class MediaModule(BaseModule):
                     },
                     "required": ["media_id"]
                 },
-                metadata={"category": "metadata", "auth_required": False}
+                metadata={"category": "metadata", "auth_required": True}
             ),
 
             create_tool_definition(
@@ -395,16 +412,64 @@ class MediaModule(BaseModule):
             logger.error(f"Tool execution failed: {tool_name} - {e}")
             raise
 
-    def _open_media_db(self, context: Any | None) -> MediaDatabase:
-        """Open per-user media DB when context provides one; fallback to module DB."""
+    def _allow_anonymous_access(self) -> bool:
         try:
-            if context and getattr(context, "db_paths", None):
-                user_media_path = context.db_paths.get("media")
-                if user_media_path and str(user_media_path) != str(getattr(self.db, "db_path_str", "")):
-                    return MediaDatabase(db_path=user_media_path, client_id=f"mcp_media_{self.config.name}")
+            return bool(self.config.settings.get("allow_anonymous_access", False))
+        except Exception:
+            return False
+
+    def _close_media_db_instance(self, db: MediaDatabase) -> None:
+        try:
+            db.close_connection()
         except Exception:
             pass
-        return self.db
+        try:
+            pool = db.backend.get_pool()
+            pool.close_all()
+        except Exception:
+            pass
+
+    def _get_or_create_user_db(self, db_path: str) -> MediaDatabase:
+        cache = getattr(self, "_user_db_cache", None)
+        if cache is None:
+            self._user_db_cache = {}
+            cache = self._user_db_cache
+        lock = getattr(self, "_user_db_cache_lock", None)
+        if lock:
+            with lock:
+                cached = cache.get(db_path)
+                if cached is not None:
+                    return cached
+                db = MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
+                cache[db_path] = db
+                return db
+        cached = cache.get(db_path)
+        if cached is not None:
+            return cached
+        db = MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
+        cache[db_path] = db
+        return db
+
+    def _open_media_db(self, context: Any | None) -> MediaDatabase:
+        """Open per-user media DB when context provides one; fallback to module DB."""
+        db = getattr(self, "db", None)
+        if db is None:
+            raise ValueError("Media database not initialized")
+        if not isinstance(db, MediaDatabase):
+            return db
+        if context is None or getattr(context, "user_id", None) is None:
+            if self._allow_anonymous_access():
+                return db
+            raise PermissionError("User context required for media access")
+        db_paths = getattr(context, "db_paths", None)
+        if not isinstance(db_paths, dict):
+            raise PermissionError("Media DB path not available in context")
+        user_media_path = db_paths.get("media")
+        if not user_media_path:
+            raise PermissionError("Media DB path not available in context")
+        if str(user_media_path) == str(getattr(db, "db_path_str", "")):
+            return db
+        return self._get_or_create_user_db(str(user_media_path))
 
     def _normalize_scores(self, rows: List[Dict[str, Any]]) -> List[float]:
         if not rows:
@@ -439,6 +504,24 @@ class MediaModule(BaseModule):
             return t[start:end]
         except Exception:
             return t[:length]
+
+    def _get_latest_description(self, dbi: MediaDatabase, media_id: int) -> Optional[str]:
+        try:
+            latest = get_document_version(
+                db_instance=dbi,
+                media_id=media_id,
+                version_number=None,
+                include_content=False,
+            )
+            return (latest or {}).get("analysis_content")
+        except Exception:
+            return None
+
+    def _sanitize_media_metadata(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        sanitized = dict(row)
+        for key in ("content", "client_id", "vector_embedding"):
+            sanitized.pop(key, None)
+        return sanitized
 
     async def _media_search_normalized(
         self,
@@ -582,6 +665,7 @@ class MediaModule(BaseModule):
             raise ValueError(f"Media not found: {media_id}")
         # Ownership check
         self._assert_media_access(media_id, context, dbi)
+        description = self._get_latest_description(dbi, media_id)
         content = meta.get("content") or ""
         item = {
             "id": meta.get("id"),
@@ -599,6 +683,7 @@ class MediaModule(BaseModule):
             "url": meta.get("url"),
             "loc": None,
         }
+        item["description"] = description
         if mode == "full":
             body = content
             return {"meta": item, "content": body, "attachments": None}
@@ -1225,37 +1310,32 @@ class MediaModule(BaseModule):
             # Ownership check first
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
-            # Get transcript from database
-            transcript_data = dbi.get_transcript(media_id)
-
-            if not transcript_data:
+            # Get transcript from database (latest text)
+            transcript_text = get_latest_transcription(dbi, media_id)
+            if transcript_text is None:
                 raise ValueError(f"No transcript found for media ID: {media_id}")
 
             # Format based on requested type
-            if format == "text":
-                if include_timestamps:
-                    # Include timestamps in text format
-                    formatted = self._format_transcript_with_timestamps(transcript_data)
-                else:
-                    formatted = transcript_data.get("text", "")
-
+            if format == "json":
+                formatted = get_media_transcripts(dbi, media_id)
+            elif format == "text":
+                formatted = (
+                    self._format_transcript_with_timestamps(transcript_text)
+                    if include_timestamps
+                    else transcript_text
+                )
             elif format == "srt":
-                formatted = self._convert_to_srt(transcript_data)
-
+                formatted = self._convert_to_srt(transcript_text)
             elif format == "vtt":
-                formatted = self._convert_to_vtt(transcript_data)
-
-            elif format == "json":
-                formatted = transcript_data
-
+                formatted = self._convert_to_vtt(transcript_text)
             else:
-                formatted = transcript_data.get("text", "")
+                formatted = transcript_text
 
             return {
                 "media_id": media_id,
                 "format": format,
                 "include_timestamps": include_timestamps,
-                "transcript": formatted
+                "transcript": formatted,
             }
 
         except Exception as e:
@@ -1275,10 +1355,14 @@ class MediaModule(BaseModule):
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
             # Get basic metadata
-            metadata = dbi.get_media_metadata(media_id)
+            metadata = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
 
             if not metadata:
                 raise ValueError(f"Media not found: {media_id}")
+
+            description = self._get_latest_description(dbi, media_id)
+            metadata = self._sanitize_media_metadata(metadata)
+            metadata["description"] = description
 
             # Add statistics if requested
             if include_stats:
@@ -1316,16 +1400,26 @@ class MediaModule(BaseModule):
             )
 
             # Start processing based on priority
+            queued = False
             if priority == "high":
                 # Process immediately
                 await self._process_media_job(job_id)
             else:
-                # Queue for background processing
-                await self._queue_media_job(job_id)
+                # Queue for background processing when configured, otherwise fallback to immediate
+                queue_backend = (
+                    self.config.settings.get("ingestion_queue")
+                    or self.config.settings.get("queue_backend")
+                    or self.config.settings.get("queue_provider")
+                )
+                if queue_backend:
+                    await self._queue_media_job(job_id)
+                    queued = True
+                else:
+                    await self._process_media_job(job_id)
 
             return {
                 "job_id": job_id,
-                "status": "processing" if priority == "high" else "queued",
+                "status": "queued" if queued else "processing",
                 "url": url,
                 "title": title,
                 "process_type": process_type
@@ -1348,24 +1442,68 @@ class MediaModule(BaseModule):
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
             # Validate media exists
-            existing = dbi.get_media_metadata(media_id)
+            existing = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
 
-            # Apply updates
-            updated_fields = []
+            updated_fields: List[str] = []
+            new_title = updates.get("title")
+            new_description = updates.get("description")
+            new_tags = updates.get("tags")
 
-            if "title" in updates:
-                dbi.update_media_title(media_id, updates["title"])
-                updated_fields.append("title")
+            with dbi.transaction() as conn:
+                row = dbi._fetchone_with_connection(
+                    conn,
+                    "SELECT uuid, version, title, content FROM Media WHERE id = ? AND deleted = 0 AND is_trash = 0",
+                    (media_id,),
+                )
+                if not row:
+                    raise ValueError(f"Media not found: {media_id}")
+                media_uuid = row["uuid"]
+                current_version = row["version"]
+                current_title = row.get("title")
+                current_content = row.get("content")
 
-            if "description" in updates:
-                dbi.update_media_description(media_id, updates["description"])
-                updated_fields.append("description")
+                new_version = current_version + 1
+                now = dbi._get_current_utc_timestamp_str()
+                set_parts = ["last_modified = ?", "version = ?", "client_id = ?"]
+                params: List[Any] = [now, new_version, dbi.client_id]
 
-            if "tags" in updates:
-                dbi.update_media_tags(media_id, updates["tags"])
-                updated_fields.append("tags")
+                if new_title is not None:
+                    set_parts.append("title = ?")
+                    params.append(new_title)
+                    updated_fields.append("title")
+
+                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
+                update_params = (*params, media_id, current_version)
+                update_cursor = dbi._execute_with_connection(conn, update_sql, update_params)
+                if update_cursor.rowcount == 0:
+                    raise ValueError(f"Failed to update media {media_id} (conflict)")
+
+                if new_title is not None and new_title != current_title:
+                    dbi._update_fts_media(conn, media_id, new_title, current_content or "")
+
+                if new_tags is not None:
+                    dbi.update_keywords_for_media(media_id, list(new_tags), conn=conn)
+                    updated_fields.append("tags")
+
+                if new_description is not None:
+                    if current_content is None:
+                        raise ValueError("Cannot update description without media content")
+                    dbi.create_document_version(
+                        media_id=media_id,
+                        content=current_content,
+                        prompt=None,
+                        analysis_content=new_description,
+                    )
+                    updated_fields.append("description")
+
+                updated_media_info = dbi._fetchone_with_connection(
+                    conn,
+                    "SELECT * FROM Media WHERE id = ?",
+                    (media_id,),
+                ) or {}
+                dbi._log_sync_event(conn, "Media", media_uuid, "update", new_version, updated_media_info)
 
             # Clear cache for this media
             self._clear_media_cache(media_id)
@@ -1373,7 +1511,7 @@ class MediaModule(BaseModule):
             return {
                 "media_id": media_id,
                 "updated_fields": updated_fields,
-                "success": True
+                "success": True,
             }
 
         except Exception as e:
@@ -1393,18 +1531,23 @@ class MediaModule(BaseModule):
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
             # Validate media exists
-            existing = dbi.get_media_metadata(media_id)
+            existing = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
 
             if permanent:
                 # Hard delete (requires admin)
-                # Check would be done at protocol level
-                dbi.delete_media_permanent(media_id)
+                if not self._is_admin(context):
+                    raise PermissionError("Admin role required for permanent delete")
+                deleted = permanently_delete_item(dbi, media_id)
+                if not deleted:
+                    raise ValueError(f"Media not found: {media_id}")
                 action = "permanently_deleted"
             else:
                 # Soft delete
-                dbi.delete_media_soft(media_id)
+                deleted = dbi.soft_delete_media(media_id, cascade=True)
+                if not deleted:
+                    raise ValueError(f"Media not found: {media_id}")
                 action = "soft_deleted"
 
             # Clear cache
@@ -1413,7 +1556,7 @@ class MediaModule(BaseModule):
             return {
                 "media_id": media_id,
                 "action": action,
-                "success": True
+                "success": True,
             }
 
         except Exception as e:
@@ -1610,22 +1753,33 @@ class MediaModule(BaseModule):
     def _assert_media_access(self, media_id: int, context: Any | None, dbi: Optional[MediaDatabase] = None) -> None:
         """Enforce that non-admin users can only access their own media when ownership is present."""
         try:
-            if context is None or getattr(context, "user_id", None) is None:
-                return
-            if self._is_admin(context):
-                return
-            dbi = dbi or self._open_media_db(context)
-            row = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
-            if not row:
-                return
-            owner = row.get("user_id")
-            if owner is not None and str(owner) != str(context.user_id):
-                raise PermissionError("Access denied for this media item")
-        except PermissionError:
-            raise
+            from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode
+            strict_ownership = is_multi_user_mode()
         except Exception:
-            # Fail-open if ownership field not present or any non-critical error occurs
+            strict_ownership = False
+
+        if context is None or getattr(context, "user_id", None) is None:
+            if self._allow_anonymous_access() and not strict_ownership:
+                return
+            raise PermissionError("User context required for media access")
+        if self._is_admin(context):
             return
+        dbi = dbi or self._open_media_db(context)
+        try:
+            row = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+        except Exception as exc:
+            if strict_ownership:
+                raise PermissionError("Access denied: ownership lookup failed") from exc
+            raise
+        if not row:
+            return
+        owner = row.get("owner_user_id")
+        if owner is None:
+            if strict_ownership:
+                raise PermissionError("Access denied: ownership metadata missing")
+            return
+        if str(owner) != str(context.user_id):
+            raise PermissionError("Access denied for this media item")
 
     def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
         """Stricter validation for high-risk tools."""
@@ -1729,8 +1883,14 @@ class MediaModule(BaseModule):
 
     async def _queue_media_job(self, job_id: str):
         """Queue media job for background processing"""
-        # Placeholder for job queue integration
-        pass
+        queue_backend = (
+            self.config.settings.get("ingestion_queue")
+            or self.config.settings.get("queue_backend")
+            or self.config.settings.get("queue_provider")
+        )
+        if not queue_backend:
+            raise RuntimeError("Ingestion queue not configured; set ingestion_queue to enable background jobs")
+        raise RuntimeError(f"Ingestion queue backend '{queue_backend}' not implemented")
 
     async def _get_media_stats(self, media_id: int) -> Dict[str, Any]:
         """Get media statistics"""
@@ -1741,17 +1901,143 @@ class MediaModule(BaseModule):
             "last_accessed": None
         }
 
-    def _format_transcript_with_timestamps(self, transcript_data: Dict) -> str:
-        """Format transcript with timestamps"""
-        # Placeholder implementation
-        return transcript_data.get("text", "")
+    def _format_timestamp(self, total_seconds: Any, ms_separator: str) -> str:
+        try:
+            total_ms = int(round(max(float(total_seconds or 0.0), 0.0) * 1000))
+        except Exception:
+            total_ms = 0
+        seconds, ms = divmod(total_ms, 1000)
+        hours, seconds = divmod(seconds, 3600)
+        minutes, seconds = divmod(seconds, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}{ms_separator}{ms:03d}"
 
-    def _convert_to_srt(self, transcript_data: Dict) -> str:
-        """Convert transcript to SRT format"""
-        # Placeholder implementation
-        return ""
+    def _coerce_time_value(self, value: Any, *, is_ms: bool = False) -> float:
+        try:
+            val = float(value)
+        except Exception:
+            return 0.0
+        if is_ms:
+            val = val / 1000.0
+        return max(val, 0.0)
 
-    def _convert_to_vtt(self, transcript_data: Dict) -> str:
-        """Convert transcript to WebVTT format"""
-        # Placeholder implementation
-        return "WEBVTT\n\n"
+    def _normalize_segments(self, segments: Any) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        if not isinstance(segments, list):
+            return normalized
+        for seg in segments:
+            if not isinstance(seg, dict):
+                continue
+            text = seg.get("text")
+            if text is None:
+                text = seg.get("Text")
+            if text is None:
+                text = seg.get("transcription")
+            if text is None:
+                text = seg.get("transcript")
+            text = str(text or "").strip()
+
+            start = seg.get("start")
+            end = seg.get("end")
+            if start is None:
+                start = seg.get("start_seconds")
+            if end is None:
+                end = seg.get("end_seconds")
+            if start is None:
+                start = seg.get("start_time")
+            if end is None:
+                end = seg.get("end_time")
+            if start is None:
+                start = seg.get("start_ms")
+            if end is None:
+                end = seg.get("end_ms")
+            is_ms = "start_ms" in seg or "end_ms" in seg
+            start_val = self._coerce_time_value(start, is_ms=is_ms)
+            end_val = self._coerce_time_value(end, is_ms=is_ms)
+            if end_val < start_val:
+                end_val = start_val
+            normalized.append({"text": text, "start": start_val, "end": end_val})
+        return normalized
+
+    def _coerce_transcript_payload(self, transcript_data: Any) -> Tuple[str, List[Dict[str, Any]]]:
+        if transcript_data is None:
+            return "", []
+        if isinstance(transcript_data, str):
+            stripped = transcript_data.strip()
+            if stripped and stripped[0] in "[{":
+                try:
+                    parsed = json.loads(stripped)
+                    return self._coerce_transcript_payload(parsed)
+                except Exception:
+                    pass
+            return transcript_data, []
+        if isinstance(transcript_data, dict):
+            segments = self._normalize_segments(transcript_data.get("segments") or transcript_data.get("Segments") or [])
+            text = transcript_data.get("text")
+            if text is None:
+                text = transcript_data.get("transcription")
+            if text is None:
+                text = ""
+            if not text and segments:
+                text = " ".join(seg["text"] for seg in segments if seg.get("text"))
+            return str(text), segments
+        if isinstance(transcript_data, list):
+            segments = self._normalize_segments(transcript_data)
+            text = " ".join(seg["text"] for seg in segments if seg.get("text"))
+            return text, segments
+        return str(transcript_data), []
+
+    def _format_transcript_with_timestamps(self, transcript_data: Any) -> str:
+        """Format transcript with timestamps when segment metadata is available."""
+        text, segments = self._coerce_transcript_payload(transcript_data)
+        if not segments:
+            return text
+        lines: List[str] = []
+        for seg in segments:
+            seg_text = seg.get("text") or ""
+            if not seg_text:
+                continue
+            start_ts = self._format_timestamp(seg.get("start", 0.0), ".")
+            lines.append(f"{start_ts} {seg_text}")
+        return "\n".join(lines).strip()
+
+    def _convert_to_srt(self, transcript_data: Any) -> str:
+        """Convert transcript to SRT format."""
+        text, segments = self._coerce_transcript_payload(transcript_data)
+        if segments:
+            lines: List[str] = []
+            idx = 1
+            for seg in segments:
+                seg_text = seg.get("text") or ""
+                if not seg_text:
+                    continue
+                start_ts = self._format_timestamp(seg.get("start", 0.0), ",")
+                end_ts = self._format_timestamp(seg.get("end", seg.get("start", 0.0)), ",")
+                lines.append(str(idx))
+                lines.append(f"{start_ts} --> {end_ts}")
+                lines.append(seg_text)
+                lines.append("")
+                idx += 1
+            if lines:
+                return "\n".join(lines).rstrip() + "\n"
+        if not text:
+            return ""
+        return f"1\n00:00:00,000 --> 00:00:10,000\n{text}\n"
+
+    def _convert_to_vtt(self, transcript_data: Any) -> str:
+        """Convert transcript to WebVTT format."""
+        text, segments = self._coerce_transcript_payload(transcript_data)
+        if segments:
+            lines: List[str] = ["WEBVTT", ""]
+            for seg in segments:
+                seg_text = seg.get("text") or ""
+                if not seg_text:
+                    continue
+                start_ts = self._format_timestamp(seg.get("start", 0.0), ".")
+                end_ts = self._format_timestamp(seg.get("end", seg.get("start", 0.0)), ".")
+                lines.append(f"{start_ts} --> {end_ts}")
+                lines.append(seg_text)
+                lines.append("")
+            return "\n".join(lines).rstrip() + "\n"
+        if not text:
+            return "WEBVTT\n\n"
+        return f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{text}\n"

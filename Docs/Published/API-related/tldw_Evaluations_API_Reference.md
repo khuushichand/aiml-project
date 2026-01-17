@@ -205,16 +205,22 @@ curl -X POST http://localhost:8000/api/v1/evaluations/geval \
 
 ### Python
 ```python
-import requests
+import json
+from urllib.request import Request, urlopen
 
-response = requests.post(
+payload = {
+    "query": "What is ML?",
+    "retrieved_contexts": ["..."],
+    "generated_response": "...",
+}
+req = Request(
     "http://localhost:8000/api/v1/evaluations/rag",
-    json={
-        "query": "What is ML?",
-        "retrieved_contexts": ["..."],
-        "generated_response": "..."
-    }
+    data=json.dumps(payload).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
 )
+with urlopen(req) as resp:
+    result = json.loads(resp.read().decode("utf-8"))
 ```
 
 ### Load Testing

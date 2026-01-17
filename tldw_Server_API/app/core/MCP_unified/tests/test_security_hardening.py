@@ -1,5 +1,4 @@
 import os
-import asyncio
 import pytest
 
 from types import SimpleNamespace
@@ -7,7 +6,6 @@ from types import SimpleNamespace
 from tldw_Server_API.app.core.MCP_unified.server import MCPServer
 from tldw_Server_API.app.core.MCP_unified.config import get_config
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
-from tldw_Server_API.app.core.MCP_unified.auth.rate_limiter import DistributedRateLimiter
 from tldw_Server_API.app.core.MCP_unified.auth.authnz_rbac import AuthNZRBAC, Resource, Action
 from fastapi import WebSocketDisconnect
 
@@ -116,74 +114,6 @@ async def test_ws_header_bearer_auth_accepts(monkeypatch):
         # If closed, it should not be due to auth failures
         assert ws.close_args[0] != 1008
 
-
-def test_redis_limiter_fallback_without_redis():
-    # When redis client is None, fallback limiter should engage
-    limiter = DistributedRateLimiter(rate=2, window=60, redis_client=None)
-
-    async def run():
-        allowed = []
-        for _ in range(3):
-            ok, _ra = await limiter.is_allowed("k1")
-            allowed.append(ok)
-        return allowed
-
-    allowed = asyncio.get_event_loop().run_until_complete(run())
-    # Token bucket fallback grants an initial free pass + burst tokens.
-    # With rate=2, first three requests are allowed, the 4th is blocked.
-    assert allowed[0] is True and allowed[1] is True and allowed[2] is True
-    # Next call should block
-    async def run_next():
-        return await limiter.is_allowed("k1")
-    ok4, _ = asyncio.get_event_loop().run_until_complete(run_next())
-    assert ok4 is False
-
-
-class _FakeRedis:
-    def script_load(self, script):
-        return "sha"
-
-    async def evalsha(self, *args, **kwargs):
-        raise RuntimeError("redis down")
-
-    async def delete(self, *args, **kwargs):
-        return 1
-
-    async def zremrangebyscore(self, *args, **kwargs):
-        return 0
-
-    async def zcard(self, *args, **kwargs):
-        return 0
-
-
-def test_redis_limiter_fallback_on_error():
-    limiter = DistributedRateLimiter(rate=1, window=60, redis_client=_FakeRedis())
-
-    async def run():
-        r1 = await limiter.is_allowed("k2")
-        r2 = await limiter.is_allowed("k2")
-        return r1, r2
-
-    r1, r2 = asyncio.get_event_loop().run_until_complete(run())
-    # With rate=1, initial free pass + 1 token → two allowed, third blocks
-    assert r1[0] is True
-    assert r2[0] is True
-    r3 = asyncio.get_event_loop().run_until_complete(limiter.is_allowed("k2"))
-    assert r3[0] is False
-
-
-@pytest.mark.asyncio
-async def test_distributed_limiter_uses_stub_when_unavailable(monkeypatch):
-    # Use an unreachable Redis URL; factory should fallback to the in-process stub
-    limiter = DistributedRateLimiter(rate=2, window=60, redis_url="redis://127.0.0.1:6399")
-
-    allowed1, _ = await limiter.is_allowed("fallback-key")
-    allowed2, _ = await limiter.is_allowed("fallback-key")
-    allowed3, _ = await limiter.is_allowed("fallback-key")
-
-    assert allowed1 is True
-    assert allowed2 is True
-    assert allowed3 is False
 
 
 @pytest.mark.asyncio

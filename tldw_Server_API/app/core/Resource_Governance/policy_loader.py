@@ -218,14 +218,42 @@ class PolicyLoader:
 
 # Optional helper to construct from default location & env
 def default_policy_loader() -> PolicyLoader:
-    base = Path(__file__).resolve().parents[4]
-    cfg_path = os.getenv(
-        "RG_POLICY_PATH",
-        str(base / "Config_Files" / "resource_governor_policies.yaml"),
-    )
+    try:
+        from tldw_Server_API.app.core.config import (
+            rg_policy_path,  # type: ignore
+            rg_policy_path_default,
+            resolve_repo_relative_path,
+            rg_repo_root,
+        )
+    except Exception:
+        rg_policy_path = None  # type: ignore
+        rg_policy_path_default = None  # type: ignore
+        resolve_repo_relative_path = None  # type: ignore
+        rg_repo_root = None  # type: ignore
+    if rg_policy_path:
+        raw_path = rg_policy_path()
+    else:
+        if rg_policy_path_default:
+            default_path = rg_policy_path_default()
+        else:
+            default_path = "Config_Files/resource_governor_policies.yaml"
+        raw_path = os.getenv("RG_POLICY_PATH", default_path)
+    try:
+        if resolve_repo_relative_path:
+            cfg_path = Path(resolve_repo_relative_path(raw_path))
+        else:
+            cfg_path = Path(raw_path).expanduser()
+            if not cfg_path.is_absolute():
+                base = rg_repo_root() if rg_repo_root else Path(__file__).resolve().parents[4]
+                cfg_path = (base / cfg_path).resolve()
+        if not cfg_path.exists():
+            logger.warning("ResourceGovernor policy file not found at {}", str(cfg_path))
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.debug("Failed to resolve RG policy path '{}': {}", raw_path, exc)
+        cfg_path = Path(raw_path)
     reload_enabled = os.getenv("RG_POLICY_RELOAD_ENABLED", "true").lower() in {"1", "true", "yes"}
     reload_interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10"))
-    return PolicyLoader(cfg_path, PolicyReloadConfig(reload_enabled, reload_interval))
+    return PolicyLoader(str(cfg_path), PolicyReloadConfig(reload_enabled, reload_interval))
 
 
 @runtime_checkable
@@ -238,7 +266,11 @@ class PolicyStoreProtocol(Protocol):
 
 
 def db_policy_loader(store: PolicyStoreProtocol, reload: Optional[PolicyReloadConfig] = None) -> PolicyLoader:
-    base = Path(__file__).resolve().parents[4]
+    try:
+        from tldw_Server_API.app.core.config import rg_repo_root  # type: ignore
+    except Exception:
+        rg_repo_root = None  # type: ignore
+    base = rg_repo_root() if rg_repo_root else Path(__file__).resolve().parents[4]
     cfg_path = base / "Config_Files" / "resource_governor_policies.yaml"
     # path is required by constructor but unused when store is provided
     return PolicyLoader(str(cfg_path), reload or PolicyReloadConfig(), store=store)

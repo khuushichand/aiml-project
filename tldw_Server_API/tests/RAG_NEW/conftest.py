@@ -13,6 +13,7 @@ from typing import Dict, Any, Generator
 from unittest.mock import MagicMock, AsyncMock
 
 import pytest
+from loguru import logger
 
 # Import actual MediaDatabase for integration tests
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -24,6 +25,7 @@ from tldw_Server_API.app.core.RAG.rag_service.metrics_collector import QueryMetr
 # =====================================================================
 
 def pytest_configure(config):
+
     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
@@ -31,9 +33,36 @@ def pytest_configure(config):
     try:
         # Importing the helpers module registers its fixtures for this test package
         import tldw_Server_API.tests.helpers.pgvector  # noqa: F401
-    except Exception:
+    except (ImportError, AttributeError) as e:
         # If unavailable, tests that require pgvector will be skipped by their own guards
-        pass
+        logger.debug(f"pgvector fixtures not available: {e}")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_semantic_cache(tmp_path, monkeypatch):
+    """Keep semantic cache state isolated between tests."""
+    cache_root = tmp_path / "semantic_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("RAG_SEMANTIC_CACHE_DIR", str(cache_root))
+    monkeypatch.delenv("RAG_CACHE_DIR", raising=False)
+
+    cache_module = None
+    try:
+        from tldw_Server_API.app.core.RAG.rag_service import semantic_cache as cache_module  # type: ignore
+    except (ImportError, AttributeError) as e:
+        # Module may not be available in all test environments
+        logger.debug(f"Semantic cache module not available: {e}")
+        cache_module = None
+
+    if cache_module is not None:
+        cache_module._SHARED_CACHES.clear()
+        cache_module._DEFAULT_CACHE_DIR = None
+
+    yield
+
+    if cache_module is not None:
+        cache_module._SHARED_CACHES.clear()
+        cache_module._DEFAULT_CACHE_DIR = None
 
 # =====================================================================
 # Cross-suite fixtures (mirrors Embeddings fixtures used by RAG tests)

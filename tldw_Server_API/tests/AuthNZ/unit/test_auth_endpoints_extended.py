@@ -1,0 +1,387 @@
+from types import SimpleNamespace
+import os
+import time
+from datetime import datetime
+
+import pytest
+from fastapi import Response
+from starlette.requests import Request
+
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+
+@pytest.mark.asyncio
+async def test_reset_password_weak_and_success(monkeypatch):
+    reset_settings()
+    # Stub DB adapter expected by endpoint (fetchval/execute/commit)
+    class _StubDB:
+        async def fetchval(self, *args, **kwargs):
+            return None
+
+        async def execute(self, *args, **kwargs):
+            class _C:
+                lastrowid = 1
+
+                async def fetchone(self):
+                    # Simulate existing reset token record
+                    return (1, None)
+
+            return _C()
+
+        async def commit(self):
+            return True
+
+    class _StubJWT:
+        def verify_token(self, token: str, token_type: str | None = None):
+            return {"sub": 42}
+
+        def hash_token_candidates(self, token: str) -> list[str]:
+            return ["htok"]
+
+        def hash_token(self, token: str) -> str:
+            return "htok"
+
+    class _StubPwd:
+        def __init__(self, weak: bool = False):
+            self.weak = weak
+        def validate_password_strength(self, new_password: str, username: str | None = None):
+            if self.weak:
+                from tldw_Server_API.app.core.AuthNZ.exceptions import WeakPasswordError
+                raise WeakPasswordError("Password too weak")
+        def hash_password(self, pwd: str) -> str:
+            return "HASHED"
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as _auth
+
+    async def _fake_is_pg() -> bool:
+        return False
+
+    monkeypatch.setattr(_auth, "is_postgres_backend", _fake_is_pg)
+
+    # Weak password
+    with pytest.raises(Exception):
+        await _auth.reset_password(
+            data=_auth.ResetPasswordRequest(token="tok", new_password="weak"),
+            db=_StubDB(),
+            jwt_service=_StubJWT(),
+            password_service=_StubPwd(weak=True),
+        )
+
+    # Success path
+    out = await _auth.reset_password(
+        data=_auth.ResetPasswordRequest(token="tok", new_password="Strong@12345"),
+        db=_StubDB(),
+        jwt_service=_StubJWT(),
+        password_service=_StubPwd(weak=False),
+    )
+    assert "success" in out.get("message", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_logout_uses_utc_expiry(monkeypatch):
+    if not hasattr(time, "tzset"):
+        pytest.skip("tzset not available on this platform")
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    exp_ts = 1_700_000_000
+    captured = {"expires_at": None, "revoked_sessions": []}
+
+    class StubJWT:
+        def __init__(self):
+            pass
+
+        def extract_jti(self, token: str) -> str:
+            return "jti-123"
+
+        def verify_token(self, token: str):
+            return {"exp": exp_ts, "session_id": 777}
+
+    class StubBlacklist:
+        async def revoke_all_user_tokens(self, **kwargs):
+            return 0
+
+        async def revoke_token(
+            self,
+            *,
+            jti,
+            expires_at,
+            user_id,
+            token_type,
+            reason,
+            revoked_by=None,
+            ip_address=None,
+        ):
+            captured["expires_at"] = expires_at
+            captured["token_type"] = token_type
+            captured["ip_address"] = ip_address
+            return True
+
+    class StubSessionManager:
+        async def revoke_all_user_sessions(self, **kwargs):
+            captured["revoked_sessions"].append(("all", kwargs))
+
+        async def revoke_session(self, *, session_id, revoked_by=None, reason=None):
+            captured["revoked_sessions"].append(
+                ("single", {"session_id": session_id, "revoked_by": revoked_by, "reason": reason})
+            )
+
+    monkeypatch.setattr(auth, "JWTService", StubJWT)
+    stub_blacklist = StubBlacklist()
+    monkeypatch.setattr(auth, "get_token_blacklist", lambda: stub_blacklist)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/logout",
+        "headers": [(b"authorization", b"Bearer my-token")],
+        "client": ("203.0.113.5", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+    data = auth.LogoutRequest(all_devices=False)
+    current_user = SimpleNamespace(id=99)
+    session_manager = StubSessionManager()
+    jwt_service = StubJWT()
+
+    original_tz = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = "US/Pacific"
+        time.tzset()
+        result = await auth.logout(
+            data=data,
+            request=request,
+            current_user=current_user,
+            session_manager=session_manager,
+            jwt_service=jwt_service,
+        )
+    finally:
+        if original_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original_tz
+        time.tzset()
+
+    assert result.message == "Successfully logged out"
+    assert captured["expires_at"] == datetime.utcfromtimestamp(exp_ts)
+    assert captured["token_type"] == "access"
+    assert captured["revoked_sessions"][0][0] == "single"
+
+
+@pytest.mark.asyncio
+async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
+    reset_settings()
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("MFA_LOGIN_TTL_SECONDS", "300")
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _fake_is_pg() -> bool:
+        return True
+
+    class _StubMFA:
+        async def get_user_mfa_status(self, user_id: int):
+            return {"enabled": True}
+
+    async def _fake_fetch_user(db, identifier: str):
+        return {
+            "id": 5,
+            "username": "mfa_user",
+            "email": "mfa@example.com",
+            "password_hash": "HASHED",
+            "role": "user",
+            "is_active": True,
+        }
+
+    class _StubPwd:
+        def verify_password(self, password: str, password_hash: str):
+            return True, False
+
+    class _StubSessionManager:
+        def __init__(self):
+            self.cached = {}
+
+        async def create_session(self, **kwargs):
+            return {"session_id": 777}
+
+        async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int):
+            self.cached[key] = (value, ttl_seconds)
+
+        async def update_session_tokens(self, **kwargs):
+            raise AssertionError("update_session_tokens should not run for MFA-required login")
+
+    class _StubLimiter:
+        enabled = False
+
+    class _StubGov:
+        async def check_lockout(self, *args, **kwargs):
+            return False, None
+
+        async def record_auth_failure(self, *args, **kwargs):
+            return {"is_locked": False, "remaining_attempts": 5}
+
+    async def _fake_get_auth_governor():
+        return _StubGov()
+
+    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
+    monkeypatch.setattr(auth, "fetch_user_by_login_identifier", _fake_fetch_user)
+    monkeypatch.setattr(auth, "get_auth_governor", _fake_get_auth_governor)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/login",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+    response = Response()
+    form_data = SimpleNamespace(username="mfa_user", password="password")
+    session_manager = _StubSessionManager()
+
+    result = await auth.login(
+        request=request,
+        response=response,
+        form_data=form_data,
+        db=None,
+        jwt_service=object(),
+        password_service=_StubPwd(),
+        session_manager=session_manager,
+        rate_limiter=_StubLimiter(),
+        settings=auth.get_settings(),
+    )
+
+    assert response.status_code == 202
+    assert result.mfa_required is True
+    assert result.expires_in == 300
+    assert result.session_token
+    assert session_manager.cached
+
+
+@pytest.mark.asyncio
+async def test_mfa_login_completes_tokens(monkeypatch):
+    reset_settings()
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _fake_is_pg() -> bool:
+        return True
+
+    async def _fake_fetch_active_user(db, user_id: int):
+        return {
+            "id": user_id,
+            "username": "mfa_user",
+            "email": "mfa@example.com",
+            "role": "user",
+            "is_active": True,
+        }
+
+    class _StubMFA:
+        async def get_user_mfa_status(self, user_id: int):
+            return {"enabled": True}
+
+        async def get_user_totp_secret(self, user_id: int):
+            return "SECRET"
+
+        def verify_totp(self, secret: str, token: str) -> bool:
+            return token == "123456"
+
+        async def verify_backup_code(self, user_id: int, code: str) -> bool:
+            return False
+
+    class _StubSessionManager:
+        def __init__(self):
+            self.ephemeral = {}
+            self.updated = {}
+            self.deleted = []
+
+        async def get_ephemeral_value(self, key: str):
+            return self.ephemeral.get(key)
+
+        async def delete_ephemeral_value(self, key: str):
+            self.deleted.append(key)
+
+        async def update_session_tokens(self, **kwargs):
+            self.updated.update(kwargs)
+
+    class _StubLimiter:
+        enabled = False
+
+        async def check_user_rate_limit(self, user_id: int, endpoint: str):
+            return True, {}
+
+        async def reset_failed_attempts(self, *args, **kwargs):
+            return None
+
+    class _StubJWT:
+        def create_access_token(self, **kwargs):
+            return "ACCESS"
+
+        def create_refresh_token(self, **kwargs):
+            return "REFRESH"
+
+    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "fetch_active_user_by_id", _fake_fetch_active_user)
+    monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
+    async def _noop_async(*args, **kwargs):
+        return None
+
+    async def _noop_claims(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(auth, "update_user_last_login", _noop_async)
+    monkeypatch.setattr(auth, "_build_scope_claims", _noop_claims)
+
+    class _StubAuditService:
+        async def log_login(self, *args, **kwargs):
+            return None
+
+        async def flush(self):
+            return None
+
+    async def _fake_audit_service(*args, **kwargs):
+        return _StubAuditService()
+
+    monkeypatch.setattr(auth, "get_or_create_audit_service_for_user_id", _fake_audit_service)
+
+    session_manager = _StubSessionManager()
+    token = "mfa-session-token"
+    cache_key = auth._mfa_login_cache_key(token)
+    session_manager.ephemeral[cache_key] = '{"user_id": 5, "session_id": 55}'
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/mfa/login",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+    response = Response()
+
+    result = await auth.mfa_login(
+        data=auth.MFALoginRequest(session_token=token, mfa_token="123456"),
+        request=request,
+        response=response,
+        db=None,
+        jwt_service=_StubJWT(),
+        session_manager=session_manager,
+        rate_limiter=_StubLimiter(),
+        settings=auth.get_settings(),
+    )
+
+    assert result.access_token == "ACCESS"
+    assert result.refresh_token == "REFRESH"
+    assert session_manager.updated["session_id"] == 55
+    assert cache_key in session_manager.deleted

@@ -182,6 +182,7 @@ async def test_enforce_llm_budget_uses_auth_governor_and_raises_402(monkeypatch)
     )
 
     def _fake_get_settings():
+
         return fake_settings
 
     async def _fake_resolve_api_key_by_hash(api_key: str, settings=None):
@@ -392,6 +393,7 @@ async def test_enforce_llm_budget_allows_under_budget_chat(monkeypatch):
     )
 
     def _fake_get_settings():
+
         return fake_settings
 
     async def _fake_resolve_api_key_by_hash(api_key: str, settings=None):
@@ -442,6 +444,7 @@ async def test_enforce_llm_budget_allows_under_budget_embeddings(monkeypatch):
     )
 
     def _fake_get_settings():
+
         return fake_settings
 
     async def _fake_resolve_api_key_by_hash(api_key: str, settings=None):

@@ -14,25 +14,43 @@ import time
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
-DEFAULT_PATH = Path("Databases/Rewrite_Cache/rewrite_cache.jsonl")
 
-
-def _safe_path() -> Path:
+def _safe_path(user_id: Optional[str]) -> Path:
     try:
         base = os.getenv("RAG_REWRITE_CACHE_PATH")
         if base:
             p = Path(base)
-        else:
-            p = DEFAULT_PATH
-        p.parent.mkdir(parents=True, exist_ok=True)
-        return p
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
+        return DatabasePaths.get_user_rewrite_cache_path(user_id)
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error("Rewrite cache: failed to resolve cache path: {}", exc)
+        raise
+    except Exception as exc:
+        logger.exception("Rewrite cache: unexpected error resolving cache path: {}", exc)
+        raise
+
+
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        resolved_path = path.resolve()
+        resolved_base = base.resolve()
     except Exception:
-        return DEFAULT_PATH
+        return False
+    try:
+        return resolved_path.is_relative_to(resolved_base)
+    except AttributeError:
+        try:
+            resolved_path.relative_to(resolved_base)
+            return True
+        except ValueError:
+            return False
 
 
 def _normalize_query(q: str) -> str:
@@ -50,7 +68,11 @@ def _normalize_query(q: str) -> str:
                     out.append(" ")
                     prev_space = True
         return "".join(out).strip()
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.warning("Rewrite cache: failed to normalize query; returning fallback: {}", exc)
+        return q or ""
     except Exception:
+        logger.exception("Rewrite cache: unexpected error normalizing query")
         return q or ""
 
 
@@ -83,15 +105,7 @@ class RewriteCache:
     ) -> None:
         # Determine storage path (per-user if provided)
         if path is None:
-            if user_id:
-                base = Path("Databases/user_databases") / str(user_id) / "Rewrite_Cache"
-                try:
-                    base.mkdir(parents=True, exist_ok=True)
-                except Exception:
-                    pass
-                self.path = str(base / "rewrite_cache.jsonl")
-            else:
-                self.path = str(_safe_path())
+            self.path = str(_safe_path(user_id))
         else:
             self.path = str(Path(path))
         # Decay settings
@@ -240,4 +254,4 @@ class RewriteCache:
             except Exception:
                 pass
         except Exception as e:
-            logger.debug(f"Failed to persist rewrite cache: {e}")
+            logger.warning(f"Failed to persist rewrite cache: {e}")

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -78,6 +77,7 @@ def test_rebuild_claims_fts_sqlite_populates_index(tmp_path: Path) -> None:
 
 
 def test_rebuild_claims_fts_postgres_uses_backend() -> None:
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.backend = MagicMock()
@@ -89,9 +89,11 @@ def test_rebuild_claims_fts_postgres_uses_backend() -> None:
     conn = _Conn()
 
     def fake_transaction():
+
         @contextmanager
         def _ctx():
             yield conn
+
         return _ctx()
 
     db.transaction = fake_transaction  # type: ignore[assignment]
@@ -121,11 +123,13 @@ def test_rebuild_claims_fts_postgres_uses_backend() -> None:
 
 
 def test_postgres_migrations_include_v6() -> None:
+
     migrations = MediaDatabase._get_postgres_migrations(MediaDatabase.__new__(MediaDatabase))
     assert 6 in migrations
 
 
 def test_postgres_migrate_to_v6_creates_identifier_table() -> None:
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.backend = MagicMock()
@@ -139,26 +143,24 @@ def test_postgres_migrate_to_v6_creates_identifier_table() -> None:
     sql_text = create_call.args[0]
     # Accept either CamelCase (legacy) or lowercase (standardized) identifiers
     assert (
-        "CREATE TABLE IF NOT EXISTS \"DocumentVersionIdentifiers\"" in sql_text
-        or "CREATE TABLE IF NOT EXISTS \"documentversionidentifiers\"" in sql_text
+        'CREATE TABLE IF NOT EXISTS "DocumentVersionIdentifiers"' in sql_text
+        or 'CREATE TABLE IF NOT EXISTS "documentversionidentifiers"' in sql_text
     )
-    assert (
-        "REFERENCES \"DocumentVersions\"" in sql_text
-        or "REFERENCES \"documentversions\"" in sql_text
-    )
+    assert 'REFERENCES "DocumentVersions"' in sql_text or 'REFERENCES "documentversions"' in sql_text
 
     index_calls = [call.args[0] for call in db.backend.execute.call_args_list[1:]]
     expected_indices = {
-        'idx_dvi_doi',
-        'idx_dvi_pmid',
-        'idx_dvi_pmcid',
-        'idx_dvi_arxiv',
-        'idx_dvi_s2',
+        "idx_dvi_doi",
+        "idx_dvi_pmid",
+        "idx_dvi_pmcid",
+        "idx_dvi_arxiv",
+        "idx_dvi_s2",
     }
     assert all(any(name in sql for sql in index_calls) for name in expected_indices)
 
 
 def test_update_fts_media_postgres_updates_vector() -> None:
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
@@ -173,6 +175,7 @@ def test_update_fts_media_postgres_updates_vector() -> None:
 
 
 def test_delete_fts_media_postgres_nulls_vector() -> None:
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
@@ -187,6 +190,7 @@ def test_delete_fts_media_postgres_nulls_vector() -> None:
 
 
 def test_update_fts_keyword_postgres_updates_vector() -> None:
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
@@ -201,6 +205,7 @@ def test_update_fts_keyword_postgres_updates_vector() -> None:
 
 
 def test_delete_fts_keyword_postgres_nulls_vector() -> None:
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
@@ -228,6 +233,7 @@ def test_backup_database_postgres_returns_false(tmp_path: Path) -> None:
 
 
 def test_search_media_db_postgres_uses_tsquery():
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.client_id = "pg-test"
@@ -274,6 +280,7 @@ def test_search_media_db_postgres_uses_tsquery():
 
 
 def test_soft_delete_keyword_postgres_uses_backend_helpers() -> None:
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.client_id = "tenant-42"
@@ -281,9 +288,11 @@ def test_soft_delete_keyword_postgres_uses_backend_helpers() -> None:
     conn = object()
 
     def fake_transaction():
+
         @contextmanager
         def _ctx():
             yield conn
+
         return _ctx()
 
     db.transaction = fake_transaction  # type: ignore[assignment]
@@ -294,17 +303,18 @@ def test_soft_delete_keyword_postgres_uses_backend_helpers() -> None:
             self.rowcount = rowcount
 
         def fetchall(self):
+
             return self._rows
 
     db._fetchone_with_connection = MagicMock(  # type: ignore[attr-defined]
         side_effect=[
-            {'id': 7, 'uuid': 'kw-uuid', 'version': 2},
+            {"id": 7, "uuid": "kw-uuid", "version": 2},
         ]
     )
     db._execute_with_connection = MagicMock(  # type: ignore[attr-defined]
         side_effect=[
             FakeCursor(rowcount=1),
-            FakeCursor(rows=[{'media_id': 3, 'media_uuid': 'media-uuid'}]),
+            FakeCursor(rows=[{"media_id": 3, "media_uuid": "media-uuid"}]),
             FakeCursor(rowcount=1),
         ]
     )
@@ -321,6 +331,7 @@ def test_soft_delete_keyword_postgres_uses_backend_helpers() -> None:
 
 
 def test_batch_insert_chunks_postgres_handles_dict_rows() -> None:
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.client_id = "tenant-42"
@@ -328,9 +339,11 @@ def test_batch_insert_chunks_postgres_handles_dict_rows() -> None:
     conn = object()
 
     def fake_transaction():
+
         @contextmanager
         def _ctx():
             yield conn
+
         return _ctx()
 
     db.transaction = fake_transaction  # type: ignore[assignment]
@@ -338,11 +351,12 @@ def test_batch_insert_chunks_postgres_handles_dict_rows() -> None:
     base_chunk_count = 2
 
     def fetch_side_effect(connection, query, params=None):
+
         assert connection is conn
         if "SELECT 1 FROM Media" in query:
-            return {'exists': 1}
+            return {"exists": 1}
         if "SELECT COUNT(*)" in query:
-            return {'chunk_count': base_chunk_count}
+            return {"chunk_count": base_chunk_count}
         raise AssertionError(f"Unexpected query: {query}")
 
     db._fetchone_with_connection = MagicMock(side_effect=fetch_side_effect)  # type: ignore[attr-defined]
@@ -355,7 +369,7 @@ def test_batch_insert_chunks_postgres_handles_dict_rows() -> None:
     result = db.batch_insert_chunks(
         99,
         [
-            {'text': 'First chunk', 'metadata': {'start_index': 0, 'end_index': 12}},
+            {"text": "First chunk", "metadata": {"start_index": 0, "end_index": 12}},
         ],
     )
 
@@ -372,6 +386,7 @@ def test_batch_insert_chunks_postgres_handles_dict_rows() -> None:
 
 
 def test_process_chunks_postgres_avoids_direct_connection_execute() -> None:
+
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.client_id = "tenant-42"
@@ -386,14 +401,16 @@ def test_process_chunks_postgres_avoids_direct_connection_execute() -> None:
     tx_conn = object()
 
     def fake_transaction():
+
         @contextmanager
         def _ctx():
             yield tx_conn
+
         return _ctx()
 
     db.transaction = fake_transaction  # type: ignore[assignment]
 
-    db._fetchone_with_connection = MagicMock(return_value={'exists': 1})  # type: ignore[attr-defined]
+    db._fetchone_with_connection = MagicMock(return_value={"exists": 1})  # type: ignore[attr-defined]
     db.execute_many = MagicMock()  # type: ignore[attr-defined]
     db._log_sync_event = MagicMock()  # type: ignore[attr-defined]
     db._get_current_utc_timestamp_str = MagicMock(return_value="2024-01-01T00:00:00Z")  # type: ignore[attr-defined]
@@ -401,7 +418,7 @@ def test_process_chunks_postgres_avoids_direct_connection_execute() -> None:
 
     db.process_chunks(
         11,
-        [{'text': 'Body', 'start_index': 0, 'end_index': 5}],
+        [{"text": "Body", "start_index": 0, "end_index": 5}],
         batch_size=1,
     )
 
@@ -426,14 +443,14 @@ def test_process_chunks_postgres_avoids_direct_connection_execute() -> None:
         assert args[3] == "create"
         assert args[4] == 1
     assert payload == {
-        'media_id': 11,
-        'chunk_text': 'Body',
-        'start_index': 0,
-        'end_index': 5,
-        'chunk_id': 'chunk-id-1',
-        'uuid': 'uuid-1',
-        'last_modified': "2024-01-01T00:00:00Z",
-        'version': 1,
-        'client_id': "tenant-42",
-        'deleted': 0,
+        "media_id": 11,
+        "chunk_text": "Body",
+        "start_index": 0,
+        "end_index": 5,
+        "chunk_id": "chunk-id-1",
+        "uuid": "uuid-1",
+        "last_modified": "2024-01-01T00:00:00Z",
+        "version": 1,
+        "client_id": "tenant-42",
+        "deleted": 0,
     }

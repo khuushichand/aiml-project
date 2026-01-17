@@ -13,6 +13,8 @@ def jobs_db(tmp_path):
 
 
 def test_idempotency_scoped_to_domain_queue_type_sqlite(jobs_db):
+
+
     jm = JobManager(jobs_db)
     key = "idem-key-123"
 

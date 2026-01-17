@@ -209,6 +209,7 @@ class TestHiggsAdapterMock:
             real_import = __import__
 
             def fake_import(name, *args, **kwargs):
+
                 if name.startswith('boson_multimodal'):
                     raise ImportError("boson_multimodal not found")
                 return real_import(name, *args, **kwargs)
@@ -286,6 +287,7 @@ class TestHiggsAdapterMock:
             return getattr(m, "role", m.get("role") if isinstance(m, dict) else None)
 
         def _get_content(m):
+
             return getattr(m, "content", m.get("content") if isinstance(m, dict) else None)
 
         assistant = next((m for m in msgs if _get_role(m) == "assistant"), None)

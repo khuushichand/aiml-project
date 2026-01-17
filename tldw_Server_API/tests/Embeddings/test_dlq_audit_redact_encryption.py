@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import os
 import pytest
@@ -9,7 +11,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 @pytest.mark.unit
 def test_dlq_list_decrypt_and_redact(disable_heavy_startup, admin_user, redis_client, monkeypatch):
-    # Ensure encryption key is set
+     # Ensure encryption key is set
     monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", "test-passphrase")
     from tldw_Server_API.app.core.Embeddings.dlq_crypto import encrypt_payload_if_configured
 
@@ -79,7 +81,7 @@ class _StubAuditService:
 
 @pytest.mark.unit
 def test_dlq_requeue_audited(disable_heavy_startup, admin_user, redis_client, monkeypatch):
-    # Make sure audit service calls are captured
+     # Make sure audit service calls are captured
     stub = _StubAuditService()
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
 
@@ -124,3 +126,94 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, redis_client, mo
     )
     assert r3.status_code == 200
     assert any(e.get("action") == "bulk_requeue" for e in stub.events)
+
+
+def _aesgcm_available() -> bool:
+
+
+    """Check if AESGCM cryptography support is available at runtime.
+
+    Returns:
+        bool: True if AESGCM can be imported, False otherwise.
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        _ = AESGCM
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.unit
+def test_dlq_crypto_roundtrip_scrypt(monkeypatch):
+    monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", "test-passphrase")
+    from tldw_Server_API.app.core.Embeddings import dlq_crypto
+
+    payload = {"msg": "hello", "count": 3}
+    enc = dlq_crypto.encrypt_payload_if_configured(payload)
+    assert enc is not None
+    dec = dlq_crypto.decrypt_payload_if_present(enc)
+    assert dec == payload
+
+    if _aesgcm_available():
+        obj = json.loads(enc)
+        assert obj.get("kdf") == "scrypt"
+        assert obj.get("salt")
+        assert obj.get("kdf_params") == dlq_crypto._SCRYPT_PARAMS
+
+
+@pytest.mark.unit
+def test_dlq_crypto_uses_stored_kdf_params(monkeypatch):
+    if not _aesgcm_available():
+        pytest.skip("cryptography not available")
+    from tldw_Server_API.app.core.Embeddings import dlq_crypto
+
+    key_str = "test-passphrase"
+    monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", key_str)
+    params = {"n": 2**12, "r": 8, "p": 1, "dklen": 32}
+    salt = b"test-salt-1234"
+    key = hashlib.scrypt(
+        key_str.encode("utf-8"),
+        salt=salt,
+        n=params["n"],
+        r=params["r"],
+        p=params["p"],
+        dklen=params["dklen"],
+    )
+    payload = {"msg": "hello", "count": 1}
+    raw = json.dumps(payload, default=str).encode("utf-8")
+    obj = dlq_crypto._aesgcm_encrypt(raw, key)
+    if obj.get("alg") != "AESGCM":
+        pytest.skip("AESGCM unavailable")
+    obj["kdf"] = "scrypt"
+    obj["salt"] = base64.b64encode(salt).decode("utf-8")
+    obj["kdf_params"] = params
+    enc_json = json.dumps(obj)
+
+    dec = dlq_crypto.decrypt_payload_if_present(enc_json)
+    assert dec == payload
+
+
+@pytest.mark.unit
+def test_dlq_crypto_roundtrip_legacy(monkeypatch):
+    if not _aesgcm_available():
+        pytest.skip("cryptography not available")
+    from tldw_Server_API.app.core.Embeddings import dlq_crypto
+
+    key_str = "legacy-passphrase"
+    monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", key_str)
+    payload = {"legacy": True, "value": "ok"}
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = hashlib.sha256(key_str.encode("utf-8")).digest()
+    raw = json.dumps(payload, default=str).encode("utf-8")
+    nonce = os.urandom(12)
+    aesgcm = AESGCM(key)
+    ct = aesgcm.encrypt(nonce, raw, associated_data=None)
+    enc_json = json.dumps({
+        "alg": "AESGCM",
+        "nonce": base64.b64encode(nonce).decode("utf-8"),
+        "ct": base64.b64encode(ct).decode("utf-8"),
+    })
+    dec = dlq_crypto.decrypt_payload_if_present(enc_json)
+    assert dec == payload

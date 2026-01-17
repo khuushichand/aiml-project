@@ -39,14 +39,10 @@ def _settings_lookup(*keys: str) -> Optional[str]:
     """Look up configuration values with environment variables overriding file settings.
 
     Order of precedence:
-      1) Environment variables (if set and non-empty)
-      2) Settings file values (e.g., from config.txt / .env)
+      1) Settings file values (e.g., from config.txt / .env)
+      2) Environment variables (if set and non-empty)
     """
     for key in keys:
-        # Prefer explicit environment overrides when present
-        env = os.getenv(key)
-        if env is not None and str(env).strip():
-            return str(env).strip()
         # Fall back to settings-backed values
         try:
             value = settings.get(key)  # type: ignore[attr-defined]
@@ -54,6 +50,10 @@ def _settings_lookup(*keys: str) -> Optional[str]:
                 return value.strip()
         except Exception:
             pass
+        # Prefer explicit environment overrides when present
+        env = os.getenv(key)
+        if env is not None and str(env).strip():
+            return str(env).strip()
     return None
 
 
@@ -262,6 +262,7 @@ def create_sync_redis_client(
         fake_client = InMemorySyncRedis(
             decode_responses=options.get("decode_responses", True)
         )
+        setattr(fake_client, "_tldw_is_stub", True)
         fake_client.ping()
         _record_connection_metrics(
             mode="sync",
@@ -293,6 +294,7 @@ class _InMemoryRedisCore:
         self._streams: Dict[str, List[Tuple[str, Dict[str, str]]]] = {}
         self._stream_counters: Dict[str, int] = {}
         self._groups: Dict[str, set] = {}
+        self._group_last_ids: Dict[Tuple[str, str], str] = {}
         self._expiry: Dict[str, float] = {}
         self._scripts: Dict[str, str] = {}
 
@@ -322,6 +324,30 @@ class _InMemoryRedisCore:
         expires_at = self._expiry.get(key)
         if expires_at is not None and expires_at <= self._now():
             self._delete_internal(key)
+
+    def _stream_id_tuple(self, entry_id: str) -> Tuple[int, int]:
+        if entry_id in ("-", None):
+            return (0, 0)
+        if entry_id == "+":
+            return (2**63 - 1, 2**63 - 1)
+        text = str(entry_id)
+        if text == "0":
+            return (0, 0)
+        parts = text.split("-", 1)
+        try:
+            ts = int(parts[0])
+        except Exception:
+            ts = 0
+        seq = 0
+        if len(parts) > 1:
+            try:
+                seq = int(parts[1])
+            except Exception:
+                seq = 0
+        return (ts, seq)
+
+    def _stream_id_gt(self, entry_id: str, other_id: str) -> bool:
+        return self._stream_id_tuple(entry_id) > self._stream_id_tuple(other_id)
 
     # ------------------------------------------------------------------
     # Stream operations
@@ -394,6 +420,39 @@ class _InMemoryRedisCore:
 
     def xgroup_create(self, name: str, group: str, id: str = "0") -> None:
         self._groups.setdefault(name, set()).add(group)
+        if id == "$":
+            stream = self._streams.get(name, [])
+            last_id = stream[-1][0] if stream else "0-0"
+        else:
+            last_id = "0-0" if id in ("0", "0-0") else str(id)
+        self._group_last_ids[(name, group)] = last_id
+
+    def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
+        streams: Dict[str, str],
+        count: Optional[int] = None,
+        block: Optional[int] = None,
+        noack: bool = False,
+    ) -> List[Tuple[str, List[Tuple[str, Dict[str, str]]]]]:
+        _ = (consumername, block, noack)
+        results: List[Tuple[str, List[Tuple[str, Dict[str, str]]]]] = []
+        for stream_name, start_id in streams.items():
+            if groupname not in self._groups.get(stream_name, set()):
+                raise RuntimeError("NOGROUP")
+            last_id = self._group_last_ids.get((stream_name, groupname), "0-0")
+            compare_id = last_id if start_id == ">" else (start_id or "0-0")
+            entries: List[Tuple[str, Dict[str, str]]] = []
+            for entry_id, data in self._streams.get(stream_name, []):
+                if self._stream_id_gt(entry_id, compare_id):
+                    entries.append((entry_id, dict(data)))
+            if count is not None and count >= 0:
+                entries = entries[:count]
+            if entries:
+                results.append((stream_name, entries))
+                self._group_last_ids[(stream_name, groupname)] = entries[-1][0]
+        return results
 
     # ------------------------------------------------------------------
     # Set / sorted set operations
@@ -484,6 +543,14 @@ class _InMemoryRedisCore:
             return None
         return float(z.get(str(member))) if str(member) in z else None
 
+    def zincrby(self, key: str, amount: float, member: str) -> float:
+        zset = self._sorted_sets.setdefault(key, {})
+        member = str(member)
+        current = float(zset.get(member, 0.0))
+        current += float(amount)
+        zset[member] = current
+        return current
+
     # ------------------------------------------------------------------
     # Hash operations
     # ------------------------------------------------------------------
@@ -497,8 +564,18 @@ class _InMemoryRedisCore:
             target[field] = str(value)
         return created
 
+    def hget(self, key: str, field: str) -> Optional[str]:
+        return self._hashes.get(key, {}).get(str(field))
+
     def hgetall(self, key: str) -> Dict[str, str]:
         return dict(self._hashes.get(key, {}))
+
+    def hincrby(self, key: str, field: str, amount: int = 1) -> int:
+        target = self._hashes.setdefault(key, {})
+        current = int(target.get(str(field), "0"))
+        current += int(amount)
+        target[str(field)] = str(current)
+        return current
 
     # ------------------------------------------------------------------
     # String operations
@@ -508,20 +585,27 @@ class _InMemoryRedisCore:
         if ex is not None:
             self._expiry[key] = self._now() + int(ex)
 
+    def setex(self, key: str, seconds: int, value: Any) -> None:
+        self.set(key, value, ex=int(seconds))
+
     def get(self, key: str) -> Optional[str]:
         self._check_expiry(key)
         return self._strings.get(key)
 
-    def delete(self, key: str) -> int:
-        existed = int(
-            key in self._strings
-            or key in self._sets
-            or key in self._sorted_sets
-            or key in self._hashes
-            or key in self._streams
-        )
-        self._delete_internal(key)
-        return existed
+    def delete(self, *keys: str) -> int:
+        deleted = 0
+        for key in keys:
+            existed = (
+                key in self._strings
+                or key in self._sets
+                or key in self._sorted_sets
+                or key in self._hashes
+                or key in self._streams
+            )
+            if existed:
+                deleted += 1
+            self._delete_internal(key)
+        return deleted
 
     def expire(self, key: str, seconds: int) -> None:
         if key in self._strings or key in self._sets or key in self._sorted_sets or key in self._hashes:
@@ -558,6 +642,24 @@ class _InMemoryRedisCore:
             result = result[:count]
         return 0, result
 
+    def keys(self, pattern: str) -> List[str]:
+        _, result = self.scan(0, match=pattern, count=None)
+        return result
+
+    def dbsize(self) -> int:
+        keys = set(self._strings.keys()) | set(self._sets.keys()) | set(self._sorted_sets.keys()) | set(self._hashes.keys()) | set(self._streams.keys())
+        return len(keys)
+
+    def info(self, section: Optional[str] = None) -> Dict[str, Any]:
+        if section not in (None, "memory"):
+            return {}
+        used = self.dbsize()
+        return {
+            "used_memory": used,
+            "used_memory_human": f"{used} keys",
+            "maxmemory": 0,
+        }
+
     def script_load(self, script: str) -> str:
         sha = hashlib.sha1(script.encode("utf-8")).hexdigest()
         self._scripts[sha] = script
@@ -567,6 +669,9 @@ class _InMemoryRedisCore:
         script = self._scripts.get(sha)
         if script is None:
             raise RuntimeError("NOSCRIPT")
+        return self.eval(script, num_keys, *args)
+
+    def eval(self, script: str, num_keys: int, *args) -> List[Any]:
         # Heuristic: handle the rate limiter script used by DistributedRateLimiter
         if "ZRANGE" in script and "ZREMRANGEBYSCORE" in script:
             if num_keys < 1 or len(args) < 3:
@@ -630,6 +735,25 @@ class InMemoryAsyncRedis:
         async with self._lock:
             self._core.xgroup_create(name, group, id)
 
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
+        streams: Dict[str, str],
+        count: Optional[int] = None,
+        block: Optional[int] = None,
+        noack: bool = False,
+    ):
+        async with self._lock:
+            return self._core.xreadgroup(
+                groupname,
+                consumername,
+                streams,
+                count=count,
+                block=block,
+                noack=noack,
+            )
+
     async def sadd(self, key: str, member: str) -> int:
         async with self._lock:
             return self._core.sadd(key, member)
@@ -666,6 +790,10 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.zscore(key, member)
 
+    async def zincrby(self, key: str, amount: float, member: str) -> float:
+        async with self._lock:
+            return self._core.zincrby(key, amount, member)
+
     async def hset(self, key: str, mapping: Dict[str, Any]) -> int:
         async with self._lock:
             return self._core.hset(key, mapping)
@@ -674,17 +802,29 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.hgetall(key)
 
+    async def hget(self, key: str, field: str) -> Optional[str]:
+        async with self._lock:
+            return self._core.hget(key, field)
+
+    async def hincrby(self, key: str, field: str, amount: int = 1) -> int:
+        async with self._lock:
+            return self._core.hincrby(key, field, amount)
+
     async def set(self, key: str, value: Any, ex: Optional[int] = None) -> None:
         async with self._lock:
             self._core.set(key, value, ex=ex)
+
+    async def setex(self, key: str, seconds: int, value: Any) -> None:
+        async with self._lock:
+            self._core.setex(key, seconds, value)
 
     async def get(self, key: str) -> Optional[str]:
         async with self._lock:
             return self._core.get(key)
 
-    async def delete(self, key: str) -> int:
+    async def delete(self, *keys: str) -> int:
         async with self._lock:
-            return self._core.delete(key)
+            return self._core.delete(*keys)
 
     async def expire(self, key: str, seconds: int) -> None:
         async with self._lock:
@@ -706,6 +846,18 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.scan(cursor, match, count)
 
+    async def keys(self, pattern: str) -> List[str]:
+        async with self._lock:
+            return self._core.keys(pattern)
+
+    async def dbsize(self) -> int:
+        async with self._lock:
+            return self._core.dbsize()
+
+    async def info(self, section: Optional[str] = None) -> Dict[str, Any]:
+        async with self._lock:
+            return self._core.info(section)
+
     async def script_load(self, script: str) -> str:
         async with self._lock:
             return self._core.script_load(script)
@@ -713,6 +865,10 @@ class InMemoryAsyncRedis:
     async def evalsha(self, sha: str, num_keys: int, *args) -> List[Any]:
         async with self._lock:
             return self._core.evalsha(sha, num_keys, *args)
+
+    async def eval(self, script: str, num_keys: int, *args) -> List[Any]:
+        async with self._lock:
+            return self._core.eval(script, num_keys, *args)
 
     def pipeline(self):
         return InMemoryAsyncPipeline(self)
@@ -763,6 +919,128 @@ class InMemorySyncRedis:
     def pipeline(self):
         return InMemorySyncPipeline(self)
 
+    def xlen(self, name: str) -> int:
+        with self._lock:
+            return self._core.xlen(name)
+
+    def xadd(self, name: str, fields: Dict[str, Any]):
+        with self._lock:
+            return self._core.xadd(name, fields)
+
+    def xrange(self, name: str, *args, **kwargs):
+        with self._lock:
+            return self._core.xrange(name, *args, **kwargs)
+
+    def xrevrange(self, name: str, *args, **kwargs):
+        with self._lock:
+            return self._core.xrevrange(name, *args, **kwargs)
+
+    def xdel(self, name: str, entry_id: str) -> int:
+        with self._lock:
+            return self._core.xdel(name, entry_id)
+
+    def xgroup_create(self, name: str, group: str, id: str = "0") -> None:
+        with self._lock:
+            self._core.xgroup_create(name, group, id)
+
+    def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
+        streams: Dict[str, str],
+        count: Optional[int] = None,
+        block: Optional[int] = None,
+        noack: bool = False,
+    ):
+        with self._lock:
+            return self._core.xreadgroup(
+                groupname,
+                consumername,
+                streams,
+                count=count,
+                block=block,
+                noack=noack,
+            )
+
+    def sadd(self, key: str, member: str) -> int:
+        with self._lock:
+            return self._core.sadd(key, member)
+
+    def srem(self, key: str, member: str) -> int:
+        with self._lock:
+            return self._core.srem(key, member)
+
+    def smembers(self, key: str):
+        with self._lock:
+            return self._core.smembers(key)
+
+    def zadd(self, key: str, mapping: Dict[str, float]) -> None:
+        with self._lock:
+            self._core.zadd(key, mapping)
+
+    def zremrangebyscore(self, key: str, minimum: float, maximum: float) -> int:
+        with self._lock:
+            return self._core.zremrangebyscore(key, float(minimum), float(maximum))
+
+    def zincrby(self, key: str, amount: float, member: str) -> float:
+        with self._lock:
+            return self._core.zincrby(key, amount, member)
+
+    def hset(self, key: str, mapping: Dict[str, Any]) -> int:
+        with self._lock:
+            return self._core.hset(key, mapping)
+
+    def hget(self, key: str, field: str) -> Optional[str]:
+        with self._lock:
+            return self._core.hget(key, field)
+
+    def hgetall(self, key: str) -> Dict[str, str]:
+        with self._lock:
+            return self._core.hgetall(key)
+
+    def hincrby(self, key: str, field: str, amount: int = 1) -> int:
+        with self._lock:
+            return self._core.hincrby(key, field, amount)
+
+    def setex(self, key: str, seconds: int, value: Any) -> None:
+        with self._lock:
+            self._core.setex(key, seconds, value)
+
+    def ttl(self, key: str) -> int:
+        with self._lock:
+            return self._core.ttl(key)
+
+    def scan(self, cursor: int = 0, match: Optional[str] = None, count: Optional[int] = None):
+        with self._lock:
+            return self._core.scan(cursor, match, count)
+
+    def keys(self, pattern: str) -> List[str]:
+        with self._lock:
+            return self._core.keys(pattern)
+
+    def dbsize(self) -> int:
+        with self._lock:
+            return self._core.dbsize()
+
+    def info(self, section: Optional[str] = None) -> Dict[str, Any]:
+        with self._lock:
+            return self._core.info(section)
+
+    def script_load(self, script: str) -> str:
+        with self._lock:
+            return self._core.script_load(script)
+
+    def evalsha(self, sha: str, num_keys: int, *args) -> List[Any]:
+        with self._lock:
+            return self._core.evalsha(sha, num_keys, *args)
+
+    def eval(self, script: str, num_keys: int, *args) -> List[Any]:
+        with self._lock:
+            return self._core.eval(script, num_keys, *args)
+
+    def publish(self, channel: str, message: str) -> int:
+        return 0
+
     # Expose subset of operations needed by the codebase
     def incr(self, key: str) -> int:
         with self._lock:
@@ -805,9 +1083,9 @@ class InMemorySyncRedis:
         with self._lock:
             self._core.set(key, value, ex=ex)
 
-    def delete(self, key: str) -> int:
+    def delete(self, *keys: str) -> int:
         with self._lock:
-            return self._core.delete(key)
+            return self._core.delete(*keys)
 
 
 class InMemorySyncPipeline:

@@ -43,20 +43,20 @@ async def test_forgot_password_email_and_reset_flow(tmp_path, monkeypatch):
     async def _is_pg() -> bool:
         return True
 
-    # Reload app so enhanced auth router mounts successfully with stubbed MFA
+    # Reload app so auth router mounts with stubbed MFA
     import importlib
     import tldw_Server_API.app.main as _main
     reloaded = importlib.reload(_main)
     from tldw_Server_API.app.main import app as _app
 
-    # Patch is_postgres_backend on the enhanced endpoints module after reload
-    import tldw_Server_API.app.api.v1.endpoints.auth_enhanced as auth_enh
-    auth_enh.is_postgres_backend = _is_pg  # type: ignore
+    # Patch is_postgres_backend on the auth endpoints module after reload
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+    auth.is_postgres_backend = _is_pg  # type: ignore
     # Ensure endpoint uses our stubbed email service
-    auth_enh.get_email_service = _get_email_service  # type: ignore
+    auth._get_email_service = _get_email_service  # type: ignore
     # Simplify input validation for the test
     from types import SimpleNamespace
-    auth_enh.get_input_validator = lambda: SimpleNamespace(validate_email=lambda _e: (True, None))  # type: ignore
+    auth.get_input_validator = lambda: SimpleNamespace(validate_email=lambda _e: (True, None))  # type: ignore
 
     # Stub DB adapter used by endpoints
     class _StubDB:

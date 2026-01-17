@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.integration
 def test_list_chat_commands_basic(test_client, auth_headers, monkeypatch):
-    # Ensure commands are enabled for this test
+     # Ensure commands are enabled for this test
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "true")
     r = test_client.get("/api/v1/chat/commands", headers=auth_headers)
     assert r.status_code == 200
@@ -22,7 +22,7 @@ def test_list_chat_commands_basic(test_client, auth_headers, monkeypatch):
 
 @pytest.mark.integration
 def test_list_chat_commands_rbac_filtering(test_client, auth_headers, monkeypatch):
-    # Enable commands and permission enforcement; when permission checks fail,
+     # Enable commands and permission enforcement; when permission checks fail,
     # commands requiring a permission should be filtered out.
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "true")
     monkeypatch.setenv("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "true")

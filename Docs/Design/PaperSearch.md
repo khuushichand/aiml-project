@@ -106,7 +106,7 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
 ## Notes
 
 - Tests mock provider functions; no external network in CI.
-- Rate limiting via SlowAPI can be added per-route if needed; test mode bypass respected.
+- Rate limiting via RG policy can be added per-route if needed.
 - GET `/api/v1/paper-search/semantic-scholar/by-id`
   - Params: `paper_id` (Semantic Scholar paperId)
   - Response: `SemanticScholarPaper`

@@ -16,12 +16,15 @@ def recorder_and_stub(monkeypatch):
             Recorder.last_opts = opts
 
         def __enter__(self):
+
             return self
 
         def __exit__(self, exc_type, exc, tb):
+
             return False
 
         def extract_info(self, url, download=False):
+
             Recorder.last_calls.append((url, bool(download)))
             return {"ok": True, "url": url}
 
@@ -34,11 +37,15 @@ def recorder_and_stub(monkeypatch):
 
 
 def _cookie_header_from_opts(opts):
+
+
     headers = (opts or {}).get("http_headers") or {}
     return headers.get("Cookie")
 
 
 def test_get_video_info_sets_cookie_header(recorder_and_stub):
+
+
     R, vmod = recorder_and_stub
     cookies = {"a": "1", "b": "two"}
     vmod.get_video_info("https://example.com/v", use_cookies=True, cookies=cookies)
@@ -49,6 +56,8 @@ def test_get_video_info_sets_cookie_header(recorder_and_stub):
 
 
 def test_get_youtube_sets_cookie_header_json_string(recorder_and_stub):
+
+
     R, vmod = recorder_and_stub
     cookies_json = json.dumps({"sid": "abc", "session": "xyz"})
     vmod.get_youtube("https://youtu.be/abc", use_cookies=True, cookies=cookies_json)
@@ -58,6 +67,8 @@ def test_get_youtube_sets_cookie_header_json_string(recorder_and_stub):
 
 
 def test_get_playlist_videos_no_cookie_if_disabled(recorder_and_stub):
+
+
     R, vmod = recorder_and_stub
     vmod.get_playlist_videos("https://youtube.com/playlist?list=PL123", use_cookies=False, cookies={"k": "v"})
     assert R.last_opts is not None

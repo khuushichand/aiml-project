@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
     QueryResult
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.sql_utils import split_sql_statements
 
 
 ########################################################################################################################
@@ -841,7 +842,7 @@ class UserDatabase:
 
     @staticmethod
     def _split_sql_statements(sql: str) -> List[str]:
-        return [stmt.strip() for stmt in sql.split(';') if stmt.strip()]
+        return split_sql_statements(sql)
 
     def _apply_schema_statements(self, statements: List[str]) -> None:
         if not statements:

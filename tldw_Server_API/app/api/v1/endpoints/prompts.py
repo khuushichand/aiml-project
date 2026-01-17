@@ -5,8 +5,9 @@
 from loguru import logger
 import os
 import base64
+import re
 import sqlite3
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional, Union, Tuple, Dict, Any
 #
 # 3rd-party imports
 from fastapi import (
@@ -17,6 +18,7 @@ from fastapi import (
     Query,
     Body,
     Request,
+    Response,
     status,
     File,
     UploadFile
@@ -40,7 +42,8 @@ from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
 from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import get_prompts_db_for_user
 from tldw_Server_API.app.api.v1.schemas import prompt_schemas as schemas
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
 #
 # DB Mgmt
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
@@ -53,17 +56,72 @@ from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 
 router = APIRouter()
 
-async def verify_prompts_auth(
+_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
+_MAX_DUPLICATE_NAME_ITERATIONS = 10000
+
+
+def _extract_template_variables(template: str) -> List[str]:
+    variables: List[str] = []
+    for match in _TEMPLATE_VAR_RE.finditer(template or ""):
+        var = match.group(1).strip()
+        if var and var not in variables:
+            variables.append(var)
+    return variables
+
+
+def _render_template(template: str, variables: Dict[str, Any]) -> str:
+    def repl(match: re.Match) -> str:
+        key = match.group(1).strip()
+        if key not in variables:
+            raise KeyError(key)
+        return str(variables[key])
+
+    return _TEMPLATE_VAR_RE.sub(repl, template)
+
+
+def _generate_unique_prompt_name(base_name: str, used_names: set, name_counts: Dict[str, int]) -> str:
+    count = name_counts.get(base_name, 0)
+    for _ in range(_MAX_DUPLICATE_NAME_ITERATIONS):
+        count += 1
+        candidate = f"duplicate {count} - {base_name}"
+        if candidate not in used_names:
+            name_counts[base_name] = count
+            return candidate
+    raise InputError(f"Could not generate unique name for '{base_name}' after {_MAX_DUPLICATE_NAME_ITERATIONS} attempts.")
+
+def _is_single_user_auth_mode() -> bool:
+    if settings.get("SINGLE_USER_MODE") is True:
+        return True
+    try:
+        return get_auth_settings().AUTH_MODE == "single_user"
+    except Exception:
+        return bool(settings.get("SINGLE_USER_MODE"))
+
+
+def _get_single_user_api_key() -> Optional[str]:
+    if "SINGLE_USER_API_KEY" in settings:
+        key = settings.get("SINGLE_USER_API_KEY")
+        return key if key else None
+    try:
+        key = getattr(get_auth_settings(), "SINGLE_USER_API_KEY", None)
+    except Exception:
+        key = None
+    if key:
+        return key
+    return settings.get("SINGLE_USER_API_KEY")
+
+
+async def _resolve_prompts_auth_user(
     request: Request = None,
     Token: Optional[str] = Header(None, alias="Token"),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     Authorization: Optional[str] = Header(None, alias="Authorization"),
-) -> bool:
+) -> Optional[User]:
     """
     Validate the legacy Token header for prompts endpoints.
 
     Single-user mode validates against SINGLE_USER_API_KEY. Multi-user mode
-    defers to the unified AuthNZ path for API keys/JWTs and enforces admin.
+    defers to the unified AuthNZ path for API keys/JWTs.
     """
     raw_token = None
     for candidate in (Token, x_api_key, Authorization):
@@ -81,8 +139,8 @@ async def verify_prompts_auth(
     if normalized.lower().startswith("bearer "):
         normalized = normalized[len("Bearer ") :].strip()
 
-    if settings.get("SINGLE_USER_MODE"):
-        expected = settings.get("SINGLE_USER_API_KEY")
+    if _is_single_user_auth_mode():
+        expected = _get_single_user_api_key()
         if not expected:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -93,7 +151,7 @@ async def verify_prompts_auth(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication token",
             )
-        return True
+        return None
 
     if request is None:
         raise HTTPException(
@@ -135,6 +193,30 @@ async def verify_prompts_auth(
             ) from exc
         raise
 
+    return user
+
+async def verify_prompts_auth(
+    request: Request = None,
+    Token: Optional[str] = Header(None, alias="Token"),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    Authorization: Optional[str] = Header(None, alias="Authorization"),
+) -> bool:
+    """
+    Validate the legacy Token header for prompts endpoints.
+
+    Single-user mode validates against SINGLE_USER_API_KEY. Multi-user mode
+    defers to the unified AuthNZ path for API keys/JWTs and enforces admin.
+    """
+    user = await _resolve_prompts_auth_user(
+        request=request,
+        Token=Token,
+        x_api_key=x_api_key,
+        Authorization=Authorization,
+    )
+
+    if _is_single_user_auth_mode():
+        return True
+
     roles = getattr(user, "roles", []) or []
     is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
     if not is_admin:
@@ -143,6 +225,35 @@ async def verify_prompts_auth(
             detail="Access denied. Required role(s): admin",
         )
 
+    return True
+
+async def verify_prompts_user(
+    request: Request = None,
+    Token: Optional[str] = Header(None, alias="Token"),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    Authorization: Optional[str] = Header(None, alias="Authorization"),
+) -> bool:
+    """Authenticate prompts requests for non-admin users.
+
+    Set PROMPTS_REQUIRE_ADMIN=true to force admin-only access for these routes.
+    """
+    user = await _resolve_prompts_auth_user(
+        request=request,
+        Token=Token,
+        x_api_key=x_api_key,
+        Authorization=Authorization,
+    )
+    if _is_single_user_auth_mode():
+        return True
+    require_admin = os.getenv("PROMPTS_REQUIRE_ADMIN", "").strip().lower() in {"1", "true", "yes", "on"}
+    if require_admin:
+        roles = getattr(user, "roles", []) or []
+        is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
+        if not is_admin:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. Required role(s): admin",
+            )
     return True
 
 @router.get(
@@ -231,7 +342,7 @@ async def get_sync_log(
     "/search",
     response_model=schemas.PromptSearchResponse,
     summary="Search prompts",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def search_all_prompts(
     search_query: str = Query(..., min_length=1, description="Search term(s)"),
@@ -270,7 +381,7 @@ async def search_all_prompts(
     response_model=schemas.KeywordResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Add a new keyword",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def create_keyword(
     keyword_data: schemas.KeywordCreate,
@@ -321,7 +432,7 @@ async def create_keyword(
     "/keywords/",
     response_model=List[str], # Just a list of keyword strings
     summary="List all active keywords",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def list_all_keywords(
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
@@ -342,18 +453,19 @@ async def list_all_keywords(
 @router.delete(
     "/keywords/{keyword_text}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Soft delete a keyword",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def delete_keyword(
     keyword_text: str,
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
-):
+) -> Response:
     try:
         success = db.soft_delete_keyword(keyword_text)
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keyword not found or already deleted.")
-        return None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ConflictError as e:
@@ -369,7 +481,7 @@ async def delete_keyword(
     "/export",
     response_model=schemas.ExportResponse, # Returns message and base64 content
     summary="Export prompts to CSV or Markdown (as base64 string)",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def export_prompts_api(
     export_format: str = Query("csv", enum=["csv", "markdown"]),
@@ -428,7 +540,7 @@ async def export_prompts_api(
     "/keywords/export-csv",
     response_model=schemas.ExportResponse,
     summary="Export all prompt keywords with associations to CSV (as base64 string)",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def export_keywords_api(
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
@@ -453,13 +565,223 @@ async def export_keywords_api(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error during keyword export: {str(e)}")
 
 
+# === Import Endpoints ===
+
+@router.post(
+    "/import",
+    response_model=schemas.PromptImportResponse,
+    summary="Import prompts from JSON",
+    dependencies=[Depends(verify_prompts_user)]
+)
+async def import_prompts_api(
+    payload: schemas.PromptImportRequest = Body(...),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user)
+):
+    try:
+        try:
+            used_names = set(db.fetch_all_prompt_names(include_deleted=True))
+        except Exception as e:
+            logger.warning(f"Failed to fetch existing prompt names for import: {e}")
+            used_names = set()
+
+        name_counts: Dict[str, int] = {}
+        imported = 0
+        failed = 0
+        skipped = 0
+        prompt_ids: List[int] = []
+
+        for prompt in payload.prompts:
+            base_name = (prompt.name or "").strip()
+            details = prompt.details if prompt.details is not None else prompt.content
+            if not details and details != "":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Each imported prompt must include content or details.",
+                )
+
+            if base_name in used_names:
+                if payload.skip_duplicates:
+                    skipped += 1
+                    continue
+                candidate_name = _generate_unique_prompt_name(base_name, used_names, name_counts)
+            else:
+                candidate_name = base_name
+
+            used_names.add(candidate_name)
+            try:
+                p_id, _uuid, _msg = db.add_prompt(
+                    name=candidate_name,
+                    author=prompt.author,
+                    details=details,
+                    system_prompt=prompt.system_prompt,
+                    user_prompt=prompt.user_prompt,
+                    keywords=prompt.keywords or [],
+                    overwrite=False,
+                )
+                if p_id:
+                    imported += 1
+                    prompt_ids.append(int(p_id))
+                else:
+                    failed += 1
+            except ConflictError:
+                if payload.skip_duplicates:
+                    skipped += 1
+                else:
+                    failed += 1
+            except (InputError, DatabaseError) as e:
+                logger.warning(f"Import failed for prompt '{base_name}': {e}")
+                failed += 1
+
+        return schemas.PromptImportResponse(
+            imported=imported,
+            failed=failed,
+            skipped=skipped,
+            prompt_ids=prompt_ids
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during import: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error during import: {str(e)}"
+        )
+
+
+# === Template Processing Endpoints ===
+
+@router.post(
+    "/templates/variables",
+    response_model=schemas.TemplateVariablesResponse,
+    summary="Extract template variables",
+    dependencies=[Depends(verify_prompts_user)]
+)
+async def extract_template_variables_api(
+    payload: schemas.TemplateVariablesRequest = Body(...)
+):
+    variables = _extract_template_variables(payload.template)
+    return schemas.TemplateVariablesResponse(variables=variables)
+
+
+@router.post(
+    "/templates/render",
+    response_model=schemas.TemplateRenderResponse,
+    summary="Render a template with variables",
+    dependencies=[Depends(verify_prompts_user)]
+)
+async def render_template_api(
+    payload: schemas.TemplateRenderRequest = Body(...)
+):
+    try:
+        rendered = _render_template(payload.template, payload.variables)
+    except KeyError as e:
+        missing_key = e.args[0] if e.args else "unknown"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Missing template variable: {missing_key}"
+        )
+    return schemas.TemplateRenderResponse(rendered=rendered)
+
+
+# === Bulk Operations Endpoints ===
+
+@router.post(
+    "/bulk/delete",
+    response_model=schemas.PromptBulkDeleteResponse,
+    summary="Bulk delete prompts",
+    dependencies=[Depends(verify_prompts_user)]
+)
+async def bulk_delete_prompts(
+    payload: schemas.PromptBulkDeleteRequest = Body(...),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user)
+):
+    deleted = 0
+    failed_ids: List[int] = []
+    for prompt_id in payload.prompt_ids:
+        try:
+            if db.soft_delete_prompt(prompt_id):
+                deleted += 1
+            else:
+                failed_ids.append(int(prompt_id))
+        except (ConflictError, DatabaseError) as e:
+            logger.warning(f"Bulk delete failed for prompt {prompt_id}: {e}")
+            failed_ids.append(int(prompt_id))
+    return schemas.PromptBulkDeleteResponse(
+        deleted=deleted,
+        failed=len(failed_ids),
+        failed_ids=failed_ids
+    )
+
+
+@router.post(
+    "/bulk/keywords",
+    response_model=schemas.PromptBulkKeywordsResponse,
+    summary="Bulk update prompt keywords",
+    dependencies=[Depends(verify_prompts_user)]
+)
+async def bulk_update_prompt_keywords(
+    payload: schemas.PromptBulkKeywordsRequest = Body(...),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user)
+):
+    if not payload.add_keywords and not payload.remove_keywords:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one of add_keywords or remove_keywords must be provided."
+        )
+    updated = 0
+    failed_ids: List[int] = []
+
+    def _normalize_for_compare(value: str) -> str:
+        try:
+            return db._normalize_keyword(value).casefold()
+        except Exception:
+            return str(value).strip().casefold()
+
+    remove_set = {
+        _normalize_for_compare(k)
+        for k in payload.remove_keywords
+        if isinstance(k, str) and k.strip()
+    }
+
+    for prompt_id in payload.prompt_ids:
+        try:
+            prompt = db.fetch_prompt_details(prompt_id)
+            if not prompt:
+                failed_ids.append(int(prompt_id))
+                continue
+            current_keywords = db.fetch_keywords_for_prompt(int(prompt_id), include_deleted=False)
+            filtered = [
+                k for k in current_keywords
+                if _normalize_for_compare(k) not in remove_set
+            ]
+            existing_norms = {_normalize_for_compare(k) for k in filtered}
+            for kw in payload.add_keywords:
+                if not isinstance(kw, str) or not kw.strip():
+                    continue
+                normalized_kw = db._normalize_keyword(kw)
+                norm_key = _normalize_for_compare(normalized_kw)
+                if norm_key not in existing_norms:
+                    filtered.append(normalized_kw)
+                    existing_norms.add(norm_key)
+            db.update_keywords_for_prompt(int(prompt_id), filtered)
+            updated += 1
+        except (InputError, DatabaseError) as e:
+            logger.warning(f"Bulk keyword update failed for prompt {prompt_id}: {e}")
+            failed_ids.append(int(prompt_id))
+    return schemas.PromptBulkKeywordsResponse(
+        updated=updated,
+        failed=len(failed_ids),
+        failed_ids=failed_ids
+    )
+
+
 # === Prompt Endpoints ===
 
 # Legacy-compatible create route for tests expecting /api/v1/prompts/create
 @router.post(
     "/create",
     summary="Create a prompt (legacy payload)",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def legacy_create_prompt(
     payload: schemas.LegacyPromptCreateRequest = Body(...),
@@ -500,14 +822,14 @@ async def legacy_create_prompt(
     response_model=schemas.PromptResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new prompt",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 @router.post(
     "",
     response_model=schemas.PromptResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new prompt [no-slash alias]",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def create_prompt(
     prompt_data: schemas.PromptCreate,
@@ -568,23 +890,29 @@ async def create_prompt(
     "/",
     response_model=schemas.PaginatedPromptsResponse,
     summary="List all prompts (paginated)",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 @router.get(
     "",
     response_model=schemas.PaginatedPromptsResponse,
     summary="List all prompts (paginated) [no-slash alias]",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def list_all_prompts(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
     include_deleted: bool = Query(False, description="Include soft-deleted prompts"),
+    sort_by: str = Query("last_modified", description="Sort by: last_modified, name, author, id"),
+    sort_order: str = Query("desc", description="Sort order: asc or desc"),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
         items_dict_list, total_pages, current_page, total_items = db.list_prompts(
-            page=page, per_page=per_page, include_deleted=include_deleted
+            page=page,
+            per_page=per_page,
+            include_deleted=include_deleted,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
         # Convert list of dicts to list of PromptBriefResponse
         brief_items = [schemas.PromptBriefResponse(**item) for item in items_dict_list]
@@ -605,7 +933,7 @@ async def list_all_prompts(
     "/{prompt_identifier}",
     response_model=schemas.PromptResponse,
     summary="Get a specific prompt by ID, UUID, or Name",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def get_prompt(
     prompt_identifier: Union[int, str], # Path param will be string, FastAPI can convert to int if possible
@@ -633,7 +961,7 @@ async def get_prompt(
     "/{prompt_identifier}",
     response_model=schemas.PromptResponse,
     summary="Update an existing prompt (or create if name matches and overwrite=true logic used)",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def update_prompt(
     prompt_identifier: Union[int, str],
@@ -701,13 +1029,14 @@ async def update_prompt(
 @router.delete(
     "/{prompt_identifier}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Soft delete a prompt",
-    dependencies=[Depends(verify_prompts_auth)]
+    dependencies=[Depends(verify_prompts_user)]
 )
 async def delete_prompt(
     prompt_identifier: Union[int, str],
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
-):
+) -> Response:
     try:
         processed_identifier: Union[int, str] = prompt_identifier
         try: processed_identifier = int(prompt_identifier)
@@ -717,11 +1046,74 @@ async def delete_prompt(
         if not success:
             # Could be not found or already deleted, DB layer logs warning
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found or already deleted.")
-        return None # HTTP 204 returns no body
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except ConflictError as e: # If version mismatch during delete
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except DatabaseError as e:
         logger.error(f"Database error deleting prompt '{prompt_identifier}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+
+
+# === Version Endpoints ===
+
+@router.get(
+    "/{prompt_identifier}/versions",
+    response_model=List[schemas.PromptVersionResponse],
+    summary="List prompt versions",
+    dependencies=[Depends(verify_prompts_user)]
+)
+async def list_prompt_versions(
+    prompt_identifier: Union[int, str],
+    db: PromptsDatabase = Depends(get_prompts_db_for_user)
+):
+    try:
+        prompt_details = db.fetch_prompt_details(prompt_identifier, include_deleted=True)
+        if not prompt_details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found.")
+        versions = db.get_prompt_versions(int(prompt_details["id"]))
+        return [schemas.PromptVersionResponse(**entry) for entry in versions]
+    except DatabaseError as e:
+        logger.error(f"Database error listing versions for prompt '{prompt_identifier}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+
+
+@router.post(
+    "/{prompt_identifier}/versions/{version}/restore",
+    response_model=schemas.PromptResponse,
+    summary="Restore a prompt to a previous version",
+    dependencies=[Depends(verify_prompts_user)]
+)
+async def restore_prompt_version(
+    prompt_identifier: Union[int, str],
+    version: int,
+    db: PromptsDatabase = Depends(get_prompts_db_for_user)
+):
+    try:
+        prompt_details = db.fetch_prompt_details(prompt_identifier, include_deleted=True)
+        if not prompt_details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found.")
+
+        updated_uuid, _msg = db.restore_prompt_version(int(prompt_details["id"]), version)
+        if updated_uuid:
+            updated_prompt = db.fetch_prompt_details(updated_uuid, include_deleted=True)
+        else:
+            updated_prompt = db.fetch_prompt_details(int(prompt_details["id"]), include_deleted=True)
+
+        if not updated_prompt:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found after restore.")
+
+        if 'deleted' not in updated_prompt and hasattr(schemas.PromptResponse, 'deleted'):
+            updated_prompt['deleted'] = False
+
+        return schemas.PromptResponse(**updated_prompt)
+    except InputError as e:
+        message = str(e)
+        status_code = status.HTTP_404_NOT_FOUND if "not found" in message.lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=message)
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except DatabaseError as e:
+        logger.error(f"Database error restoring prompt '{prompt_identifier}' version {version}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
 
 

@@ -17,12 +17,43 @@ Note:
 """
 
 import argparse
+import asyncio
 import base64
 import json
 import sys
 from pathlib import Path
 
-import requests
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
+
+from common.repo_utils import configure_local_egress, ensure_repo_root
+
+ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1)
+
+
+async def _stream_audio(url: str, headers: dict, payload: dict, out_path: Path) -> None:
+    with out_path.open("ab") as fout:
+        async for chunk in http_client.astream_bytes(
+            method="POST",
+            url=url,
+            headers=headers,
+            data=json.dumps(payload),
+            timeout=60.0,
+        ):
+            if not chunk:
+                continue
+            fout.write(chunk)
 
 
 def main():
@@ -61,20 +92,26 @@ def main():
         "Content-Type": "application/json",
     }
 
-    if args.stream:
-        # Stream bytes and save incrementally
-        with requests.post(url, headers=headers, data=json.dumps(payload), stream=True) as r:
+    configure_local_egress(args.host)
+
+    try:
+        if args.stream:
+            # Stream bytes and save incrementally
+            out_path = Path(args.out)
+            if out_path.exists():
+                out_path.unlink()
+            asyncio.run(_stream_audio(url, headers, payload, out_path))
+            print(f"Saved streamed audio to {args.out}")
+        else:
+            r = http_client.fetch(method="POST", url=url, headers=headers, json=payload, timeout=60.0)
             r.raise_for_status()
-            with open(args.out, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-        print(f"Saved streamed audio to {args.out}")
-    else:
-        r = requests.post(url, headers=headers, json=payload)
-        r.raise_for_status()
-        Path(args.out).write_bytes(r.content)
-        print(f"Saved audio to {args.out}")
+            Path(args.out).write_bytes(r.content)
+            print(f"Saved audio to {args.out}")
+    finally:
+        try:
+            asyncio.run(http_client.shutdown_http_client())
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

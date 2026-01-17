@@ -6,6 +6,8 @@ pytestmark = pytest.mark.integration
 
 
 def test_admin_security_alert_status_endpoint(isolated_test_environment):
+
+
     client, db_name = isolated_test_environment
     headers = _admin_headers(client, db_name)
 

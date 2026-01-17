@@ -43,6 +43,7 @@ class FakeRedis:
         return cls()
 
     def ping(self):
+
         return True
 
     def publish(self, channel: str, data: bytes):
@@ -125,7 +126,8 @@ async def test_redis_fanout_cross_worker_real(monkeypatch):
         assert frame["data"] == "ping"
 
 def test_health_includes_redis_ping(monkeypatch):
-    # Setup app with sandbox routes and fake redis
+
+     # Setup app with sandbox routes and fake redis
     monkeypatch.setenv("TEST_MODE", "1")
     chan = f"test:sandbox:health:{uuid.uuid4().hex}"
     monkeypatch.setenv("SANDBOX_WS_REDIS_FANOUT", "true")

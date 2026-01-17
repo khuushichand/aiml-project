@@ -30,6 +30,7 @@ class TestElevenLabsAdapterBasics:
 
     def test_capabilities_formats(self, adapter):
         import asyncio
+
         caps = asyncio.run(adapter.get_capabilities())
         formats = {f.value for f in caps.supported_formats}
         assert "mp3" in formats

@@ -8,7 +8,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
@@ -54,8 +54,13 @@ def migrate_sqlite_to_postgres(
     batch_size: int = 500,
     skip_tables: Optional[Iterable[str]] = None,
     label: str = 'content',
+    user_id: Optional[str] = None,
 ) -> None:
-    """Copy rows from a SQLite database into a PostgreSQL database."""
+    """Copy rows from a SQLite database into a PostgreSQL database.
+
+    When user_id is provided, truncation and copy are scoped to that user_id
+    for tables that include a user_id column.
+    """
 
     sqlite_path = Path(sqlite_path)
     if not sqlite_path.exists():
@@ -76,10 +81,10 @@ def migrate_sqlite_to_postgres(
         backend = DatabaseBackendFactory.create_backend(postgres_config)
         try:
             with backend.transaction() as pg_conn:
-                _truncate_tables(backend, pg_conn, insertion_order)
+                _truncate_tables(backend, pg_conn, insertion_order, tables, user_id=user_id)
                 for table_name in insertion_order:
                     meta = tables[table_name]
-                    _copy_table(sqlite_conn, backend, pg_conn, meta, batch_size)
+                    _copy_table(sqlite_conn, backend, pg_conn, meta, batch_size, user_id=user_id)
                 _sync_sequences(backend, pg_conn, tables)
         finally:
             try:
@@ -301,11 +306,26 @@ def _truncate_tables(
     backend: DatabaseBackend,
     pg_conn,
     insertion_order: Sequence[str],
+    tables: Dict[str, TableMeta],
+    user_id: Optional[str] = None,
 ) -> None:
     for table_name in reversed(list(insertion_order)):
-        sql = f'DELETE FROM {table_name}'
+        meta = tables.get(table_name)
+        has_user_id = bool(meta and any(col.lower() == "user_id" for col in meta.columns))
+        if user_id and has_user_id:
+            sql = f'DELETE FROM {table_name} WHERE user_id = %s'
+            params = (user_id,)
+        elif user_id and not has_user_id:
+            logger.info(
+                'Skipping truncate for %s (no user_id column) in per-user mode',
+                table_name,
+            )
+            continue
+        else:
+            sql = f'DELETE FROM {table_name}'
+            params = None
         try:
-            backend.execute(sql, connection=pg_conn)
+            backend.execute(sql, params, connection=pg_conn)
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning('Unable to clear table %s: %s', table_name, exc)
 
@@ -316,9 +336,15 @@ def _copy_table(
     pg_conn,
     meta: TableMeta,
     batch_size: int,
+    user_id: Optional[str] = None,
 ) -> None:
     column_list = ', '.join([f'"{col}"' for col in meta.columns])
     select_sql = f'SELECT {column_list} FROM "{meta.source_name}"'
+    select_params: Tuple[Any, ...] = ()
+    has_user_id = any(col.lower() == "user_id" for col in meta.columns)
+    if user_id and has_user_id:
+        select_sql = f'{select_sql} WHERE "user_id" = ?'
+        select_params = (user_id,)
     insert_columns = ', '.join(meta.pg_columns)
     placeholders = ', '.join(['%s'] * len(meta.pg_columns))
     insert_sql = (
@@ -337,7 +363,7 @@ def _copy_table(
     except Exception:
         boolean_columns = set()
 
-    cursor = sqlite_conn.execute(select_sql)
+    cursor = sqlite_conn.execute(select_sql, select_params)
     total = 0
     while True:
         rows = cursor.fetchmany(batch_size)
@@ -433,6 +459,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument('--pg-timeout', default=10, type=int)
     parser.add_argument('--batch-size', default=500, type=int)
     parser.add_argument('--skip-table', action='append', help='Additional tables to skip')
+    parser.add_argument(
+        '--user-id',
+        help='Optional user_id for per-user migrations (scopes truncation and copy).',
+    )
     parser.add_argument('--log-level', default='INFO')
 
     args = parser.parse_args(argv)
@@ -469,6 +499,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             batch_size=args.batch_size,
             skip_tables=args.skip_table,
             label=label,
+            user_id=args.user_id,
         )
 
     if args.workflows_sqlite:

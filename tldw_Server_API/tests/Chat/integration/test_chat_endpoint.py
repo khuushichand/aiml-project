@@ -22,6 +22,7 @@ except Exception:
 
 # Import your FastAPI app instance
 from tldw_Server_API.app.main import app
+
 # Import helpers from conftest
 # get_auth_headers is defined locally below for clarity
 # Import schemas from your actual file path
@@ -36,11 +37,15 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ToolDefinition,
     FunctionDefinition,
     ToolChoiceOption,
-    ToolChoiceFunction
+    ToolChoiceFunction,
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
-    ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError,
-    ChatConfigurationError, ChatProviderError, ChatAPIError
+    ChatAuthenticationError,
+    ChatRateLimitError,
+    ChatBadRequestError,
+    ChatConfigurationError,
+    ChatProviderError,
+    ChatAPIError,
 )
 from tldw_Server_API.app.core.Chat.prompt_template_manager import PromptTemplate, DEFAULT_RAW_PASSTHROUGH_TEMPLATE
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
@@ -57,7 +62,7 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
         headers = {}
 
     # Get CSRF token from cookies if not already set
-    if not hasattr(client, 'csrf_token'):
+    if not hasattr(client, "csrf_token"):
         # Make a GET request to get CSRF token
         response = client.get("/api/v1/health")
         csrf_token = response.cookies.get("csrf_token", "")
@@ -65,7 +70,7 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
 
     # Add CSRF token to headers (preserving any existing headers)
     headers = dict(headers)  # Make a copy to avoid modifying the original
-    headers["X-CSRF-Token"] = getattr(client, 'csrf_token', '')
+    headers["X-CSRF-Token"] = getattr(client, "csrf_token", "")
 
     print(f"DEBUG make_request_with_csrf: Final headers being sent: {headers}")
 
@@ -73,9 +78,11 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
     method_func = getattr(client, method.lower())
     return method_func(url, headers=headers, **kwargs)
 
+
 def get_auth_headers(auth_token):
     """Get appropriate auth headers based on AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
     settings = get_settings()
 
     if settings.AUTH_MODE == "multi_user":
@@ -83,6 +90,7 @@ def get_auth_headers(auth_token):
     else:
         # For single-user mode, use Token header (expected by the endpoint)
         return {"Token": auth_token}
+
 
 # Fixture for TestClient with proper CSRF token handling
 @pytest.fixture(scope="function")
@@ -110,12 +118,8 @@ def client():
 @pytest.fixture
 def mock_user():
     """Create a mock user for testing."""
-    return User(
-        id=1,
-        username="test_user",
-        email="test@example.com",
-        is_active=True
-    )
+    return User(id=1, username="test_user", email="test@example.com", is_active=True)
+
 
 @pytest.fixture(autouse=True)
 def setup_auth_override(mock_user):
@@ -127,9 +131,10 @@ def setup_auth_override(mock_user):
     from unittest.mock import patch
 
     # Mock the auth utility functions used by the chat endpoint
-    with patch('tldw_Server_API.app.api.v1.endpoints.chat.is_authentication_required', return_value=False):
+    with patch("tldw_Server_API.app.api.v1.endpoints.chat.is_authentication_required", return_value=False):
         # When auth is not required, the endpoint won't check the token
         yield
+
 
 @pytest.fixture
 def valid_auth_token() -> str:
@@ -152,7 +157,7 @@ def valid_auth_token() -> str:
             "username": "test_user",
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),
             "iat": datetime.datetime.utcnow(),
-            "type": "access"
+            "type": "access",
         }
         test_token = jwt.encode(payload, secret_key, algorithm=settings.JWT_ALGORITHM)
         return f"Bearer {test_token}"
@@ -180,9 +185,9 @@ DEFAULT_USER_MESSAGES_FOR_SCHEMA = [
 def default_chat_request_data():
     """Provides a default ChatCompletionRequest object for tests."""
     return ChatCompletionRequest(
-        model=DEFAULT_MODEL_NAME,
-        messages=DEFAULT_USER_MESSAGES_FOR_SCHEMA  # Use the locally defined constant
+        model=DEFAULT_MODEL_NAME, messages=DEFAULT_USER_MESSAGES_FOR_SCHEMA  # Use the locally defined constant
     )
+
 
 @pytest.fixture
 def default_chat_request_data_error_stream():
@@ -190,7 +195,7 @@ def default_chat_request_data_error_stream():
     return ChatCompletionRequest(
         model=DEFAULT_MODEL_NAME,  # Use the locally defined constant
         messages=DEFAULT_USER_MESSAGES_FOR_SCHEMA,  # Use the locally defined constant
-        stream=True # Ensure stream is true for this test
+        stream=True,  # Ensure stream is true for this test
     )
 
 
@@ -201,13 +206,13 @@ def mock_chat_db():
     db_mock.get_character_card_by_id.return_value = None
     # Add default character card for by_name lookup for default character
     db_mock.get_character_card_by_name.return_value = {
-        'id': 'mock_default_char_id_123', # Or an int if your DB returns int
-        'name': DEFAULT_CHARACTER_NAME, # Assuming DEFAULT_CHARACTER_NAME is importable or defined
-        'system_prompt': 'Mock default system prompt'
+        "id": "mock_default_char_id_123",  # Or an int if your DB returns int
+        "name": DEFAULT_CHARACTER_NAME,  # Assuming DEFAULT_CHARACTER_NAME is importable or defined
+        "system_prompt": "Mock default system prompt",
         # Add any other fields your endpoint/templating might try to access from the default char
     }
-    db_mock.add_conversation.return_value = "mock_conv_id_xyz" # For new conversation creation
-    db_mock.add_message.return_value = "mock_message_id_abc" # Or whatever it should return
+    db_mock.add_conversation.return_value = "mock_conv_id_xyz"  # For new conversation creation
+    db_mock.add_message.return_value = "mock_message_id_abc"  # Or whatever it should return
 
     # >>> ADD THIS LINE <<<
     db_mock.client_id = "test_client_unit"
@@ -221,22 +226,32 @@ def mock_media_db():
 
 # --- Unit Tests for the Endpoint ---
 
+
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 @patch(
-    "tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")  # Keep patch in case logic changes, but expect no calls
+    "tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string"
+)  # Keep patch in case logic changes, but expect no calls
 def test_create_chat_completion_no_template(
-        mock_apply_template, mock_load_template, mock_chat_api_call,
-        client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
+    mock_apply_template,
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    default_chat_request_data,
 ):
     # Simulate that when the endpoint tries to load the default template (or any specified one),
     # it's not found, making active_template=None in the endpoint.
     mock_load_template.return_value = None
 
-    mock_response_data = {"id": "chatcmpl-no-template",
-                          "choices": [{"message": {"role": "assistant", "content": "Raw response"}}]}
+    mock_response_data = {
+        "id": "chatcmpl-no-template",
+        "choices": [{"message": {"role": "assistant", "content": "Raw response"}}],
+    }
     mock_chat_api_call.return_value = mock_response_data
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
@@ -256,8 +271,9 @@ def test_create_chat_completion_no_template(
         print(f"Response body: {response.text}")
         print(f"Response headers: {response.headers}")
     assert response.status_code == status.HTTP_200_OK
-    assert response.json()["choices"][0]["message"]["content"] == mock_response_data["choices"][0]["message"][
-        "content"]  # Check relevant part
+    assert (
+        response.json()["choices"][0]["message"]["content"] == mock_response_data["choices"][0]["message"]["content"]
+    )  # Check relevant part
 
     mock_chat_api_call.assert_called_once()
     called_kwargs = mock_chat_api_call.call_args.kwargs
@@ -267,7 +283,7 @@ def test_create_chat_completion_no_template(
     # Update the assertion to check if system_message is present and has expected value
     if "system_message" in called_kwargs:
         # If present, it should be from the default character
-        assert called_kwargs["system_message"] == 'Mock default system prompt'
+        assert called_kwargs["system_message"] == "Mock default system prompt"
 
     # Messages should be passed through as-is when using the raw passthrough template
     expected_payload_messages_as_dicts = [msg.model_dump(exclude_none=True) for msg in DEFAULT_USER_MESSAGES_FOR_SCHEMA]
@@ -287,9 +303,9 @@ def test_create_chat_completion_no_template(
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
 
-
 # (The rest of the tests in test_chat_endpoint.py remain the same as the corrected version from the previous response)
 # Ensure they use the `default_chat_request_data` fixture where appropriate.
+
 
 @pytest.mark.unit
 @pytest.mark.skip(reason="Streaming tests hang with TestClient - needs investigation")
@@ -298,15 +314,24 @@ def test_create_chat_completion_no_template(
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 @patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_create_chat_completion_success_streaming(  # Added default_chat_request_data fixture
-        mock_apply_template, mock_load_template, mock_chat_api_call,
-        client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
+    mock_apply_template,
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    default_chat_request_data,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
 ):
     mock_load_template.return_value = None  # Default passthrough
-    mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
-        "original_system_message_from_request", ""))
+    mock_apply_template.side_effect = lambda template_str, data: data.get(
+        "message_content", data.get("original_system_message_from_request", "")
+    )
 
     with patch(
-            "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_chat_api_call_inner:  # Renamed for clarity
+        "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call"
+    ) as mock_chat_api_call_inner:  # Renamed for clarity
+
         def mock_stream_generator():  # This mock is for the return value of perform_chat_api_call
             yield "Hello"  # Just the content delta
             yield " World"
@@ -318,9 +343,7 @@ def test_create_chat_completion_success_streaming(  # Added default_chat_request
 
         streaming_request_data = default_chat_request_data.model_copy(update={"stream": True})
         response = client.post_with_csrf(
-            "/api/v1/chat/completions",
-            json=streaming_request_data.model_dump(),
-            headers={"token": valid_auth_token}
+            "/api/v1/chat/completions", json=streaming_request_data.model_dump(), headers={"token": valid_auth_token}
         )
 
         assert response.status_code == status.HTTP_200_OK
@@ -336,7 +359,10 @@ def test_create_chat_completion_success_streaming(  # Added default_chat_request
         # events[2] would be 'data: {"choices": [{"delta": {"content": " World"}}]}'
         assert json.loads(events[1].split("data: ", 1)[1])["choices"][0]["delta"]["content"] == "Hello"
         assert json.loads(events[2].split("data: ", 1)[1])["choices"][0]["delta"]["content"] == " World"
-        assert "data: " in events[-1] and json.loads(events[-1].split("data: ", 1)[1]).get("choices")[0].get("finish_reason") == "stop"
+        assert (
+            "data: " in events[-1]
+            and json.loads(events[-1].split("data: ", 1)[1]).get("choices")[0].get("finish_reason") == "stop"
+        )
 
         mock_chat_api_call_inner.assert_called_once()
         call_args = mock_chat_api_call_inner.call_args[1]
@@ -353,30 +379,35 @@ def test_create_chat_completion_success_streaming(  # Added default_chat_request
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 @patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_system_message_extraction(
-        mock_apply_template, mock_load_template, mock_chat_api_call,
-        client, valid_auth_token, mock_media_db, mock_chat_db
+    mock_apply_template, mock_load_template, mock_chat_api_call, client, valid_auth_token, mock_media_db, mock_chat_db
 ):
     mock_load_template.return_value = None  # Default passthrough
-    mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
-        "original_system_message_from_request", ""))
-    mock_chat_api_call.return_value = {"id": "chatcmpl-123",
-                                       "choices": [{"message": {"role": "assistant", "content": "Test response"}}]}
+    mock_apply_template.side_effect = lambda template_str, data: data.get(
+        "message_content", data.get("original_system_message_from_request", "")
+    )
+    mock_chat_api_call.return_value = {
+        "id": "chatcmpl-123",
+        "choices": [{"message": {"role": "assistant", "content": "Test response"}}],
+    }
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
 
     messages_with_system = [
         ChatCompletionSystemMessageParam(role="system", content="You are a helpful assistant."),
-        ChatCompletionUserMessageParam(role="user", content="Hello there.")
+        ChatCompletionUserMessageParam(role="user", content="Hello there."),
     ]
     # Use the specific Pydantic models from your schema
     request_data_obj = ChatCompletionRequest(model="test-model", messages=messages_with_system)
 
-    client.post_with_csrf("/api/v1/chat/completions", json=request_data_obj.model_dump(), headers={"Token": valid_auth_token})
+    client.post_with_csrf(
+        "/api/v1/chat/completions", json=request_data_obj.model_dump(), headers={"Token": valid_auth_token}
+    )
 
     mock_chat_api_call.assert_called_once()
     call_args = mock_chat_api_call.call_args.kwargs
     assert call_args["system_message"] == "You are a helpful assistant."
+    # System messages are passed separately; payload should only include non-system roles.
     assert len(call_args["messages_payload"]) == 1
     assert call_args["messages_payload"][0]["role"] == "user"
     assert call_args["messages_payload"][0]["content"] == "Hello there."  # Assuming passthrough template
@@ -391,23 +422,35 @@ def test_system_message_extraction(
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 @patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_no_system_message_in_payload(
-        mock_apply_template, mock_load_template, mock_chat_api_call,
-        client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
-        # Added default_chat_request_data
+    mock_apply_template,
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    default_chat_request_data,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    # Added default_chat_request_data
 ):
-    mock_load_template.return_value = None  # Default passthrough because prompt_template_name is None in default_chat_request_data
+    mock_load_template.return_value = (
+        None  # Default passthrough because prompt_template_name is None in default_chat_request_data
+    )
     # Simulate passthrough for apply_template when default template is used
-    mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
-        "original_system_message_from_request", ""))
+    mock_apply_template.side_effect = lambda template_str, data: data.get(
+        "message_content", data.get("original_system_message_from_request", "")
+    )
 
-    mock_chat_api_call.return_value = {"id": "chatcmpl-123",
-                                       "choices": [{"message": {"role": "assistant", "content": "Test response"}}]}
+    mock_chat_api_call.return_value = {
+        "id": "chatcmpl-123",
+        "choices": [{"message": {"role": "assistant", "content": "Test response"}}],
+    }
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
 
-    client.post_with_csrf("/api/v1/chat/completions", json=default_chat_request_data.model_dump(),
-                headers={"Token": valid_auth_token})
+    client.post_with_csrf(
+        "/api/v1/chat/completions", json=default_chat_request_data.model_dump(), headers={"Token": valid_auth_token}
+    )
 
     mock_chat_api_call.assert_called_once()
     # This line was missing:
@@ -435,26 +478,36 @@ def test_no_system_message_in_payload(
     app.dependency_overrides.pop(get_media_db_for_user, None)
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
+
 VALID_ALTERNATIVE_PROVIDER_FOR_TEST = "groq"
 
 
 @pytest.mark.unit
 # Update the patch.dict to use this valid alternative provider name
-@patch.dict("tldw_Server_API.app.api.v1.schemas.chat_request_schemas.API_KEYS", {
-    "openai": "key_from_config",
-    VALID_ALTERNATIVE_PROVIDER_FOR_TEST: "alternative_key_for_test",  # Use the valid name
-    "cohere": "cohere_test_key_if_needed_separately"  # If you still have a cohere specific part
-})
+@patch.dict(
+    "tldw_Server_API.app.api.v1.schemas.chat_request_schemas.API_KEYS",
+    {
+        "openai": "key_from_config",
+        VALID_ALTERNATIVE_PROVIDER_FOR_TEST: "alternative_key_for_test",  # Use the valid name
+        "cohere": "cohere_test_key_if_needed_separately",  # If you still have a cohere specific part
+    },
+)
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 @patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 @pytest.mark.skip(reason="Flaky under composite run due to provider defaults; validated in isolation")
 def test_api_key_used_from_config(
-        mock_apply_template, mock_load_template,
-        client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
+    mock_apply_template,
+    mock_load_template,
+    client,
+    default_chat_request_data,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
 ):
     mock_load_template.return_value = None
-    mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
-        "original_system_message_from_request", ""))
+    mock_apply_template.side_effect = lambda template_str, data: data.get(
+        "message_content", data.get("original_system_message_from_request", "")
+    )
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
@@ -464,8 +517,9 @@ def test_api_key_used_from_config(
 
         # Test 1: Default provider (should pick up "openai" key from patched dict)
         # default_chat_request_data has api_provider=None, so it will use DEFAULT_LLM_PROVIDER ("openai")
-        client.post_with_csrf("/api/v1/chat/completions", json=default_chat_request_data.model_dump(),
-                    headers={"Token": valid_auth_token})
+        client.post_with_csrf(
+            "/api/v1/chat/completions", json=default_chat_request_data.model_dump(), headers={"Token": valid_auth_token}
+        )
         mock_chat_api_call.assert_called_once()
         assert mock_chat_api_call.call_args.kwargs["api_key"] == "key_from_config"
         assert mock_chat_api_call.call_args.kwargs["api_endpoint"] == "openai"  # Check target endpoint
@@ -483,12 +537,14 @@ def test_api_key_used_from_config(
                 # If it were an integration test, a valid model for the provider would be needed.
             }
         )
-        response_alternative = client.post("/api/v1/chat/completions", json=request_data_alternative.model_dump(),
-                                           headers={"Token": valid_auth_token})
+        response_alternative = client.post(
+            "/api/v1/chat/completions", json=request_data_alternative.model_dump(), headers={"Token": valid_auth_token}
+        )
 
         # This assertion should now pass if VALID_ALTERNATIVE_PROVIDER_FOR_TEST is correctly handled
-        assert response_alternative.status_code == status.HTTP_200_OK, \
-            f"Alternative provider '{VALID_ALTERNATIVE_PROVIDER_FOR_TEST}' failed: {response_alternative.text}"
+        assert (
+            response_alternative.status_code == status.HTTP_200_OK
+        ), f"Alternative provider '{VALID_ALTERNATIVE_PROVIDER_FOR_TEST}' failed: {response_alternative.text}"
 
         mock_chat_api_call.assert_called_once()
         assert mock_chat_api_call.call_args.kwargs["api_key"] == "alternative_key_for_test"
@@ -500,8 +556,9 @@ def test_api_key_used_from_config(
         request_data_cohere = default_chat_request_data.model_copy(
             update={"api_provider": "cohere", "model": "command-r"}  # Assuming 'cohere' is in SUPPORTED_API_ENDPOINTS
         )
-        response_cohere = client.post("/api/v1/chat/completions", json=request_data_cohere.model_dump(),
-                                      headers={"Token": valid_auth_token})
+        response_cohere = client.post(
+            "/api/v1/chat/completions", json=request_data_cohere.model_dump(), headers={"Token": valid_auth_token}
+        )
         assert response_cohere.status_code == status.HTTP_200_OK, f"Cohere provider failed: {response_cohere.text}"
         mock_chat_api_call.assert_called_once()
         assert mock_chat_api_call.call_args.kwargs["api_key"] == "cohere_test_key_if_needed_separately"
@@ -517,13 +574,20 @@ def test_api_key_used_from_config(
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
 def test_missing_api_key_for_required_provider(
-        mock_apply_template, mock_load_template,
-        client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db, monkeypatch
+    mock_apply_template,
+    mock_load_template,
+    client,
+    default_chat_request_data,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    monkeypatch,
 ):
     # Simulate that the default template is found and is a passthrough
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
-    mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
-        "original_system_message_from_request", ""))
+    mock_apply_template.side_effect = lambda template_str, data: data.get(
+        "message_content", data.get("original_system_message_from_request", "")
+    )
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
@@ -543,20 +607,19 @@ def test_missing_api_key_for_required_provider(
 
     # Ensure endpoint prefers module-level API_KEYS for this test to avoid env/interference
     # Do NOT enable TEST_MODE here, since TEST_MODE enables auto-mock for some providers and bypasses 503.
-    monkeypatch.delenv('TEST_MODE', raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
     monkeypatch.setattr(
         "tldw_Server_API.app.core.AuthNZ.byok_runtime.resolve_server_default_key",
         lambda _provider: None,
     )
     from unittest.mock import patch as _patch
+
     with _patch("tldw_Server_API.app.api.v1.endpoints.chat.get_api_keys", return_value={}):
         response = client.post_with_csrf(
-        "/api/v1/chat/completions",
-        json=request_data_openai.model_dump(),
-        headers={"token": valid_auth_token}
+            "/api/v1/chat/completions", json=request_data_openai.model_dump(), headers={"token": valid_auth_token}
         )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     detail = response.json()["detail"]
     assert detail["error_code"] == "missing_provider_credentials"
     after = reg.get_metric_stats("byok_missing_credentials_total", labels=labels).get("count", 0)
@@ -571,30 +634,36 @@ def test_missing_api_key_for_required_provider(
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")  # Mock template deps
 @patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_keyless_provider_proceeds_without_key(  # Added default_chat_request_data
-        mock_apply_template, mock_load_template,
-        client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
+    mock_apply_template,
+    mock_load_template,
+    client,
+    default_chat_request_data,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
 ):
     mock_load_template.return_value = None  # Default passthrough
-    mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
-        "original_system_message_from_request", ""))
+    mock_apply_template.side_effect = lambda template_str, data: data.get(
+        "message_content", data.get("original_system_message_from_request", "")
+    )
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
 
-    with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {}, clear=True), \
-            patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_chat_api_call:
+    with (
+        patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {}, clear=True),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_chat_api_call,
+    ):
         mock_chat_api_call.return_value = {"id": "res_ollama"}
         request_data_ollama = default_chat_request_data.model_copy(update={"api_provider": "ollama"})
 
         response = client.post_with_csrf(
-            "/api/v1/chat/completions",
-            json=request_data_ollama.model_dump(),
-            headers={"token": valid_auth_token}
+            "/api/v1/chat/completions", json=request_data_ollama.model_dump(), headers={"token": valid_auth_token}
         )
         assert response.status_code == status.HTTP_200_OK
         mock_chat_api_call.assert_called_once()
-        assert mock_chat_api_call.call_args[1].get(
-            "api_key") is None  # Check that api_key was indeed None or not passed
+        api_key = mock_chat_api_call.call_args[1].get("api_key")
+        assert api_key is None, f"Expected None for keyless provider, got: {api_key!r}"
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -605,58 +674,83 @@ def test_keyless_provider_proceeds_without_key(  # Added default_chat_request_da
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")  # Corrected patch target
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 @patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
-@pytest.mark.parametrize("error_type, expected_status, expected_detail_substring", [
-    (ChatAuthenticationError(provider="test", message="Auth failed detail from lib"),
-     # Error from perform_chat_api_call
-     status.HTTP_401_UNAUTHORIZED,
-     "Auth failed detail from lib"),  # Endpoint uses the lib's message for < 500 errors
-
-    (ChatRateLimitError(provider="test", message="Rate limit detail from lib"),
-     status.HTTP_429_TOO_MANY_REQUESTS,
-     "Rate limit detail from lib"),
-
-    (ChatBadRequestError(provider="test", message="Bad request detail from lib"),
-     status.HTTP_400_BAD_REQUEST,
-     "Bad request detail from lib"),
-
-    (ChatConfigurationError(provider="test", message="Config error from lib"),  # This is a 5xx type error
-     status.HTTP_503_SERVICE_UNAVAILABLE,  # Endpoint maps ChatConfigurationError to 503
-     "The chat service is temporarily unavailable."),  # Endpoint masks 5xx details
-
-    (ChatProviderError(provider="test", message="Provider issue from lib", status_code=503),  # This is a 5xx type error
-     status.HTTP_503_SERVICE_UNAVAILABLE,
-     "The chat service is temporarily unavailable."),
-
-    (ChatProviderError(provider="test", message="Provider non-HTTP issue from lib", status_code=502),
-     # This is a 5xx type error
-     status.HTTP_502_BAD_GATEWAY,
-     "The chat service provider is currently unavailable."),
-
-    (ChatAPIError(provider="test", message="Generic API issue from lib", status_code=500),  # This is a 5xx type error
-     status.HTTP_500_INTERNAL_SERVER_ERROR,
-     "An internal server error occurred."),
-
-    # Case: A non-library, non-HTTPException error from perform_chat_api_call (e.g., a raw ValueError)
-    # The endpoint's final `except Exception` catches this.
-    (ValueError("Value error from shim"),
-     status.HTTP_500_INTERNAL_SERVER_ERROR,  # Endpoint's generic catch-all
-     "An unexpected internal server error occurred."),
-
-    # Case: An HTTPException raised directly by perform_chat_api_call
-    # The endpoint's general exception handler will catch this and return 500
-    (HTTPException(status_code=418, detail="I'm a teapot from shim"),
-     status.HTTP_500_INTERNAL_SERVER_ERROR,  # General exception handler catches this
-     "An unexpected internal server error occurred.")  # Generic error message
-])
+@pytest.mark.parametrize(
+    "error_type, expected_status, expected_detail_substring",
+    [
+        (
+            ChatAuthenticationError(provider="test", message="Auth failed detail from lib"),
+            # Error from perform_chat_api_call
+            status.HTTP_401_UNAUTHORIZED,
+            "unauthorized",
+        ),
+        (
+            ChatRateLimitError(provider="test", message="Rate limit detail from lib"),
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "rate limit exceeded",
+        ),
+        (
+            ChatBadRequestError(provider="test", message="Bad request detail from lib"),
+            status.HTTP_400_BAD_REQUEST,
+            "invalid request",
+        ),
+        (
+            ChatConfigurationError(provider="test", message="Config error from lib"),  # This is a 5xx type error
+            status.HTTP_503_SERVICE_UNAVAILABLE,  # Endpoint maps ChatConfigurationError to 503
+            "The chat service is temporarily unavailable.",
+        ),  # Endpoint masks 5xx details
+        (
+            ChatProviderError(
+                provider="test", message="Provider issue from lib", status_code=503
+            ),  # This is a 5xx type error
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "The chat service is temporarily unavailable.",
+        ),
+        (
+            ChatProviderError(provider="test", message="Provider non-HTTP issue from lib", status_code=502),
+            # This is a 5xx type error
+            status.HTTP_502_BAD_GATEWAY,
+            "The chat service provider is currently unavailable.",
+        ),
+        (
+            ChatAPIError(
+                provider="test", message="Generic API issue from lib", status_code=500
+            ),  # This is a 5xx type error
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "An internal server error occurred.",
+        ),
+        # Case: A non-library, non-HTTPException error from perform_chat_api_call (e.g., a raw ValueError)
+        # The endpoint's final `except Exception` catches this.
+        (
+            ValueError("Value error from shim"),
+            status.HTTP_500_INTERNAL_SERVER_ERROR,  # Endpoint's generic catch-all
+            "An unexpected internal server error occurred.",
+        ),
+        # Case: An HTTPException raised directly by perform_chat_api_call
+        # The endpoint's general exception handler will catch this and return 500
+        (
+            HTTPException(status_code=418, detail="I'm a teapot from shim"),
+            status.HTTP_500_INTERNAL_SERVER_ERROR,  # General exception handler catches this
+            "An unexpected internal server error occurred.",
+        ),  # Generic error message
+    ],
+)
 def test_chat_api_call_exception_handling_unit(
-        mock_apply_template, mock_load_template, mock_perform_chat_api_call,  # Corrected mock name
-        client, valid_auth_token, mock_media_db, mock_chat_db,
-        default_chat_request_data,
-        error_type, expected_status, expected_detail_substring
+    mock_apply_template,
+    mock_load_template,
+    mock_perform_chat_api_call,  # Corrected mock name
+    client,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    default_chat_request_data,
+    error_type,
+    expected_status,
+    expected_detail_substring,
 ):
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
-    mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
-        "original_system_message_from_request", ""))
+    mock_apply_template.side_effect = lambda template_str, data: data.get(
+        "message_content", data.get("original_system_message_from_request", "")
+    )
 
     # This is the mock for perform_chat_api_call inside the endpoint
     mock_perform_chat_api_call.side_effect = error_type
@@ -667,7 +761,7 @@ def test_chat_api_call_exception_handling_unit(
     response = client.post_with_csrf(
         "/api/v1/chat/completions",
         json=default_chat_request_data.model_dump(),
-        headers={"Token": valid_auth_token}  # Ensure correct header name
+        headers={"Token": valid_auth_token},  # Ensure correct header name
     )
 
     assert response.status_code == expected_status
@@ -679,10 +773,28 @@ def test_chat_api_call_exception_handling_unit(
     # For string details, check if the expected substring is present.
     # For dict details (e.g. Pydantic validation errors), this check might need adjustment,
     # but for these specific exception handlings, detail is expected to be a string.
-    assert isinstance(response_detail_text,
-                      str), f"Response detail should be a string, got {type(response_detail_text)}"
-    assert expected_detail_substring.lower() in response_detail_text.lower(), \
-        f"Expected detail '{expected_detail_substring}' not found in actual detail '{response_detail_text}'"
+    assert isinstance(
+        response_detail_text, str
+    ), f"Response detail should be a string, got {type(response_detail_text)}"
+    detail_lower = response_detail_text.lower()
+    assert (
+        expected_detail_substring.lower() in detail_lower
+    ), f"Expected detail '{expected_detail_substring}' not found in actual detail '{response_detail_text}'"
+    if expected_status == status.HTTP_401_UNAUTHORIZED:
+        assert (
+            "key" in detail_lower or "token" in detail_lower or detail_lower.strip() == "unauthorized."
+        ), f"Expected auth error with credential context, got: {response_detail_text}"
+    if expected_status == status.HTTP_429_TOO_MANY_REQUESTS:
+        assert (
+            "retry" in detail_lower or "try again" in detail_lower
+        ), f"Expected rate limit error with retry guidance, got: {response_detail_text}"
+    if expected_status == status.HTTP_400_BAD_REQUEST:
+        assert (
+            "input" in detail_lower
+            or "payload" in detail_lower
+            or "parameter" in detail_lower
+            or detail_lower.strip() == "invalid request."
+        ), f"Expected invalid request error with input context, got: {response_detail_text}"
 
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)
@@ -695,13 +807,20 @@ def test_chat_api_call_exception_handling_unit(
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 @patch("tldw_Server_API.app.core.Chat.chat_service.apply_template_to_string")
 def test_non_iterable_stream_generator_from_shim(
-        mock_apply_template, mock_load_template, mock_chat_api_call,
-        client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
+    mock_apply_template,
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    default_chat_request_data,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
 ):
     # Simulate that the default template is found and is a passthrough
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
-    mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
-        "original_system_message_from_request", ""))
+    mock_apply_template.side_effect = lambda template_str, data: data.get(
+        "message_content", data.get("original_system_message_from_request", "")
+    )
 
     # Simulate chat_api_call (perform_chat_api_call) returning a non-iterable/non-async-iterable
     mock_chat_api_call.return_value = 123
@@ -711,9 +830,7 @@ def test_non_iterable_stream_generator_from_shim(
 
     streaming_request_data = default_chat_request_data.model_copy(update={"stream": True})
     response = client.post_with_csrf(
-        "/api/v1/chat/completions",
-        json=streaming_request_data.model_dump(),
-        headers={"token": valid_auth_token}
+        "/api/v1/chat/completions", json=streaming_request_data.model_dump(), headers={"token": valid_auth_token}
     )
 
     assert response.status_code == status.HTTP_502_BAD_GATEWAY
@@ -723,6 +840,7 @@ def test_non_iterable_stream_generator_from_shim(
     app.dependency_overrides.pop(get_media_db_for_user, None)
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
+
 @pytest.mark.skip(reason="Async generator error handling causes timeout - needs refactoring")
 @pytest.mark.unit
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test_key"})
@@ -730,14 +848,21 @@ def test_non_iterable_stream_generator_from_shim(
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
 def test_error_within_stream_generator(
-        mock_apply_template, mock_load_template, mock_chat_api_call,
-        client, default_chat_request_data_error_stream, valid_auth_token, mock_media_db, mock_chat_db
+    mock_apply_template,
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    default_chat_request_data_error_stream,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
 ):
     # Simulate that the default template (or any) is found and is a passthrough
     # or correctly loaded if it's DEFAULT_RAW_PASSTHROUGH_TEMPLATE.name
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
-    mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
-        "original_system_message_from_request", ""))
+    mock_apply_template.side_effect = lambda template_str, data: data.get(
+        "message_content", data.get("original_system_message_from_request", "")
+    )
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
@@ -756,9 +881,7 @@ def test_error_within_stream_generator(
     request_data_dict = default_chat_request_data_error_stream.model_dump()
 
     response = client.post_with_csrf(
-        "/api/v1/chat/completions",
-        json=request_data_dict,
-        headers={"Token": valid_auth_token}  # Corrected header name
+        "/api/v1/chat/completions", json=request_data_dict, headers={"Token": valid_auth_token}  # Corrected header name
     )
     assert response.status_code == status.HTTP_200_OK  # Stream should still start with 200
 
@@ -814,9 +937,10 @@ def test_error_within_stream_generator(
                         assert payload.get("tldw_conversation_id") == expected_conv_id
 
                 if "error" in payload and "message" in payload["error"]:
-                    if "Something broke mid-stream!" in payload["error"]["message"] or \
-                            "Stream failed due to provider error." in payload["error"][
-                        "message"]:  # Endpoint wraps the error
+                    if (
+                        "Something broke mid-stream!" in payload["error"]["message"]
+                        or "Stream failed due to provider error." in payload["error"]["message"]
+                    ):  # Endpoint wraps the error
                         error_event_found = True
             except json.JSONDecodeError:
                 print(f"WARN: Could not decode JSON from event: {payload_str}")
@@ -846,33 +970,44 @@ def test_error_within_stream_generator(
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
 def test_create_chat_completion_with_optional_params(
-        mock_load_template, mock_chat_api_call,
-        client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    default_chat_request_data,
 ):
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE  # Use the actual default
-    mock_chat_api_call.return_value = {"id": "chatcmpl-optional", "choices": [
-        {"message": {"role": "assistant", "content": "Response with optionals"}}]}
+    mock_chat_api_call.return_value = {
+        "id": "chatcmpl-optional",
+        "choices": [{"message": {"role": "assistant", "content": "Response with optionals"}}],
+    }
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
 
-    request_with_optionals = default_chat_request_data.model_copy(update={
-        "frequency_penalty": 0.5,
-        "presence_penalty": -0.5,
-        "logprobs": True,
-        "top_logprobs": 5,
-        "max_tokens": 150,
-        "n": 2,
-        "response_format": ResponseFormat(type="json_object"),
-        "seed": 12345,
-        "stop": ["\n", "stopword"],
-        "user": "test-user-id",
-        "minp": 0.05,  # Custom extension
-        "topk": 50  # Custom extension
-    })
+    request_with_optionals = default_chat_request_data.model_copy(
+        update={
+            "frequency_penalty": 0.5,
+            "presence_penalty": -0.5,
+            "logprobs": True,
+            "top_logprobs": 5,
+            "max_tokens": 150,
+            "n": 2,
+            "response_format": ResponseFormat(type="json_object"),
+            "seed": 12345,
+            "stop": ["\n", "stopword"],
+            "user": "test-user-id",
+            "minp": 0.05,  # Custom extension
+            "topk": 50,  # Custom extension
+        }
+    )
     request_data_dict = request_with_optionals.model_dump(exclude_none=True)
 
-    response = client.post_with_csrf("/api/v1/chat/completions", json=request_data_dict, headers={"Token": valid_auth_token})
+    response = client.post_with_csrf(
+        "/api/v1/chat/completions", json=request_data_dict, headers={"Token": valid_auth_token}
+    )
 
     assert response.status_code == status.HTTP_200_OK
     mock_chat_api_call.assert_called_once()
@@ -885,9 +1020,7 @@ def test_create_chat_completion_with_optional_params(
     # max_tokens is not directly mapped by chat_args, but by the schema to chat_api_call's provider logic
     # For a unit test of the endpoint, we check it's passed to chat_api_call if chat_api_call accepts it
     # The current chat_api_call doesn't explicitly list max_tokens in its signature,
-    # so it depends on the underlying provider functions.
-    # For now, we'll assume it's NOT directly passed by chat_api_call's main args
-    # unless PROVIDER_PARAM_MAP is updated.
+    # so it depends on downstream adapter/handler forwarding behavior.
     # Let's focus on params explicitly in chat_api_call signature.
     # assert called_kwargs["n"] == 2 # 'n' is also not directly in chat_api_call signature
     # assert called_kwargs["response_format"] == {"type": "json_object"} # also not direct
@@ -907,31 +1040,46 @@ def test_create_chat_completion_with_optional_params(
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
 def test_create_chat_completion_with_tools_unit(
-        mock_load_template, mock_chat_api_call,
-        client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    default_chat_request_data,
 ):
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
-    mock_chat_api_call.return_value = {"id": "chatcmpl-tools",
-                                       "choices": [{"message": {"role": "assistant", "tool_calls": []}}]}
+    mock_chat_api_call.return_value = {
+        "id": "chatcmpl-tools",
+        "choices": [{"message": {"role": "assistant", "tool_calls": []}}],
+    }
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
 
     tools_payload = [
-        ToolDefinition(type="function",
-                       function=FunctionDefinition(name="get_current_weather", description="Get weather",
-                                                   parameters={"type": "object",
-                                                               "properties": {"location": {"type": "string"}}}))
+        ToolDefinition(
+            type="function",
+            function=FunctionDefinition(
+                name="get_current_weather",
+                description="Get weather",
+                parameters={"type": "object", "properties": {"location": {"type": "string"}}},
+            ),
+        )
     ]
     tool_choice_payload = ToolChoiceOption(type="function", function=ToolChoiceFunction(name="get_current_weather"))
 
-    request_with_tools = default_chat_request_data.model_copy(update={
-        "tools": tools_payload,  # Pass the actual ToolDefinition objects
-        "tool_choice": tool_choice_payload  # Pass the actual ToolChoiceOption object
-    })
+    request_with_tools = default_chat_request_data.model_copy(
+        update={
+            "tools": tools_payload,  # Pass the actual ToolDefinition objects
+            "tool_choice": tool_choice_payload,  # Pass the actual ToolChoiceOption object
+        }
+    )
     request_data_dict = request_with_tools.model_dump(exclude_none=True)
 
-    response = client.post_with_csrf("/api/v1/chat/completions", json=request_data_dict, headers={"Token": valid_auth_token})
+    response = client.post_with_csrf(
+        "/api/v1/chat/completions", json=request_data_dict, headers={"Token": valid_auth_token}
+    )
     if response.status_code != status.HTTP_200_OK:
         print(f"Response status: {response.status_code}")
         print(f"Response body: {response.json()}")
@@ -952,11 +1100,19 @@ def test_create_chat_completion_with_tools_unit(
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.load_template")
 def test_save_to_db_not_passed_to_chat_api_call(
-        mock_load_template, mock_chat_api_call,
-        client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
+    mock_load_template,
+    mock_chat_api_call,
+    client,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    default_chat_request_data,
 ):
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
-    mock_chat_api_call.return_value = {"id": "chatcmpl-ok", "choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+    mock_chat_api_call.return_value = {
+        "id": "chatcmpl-ok",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+    }
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
@@ -979,8 +1135,13 @@ def test_save_to_db_not_passed_to_chat_api_call(
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")  # Mock this
 def test_create_chat_completion_character_not_found_uses_defaults(
-        mock_load_template, mock_chat_api_call_shim,
-        client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
+    mock_load_template,
+    mock_chat_api_call_shim,
+    client,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    default_chat_request_data,
 ):
     # Mock DB to return None for character
     mock_chat_db.get_character_card_by_id.return_value = None
@@ -991,14 +1152,18 @@ def test_create_chat_completion_character_not_found_uses_defaults(
 
     mock_chat_api_call_shim.return_value = {"id": "res", "choices": [{"message": {"content": "default response"}}]}
 
-    request_with_char = default_chat_request_data.model_copy(update={
-        "character_id": "non_existent_char_id",
-        "prompt_template_name": "some_template_that_uses_char_vars"  # Assume this template exists for the test
-    })
+    request_with_char = default_chat_request_data.model_copy(
+        update={
+            "character_id": "non_existent_char_id",
+            "prompt_template_name": "some_template_that_uses_char_vars",  # Assume this template exists for the test
+        }
+    )
     # If some_template_that_uses_char_vars is mocked by mock_load_template to use {char_name}
     # And char_name is not found, it will use the default "Character" from template_data initialization.
 
-    client.post_with_csrf("/api/v1/chat/completions", json=request_with_char.model_dump(), headers={"Token": valid_auth_token})
+    client.post_with_csrf(
+        "/api/v1/chat/completions", json=request_with_char.model_dump(), headers={"Token": valid_auth_token}
+    )
 
     mock_chat_api_call_shim.assert_called_once()
     called_args_to_shim = mock_chat_api_call_shim.call_args.kwargs
@@ -1007,8 +1172,9 @@ def test_create_chat_completion_character_not_found_uses_defaults(
     # If system_message_template in the active_template was "{char_name} says: {original_system_message_from_request}"
     # And no char was found, and no original system message, it might become "Character says: "
     # For the default passthrough, if original system message is empty, this would be empty.
-    assert called_args_to_shim.get(
-        "system_message") is not None  # It will be at least "" if DEFAULT_RAW_PASSTHROUGH_TEMPLATE is used
+    assert (
+        called_args_to_shim.get("system_message") is not None
+    )  # It will be at least "" if DEFAULT_RAW_PASSTHROUGH_TEMPLATE is used
 
     # Verify DB was called
     mock_chat_db.get_character_card_by_name.assert_called_once_with("non_existent_char_id")
@@ -1024,8 +1190,13 @@ def test_create_chat_completion_character_not_found_uses_defaults(
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")
 @patch("tldw_Server_API.app.core.Chat.chat_service.load_template")
 def test_create_chat_completion_template_file_not_found(
-        mock_load_template, mock_chat_api_call_shim,
-        client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
+    mock_load_template,
+    mock_chat_api_call_shim,
+    client,
+    valid_auth_token,
+    mock_media_db,
+    mock_chat_db,
+    default_chat_request_data,
 ):
     # Simulate load_template returning None (template not found)
     mock_load_template.return_value = None
@@ -1035,12 +1206,11 @@ def test_create_chat_completion_template_file_not_found(
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
 
-    request_data = default_chat_request_data.model_copy(update={
-        "prompt_template_name": "definitely_missing_template"
-    })
+    request_data = default_chat_request_data.model_copy(update={"prompt_template_name": "definitely_missing_template"})
 
-    response = client.post_with_csrf("/api/v1/chat/completions", json=request_data.model_dump(),
-                           headers={"Token": valid_auth_token})
+    response = client.post_with_csrf(
+        "/api/v1/chat/completions", json=request_data.model_dump(), headers={"Token": valid_auth_token}
+    )
     assert response.status_code == status.HTTP_200_OK  # Should fall back to default template
     mock_load_template.assert_called_once_with("definitely_missing_template")
     mock_chat_api_call_shim.assert_called_once()

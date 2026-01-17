@@ -92,12 +92,94 @@ export default function SearchPage() {
   const [circuitBreaker, setCircuitBreaker] = useState<boolean>(false);
   const [userId, setUserId] = useState<string>('');
   const [sessionId, setSessionId] = useState<string>('');
+  const [sourceFeedbackEnabled, setSourceFeedbackEnabled] = useState<boolean>(false);
+  const [docFeedbackById, setDocFeedbackById] = useState<Record<string, { value?: 'up' | 'down'; pending?: boolean }>>({});
+  const [expandedDocs, setExpandedDocs] = useState<Record<string, boolean>>({});
 
   const [view, setView] = useState<'basic' | 'json' | 'response' | 'curl'>('basic');
   const [jsonBody, setJsonBody] = useState<string>('');
   const [respView, setRespView] = useState<'pretty' | 'tree'>('pretty');
   const [preset, setPreset] = useState<'fast'|'balanced'|'accurate'>('balanced');
   const [extras, setExtras] = useState<string>('{}');
+
+  const buildDocId = (doc: Record<string, any>, fallback: string) => {
+    const candidate = doc.id || doc.metadata?.doc_id || doc.metadata?.document_id || fallback;
+    return candidate ? String(candidate) : '';
+  };
+
+  const buildChunkIds = (doc: Record<string, any>) => {
+    const chunkIds = doc.metadata?.chunk_ids || doc.metadata?.chunkIds;
+    const chunkId = doc.metadata?.chunk_id || doc.metadata?.chunkId;
+    if (Array.isArray(chunkIds)) {
+      return chunkIds.map((id: unknown) => String(id)).filter(Boolean);
+    }
+    if (chunkId) {
+      return [String(chunkId)];
+    }
+    return [];
+  };
+
+  const buildCorpus = (doc: Record<string, any>) => {
+    return doc.metadata?.corpus || doc.metadata?.source || doc.metadata?.source_name || undefined;
+  };
+
+  const sendImplicitFeedback = async (payload: Record<string, unknown>) => {
+    try {
+      await apiClient.post('/rag/feedback/implicit', {
+        query: query || undefined,
+        session_id: sessionId || undefined,
+        ...payload,
+      });
+    } catch (err) {
+      // best-effort
+      if (process.env.NODE_ENV === 'development') {
+        console.debug('[ImplicitFeedback] failed:', err);
+      }
+    }
+  };
+
+  const handleSourceFeedback = async (
+    docId: string,
+    helpful: boolean,
+    meta: { chunkIds: string[]; corpus?: string; rank: number; impressionList: string[] }
+  ) => {
+    if (!docId) {
+      show({ title: 'Missing document id', variant: 'warning' });
+      return;
+    }
+    const current = docFeedbackById[docId];
+    const nextValue = helpful ? 'up' : 'down';
+    if (current?.pending || current?.value === nextValue) return;
+
+    setDocFeedbackById((prev) => ({
+      ...prev,
+      [docId]: { value: nextValue, pending: true },
+    }));
+
+    try {
+      await apiClient.post('/feedback/explicit', {
+        feedback_type: 'helpful',
+        helpful,
+        query,
+        document_ids: [docId],
+        chunk_ids: meta.chunkIds.length ? meta.chunkIds : undefined,
+        corpus: meta.corpus,
+        session_id: sessionId || undefined,
+      });
+      setDocFeedbackById((prev) => ({
+        ...prev,
+        [docId]: { value: nextValue, pending: false },
+      }));
+      show({ title: 'Feedback sent', variant: 'success' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Could not submit feedback';
+      setDocFeedbackById((prev) => ({
+        ...prev,
+        [docId]: { value: current?.value, pending: false },
+      }));
+      show({ title: 'Feedback failed', description: message, variant: 'danger' });
+    }
+  };
   const onSearch = async () => {
     setLoading(true);
     setError(null);
@@ -194,6 +276,8 @@ export default function SearchPage() {
       }
       const res = await apiClient.post('/rag/search', payload);
       setResult(res);
+      setDocFeedbackById({});
+      setExpandedDocs({});
       setView('response');
       show({ title: 'Search complete', variant: 'success' });
 
@@ -491,6 +575,11 @@ export default function SearchPage() {
     return () => window.removeEventListener('keydown', key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [curl, result]); // show is stable from toast hook
+
+  const documents = result?.documents || [];
+  const impressionList = documents
+    .map((doc: any, idx: number) => buildDocId(doc, `doc-${idx + 1}`))
+    .filter(Boolean);
 
   return (
     <Layout>
@@ -885,23 +974,162 @@ export default function SearchPage() {
             <div className="space-y-4">
               {result.generated_answer && (
                 <div>
-                  <h2 className="text-lg font-semibold">Answer</h2>
+                  <div className="mb-2 flex items-center justify-between">
+                    <h2 className="text-lg font-semibold">Answer</h2>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(result.generated_answer || '');
+                            show({ title: 'Answer copied', variant: 'success' });
+                            void sendImplicitFeedback({ event_type: 'copy' });
+                          } catch {
+                            show({ title: 'Copy failed', variant: 'danger' });
+                          }
+                        }}
+                      >
+                        Copy
+                      </Button>
+                      {(result.academic_citations || []).length > 0 && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={async () => {
+                            const citations = (result.academic_citations || []).join('\n');
+                            const copyText = `${result.generated_answer}\n\nSources:\n${citations}`;
+                            try {
+                              await navigator.clipboard.writeText(copyText);
+                              show({ title: 'Answer with citations copied', variant: 'success' });
+                              const docIds = documents
+                                .map((d: Record<string, any>, i: number) => buildDocId(d, `doc-${i + 1}`))
+                                .filter(Boolean);
+                              const chunkIds = documents.flatMap((d: Record<string, any>) => buildChunkIds(d));
+                              const singleDoc = docIds.length === 1 ? documents[0] : null;
+                              void sendImplicitFeedback({
+                                event_type: 'citation_used',
+                                doc_id: docIds.length === 1 ? docIds[0] : undefined,
+                                chunk_ids: chunkIds.length ? chunkIds : undefined,
+                                impression_list: docIds.length ? docIds : undefined,
+                                corpus: singleDoc ? buildCorpus(singleDoc) : undefined,
+                              });
+                            } catch {
+                              show({ title: 'Copy failed', variant: 'danger' });
+                            }
+                          }}
+                        >
+                          Copy with citations
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                   <div className="whitespace-pre-wrap rounded bg-gray-50 p-3 text-sm">{result.generated_answer}</div>
                 </div>
               )}
               <div>
-                <h2 className="text-lg font-semibold">Documents</h2>
+                <div className="mb-2 flex items-center justify-between">
+                  <h2 className="text-lg font-semibold">Documents</h2>
+                  <label className="inline-flex items-center gap-2 text-xs text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={sourceFeedbackEnabled}
+                      onChange={(event) => setSourceFeedbackEnabled(event.target.checked)}
+                    />
+                    <span>Pro mode: source feedback</span>
+                  </label>
+                </div>
                 <ul className="space-y-2 text-sm">
                   {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                  {(result.documents || []).map((d: any, i: number) => (
-                    <li key={i} className="rounded border p-3">
-                      <div className="text-gray-800">{d.metadata?.title || d.id || `Doc ${i+1}`}</div>
-                      {d.content && <div className="mt-1 line-clamp-3 text-gray-600">{d.content}</div>}
-                      {typeof d.score !== 'undefined' && (
-                        <div className="mt-1 text-xs text-gray-500">Score: {d.score}</div>
-                      )}
-                    </li>
-                  ))}
+                  {documents.map((d: any, i: number) => {
+                    const docId = buildDocId(d, `doc-${i + 1}`);
+                    const docKey = docId || `doc-${i + 1}`;
+                    const chunkIds = buildChunkIds(d);
+                    const corpus = buildCorpus(d);
+                    const feedbackState = docFeedbackById[docId] || {};
+                    const pending = feedbackState.pending;
+                    const upSelected = feedbackState.value === 'up';
+                    const downSelected = feedbackState.value === 'down';
+                    const docUrl = d.metadata?.url || d.metadata?.source_url;
+                    const isExpanded = !!expandedDocs[docKey];
+                    return (
+                      <li key={docKey} className="rounded border p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="text-gray-800">
+                            {d.metadata?.title || d.id || `Doc ${i + 1}`}
+                            {docUrl && (
+                              <a
+                                className="ml-2 text-xs text-blue-600 hover:underline"
+                                href={docUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={() => {
+                                  void sendImplicitFeedback({
+                                    event_type: 'click',
+                                    doc_id: docId || undefined,
+                                    rank: i + 1,
+                                    impression_list: impressionList,
+                                    corpus,
+                                  });
+                                }}
+                              >
+                                Open
+                              </a>
+                            )}
+                          </div>
+                          {sourceFeedbackEnabled && (
+                            <div className="flex items-center gap-2 text-xs text-gray-500">
+                              <button
+                                type="button"
+                                className={`rounded border px-2 py-0.5 ${upSelected ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600 hover:bg-gray-100'}`}
+                                disabled={pending || !docId}
+                                onClick={() => handleSourceFeedback(docId, true, { chunkIds, corpus, rank: i + 1, impressionList })}
+                                aria-label="Send source helpful feedback"
+                              >
+                                Yes
+                              </button>
+                              <button
+                                type="button"
+                                className={`rounded border px-2 py-0.5 ${downSelected ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-300 text-gray-600 hover:bg-gray-100'}`}
+                                disabled={pending || !docId}
+                                onClick={() => handleSourceFeedback(docId, false, { chunkIds, corpus, rank: i + 1, impressionList })}
+                                aria-label="Send source not helpful feedback"
+                              >
+                                No
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {d.content && (
+                          <div className="mt-1 text-gray-600">
+                            <div className={isExpanded ? '' : 'line-clamp-3'}>{d.content}</div>
+                            <button
+                              type="button"
+                              className="mt-1 text-xs text-blue-600 hover:underline"
+                              onClick={() => {
+                                const next = !isExpanded;
+                                setExpandedDocs((prev) => ({ ...prev, [docKey]: next }));
+                                if (next) {
+                                  void sendImplicitFeedback({
+                                    event_type: 'expand',
+                                    doc_id: docId || undefined,
+                                    rank: i + 1,
+                                    impression_list: impressionList,
+                                    corpus,
+                                  });
+                                }
+                              }}
+                            >
+                              {isExpanded ? 'Show less' : 'Show more'}
+                            </button>
+                          </div>
+                        )}
+                        {typeof d.score !== 'undefined' && (
+                          <div className="mt-1 text-xs text-gray-500">Score: {d.score}</div>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             </div>

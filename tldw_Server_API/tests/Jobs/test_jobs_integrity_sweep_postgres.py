@@ -12,6 +12,8 @@ def _setup(jobs_pg_dsn):
 
 
 def test_integrity_sweep_clears_non_processing_lease_postgres(monkeypatch, jobs_pg_dsn):
+
+
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u")
     # Manually inject bad lease fields on a queued job

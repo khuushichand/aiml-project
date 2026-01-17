@@ -2,10 +2,10 @@
 
 ## 1. Descriptive of Current Feature Set
 
-- Purpose: Centralized request limiting to protect APIs and background operations. Supports explicit per-route caps and RBAC-aware selection of per-resource limits.
+- Purpose: Centralized ingress limiting via Resource Governor (RG) policies to protect APIs and background operations.
 - Capabilities:
-  - Global SlowAPI limiter for FastAPI routes, with test-aware bypass.
-  - Route-level decorators like `@limiter.limit("10/minute")` and optional per-route key functions.
+  - RG middleware enforces request caps using route_map (path + tag matching).
+  - Ingress rate limiting is enforced exclusively by RG (no legacy ingress decorators).
   - RBAC rate-limit selector (logs strictest user/role limits for a resource; enforcement path stubbed).
   - Token scope dependency (`require_token_scope`) with usage counting hints (`count_as="call"|"run"`).
 - Inputs/Outputs:
@@ -23,33 +23,30 @@
 ## 2. Technical Details of Features
 
 - Architecture & Data Flow
-  - Global limiter instance and test-aware key function: tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py:1
-    - `Limiter(key_func=get_test_aware_remote_address)` returns `None` in `TEST_MODE`, bypassing rate limits during tests.
+  - RG middleware + route_map: tldw_Server_API/app/core/Resource_Governance/middleware_simple.py
   - RBAC selector: `rbac_rate_limit(resource)` returns a dependency that logs selected limits from `rbac_user_rate_limits` and `rbac_role_rate_limits` but does not enforce yet: tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:994
   - Token-scope enforcement: `require_token_scope(scope, ..., endpoint_id=..., count_as=...)` injects scoped virtual-key checks and emits usage hints: tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:1040
 
 - Configuration
-  - Testing bypass: `TEST_MODE=true` (and helpers in some modules, e.g., Watchlists supports `WATCHLISTS_DISABLE_RATE_LIMITS`).
-  - Per-route rates are declared inline via decorators; for RBAC selection, limits are stored in DB tables and read by the selector (no env required).
+  - Testing bypass: `RG_ENABLED` defaults off in tests; set `RG_ENABLED=1` to enforce in CI.
+  - Per-route rates are declared in RG policies; RBAC selection reads limits from DB tables.
 
 - Concurrency & Performance
-  - SlowAPI uses in-process counters by default. For multi-instance deployments, front an API gateway or add a shared limiter (future enhancement).
+- RG handles request limiting; for multi-instance deployments, prefer the Redis backend.
 
 - Error Handling
-  - When exceeded, HTTP 429 responses with `Retry-After` may be set explicitly (see auth endpoint path) or by the limiter behavior.
+- When exceeded, HTTP 429 responses with `Retry-After` are emitted by RG middleware.
 
 ## 3. Developer-Related/Relevant Information for Contributors
 
 - Folder Structure
-  - `Rate_Limit.py` — legacy utilities (keep minimal; prefer API_Deps limiter).
-  - `app/api/v1/API_Deps/rate_limiting.py` — source of truth for limiter setup.
   - `app/api/v1/API_Deps/auth_deps.py` — `rbac_rate_limit` and `require_token_scope` dependencies.
 - Extension Points
-  - Use `@limiter.limit("N/unit")` on new endpoints. For resource-scoped behavior, add `Depends(rbac_rate_limit("<resource>"))`.
+- Use RG policy entries + route_map for new endpoints. For resource-scoped behavior, add `Depends(rbac_rate_limit("<resource>"))`.
   - To enable true RBAC enforcement, extend `enforce_rbac_rate_limit` to check counters and raise 429 based on selected limits.
 - Tests
   - Evaluations limiting shape and status: tldw_Server_API/tests/Evaluations/test_evaluations_unified.py:711, 733–736
   - Watchlists optional rate limit headers path: tldw_Server_API/tests/Watchlists/test_rate_limit_headers_optional.py:39
 - Local Dev Tips
-  - Set `TEST_MODE=true` to bypass `SlowAPI` limits during unit/integration tests.
+  - Set `RG_ENABLED=1` to enforce RG limits locally; leave unset for permissive dev runs.
   - Use small per-route limits to validate 429 behavior in dev.

@@ -9,15 +9,17 @@ import tldw_Server_API.app.core.config as _cfg_mod
 def _patch_chunking_regex_policy(monkeypatch):
     class _DummyCfg:
         def has_section(self, name):
-            return name == 'Chunking'
+            return name == "Chunking"
+
         def get(self, section, key, fallback=None):
             mapping = {
-                'regex_timeout_seconds': '0.5',
-                'regex_disable_multiprocessing': '1',
-                'regex_simple_only': '1',
+                "regex_timeout_seconds": "0.5",
+                "regex_disable_multiprocessing": "1",
+                "regex_simple_only": "1",
             }
             return mapping.get(key, fallback)
-    monkeypatch.setattr(_cfg_mod, 'load_comprehensive_config', lambda: _DummyCfg())
+
+    monkeypatch.setattr(_cfg_mod, "load_comprehensive_config", lambda: _DummyCfg())
 
 
 @pytest.mark.unit

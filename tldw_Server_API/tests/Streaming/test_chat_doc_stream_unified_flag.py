@@ -24,6 +24,8 @@ async def _async_text_stream() -> AsyncIterator[str]:
 
 
 def _dup_done_stream() -> AsyncIterator[str]:
+
+
     async def _gen():
         yield "Line before done"
         yield "[DONE]"
@@ -53,6 +55,7 @@ async def test_chat_document_generation_streaming_unified_sse(monkeypatch):
         import tldw_Server_API.app.core.Chat.document_generator as gen_mod
 
         def _stub_call_llm(*args, **kwargs):
+
             return _async_text_stream()
 
         gen_mod.DocumentGeneratorService._call_llm = _stub_call_llm  # type: ignore
@@ -125,6 +128,7 @@ async def test_chat_document_generation_streaming_unified_sse_provider_duplicate
         import tldw_Server_API.app.core.Chat.document_generator as gen_mod
 
         def _stub_call_llm(*args, **kwargs):
+
             return _dup_done_stream()
 
         gen_mod.DocumentGeneratorService._call_llm = _stub_call_llm  # type: ignore
@@ -196,6 +200,7 @@ async def test_chat_document_generation_streaming_unified_sse_slow_async_heartbe
         import tldw_Server_API.app.core.Chat.document_generator as gen_mod
 
         def _stub_call_llm(*args, **kwargs):
+
             return _async_text_stream_slow()
 
         gen_mod.DocumentGeneratorService._call_llm = _stub_call_llm  # type: ignore

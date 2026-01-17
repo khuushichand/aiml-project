@@ -57,7 +57,7 @@ def test_media_embedding_job_lifecycle():
             data = r2.json()
             assert data.get("id") == job_id
             assert data.get("media_id") == 123
-            assert data.get("status") in ("processing", "completed", "failed")
+            assert data.get("status") in ("queued", "processing", "completed", "failed")
 
             # List jobs
             r3 = client.get("/api/v1/media/embeddings/jobs", headers={"X-API-KEY": api_key})

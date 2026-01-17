@@ -36,7 +36,9 @@ def client(monkeypatch):
     )
 
     async def _fake_run_speech_chat_turn(
+        *,
         request_data: SpeechChatRequest,
+        request=None,
         current_user,
         chat_db,
         tts_service,

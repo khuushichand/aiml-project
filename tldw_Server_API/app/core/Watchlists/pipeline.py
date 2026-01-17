@@ -27,6 +27,7 @@ Notes:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import json
 import inspect
@@ -54,6 +55,20 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 
 def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+
+
+def _forums_enabled() -> bool:
+    return str(os.getenv("WATCHLIST_FORUMS_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _forum_delay_seconds() -> float:
+    try:
+        delay_ms = int(os.getenv("WATCHLIST_FORUMS_DELAY_MS", "1500") or 1500)
+    except Exception:
+        delay_ms = 1500
+    if delay_ms < 0:
+        delay_ms = 0
+    return delay_ms / 1000.0
 
 
 def _normalize_tz(tz: Optional[str]) -> str:
@@ -251,6 +266,16 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
 
     for src in sources:
             try:
+                src_type = (src.source_type or "").lower()
+                if src_type == "forum":
+                    if not _forums_enabled():
+                        try:
+                            db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="forum_disabled")
+                        except Exception:
+                            pass
+                        continue
+                    if not test_mode:
+                        await asyncio.sleep(_forum_delay_seconds())
                 # Defer source if Retry-After previously set and not elapsed
                 if getattr(src, "defer_until", None):
                     try:
@@ -296,7 +321,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                     except Exception as rec_err:
                         logger.debug(f"record_scraped_item failed (source_id={getattr(src, 'id', '?')}): {rec_err}")
 
-                if (src.source_type or "").lower() == "rss":
+                if src_type == "rss":
                     urls = [src.url]
                     rss_items: List[Dict[str, Any]]
                     # Per-source settings
@@ -700,7 +725,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         except Exception:
                             pass
 
-                elif (src.source_type or "").lower() == "site":
+                elif src_type in {"site", "forum"}:
                     # Determine discovery preferences
                     settings = {}
                     try:

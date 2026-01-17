@@ -786,19 +786,22 @@ Learned fusion uses a lightweight calibrator over retrieval/rerank scores to pro
 ### Python SDK Example
 
 ```python
-import httpx
-import asyncio
+import json
+from urllib import request
 
-async def search_rag(query: str, **kwargs):
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/rag/search",
-            json={"query": query, **kwargs}
-        )
-        return response.json()
+def search_rag(query: str, **kwargs):
+    payload = {"query": query, **kwargs}
+    req = request.Request(
+        "http://localhost:8000/api/v1/rag/search",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 # Usage
-result = await search_rag(
+result = search_rag(
     "What is machine learning?",
     sources=["media_db", "notes"],
     enable_citations=True,

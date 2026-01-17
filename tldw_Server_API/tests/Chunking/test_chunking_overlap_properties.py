@@ -8,20 +8,21 @@ from tldw_Server_API.app.core.Chunking.base import ChunkerConfig, ChunkingMethod
 
 @pytest.fixture(autouse=True)
 def testing_env():
-    os.environ['TESTING'] = 'true'
+    os.environ["TESTING"] = "true"
     yield
-    os.environ.pop('TESTING', None)
+    os.environ.pop("TESTING", None)
 
 
 def words_to_text(words):
-    return ' '.join(words)
+
+    return " ".join(words)
 
 
 @hyp_settings(deadline=None)
 @given(
     total_words=st.integers(min_value=10, max_value=200),
     max_size=st.integers(min_value=3, max_value=40),
-    overlap=st.integers(min_value=0, max_value=10)
+    overlap=st.integers(min_value=0, max_value=10),
 )
 def test_words_overlap_property(total_words, max_size, overlap):
     # Constrain overlap < max_size
@@ -34,7 +35,9 @@ def test_words_overlap_property(total_words, max_size, overlap):
     words = [f"w{i}" for i in range(total_words)]
     text = words_to_text(words)
 
-    cfg = ChunkerConfig(default_method=ChunkingMethod.WORDS, default_max_size=max_size, default_overlap=overlap, language='en')
+    cfg = ChunkerConfig(
+        default_method=ChunkingMethod.WORDS, default_max_size=max_size, default_overlap=overlap, language="en"
+    )
     ck = Chunker(config=cfg)
     chunks = ck.chunk_text(text, method=ChunkingMethod.WORDS.value, max_size=max_size, overlap=overlap)
 
@@ -43,8 +46,8 @@ def test_words_overlap_property(total_words, max_size, overlap):
         return
 
     # Check that last <overlap> words of chunk i equals first <overlap> of chunk i+1
-    for i in range(len(chunks)-1):
+    for i in range(len(chunks) - 1):
         a = chunks[i].split()
-        b = chunks[i+1].split()
+        b = chunks[i + 1].split()
         if len(a) >= overlap and len(b) >= overlap:
             assert a[-overlap:] == b[:overlap]

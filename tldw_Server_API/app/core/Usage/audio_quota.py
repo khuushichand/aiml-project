@@ -14,6 +14,7 @@ In-process maps are used for concurrency caps (MVP, single-process safety).
 from __future__ import annotations
 
 import asyncio
+import configparser
 from datetime import datetime, timezone
 import os
 from typing import Dict, Optional, Tuple, List
@@ -139,6 +140,98 @@ _rg_stream_handles: Dict[int, List[str]] = {}
 _rg_job_handles: Dict[int, List[str]] = {}
 _rg_job_handle_locks: Dict[int, asyncio.Lock] = {}
 _rg_job_handle_locks_lock = asyncio.Lock()
+_rg_audio_init_error: Optional[str] = None
+_rg_audio_init_error_logged = False
+_rg_audio_fallback_logged = False
+
+
+def _safe_config_or_env(name: str, config_fn, env_key: str, default: str = "") -> str:
+    """Safely retrieve a config value or fall back to an environment variable."""
+    if not callable(config_fn):
+        return os.getenv(env_key, default)
+    try:
+        return str(config_fn())
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError, configparser.Error) as exc:
+        logger.debug(f"RG audio context failed to resolve {name}: {exc}")
+        return os.getenv(env_key, default)
+
+
+def _rg_audio_context() -> Dict[str, str]:
+    backend = _safe_config_or_env("backend", rg_backend, "RG_BACKEND", "memory")  # type: ignore[arg-type]
+    store = _safe_config_or_env("policy_store", rg_policy_store, "RG_POLICY_STORE", "")  # type: ignore[arg-type]
+    policy_path = _safe_config_or_env(
+        "policy_path",
+        rg_policy_path,
+        "RG_POLICY_PATH",
+        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+    )
+    try:
+        policy_path_resolved = os.path.abspath(policy_path)
+    except OSError as exc:
+        logger.debug(f"RG audio context failed to resolve policy_path_resolved: {exc}")
+        policy_path_resolved = policy_path
+    reload_enabled = _safe_config_or_env(
+        "policy_reload_enabled",
+        rg_policy_reload_enabled,
+        "RG_POLICY_RELOAD_ENABLED",
+        "",
+    )  # type: ignore[arg-type]
+    reload_interval = _safe_config_or_env(
+        "policy_reload_interval",
+        rg_policy_reload_interval_sec,
+        "RG_POLICY_RELOAD_INTERVAL_SEC",
+        "",
+    )  # type: ignore[arg-type]
+    try:
+        cwd = os.getcwd()
+    except OSError as exc:
+        logger.debug(f"RG audio context failed to resolve cwd: {exc}")
+        cwd = ""
+    return {
+        "backend": str(backend),
+        "policy_path": str(policy_path),
+        "policy_path_resolved": str(policy_path_resolved),
+        "policy_store": str(store),
+        "policy_reload_enabled": str(reload_enabled),
+        "policy_reload_interval": str(reload_interval),
+        "cwd": str(cwd),
+    }
+
+
+async def _log_rg_audio_init_failure(exc: Exception) -> None:
+    global _rg_audio_init_error, _rg_audio_init_error_logged
+    ctx = _rg_audio_context()
+    async with _rg_audio_lock:
+        _rg_audio_init_error = repr(exc)
+        if _rg_audio_init_error_logged:
+            return
+        _rg_audio_init_error_logged = True
+        logger.opt(exception=exc).error(
+            "Audio ResourceGovernor init failed; falling back to legacy behavior. "
+            "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
+            "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
+            "reload_interval={policy_reload_interval} cwd={cwd}",
+            **ctx,
+        )
+
+
+async def _log_rg_audio_fallback(reason: str) -> None:
+    global _rg_audio_fallback_logged
+    ctx = _rg_audio_context()
+    async with _rg_audio_lock:
+        if _rg_audio_fallback_logged:
+            return
+        _rg_audio_fallback_logged = True
+        init_error = _rg_audio_init_error
+        logger.error(
+            "Audio ResourceGovernor unavailable; falling back to legacy behavior. "
+            "reason={} init_error={} backend={backend} policy_path={policy_path} "
+            "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
+            "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
+            reason,
+            init_error,
+            **ctx,
+        )
 
 
 def _reset_in_process_counters_for_tests() -> None:
@@ -162,17 +255,19 @@ async def _get_audio_rg_governor():
     Lazily initialize a process-local ResourceGovernor instance for audio
     streams/jobs using the same configuration helpers as app.main.
 
-    On failure, returns None and callers either fail closed (when RG is enabled)
-    or treat concurrency limiting as disabled (when RG is disabled).
+    On failure, returns None and callers treat concurrency limiting as disabled
+    (fail-open), even when RG is enabled.
     """
     global _rg_audio_governor, _rg_audio_loader
     if not _rg_audio_enabled():
         return None
     # If RG is not available in this environment, keep legacy behavior.
     if RGRequest is None or PolicyLoader is None or PolicyReloadConfig is None or rg_policy_store is None:
+        await _log_rg_audio_fallback("rg_components_unavailable")
         return None
     if _rg_audio_governor is not None:
         return _rg_audio_governor
+    init_error: Optional[Exception] = None
     async with _rg_audio_lock:
         if _rg_audio_governor is not None:
             return _rg_audio_governor
@@ -204,10 +299,12 @@ async def _get_audio_rg_governor():
             _rg_audio_governor = gov
             return gov
         except Exception as e:
-            logger.debug(f"Audio quotas: ResourceGovernor initialization failed: {e}")
+            init_error = e
             _rg_audio_governor = None
             _rg_audio_loader = None
-            return None
+    if init_error is not None:
+        await _log_rg_audio_init_failure(init_error)
+    return None
 
 
 async def _get_job_handle_lock(user_id: int) -> asyncio.Lock:
@@ -261,8 +358,8 @@ def _get_stream_ttl_seconds() -> int:
         try:
             v = int(val_env)
             return max(30, min(3600, v))
-        except Exception:
-            pass
+        except (TypeError, ValueError) as exc:
+            logger.debug(f"Audio stream TTL: invalid AUDIO_STREAM_TTL_SECONDS='{val_env}': {exc}")
     # 2) Config default
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
@@ -270,11 +367,12 @@ def _get_stream_ttl_seconds() -> int:
         if cfg and cfg.has_section('Audio-Quota'):
             try:
                 v = int(cfg.get('Audio-Quota', 'stream_ttl_seconds', fallback='120'))
-            except Exception:
+            except (TypeError, ValueError, configparser.Error) as exc:
+                logger.debug(f"Audio stream TTL: invalid config value: {exc}")
                 v = 120
             return max(30, min(3600, v))
-    except Exception:
-        pass
+    except (OSError, RuntimeError, configparser.Error, TypeError, ValueError) as exc:
+        logger.debug(f"Audio stream TTL: failed to load config: {exc}")
     # 3) Hard default
     return 120
 
@@ -482,7 +580,36 @@ async def set_user_tier(user_id: int, tier: str) -> None:
 
 async def get_limits_for_user(user_id: int) -> Dict[str, Optional[float]]:
     tier = await get_user_tier(user_id)
-    return TIER_LIMITS.get(tier, TIER_LIMITS["free"]).copy()
+    limits = TIER_LIMITS.get(tier, TIER_LIMITS["free"]).copy()
+    overrides = await _get_user_override_limits(user_id)
+    for key, value in overrides.items():
+        if value is not None:
+            limits[key] = value
+    return limits
+
+
+async def _get_user_override_limits(user_id: int) -> Dict[str, Optional[float]]:
+    try:
+        from tldw_Server_API.app.core.UserProfiles.overrides_repo import UserProfileOverridesRepo
+
+        pool = await get_db_pool()
+        repo = UserProfileOverridesRepo(pool)
+        await repo.ensure_tables()
+        rows = await repo.list_overrides_for_user(int(user_id))
+        overrides: Dict[str, Optional[float]] = {}
+        for row in rows:
+            key = str(row.get("key") or "")
+            value = row.get("value")
+            if value is None:
+                continue
+            if key == "limits.audio_daily_minutes":
+                overrides["daily_minutes"] = float(value)
+            elif key == "limits.audio_concurrent_jobs":
+                overrides["concurrent_jobs"] = int(value)
+        return overrides
+    except Exception as exc:
+        logger.debug("Audio quota overrides unavailable for user {}: {}", user_id, exc)
+        return {}
 
 
 async def get_daily_minutes_used(user_id: int) -> float:
@@ -711,7 +838,10 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
     """
     Determine whether a new concurrent audio job may be started for the given user and, if allowed, increment the active-job counter.
 
-    If a concurrency limit exists for the user's tier the function enforces it using Redis when available (falling back to an in-process counter). It also emits quota and active-job metrics. When the limit is exceeded the function does not increment the counter and reports a descriptive message.
+    If RG-based concurrency is available, the function enforces it and updates metrics. When RG is
+    enabled but unavailable or reserve fails, the function logs a fallback and allows the job
+    (fail-open, no concurrency tracking). When the limit is exceeded the function reports a
+    descriptive message.
 
     Returns:
         (bool, str): `True` and `"OK"` if the job may start and the active-job counter was incremented; `False` and an explanatory message like `"Concurrent job limit reached (<max>)"` if starting the job would exceed the user's concurrency limit.
@@ -742,12 +872,16 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
                 # Approximate active count via local handles for metrics
                 _metrics_set_gauge("audio_jobs_active", float(len(handles)), {"user_id": str(user_key)})
             return True, "OK"
+        # Fail-open is intentional: if RG is temporarily unavailable, don't deny audio jobs.
+        # Operators control overall service availability via infrastructure decisions, not exceptions here.
         except Exception as e:
-            logger.debug(f"RG error in can_start_job: {e}")
-            return False, "Rate limit enforcement unavailable"
+            logger.debug(f"RG reserve failed for jobs, failing open: {e}")
+            await _log_rg_audio_fallback("rg_reserve_failed_jobs")
+            return True, "OK"
 
     if _rg_audio_enabled():
-        return False, "Rate limit enforcement unavailable (ResourceGovernor not initialized)"
+        await _log_rg_audio_fallback("rg_governor_unavailable_jobs")
+        return True, "OK"
 
     # RG disabled → treat as unlimited.
     return True, "OK"
@@ -799,7 +933,9 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
     """
     Determines whether the user may start a new concurrent audio stream and reserves a slot if allowed.
 
-    Attempts to allocate a concurrent-stream slot for the given user; if a slot is available the function records the reservation and returns success, otherwise it reports the denial reason.
+    Attempts to allocate a concurrent-stream slot for the given user; if a slot is available the
+    function records the reservation and returns success, otherwise it reports the denial reason.
+    When RG is enabled but unavailable or reserve fails, the function allows the stream (fail-open).
 
     Returns:
         (bool, str): `True` and `"OK"` if a slot was reserved and the stream may start, `False` and a human-readable reason (e.g., "Concurrent streams limit reached (<n>)") otherwise.
@@ -824,11 +960,13 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
             _metrics_set_gauge("audio_streaming_active", float(len(handles)), {"user_id": str(int(user_id))})
             return True, "OK"
         except Exception as e:
-            logger.debug(f"RG error in can_start_stream: {e}")
-            return False, "Rate limit enforcement unavailable"
+            logger.debug(f"RG reserve failed for streams, failing open: {e}")
+            await _log_rg_audio_fallback("rg_reserve_failed_streams")
+            return True, "OK"
 
     if _rg_audio_enabled():
-        return False, "Rate limit enforcement unavailable (ResourceGovernor not initialized)"
+        await _log_rg_audio_fallback("rg_governor_unavailable_streams")
+        return True, "OK"
 
     # RG disabled → treat as unlimited.
     return True, "OK"
@@ -949,8 +1087,8 @@ def _get_job_ttl_seconds() -> int:
         try:
             v = int(val_env)
             return max(30, min(3600, v))
-        except Exception:
-            pass
+        except (TypeError, ValueError) as exc:
+            logger.debug(f"Audio job TTL: invalid AUDIO_JOB_TTL_SECONDS='{val_env}': {exc}")
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
 
@@ -958,11 +1096,12 @@ def _get_job_ttl_seconds() -> int:
         if cfg and cfg.has_section("Audio-Quota"):
             try:
                 v = int(cfg.get("Audio-Quota", "job_ttl_seconds", fallback="600"))
-            except Exception:
+            except (TypeError, ValueError, configparser.Error) as exc:
+                logger.debug(f"Audio job TTL: invalid config value: {exc}")
                 v = 600
             return max(30, min(3600, v))
-    except Exception:
-        pass
+    except (OSError, RuntimeError, configparser.Error, TypeError, ValueError) as exc:
+        logger.debug(f"Audio job TTL: failed to load config: {exc}")
     return 600
 
 
@@ -1068,8 +1207,10 @@ def _apply_tier_overrides_from_config(base: Dict[str, Dict[str, Optional[float]]
                         else:
                             try:
                                 merged[tier][key] = float(val) if key == "daily_minutes" else int(val)
-                            except Exception:
-                                pass
+                            except (TypeError, ValueError) as exc:
+                                logger.debug(
+                                    f"Audio-Quota override parse failed for {tier}.{key}={val!r}: {exc}"
+                                )
     except Exception as e:
         logger.debug(f"Audio-Quota config overrides failed: {e}")
     return merged

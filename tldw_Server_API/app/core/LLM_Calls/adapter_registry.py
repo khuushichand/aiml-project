@@ -37,6 +37,17 @@ class ChatProviderRegistry:
         "custom-openai-api": "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter",
         "custom-openai-api-2": "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter2",
         "mlx": "tldw_Server_API.app.core.LLM_Calls.providers.mlx_provider.MLXChatAdapter",
+        "cohere": "tldw_Server_API.app.core.LLM_Calls.providers.cohere_adapter.CohereAdapter",
+        "moonshot": "tldw_Server_API.app.core.LLM_Calls.providers.moonshot_adapter.MoonshotAdapter",
+        "zai": "tldw_Server_API.app.core.LLM_Calls.providers.zai_adapter.ZaiAdapter",
+        "llama.cpp": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.LlamaCppAdapter",
+        "kobold": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.KoboldAdapter",
+        "ooba": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.OobaAdapter",
+        "tabbyapi": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.TabbyAPIAdapter",
+        "vllm": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.VLLMAdapter",
+        "local-llm": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.LocalLLMAdapter",
+        "ollama": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.OllamaAdapter",
+        "aphrodite": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.AphroditeAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -99,6 +110,10 @@ class ChatProviderRegistry:
             except Exception as e:
                 logger.warning(f"Capability discovery failed for '{name}': {e}")
         return out
+
+    def list_providers(self) -> list[str]:
+        """Return a sorted list of registered provider names."""
+        return sorted(self._adapter_specs.keys())
 
 
 _registry: Optional[ChatProviderRegistry] = None

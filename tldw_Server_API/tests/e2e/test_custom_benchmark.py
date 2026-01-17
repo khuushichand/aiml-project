@@ -140,6 +140,7 @@ class TestCustomBenchmark:
         ]
 
     def _create_benchmark_if_needed(self):
+
         """Helper to create a benchmark if not already created - simulates user creating a new benchmark."""
         if TestCustomBenchmark.eval_id is not None:
             return  # Already have a benchmark
@@ -178,6 +179,7 @@ class TestCustomBenchmark:
             print(f"❌ Error creating benchmark: {e}")
 
     def test_create_custom_benchmark_evaluation(self):
+
         """Test creating a custom benchmark as an evaluation."""
         # Create evaluation with our 10 questions as the dataset
         eval_data = {
@@ -220,6 +222,7 @@ class TestCustomBenchmark:
             SmartErrorHandler.handle_error(e, "custom benchmark creation")
 
     def test_run_benchmark_with_real_llm(self):
+
         """Test running benchmark with actual LLM endpoint - simulating real user workflow."""
         if TestCustomBenchmark.eval_id is None:
             # Try to create the benchmark first
@@ -286,6 +289,7 @@ class TestCustomBenchmark:
             print(f"Benchmark run failed: {response.status_code}")
 
     def test_run_benchmark_workflow(self):
+
         """Test complete benchmark workflow as a user would experience it."""
         if not hasattr(self, 'eval_id') or self.eval_id is None:
             self.test_create_custom_benchmark_evaluation()
@@ -322,6 +326,7 @@ class TestCustomBenchmark:
             print(f"Mixed benchmark run failed: {response.status_code}")
 
     def test_verify_benchmark_scoring(self):
+
         """Verify that benchmark scoring correctly identifies correct/incorrect answers."""
         # Make test self-sufficient - create benchmark if needed (simulating user creating one)
         if TestCustomBenchmark.eval_id is None:
@@ -356,6 +361,7 @@ class TestCustomBenchmark:
             print(f"Failed to get benchmark runs: {response.status_code}")
 
     def test_wait_for_benchmark_completion(self):
+
         """Wait for benchmark runs to complete using async handler."""
         if TestCustomBenchmark.run_id is None:
             pytest.skip("No run ID available")
@@ -381,6 +387,7 @@ class TestCustomBenchmark:
             SmartErrorHandler.handle_error(e, "waiting for benchmark completion")
 
     def test_benchmark_results_aggregation(self):
+
         """Test that benchmark results are properly aggregated by category."""
         if TestCustomBenchmark.eval_id is None:
             pytest.skip("No evaluation ID available")
@@ -407,6 +414,7 @@ class TestCustomBenchmark:
         print(f"✓ Benchmark has proper category distribution: {category_counts}")
 
     def test_concurrent_benchmark_execution(self):
+
         """Test running multiple benchmark evaluations concurrently - simulating multiple users."""
         if TestCustomBenchmark.eval_id is None:
             pytest.skip("No evaluation ID available")
@@ -443,6 +451,7 @@ class TestCustomBenchmark:
         # The actual LLM responses don't matter - we're testing the API workflow
 
     def test_benchmark_with_custom_scoring_criteria(self):
+
         """Test benchmark with custom scoring criteria for different question types."""
         # Create a specialized benchmark with custom scoring per category
         eval_data = {
@@ -476,6 +485,7 @@ class TestCustomBenchmark:
             print(f"Custom scoring benchmark failed: {response.status_code}")
 
     def test_cleanup_custom_benchmarks(self):
+
         """Clean up all created benchmarks."""
         cleaned = 0
 
@@ -512,6 +522,7 @@ class TestBenchmarkEdgeCases:
         # No mocking needed - E2E tests use real API endpoints
 
     def test_benchmark_with_empty_dataset(self):
+
         """Test creating benchmark with empty dataset."""
         eval_data = {
             "name": "empty_benchmark",
@@ -534,6 +545,7 @@ class TestBenchmarkEdgeCases:
             print("✓ Empty benchmark rejected as expected")
 
     def test_benchmark_with_malformed_questions(self):
+
         """Test benchmark with malformed question data."""
         eval_data = {
             "name": "malformed_benchmark",
@@ -556,6 +568,7 @@ class TestBenchmarkEdgeCases:
         print(f"Malformed benchmark response: {response.status_code}")
 
     def test_benchmark_with_invalid_model(self):
+
         """Test benchmark execution with invalid/unconfigured model - simulating user error."""
         # Create a simple benchmark first
         eval_data = {

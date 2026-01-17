@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 from typing import Callable, List, Optional
 
 from loguru import logger
@@ -26,8 +25,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths, get_user_media_db_path
-from tldw_Server_API.app.core.Utils.Utils import get_project_root
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
 
 
@@ -35,20 +33,11 @@ def _is_truthy(value: Optional[str]) -> bool:
     return str(value or "").lower() in {"1", "true", "yes", "on"}
 
 
-def _resolve_user_db_base_dir() -> Path:
-    user_db_base = os.getenv("USER_DB_BASE_DIR") or settings.get("USER_DB_BASE_DIR")
-    project_root = Path(get_project_root())
-    if not user_db_base:
-        return project_root / "Databases" / "user_databases"
-    base_path = Path(user_db_base).expanduser()
-    if not base_path.is_absolute():
-        return (project_root / base_path).resolve()
-    return base_path.resolve()
-
-
 def _enumerate_sqlite_user_ids() -> List[int]:
-    base = _resolve_user_db_base_dir()
-    if not base.exists():
+    try:
+        base = DatabasePaths.get_user_db_base_dir()
+    except Exception as exc:
+        logger.debug(f"claims_review_metrics: failed to resolve user db base dir: {exc}")
         return []
     user_ids: List[int] = []
     for entry in base.iterdir():
@@ -136,7 +125,7 @@ async def run_claims_review_metrics_once(
             try:
                 user_db = create_media_database(
                     client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
-                    db_path=get_user_media_db_path(int(user_id)),
+                    db_path=str(DatabasePaths.get_media_db_path(int(user_id))),
                 )
             except Exception as exc:
                 logger.debug(f"claims_review_metrics: failed to open user db {user_id}: {exc}")

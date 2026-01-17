@@ -21,6 +21,8 @@ async def _run_once():
 
 
 def test_slo_gauges_postgres(monkeypatch):
+
+
     dsn = os.getenv("JOBS_DB_URL")
     if not dsn:
         pytest.skip("JOBS_DB_URL not set")

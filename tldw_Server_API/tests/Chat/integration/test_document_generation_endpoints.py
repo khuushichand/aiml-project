@@ -1,5 +1,6 @@
 import datetime
 import pytest
+from fastapi import status
 
 from tldw_Server_API.app.api.v1.API_Deps.chat_documents_deps import get_document_generator_service
 from tldw_Server_API.app.api.v1.endpoints import chat as chat_router
@@ -8,7 +9,15 @@ from tldw_Server_API.tests._plugins.chat_fixtures import get_auth_headers
 pytestmark = pytest.mark.usefixtures("setup_dependencies")
 
 
+@pytest.fixture(autouse=True)
+def _ensure_openai_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    yield
+
+
 def _make_payload(**overrides):
+
+
     base = {
         "conversation_id": "chat-42",
         "document_type": "summary",
@@ -23,6 +32,8 @@ def _make_payload(**overrides):
 
 
 def test_document_generate_streams_as_sse(authenticated_client, auth_token):
+
+
     calls = {}
 
     class StreamingStubService:
@@ -30,9 +41,11 @@ def test_document_generate_streams_as_sse(authenticated_client, auth_token):
         next_id: int = 1
 
         def __init__(self, db):
+
             self._db = db
 
         def generate_document(self, *, stream, **kwargs):
+
             calls["stream"] = stream
 
             async def _generator():
@@ -52,6 +65,7 @@ def test_document_generate_streams_as_sse(authenticated_client, auth_token):
             generation_time_ms,
             token_count=None,
         ):
+
             doc_id = StreamingStubService.next_id
             StreamingStubService.next_id += 1
             StreamingStubService.stored_docs.append(
@@ -72,6 +86,7 @@ def test_document_generate_streams_as_sse(authenticated_client, auth_token):
             return doc_id
 
         def get_generated_documents(self, conversation_id=None, document_type=None, limit=50):
+
             docs = list(StreamingStubService.stored_docs)
             if conversation_id is not None:
                 docs = [doc for doc in docs if doc["conversation_id"] == conversation_id]
@@ -114,19 +129,25 @@ def test_document_generate_streams_as_sse(authenticated_client, auth_token):
 
 
 def test_document_generate_bubbles_service_error(authenticated_client):
+
+
     class FailingStubService:
         record_calls = 0
 
         def __init__(self, db):
+
             self._db = db
 
         def generate_document(self, *args, **kwargs):
+
             return {"success": False, "error": "No messages found for conversation chat-42"}
 
         def get_generated_documents(self, *args, **kwargs):
+
             return []
 
         def record_streamed_document(self, *args, **kwargs):
+
             FailingStubService.record_calls += 1
             return None
 
@@ -145,6 +166,8 @@ def test_document_generate_bubbles_service_error(authenticated_client):
 
 
 def test_document_generate_uses_configured_api_key(monkeypatch, authenticated_client):
+
+
     captured = {}
 
     class KeyCaptureService:
@@ -152,11 +175,13 @@ def test_document_generate_uses_configured_api_key(monkeypatch, authenticated_cl
             self._db = db
 
         def generate_document(self, *, stream, **kwargs):
+
             captured["api_key"] = kwargs.get("api_key")
             captured["provider"] = kwargs.get("provider")
             return "Generated content"
 
         def get_generated_documents(self, conversation_id=None, document_type=None, limit=50):
+
             return [
                 {
                     "id": 101,
@@ -188,3 +213,34 @@ def test_document_generate_uses_configured_api_key(monkeypatch, authenticated_cl
     assert response.status_code == 200, response.text
     assert captured["api_key"] == "sk-configured"
     assert captured["provider"] == "openai"
+
+
+def test_document_generate_missing_provider_credentials_returns_503(monkeypatch, authenticated_client):
+
+
+    from tldw_Server_API.app.api.v1.endpoints import chat_documents as chat_docs
+    from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+
+    async def _missing(provider, *_args, **_kwargs):
+        return ResolvedByokCredentials(
+            provider=provider,
+            api_key=None,
+            app_config=None,
+            credential_fields={},
+            source="server",
+            allowlisted=True,
+        )
+
+    monkeypatch.setattr(chat_docs, "resolve_byok_credentials", _missing)
+
+    payload = _make_payload()
+    payload.pop("api_key", None)
+
+    response = authenticated_client.post(
+        "/api/v1/chat/documents/generate",
+        json=payload,
+    )
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    detail = response.json().get("detail", {})
+    assert detail.get("error_code") == "missing_provider_credentials"

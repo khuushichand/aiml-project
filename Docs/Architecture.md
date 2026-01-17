@@ -257,29 +257,33 @@ Database design is covered in depth in:
 
 This section gives the quick mental model.
 
-**AuthNZ DB**
-- Default (single-user): SQLite file configured by `DATABASE_URL` (defaults to `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`).
-- Multi-user deployments typically use PostgreSQL.
+Note: `<USER_DB_BASE_DIR>` is defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/` under the project root, and can be overridden via environment variable or `Config_Files/config.txt`.
+
+### AuthNZ DB
+- Centralized in all auth modes.
+- Default (single-user): SQLite file configured by `DATABASE_URL` (defaults to `sqlite:///./Databases/users.db`).
+- Multi-user: centralized PostgreSQL instance (e.g., `postgresql://user:password@host:5432/tldw_users`).
+- Unlike per-user Content/Media DBs under `<USER_DB_BASE_DIR>/<user_id>/`, AuthNZ data remains centralized.
 - Stores users, credentials, permissions, and related auth data.
 
-**Content / Media DB v2**
-- Per-user SQLite DB under `Databases/user_databases/<user_id>/Media_DB_v2.db`.
+### Content / Media DB v2
+- Per-user SQLite DB under `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`.
 - Stores media items, chunks, metadata, and FTS indexes.
 - Root-level path `Databases/Media_DB_v2.db` is deprecated; always go through the DB helpers.
 
-**Notes / Chats / Characters**
-- Per-user `ChaChaNotes.db` under `Databases/user_databases/<user_id>/ChaChaNotes.db`.
+### Notes / Chats / Characters
+- Per-user `ChaChaNotes.db` under `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`.
 - Stores notes, chat history, and character data.
 
-**Prompt Studio and related artifacts**
-- Per-user prompts DB under `Databases/user_databases/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`.
+### Prompt Studio and related artifacts
+- Per-user prompts DB under `<USER_DB_BASE_DIR>/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`.
 
-**Evaluations DB**
+### Evaluations DB
 - `Databases/evaluations.db`.
 - Centralized schema for evaluations, metrics, and audit logs.
 
-**Vector Store**
-- Default: ChromaDB, usually per-user under `Databases/user_databases/<user_id>/chroma_storage/`.
+### Vector Store
+- Default: ChromaDB, usually per-user under `<USER_DB_BASE_DIR>/<user_id>/chroma_storage/`.
 - Optionally: PostgreSQL with pgvector, configured via `config.txt` and env vars.
 
 All DB access should go through the abstractions in `core/DB_Management/` and the vector store wrappers in `core/Embeddings/` and `core/RAG/`.
@@ -303,7 +307,7 @@ tldw_server supports two primary auth modes:
 Per-user data:
 
 - User identity (from API key or JWT) is mapped to a **user_id**.
-- Per-user DB paths are derived from this user_id under `Databases/user_databases/`.
+- Per-user DB paths are derived from this user_id under `<USER_DB_BASE_DIR>/` (defaults to `Databases/user_databases/` unless configured).
 - RAG, notes, prompts, and vector stores all use these per-user roots to keep content logically isolated.
 
 See:

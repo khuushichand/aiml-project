@@ -52,7 +52,7 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
     - `docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d`
   - With debug profile (Redis Commander):
     - `docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile debug up -d`
-  - Scale workers: `docker compose -f Dockerfiles/docker-compose.embeddings.yml up -d --scale chunking-workers=3`
+  - Scale workers: `docker compose -f Dockerfiles/docker-compose.embeddings.yml up -d --scale chunking-workers=3 --scale embedding-workers=2 --scale storage-workers=1 --scale content-workers=1`
 
 ## Images
 

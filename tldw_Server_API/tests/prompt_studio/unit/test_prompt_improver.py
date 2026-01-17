@@ -19,6 +19,7 @@ class TestPromptAnalysis:
     """Test the PromptAnalysis model."""
 
     def test_analysis_creation(self):
+
         """Test creating a PromptAnalysis."""
         analysis = PromptAnalysis(
             clarity_score=0.85,
@@ -35,6 +36,7 @@ class TestPromptAnalysis:
         assert "complexity" in analysis.metrics
 
     def test_analysis_overall_score(self):
+
         """Test calculating overall score."""
         analysis = PromptAnalysis(
             clarity_score=0.80,
@@ -47,6 +49,7 @@ class TestPromptAnalysis:
         assert overall == 0.75  # Average of all scores
 
     def test_analysis_to_dict(self):
+
         """Test converting analysis to dictionary."""
         analysis = PromptAnalysis(
             clarity_score=0.85,
@@ -67,6 +70,7 @@ class TestImprovementResult:
     """Test the ImprovementResult model."""
 
     def test_result_creation(self):
+
         """Test creating an ImprovementResult."""
         result = ImprovementResult(
             original_prompt="Original text",
@@ -83,6 +87,7 @@ class TestImprovementResult:
         assert result.metadata["iterations"] == 3
 
     def test_result_with_analysis(self):
+
         """Test result with before/after analysis."""
         before = PromptAnalysis(
             clarity_score=0.60,
@@ -122,6 +127,7 @@ class TestPromptImprover:
         return PromptImprover(db=mock_db)
 
     def test_improver_initialization(self):
+
         """Test PromptImprover initialization."""
         mock_db = Mock(spec=PromptStudioDatabase)
         mock_db.client_id = "test-client"
@@ -130,6 +136,7 @@ class TestPromptImprover:
         assert improver.db == mock_db
 
     def test_analyze_prompt(self, improver):
+
         """Test analyzing a prompt."""
         prompt = "Please summarize the following text in a concise manner"
 
@@ -142,6 +149,7 @@ class TestPromptImprover:
         assert isinstance(analysis.suggestions, list)
 
     def test_improve_clarity(self, improver):
+
         """Test improving prompt clarity."""
         original = "You should maybe try to perhaps summarize this text if you can"
 
@@ -155,6 +163,7 @@ class TestPromptImprover:
         assert result.strategy == ImprovementStrategy.CLARITY
 
     def test_improve_specificity(self, improver):
+
         """Test improving prompt specificity."""
         original = "Do something with this data"
 
@@ -169,6 +178,7 @@ class TestPromptImprover:
         assert len(result.improved_prompt) > len(original)
 
     def test_improve_structure(self, improver):
+
         """Test improving prompt structure."""
         original = "Analyze this. Be thorough. Use examples. Format nicely."
 
@@ -183,6 +193,7 @@ class TestPromptImprover:
                   for word in ["first", "then", "finally", "step"])
 
     def test_add_examples(self, improver):
+
         """Test adding examples to prompt."""
         original = "Classify the sentiment of the text"
         examples = [
@@ -200,6 +211,7 @@ class TestPromptImprover:
         assert "positive" in result.improved_prompt
 
     def test_add_constraints(self, improver):
+
         """Test adding constraints to prompt."""
         original = "Generate a summary"
         constraints = [
@@ -218,6 +230,7 @@ class TestPromptImprover:
         assert "bullet" in result.improved_prompt.lower()
 
     def test_chain_of_thought(self, improver):
+
         """Test adding chain-of-thought reasoning."""
         original = "Solve this math problem: 25 * 4 + 10"
 
@@ -230,6 +243,7 @@ class TestPromptImprover:
         assert any(keyword in result.improved_prompt.lower() for keyword in cot_keywords)
 
     def test_improve_multiple_strategies(self, improver):
+
         """Test applying multiple improvement strategies."""
         original = "Analyze data"
 
@@ -247,6 +261,7 @@ class TestPromptImprover:
         assert len(result.improvements_made) >= 3
 
     def test_auto_improve(self, improver):
+
         """Test automatic improvement selection."""
         original = "do stuff with things"
 
@@ -259,6 +274,7 @@ class TestPromptImprover:
         assert result.strategy in [ImprovementStrategy.AUTO, ImprovementStrategy.SPECIFICITY]
 
     def test_iterative_improvement(self, improver):
+
         """Test iterative prompt improvement."""
         original = "Summarize"
 
@@ -286,6 +302,7 @@ class TestPromptImprover:
         assert result.improved_prompt != original
 
     def test_batch_improvement(self, improver):
+
         """Test batch prompt improvement."""
         prompts = [
             "Do analysis",
@@ -302,6 +319,7 @@ class TestPromptImprover:
         assert all(r.improved_prompt != prompts[i] for i, r in enumerate(results))
 
     def test_compare_prompts(self, improver):
+
         """Test comparing two prompts."""
         prompt1 = "Summarize this text"
         prompt2 = "Please provide a comprehensive summary of the following text, including key points and conclusions"
@@ -314,6 +332,7 @@ class TestPromptImprover:
         assert comparison["winner"] == "prompt2"  # More detailed prompt should win
 
     def test_validate_improvement(self, improver):
+
         """Test validating prompt improvement."""
         original = "Do task"
         improved = "Please complete the following task with attention to detail"
@@ -323,6 +342,7 @@ class TestPromptImprover:
         assert is_valid is True
 
     def test_improvement_with_llm(self, improver):
+
         """Test improvement using LLM assistance."""
         with patch.object(improver, 'llm_client') as mock_llm:
             mock_llm.generate.return_value = "Improved prompt from LLM"
@@ -337,6 +357,7 @@ class TestPromptImprover:
             assert mock_llm.generate.called
 
     def test_improve_text_parses_openai_response(self, improver, monkeypatch):
+
         """Ensure _improve_text handles OpenAI-format responses."""
         payload = {
             "id": "chatcmpl-test",
@@ -355,8 +376,8 @@ class TestPromptImprover:
         }
 
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_improver.chat_with_openai",
-            lambda **kwargs: payload,
+            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_improver._call_openai_adapter",
+            lambda request: payload,
         )
 
         improved = improver._improve_text(
@@ -382,6 +403,7 @@ class TestImprovementStrategies:
         return PromptImprover(db=mock_db)
 
     def test_simplify_strategy(self, improver):
+
         """Test simplification strategy."""
         complex_prompt = """
         In order to facilitate the comprehensive analysis of the provided textual data,
@@ -401,6 +423,7 @@ class TestImprovementStrategies:
         assert "endeavor" not in result.improved_prompt
 
     def test_expand_strategy(self, improver):
+
         """Test expansion strategy."""
         brief_prompt = "Summarize"
 
@@ -413,6 +436,7 @@ class TestImprovementStrategies:
         assert len(result.improved_prompt) > len(brief_prompt) * 5
 
     def test_formalize_strategy(self, improver):
+
         """Test formalization strategy."""
         informal_prompt = "hey can u plz check this code and tell me if its ok?"
 
@@ -431,6 +455,7 @@ class TestImprovementStrategies:
         assert formal_improvements
 
     def test_technical_strategy(self, improver):
+
         """Test technical enhancement strategy."""
         general_prompt = "Check if the function works correctly"
 
@@ -458,6 +483,7 @@ class TestAnalysisFeatures:
         return PromptImprover(db=mock_db)
 
     def test_readability_analysis(self, improver):
+
         """Test readability analysis."""
         simple = "Write a summary of this text."
         complex = "Endeavor to synthesize a comprehensive yet succinct representation."
@@ -468,6 +494,7 @@ class TestAnalysisFeatures:
         assert simple_score > complex_score
 
     def test_ambiguity_detection(self, improver):
+
         """Test detecting ambiguous language."""
         ambiguous = "Do the thing with the stuff over there"
         clear = "Process the data file located in the input directory"
@@ -478,6 +505,7 @@ class TestAnalysisFeatures:
         assert len(ambiguous_issues) > len(clear_issues)
 
     def test_completeness_check(self, improver):
+
         """Test checking prompt completeness."""
         incomplete = "Analyze"
         complete = "Analyze the provided sales data for Q4 2023, focusing on trends, anomalies, and year-over-year growth"
@@ -488,6 +516,7 @@ class TestAnalysisFeatures:
         assert complete_score > incomplete_score
 
     def test_task_alignment(self, improver):
+
         """Test checking task alignment."""
         prompt = "Summarize the key findings from the research paper"
         task = "summarization"
@@ -512,11 +541,13 @@ class TestErrorHandling:
         return PromptImprover(db=mock_db)
 
     def test_empty_prompt_handling(self, improver):
+
         """Test handling empty prompt."""
         with pytest.raises(ValueError):
             improver.improve("", strategy=ImprovementStrategy.CLARITY)
 
     def test_invalid_strategy(self, improver):
+
         """Test handling invalid strategy."""
         # Invalid strategy should either raise error or return unchanged
         try:
@@ -528,6 +559,7 @@ class TestErrorHandling:
             pass
 
     def test_malformed_examples(self, improver):
+
         """Test handling malformed examples."""
         # Test with malformed examples - should handle gracefully
         try:
@@ -543,6 +575,7 @@ class TestErrorHandling:
             pass
 
     def test_improvement_failure_recovery(self, improver):
+
         """Test recovery from improvement failure."""
         # Simulate a strategy that fails
         with patch.object(improver, '_apply_strategy') as mock_apply:
@@ -573,6 +606,7 @@ class TestCachingPerformance:
         return PromptImprover(db=mock_db)
 
     def test_result_caching(self, improver):
+
         """Test caching of improvement results."""
         prompt = "Analyze this data"
 
@@ -586,6 +620,7 @@ class TestCachingPerformance:
         assert result1.improved_prompt == result2.improved_prompt
 
     def test_cache_invalidation(self, improver):
+
         """Test cache invalidation."""
         prompt = "Test prompt"
 
@@ -603,6 +638,7 @@ class TestCachingPerformance:
             assert result2.improved_prompt != result1.improved_prompt
 
     def test_batch_processing_performance(self, improver):
+
         """Test batch processing is more efficient than individual."""
         import time
 
@@ -641,6 +677,7 @@ class TestIntegrationFeatures:
         return PromptImprover(db=mock_db)
 
     def test_export_improvements(self, improver):
+
         """Test exporting improvement history."""
         prompts = ["Prompt 1", "Prompt 2", "Prompt 3"]
 
@@ -658,6 +695,7 @@ class TestIntegrationFeatures:
         assert all("improved_prompt" in item for item in data)
 
     def test_import_strategies(self, improver):
+
         """Test importing custom strategies."""
         custom_strategies = {
             "custom_1": lambda p: p.upper(),
@@ -672,6 +710,7 @@ class TestIntegrationFeatures:
         assert improver.custom_strategies == custom_strategies
 
     def test_improvement_pipeline(self, improver):
+
         """Test creating improvement pipeline."""
         pipeline = improver.create_pipeline([
             ImprovementStrategy.CLARITY,

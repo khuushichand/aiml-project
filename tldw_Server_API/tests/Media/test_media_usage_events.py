@@ -24,12 +24,15 @@ def quota_service_stub(monkeypatch):
 
 
 def test_ebooks_process_usage_event_logged(client_with_single_user, quota_service_stub, monkeypatch):
+
+
     client, usage_logger = client_with_single_user
 
     # Stub heavy processing to return immediately
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 
     def _stub_process_epub(**kwargs):
+
         return {
             "status": "Success",
             "content": "",
@@ -48,11 +51,14 @@ def test_ebooks_process_usage_event_logged(client_with_single_user, quota_servic
 
 
 def test_documents_process_usage_event_logged(client_with_single_user, quota_service_stub, monkeypatch):
+
+
     client, usage_logger = client_with_single_user
 
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 
     def _stub_process_document_content(**kwargs):
+
         return {
             "status": "Success",
             "content": "Hello",
@@ -71,6 +77,8 @@ def test_documents_process_usage_event_logged(client_with_single_user, quota_ser
 
 
 def test_pdfs_process_usage_event_logged(client_with_single_user, quota_service_stub, monkeypatch):
+
+
     client, usage_logger = client_with_single_user
 
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod

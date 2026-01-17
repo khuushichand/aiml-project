@@ -10,10 +10,6 @@ import signal
 import subprocess  # For synchronous fallback if needed
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-#
-# Third-party imports
-import httpx
-#
 # Local imports
 from .LLM_Base_Handler import BaseLLMHandler
 from .LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
@@ -118,6 +114,22 @@ class LlamaCppHandler(BaseLLMHandler):
         """Log defensively to avoid errors when sinks are closed during atexit."""
         handler_utils.safe_log(self.logger, level, msg, *args)
 
+    def _is_chat_endpoint(self, api_endpoint: str) -> bool:
+        endpoint = f"/{api_endpoint.lstrip('/')}"
+        return endpoint.lower().endswith("/chat/completions")
+
+    def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
+        parts: List[str] = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                role = str(msg.get("role", "user"))
+                content = msg.get("content", "")
+            else:
+                role = str(getattr(msg, "role", "user"))
+                content = getattr(msg, "content", "")
+            parts.append(f"{role}: {content}")
+        return "\n".join(parts)
+
     async def list_models(self) -> List[str]:
         """Lists locally available GGUF models."""
         if not self.models_dir.exists():
@@ -142,6 +154,8 @@ class LlamaCppHandler(BaseLLMHandler):
             raise ServerError(f"Llama.cpp server executable not found at {self.config.executable_path}")
 
         model_path = self.models_dir / model_filename
+        if not self._is_path_allowed(model_path):
+            raise ServerError("Model path must be under allowed directories.")
         if not model_path.is_file():
             raise ModelNotFoundError(f"Model file {model_filename} not found in {self.models_dir}.")
 
@@ -311,9 +325,21 @@ class LlamaCppHandler(BaseLLMHandler):
             "prompt": lambda v: ["-p", str(v)],
         }
 
+        def _coerce_port(value: Any, fallback: Any) -> int:
+            if value is None or value == "":
+                return int(fallback)
+            try:
+                return int(value)
+            except (TypeError, ValueError) as exc:
+                raise ServerError(f"Invalid port value: {value!r}") from exc
+
+        host_value = args.get("host", self.config.default_host)
+        if not host_value:
+            host_value = self.config.default_host or "127.0.0.1"
+        host = handler_utils.strip_host_brackets(str(host_value))
+        client_host = handler_utils.resolve_client_host(host)
         # Required defaults
-        raw_port = int(args.get("port", self.config.default_port))
-        host = str(args.get("host", self.config.default_host))
+        raw_port = _coerce_port(args.get("port"), self.config.default_port)
         port = self._pick_port(host, raw_port)
         n_gpu_layers = int(
             args.get("n_gpu_layers", args.get("ngl", args.get("gpu_layers", self.config.default_n_gpu_layers)))
@@ -392,9 +418,10 @@ class LlamaCppHandler(BaseLLMHandler):
                 **cpe_kwargs
             )
             # Poll HTTP health instead of fixed sleep
-            base_url = f"http://{host}:{port}"
+            base_url = handler_utils.build_base_url(client_host, port)
             t0 = time.perf_counter()
-            is_ready = await wait_for_http_ready(base_url, timeout_total=30.0, interval=0.5)
+            readiness_timeout = getattr(self.config, "readiness_timeout", 30.0) or 30.0
+            is_ready = await wait_for_http_ready(base_url, timeout_total=readiness_timeout, interval=0.5)
 
             if process.returncode is not None or not is_ready:
                 # If logging to file, error might not be in stderr pipe here.
@@ -403,7 +430,8 @@ class LlamaCppHandler(BaseLLMHandler):
                 if stderr_redir == asyncio.subprocess.PIPE and process.stderr:  # Check if stderr was piped
                     try:
                         # Use timeout to prevent blocking indefinitely if server is still writing
-                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
+                        stderr_timeout = getattr(self.config, "stderr_read_timeout", 5.0) or 5.0
+                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=stderr_timeout)
                         stderr_output = err_bytes.decode(errors='ignore').strip()
                     except asyncio.TimeoutError:
                         stderr_output = "(stderr read timed out after 5s)"
@@ -559,26 +587,45 @@ class LlamaCppHandler(BaseLLMHandler):
         if not self._active_server_process or self._active_server_process.returncode is not None:
             raise ServerError("Llama.cpp server is not running or not managed by this handler.")
 
-        base_url = f"http://{self._active_server_host}:{self._active_server_port}"
+        active_host = self._active_server_host or self.config.default_host or "127.0.0.1"
+        active_port = self._active_server_port or self.config.default_port
+        client_host = handler_utils.resolve_client_host(active_host)
+        base_url = handler_utils.build_base_url(client_host, active_port)
         # Ensure exactly one slash between base and path
         target_url = f"{base_url}/{api_endpoint.lstrip('/')}"
 
-        # Prepare payload (OpenAI compatible)
-        payload = kwargs.copy()  # n_predict, temperature, top_k, top_p, stop, etc.
-        if messages:
-            payload["messages"] = messages
-        elif prompt:  # Convert simple prompt to messages for chat completions endpoint
-            payload["messages"] = [{"role": "user", "content": prompt}]
-        else:
-            raise InferenceError("Either 'prompt' or 'messages' must be provided for inference.")
+        payload = kwargs.copy()
+        timeout = payload.pop("timeout", None)
+        payload.pop("stream", None)
+        payload.pop("api_endpoint", None)
+        prompt_value = prompt
+        if prompt_value is None and "prompt" in payload:
+            prompt_value = payload.pop("prompt")
+        messages_value = messages
+        if messages_value is None and "messages" in payload:
+            messages_value = payload.pop("messages")
 
-        if "stream" not in payload:  # Default to non-streaming for this method
-            payload["stream"] = False
+        if self._is_chat_endpoint(api_endpoint):
+            if messages_value:
+                payload["messages"] = messages_value
+            elif prompt_value is not None:
+                payload["messages"] = [{"role": "user", "content": prompt_value}]
+            else:
+                raise InferenceError("Either 'prompt' or 'messages' must be provided for inference.")
+        else:
+            if prompt_value is None and messages_value:
+                prompt_value = self._messages_to_prompt(messages_value)
+            if prompt_value is None:
+                raise InferenceError("Prompt is required for completion endpoint inference.")
+            payload["prompt"] = prompt_value
+
+        payload["stream"] = False
 
         self.logger.debug(f"Sending Llama.cpp inference request to {target_url} with payload: {payload}")
 
         t0 = time.perf_counter()
-        async with create_async_client(timeout=kwargs.get("timeout", 120.0)) as client:
+        http_timeout = timeout if timeout is not None else getattr(self.config, "http_timeout", 120.0)
+        async with create_async_client(timeout=http_timeout) as client:
             try:
                 result = await request_json(client, "POST", target_url, json=payload, headers={"Content-Type": "application/json"})
                 t1 = time.perf_counter()
@@ -586,39 +633,69 @@ class LlamaCppHandler(BaseLLMHandler):
                 self.metrics["inference_time_sum"] += max(0.0, t1 - t0)
                 self.logger.debug("Llama.cpp inference successful.")
                 return result
-            except httpx.HTTPStatusError as e:
-                error_text = e.response.text
+            except Exception as e:
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    error_text = http_utils.get_http_error_text(e)
+                    self.logger.error(
+                        f"Llama.cpp API error ({status}) from {target_url}: {error_text}",
+                        exc_info=True
+                    )
+                    self.metrics["inference_error_count"] += 1
+                    raise InferenceError(f"Llama.cpp API error ({status}): {error_text}")
+                if http_utils.is_network_error(e):
+                    self.logger.error(
+                        f"Could not connect or communicate with Llama.cpp server at {target_url}: {e}",
+                        exc_info=True
+                    )
+                    self.metrics["inference_error_count"] += 1
+                    raise ServerError(f"Could not connect/communicate with Llama.cpp server at {target_url}: {e}")
+                error_text = http_utils.get_http_error_text(e)
                 self.logger.error(
-                    f"Llama.cpp API error ({e.response.status_code}) from {target_url}: {error_text}",
-                    exc_info=True
+                    f"Unexpected error during Llama.cpp inference to {target_url}: {error_text}",
+                    exc_info=True,
                 )
                 self.metrics["inference_error_count"] += 1
-                raise InferenceError(f"Llama.cpp API error ({e.response.status_code}): {error_text}")
-            except httpx.RequestError as e:
-                self.logger.error(
-                    f"Could not connect or communicate with Llama.cpp server at {target_url}: {e}",
-                    exc_info=True
-                )
-                self.metrics["inference_error_count"] += 1
-                raise ServerError(f"Could not connect/communicate with Llama.cpp server at {target_url}: {e}")
+                raise InferenceError(f"Unexpected error during Llama.cpp inference: {error_text}")
 
     async def stream_inference(self, prompt: Optional[str] = None, messages: Optional[List[Dict[str, str]]] = None,
                                api_endpoint: str = "/v1/chat/completions", **kwargs):
         if not self._active_server_process or self._active_server_process.returncode is not None:
             raise ServerError("Llama.cpp server is not running or not managed by this handler.")
-        base_url = f"http://{self._active_server_host}:{self._active_server_port}"
+        active_host = self._active_server_host or self.config.default_host or "127.0.0.1"
+        active_port = self._active_server_port or self.config.default_port
+        client_host = handler_utils.resolve_client_host(active_host)
+        base_url = handler_utils.build_base_url(client_host, active_port)
         target_url = f"{base_url}/{api_endpoint.lstrip('/')}"
         payload = kwargs.copy()
-        if messages:
-            payload["messages"] = messages
-        elif prompt:
-            payload["messages"] = [{"role": "user", "content": prompt}]
+        timeout = payload.pop("timeout", None)
+        payload.pop("stream", None)
+        payload.pop("api_endpoint", None)
+        prompt_value = prompt
+        if prompt_value is None and "prompt" in payload:
+            prompt_value = payload.pop("prompt")
+        messages_value = messages
+        if messages_value is None and "messages" in payload:
+            messages_value = payload.pop("messages")
+
+        if self._is_chat_endpoint(api_endpoint):
+            if messages_value:
+                payload["messages"] = messages_value
+            elif prompt_value is not None:
+                payload["messages"] = [{"role": "user", "content": prompt_value}]
+            else:
+                raise InferenceError("Either 'prompt' or 'messages' must be provided for stream_inference.")
         else:
-            raise InferenceError("Either 'prompt' or 'messages' must be provided for stream_inference.")
+            if prompt_value is None and messages_value:
+                prompt_value = self._messages_to_prompt(messages_value)
+            if prompt_value is None:
+                raise InferenceError("Prompt is required for completion endpoint streaming.")
+            payload["prompt"] = prompt_value
         payload["stream"] = True
         headers = {"Content-Type": "application/json"}
 
-        async with create_async_client(timeout=kwargs.get("timeout", 120.0)) as client:
+        http_timeout = timeout if timeout is not None else getattr(self.config, "http_timeout", 120.0)
+        async with create_async_client(timeout=http_timeout) as client:
             try:
                 async with client.stream("POST", target_url, json=payload, headers=headers) as resp:
                     resp.raise_for_status()
@@ -637,11 +714,15 @@ class LlamaCppHandler(BaseLLMHandler):
                             yield openai_delta_chunk(l)
                     if not done_sent:
                         yield sse_done()
-            except httpx.HTTPStatusError as e:
-                msg = getattr(e.response, "text", str(e))
-                yield sse_data({"error": {"message": f"HTTP error: {msg}", "type": "llamacpp_stream_error"}})
             except Exception as e:
-                yield sse_data({"error": {"message": f"Stream error: {str(e)}", "type": "llamacpp_stream_error"}})
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    msg = http_utils.get_http_error_text(e)
+                    yield sse_data({"error": {"message": f"HTTP error ({status}): {msg}", "type": "llamacpp_stream_error"}})
+                elif http_utils.is_network_error(e):
+                    yield sse_data({"error": {"message": f"Network error: {e}", "type": "llamacpp_stream_error"}})
+                else:
+                    yield sse_data({"error": {"message": f"Stream error: {str(e)}", "type": "llamacpp_stream_error"}})
 
     # --- Cleanup ---
     def _cleanup_managed_server_sync(self):

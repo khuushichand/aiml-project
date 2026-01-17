@@ -8,7 +8,7 @@ import os as _os
 
 from starlette.websockets import WebSocketDisconnect
 
-from tldw_Server_API.app.core.MCP_unified import get_mcp_server
+from tldw_Server_API.app.core.MCP_unified import get_mcp_server, reset_mcp_server
 
 # Minimize startup side-effects for tests
 _os.environ.setdefault("TEST_MODE", "true")
@@ -23,6 +23,7 @@ async def test_ws_per_ip_cap_enforced(monkeypatch):
     # Configure per-IP cap before app/server initialization
     os.environ["MCP_WS_MAX_CONNECTIONS_PER_IP"] = "2"
     os.environ["MCP_WS_MAX_CONNECTIONS"] = "50"
+    os.environ["MCP_WS_ALLOWED_ORIGINS"] = "*"
 
     # Clear cached config to pick up env vars
     from tldw_Server_API.app.core.MCP_unified.config import get_config
@@ -34,6 +35,7 @@ async def test_ws_per_ip_cap_enforced(monkeypatch):
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
 
+    await reset_mcp_server()
     client = TestClient(app)
     server = get_mcp_server()
     server.config.ws_auth_required = False
@@ -41,6 +43,7 @@ async def test_ws_per_ip_cap_enforced(monkeypatch):
     server.config.blocked_client_ips = []
     server.config.ws_max_connections_per_ip = 2
     server.config.ws_max_connections = 50
+    server.config.ws_allowed_origins = ["*"]
 
     # Open two connections (at cap)
     ws1 = client.websocket_connect("/api/v1/mcp/ws?client_id=ipcap1")

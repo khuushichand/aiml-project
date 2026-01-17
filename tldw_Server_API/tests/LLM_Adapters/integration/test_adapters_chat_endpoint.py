@@ -11,14 +11,73 @@ path while keeping CI deterministic and offline.
 """
 
 import os
-from typing import Iterator
+from typing import Any, Dict, List
 
 import pytest
 
 
+NETWORK_TESTS_ENABLED = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "on"}
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int = 200, json_obj: Dict[str, Any] | None = None, lines: List[str] | None = None):
+        self.status_code = status_code
+        self._json = json_obj or {
+            "id": "cmpl-test",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello there"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        self._lines = lines or [
+            "data: {\"choices\":[{\"delta\":{\"content\":\"chunk\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        ]
+
+    def raise_for_status(self):
+        if 400 <= self.status_code:
+            import httpx
+            req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+            resp = httpx.Response(self.status_code, request=req)
+            raise httpx.HTTPStatusError("err", request=req, response=resp)
+
+    def json(self):
+        return self._json
+
+    def iter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _FakeStreamCtx:
+    def __init__(self, resp: _FakeResponse):
+        self._resp = resp
+
+    def __enter__(self):
+        return self._resp
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def post(self, *args, **kwargs):
+        return _FakeResponse()
+
+    def stream(self, *args, **kwargs):
+        return _FakeStreamCtx(_FakeResponse())
+
+
 @pytest.fixture(autouse=True)
 def _enable_adapters(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     # Avoid endpoint-internal mock path that bypasses provider handlers
     monkeypatch.delenv("TEST_MODE", raising=False)
     # Ensure suite-level env overrides from other tests don't hijack base URL.
@@ -57,7 +116,7 @@ def _real_key(provider: str) -> str | None:
 def test_chat_completions_non_streaming_via_adapter(monkeypatch, client, auth_token):
     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
 
-    real = _real_key("openai")
+    real = _real_key("openai") if NETWORK_TESTS_ENABLED else None
     if real:
         # Use real key; do not monkeypatch provider call
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "openai": real}
@@ -68,28 +127,16 @@ def test_chat_completions_non_streaming_via_adapter(monkeypatch, client, auth_to
         assert data.get("object") == "chat.completion"
         assert isinstance(data.get("choices"), list) and len(data["choices"]) >= 1
     else:
-        # Provide a test key and mock legacy call to avoid network
-        chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "openai": "sk-adapter-test-key"}
-        import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
-
-        def _fake_openai(**kwargs):
-            assert kwargs.get("model") == "gpt-4o-mini"
-            # Ensure request was routed non-streaming (explicit False or None is fine)
-            assert kwargs.get("streaming") in (False, None)
-            return {
-                "id": "cmpl-test",
-                "object": "chat.completion",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "Hello there"},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            }
-
-        monkeypatch.setattr(llm_calls, "chat_with_openai", _fake_openai)
+        # Provide a test key and mock adapter HTTP client to avoid network
+        chat_endpoint.API_KEYS = {
+            **(chat_endpoint.API_KEYS or {}),
+            "openai": "sk-adapter-test-key",
+            "openrouter": "sk-or-test",
+        }
+        import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
+        import tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter as openrouter_mod
+        monkeypatch.setattr(openai_mod, "http_client_factory", lambda *a, **k: _FakeClient())
+        monkeypatch.setattr(openrouter_mod, "http_client_factory", lambda *a, **k: _FakeClient())
         r = client.post_with_auth("/api/v1/chat/completions", auth_token, json=_payload(stream=False))
         assert r.status_code == 200, f"Body: {r.text}"
         data = r.json()
@@ -100,7 +147,7 @@ def test_chat_completions_non_streaming_via_adapter(monkeypatch, client, auth_to
 def test_chat_completions_streaming_via_adapter(monkeypatch, client, auth_token):
     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
 
-    real = _real_key("openai")
+    real = _real_key("openai") if NETWORK_TESTS_ENABLED else None
     if real:
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "openai": real}
         from tldw_Server_API.tests._plugins.chat_fixtures import get_auth_headers
@@ -114,15 +161,15 @@ def test_chat_completions_streaming_via_adapter(monkeypatch, client, auth_token)
             assert any(line.startswith("data: ") and "[DONE]" not in line for line in lines)
             assert sum(1 for line in lines if line.strip().lower() == "data: [done]") == 1
     else:
-        chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "openai": "sk-adapter-test-key"}
-        import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
-
-        def _fake_stream_openai(**kwargs) -> Iterator[str]:
-            assert kwargs.get("streaming") is True
-            yield "data: {\"choices\":[{\"delta\":{\"content\":\"chunk\"}}]}\n\n"
-            yield "data: [DONE]\n\n"
-
-        monkeypatch.setattr(llm_calls, "chat_with_openai", _fake_stream_openai)
+        chat_endpoint.API_KEYS = {
+            **(chat_endpoint.API_KEYS or {}),
+            "openai": "sk-adapter-test-key",
+            "openrouter": "sk-or-test",
+        }
+        import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
+        import tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter as openrouter_mod
+        monkeypatch.setattr(openai_mod, "http_client_factory", lambda *a, **k: _FakeClient())
+        monkeypatch.setattr(openrouter_mod, "http_client_factory", lambda *a, **k: _FakeClient())
 
         from tldw_Server_API.tests._plugins.chat_fixtures import get_auth_headers
         headers = get_auth_headers(auth_token, getattr(client, "csrf_token", ""))

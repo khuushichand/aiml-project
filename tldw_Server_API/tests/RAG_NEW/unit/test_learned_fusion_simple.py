@@ -64,7 +64,8 @@ async def test_learned_fusion_calibration_for_cross_encoder(monkeypatch):
         from tldw_Server_API.app.core.RAG.rag_service import advanced_reranking as ar
 
         def _fake_create(strategy, cfg, llm_client=None):
-            # For cross_encoder, return a dummy reranker that assigns low scores
+
+                     # For cross_encoder, return a dummy reranker that assigns low scores
             if strategy == ar.RerankingStrategy.CROSS_ENCODER:
                 return _DummyReranker(cfg, score=0.1)
             return ar.create_reranker(strategy, cfg, llm_client=llm_client)

@@ -16,8 +16,8 @@ def test_ccv3_validate_and_parse_happy_path():
             "personality": "Bold",
             "scenario": "Epic quest",
             "first_mes": "Greetings from v3!",
-            "mes_example": "USER: Hi\nASSISTANT: Hello"
-        }
+            "mes_example": "USER: Hi\nASSISTANT: Hello",
+        },
     }
     ok, errs = validate_v3_card(card)
     assert ok and not errs
@@ -37,10 +37,7 @@ def test_ccv3_missing_required_fields_returns_none():
     card = {
         "spec": "chara_card_v3",
         "spec_version": "3.0",
-        "data": {
-            "name": "No First Message",
-            "description": "Missing first_mes"
-        }
+        "data": {"name": "No First Message", "description": "Missing first_mes"},
     }
     ok, errs = validate_v3_card(card)
     assert not ok

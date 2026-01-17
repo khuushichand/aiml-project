@@ -110,17 +110,20 @@ class TestSQLiteJSONSupport:
     """Test SQLite JSON function detection."""
 
     def test_json_support_detection_positive(self, mem_db):
+
         """Test JSON support detection when JSON functions are available."""
         # Most modern SQLite versions should support JSON
         assert mem_db._check_json_support() == True
 
     def test_json_support_detection_mocked_failure(self, mem_db):
+
         """Test JSON support detection when JSON functions fail."""
         with patch.object(mem_db, 'execute_query') as mock_execute:
             mock_execute.side_effect = sqlite3.OperationalError("no such function: json")
             assert mem_db._check_json_support() == False
 
     def test_json_support_detection_db_error(self, mem_db):
+
         """Test JSON support detection when database error occurs."""
         with patch.object(mem_db, 'execute_query') as mock_execute:
             mock_execute.side_effect = CharactersRAGDBError("Database error")
@@ -131,6 +134,7 @@ class TestCharacterCardTagSearch:
     """Test the main tag search functionality."""
 
     def test_search_by_single_tag(self, mem_db, sample_character_cards):
+
         """Test searching by a single tag."""
         results = mem_db.search_character_cards_by_tags(["fantasy"])
 
@@ -142,6 +146,7 @@ class TestCharacterCardTagSearch:
         assert "Case Sensitive Test" in names
 
     def test_search_by_multiple_tags(self, mem_db, sample_character_cards):
+
         """Test searching by multiple tags (OR operation)."""
         results = mem_db.search_character_cards_by_tags(["dragon", "space"])
 
@@ -153,6 +158,7 @@ class TestCharacterCardTagSearch:
         assert "Case Sensitive Test" in names
 
     def test_search_case_insensitive(self, mem_db, sample_character_cards):
+
         """Test that tag search is case insensitive."""
         # Search for "FANTASY" should match "fantasy" tags
         results = mem_db.search_character_cards_by_tags(["FANTASY"])
@@ -168,11 +174,13 @@ class TestCharacterCardTagSearch:
         assert "Case Sensitive Test" in names  # Has "DRAGON" tag
 
     def test_search_no_matches(self, mem_db, sample_character_cards):
+
         """Test searching for tags that don't exist."""
         results = mem_db.search_character_cards_by_tags(["nonexistent"])
         assert len(results) == 0
 
     def test_search_with_limit(self, mem_db, sample_character_cards):
+
         """Test search with result limit."""
         # Search for a common tag with limit
         results = mem_db.search_character_cards_by_tags(["fantasy"], limit=1)
@@ -183,6 +191,7 @@ class TestCharacterCardTagSearch:
         assert len(all_results) > 1
 
     def test_search_excludes_deleted_cards(self, mem_db, sample_character_cards):
+
         """Test that deleted cards are excluded from search results."""
         # First verify we can find the card
         results = mem_db.search_character_cards_by_tags(["dragon"])
@@ -207,21 +216,25 @@ class TestTagSearchInputValidation:
     """Test input validation for tag search."""
 
     def test_empty_tag_keywords_raises_error(self, mem_db):
+
         """Test that empty tag list raises InputError."""
         with pytest.raises(InputError, match="tag_keywords cannot be empty"):
             mem_db.search_character_cards_by_tags([])
 
     def test_none_tag_keywords_raises_error(self, mem_db):
+
         """Test that None tag list raises InputError."""
         with pytest.raises(InputError, match="tag_keywords cannot be empty"):
             mem_db.search_character_cards_by_tags(None)
 
     def test_whitespace_only_tags_filtered(self, mem_db, sample_character_cards):
+
         """Test that whitespace-only tags are filtered out."""
         with pytest.raises(InputError, match="No valid tag keywords provided after normalization"):
             mem_db.search_character_cards_by_tags(["", "   ", "\t"])
 
     def test_mixed_valid_invalid_tags(self, mem_db, sample_character_cards):
+
         """Test behavior with mix of valid and invalid tags."""
         # Should work with valid tags despite whitespace entries
         results = mem_db.search_character_cards_by_tags(["fantasy", "", "   ", "dragon"])
@@ -232,6 +245,7 @@ class TestTagSearchFallbackMethod:
     """Test the fallback method for older SQLite versions."""
 
     def test_fallback_method_basic_functionality(self, mem_db, sample_character_cards):
+
         """Test that fallback method works correctly."""
         # Force use of fallback method
         results = mem_db._search_cards_by_tags_fallback(["fantasy"], limit=10)
@@ -242,6 +256,7 @@ class TestTagSearchFallbackMethod:
         assert any("Dragon" in name or "Magic" in name for name in names)
 
     def test_fallback_with_pagination(self, mem_db, sample_character_cards):
+
         """Test fallback method pagination."""
         # Test fallback method directly with small limit to ensure it works correctly
         results = mem_db._search_cards_by_tags_fallback(["fantasy"], limit=2)
@@ -265,6 +280,7 @@ class TestTagSearchFallbackMethod:
                 assert 'fantasy' in card_tags_normalized
 
     def test_fallback_handles_invalid_json(self, mem_db):
+
         """Test fallback method handles invalid JSON in tags gracefully."""
         # Create a card with invalid JSON tags by directly inserting into DB
         conn = mem_db.get_connection()
@@ -284,6 +300,7 @@ class TestTagSearchPerformance:
     """Test performance aspects of tag search."""
 
     def test_large_dataset_handling(self, mem_db):
+
         """Test tag search with larger dataset."""
         # Create multiple characters with various tags
         large_dataset = []
@@ -316,6 +333,7 @@ class TestTagSearchPerformance:
         assert duration < 5.0, f"Tag search took too long: {duration:.2f}s"
 
     def test_json_vs_fallback_consistency(self, mem_db, sample_character_cards):
+
         """Test that JSON and fallback methods return consistent results."""
         # Get results using JSON method (if available)
         if mem_db._check_json_support():
@@ -339,6 +357,7 @@ class TestTagSearchEdgeCases:
     """Test edge cases and error conditions."""
 
     def test_database_error_handling(self, mem_db):
+
         """Test handling of database errors during search."""
         # Mock database error
         with patch.object(mem_db, 'execute_query') as mock_execute:
@@ -348,6 +367,7 @@ class TestTagSearchEdgeCases:
                 mem_db.search_character_cards_by_tags(["fantasy"])
 
     def test_special_characters_in_tags(self, mem_db):
+
         """Test search with special characters in tags."""
         # Create character with special characters in tags
         special_card = {
@@ -370,6 +390,7 @@ class TestTagSearchEdgeCases:
         assert len(results2) == 1
 
     def test_unicode_tags(self, mem_db):
+
         """Test search with Unicode characters in tags."""
         # Create character with Unicode tags
         unicode_card = {
@@ -396,6 +417,7 @@ class TestTagSearchIntegration:
     """Integration tests for tag search with other DB operations."""
 
     def test_tag_search_after_card_updates(self, mem_db, sample_character_cards):
+
         """Test tag search after updating character card tags."""
         # Find a character to update
         results = mem_db.search_character_cards_by_tags(["fantasy"])
@@ -444,6 +466,7 @@ class TestTagSearchIntegration:
         assert any(c['name'] == card['name'] for c in new_results)
 
     def test_concurrent_search_operations(self, mem_db, sample_character_cards):
+
         """Test multiple concurrent search operations."""
         import threading
         import time
@@ -452,6 +475,7 @@ class TestTagSearchIntegration:
         errors = []
 
         def search_worker(tag):
+
             try:
                 worker_results = mem_db.search_character_cards_by_tags([tag])
                 results.append((tag, len(worker_results)))

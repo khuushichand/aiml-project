@@ -93,6 +93,23 @@ class EmbeddingsABTestResultSummary(BaseModel):
     per_query: Optional[List[Dict[str, Any]]] = None
 
 
+class EmbeddingsABTestResultRow(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    result_id: str
+    test_id: str
+    arm_id: str
+    query_id: str
+    ranked_ids: List[str] = Field(default_factory=list)
+    scores: Optional[List[float]] = None
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    latency_ms: Optional[float] = None
+    ranked_distances: Optional[List[float]] = None
+    ranked_metadatas: Optional[List[Dict[str, Any]]] = None
+    ranked_documents: Optional[List[str]] = None
+    rerank_scores: Optional[List[float]] = None
+    created_at: Optional[str] = None
+
+
 class EmbeddingsABTestCreateResponse(BaseModel):
     test_id: str
     status: Literal['pending', 'created'] = 'created'
@@ -106,6 +123,7 @@ class EmbeddingsABTestStatusResponse(BaseModel):
 
 class EmbeddingsABTestResultsResponse(BaseModel):
     summary: EmbeddingsABTestResultSummary
+    results: List[EmbeddingsABTestResultRow] = Field(default_factory=list)
     page: int = 1
     page_size: int = 50
     total: int = 0

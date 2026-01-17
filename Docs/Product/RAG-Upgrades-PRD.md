@@ -1,7 +1,7 @@
 # PRD: RAG Upgrades (Unified Pipeline)
 
 - Owner: RAG/Backend
-- Stakeholders: API, WebUI, Evaluations, Embeddings
+- Stakeholders: API, tldw-frontend, Evaluations, Embeddings
 - Status: In Progress
 - Last updated: 2025-11-16
 - Related docs: RAG core guide (tldw_Server_API/app/core/RAG/README.md), API ref (tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md), Benchmarking (Docs/RAG/RAG_Benchmarks.md), Prior plans (Docs/Design/RAG_Plan.md, Docs/Design/RAG_Features_Evaluation_And_Plan.md, Docs/Design/RAG-Benchmarking.md)
@@ -94,6 +94,11 @@ Phase‑specific FRs:
 - Precomputed late‑interaction:
   - Ingestion stores per‑paragraph/span vectors with offsets; query path loads vectors and does max‑sim per doc.
   - Flags: `enable_precomputed_spans`, `span_chars`, `span_stride` fall back to stored params.
+  - Budgets/limits (config‑level, not per‑request):
+    - `precomputed_spans_max_vectors_per_corpus` (default: 200000)
+    - `precomputed_spans_max_mb_per_corpus` (default: 512)
+    - `precomputed_spans_retention_days` (default: 30)
+    - Enforce per‑user quota via `StorageQuotaService` (counts toward `CHROMADB_BASE_PATH`); stop or skip span ingestion when caps are reached and record a budget‑exhausted flag in metadata/metrics.
 - Learned fusion/calibration:
   - Flags: `enable_learned_fusion`, `calibrator_version`, `abstention_policy` (continue|ask|decline).
   - Response exposes `metadata.reranking_calibration` and `abstention_decision`.
@@ -127,7 +132,7 @@ Response additions (under `metadata`):
 - `decomposition`: { subqueries: [...], timings }
 - `graph_retrieval`: { communities, neighbors_k, alpha }
 
-Documentation to update: `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md` and WebUI helper texts.
+Documentation to update: `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md` and `tldw-frontend` helper texts for Unified RAG Search.
 
 ## 9) Architecture & Code Touchpoints
 
@@ -139,7 +144,7 @@ Documentation to update: `tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md` and
 - Synonyms registry: `tldw_Server_API/app/core/RAG/rag_service/synonyms_registry.py`
 - Post‑verification: `tldw_Server_API/app/core/RAG/rag_service/post_generation_verifier.py`
 - Ingestion for precomputed spans: `tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py` (+ small store under `tldw_Server_API/app/core/RAG/rag_service/vector_stores/`)
-- WebUI texts: `tldw_Server_API/WebUI/README.md` and RAG tab JSON builders
+- Frontend UI: `tldw-frontend/pages/search.tsx`, `tldw-frontend/lib/quickforms.ts`, and any RAG preset/advanced panels tied to Unified RAG Search
 
 ## 10) Rollout Plan
 
@@ -167,12 +172,35 @@ Experiments & Ablations
 Instrumentation
 - Extend current metrics in pipeline; add `prf_*`, `calibration_*`, `mv_*`, and phase budget overrun counters.
 
+Benchmark Dataset & Scoring Protocol (explicit)
+- Groundedness track dataset: `Docs/Deployment/Monitoring/Evals/nightly_rag_eval.jsonl` (JSONL records: `{query, expect?, namespace?}`).
+- Protocol (groundedness):
+  - Run unified pipeline with `enable_post_verification=true` and `require_hard_citations=true`.
+  - Faithfulness score = `1 - metadata.post_verification.unsupported_ratio` (0–1).
+  - Citation coverage = `metadata.hard_citations.coverage` (0–1) when present.
+- Claim‑faithfulness (optional):
+  - Use Evaluations API metric `claim_faithfulness` over retrieved contexts; report separately from groundedness.
+- Retrieval track dataset (required for Recall/MRR):
+  - `Docs/RAG/Benchmarks/rag_retrieval_v1.jsonl` (to be created) with `{query, relevant_doc_ids, namespace?}`.
+  - Compute Recall@K/MRR only when `relevant_doc_ids` are present.
+
+Baseline (documented)
+- Baseline config: current production defaults with new flags off (`enable_prf=false`, `enable_precomputed_spans=false`, `enable_learned_fusion=false`, `enable_query_decomposition=false`, `enable_graph_retrieval=false`) and `enable_post_verification=true` for faithfulness scoring.
+- Baseline results to record before Phase 1 defaults change:
+  - Dataset: `nightly_rag_eval.jsonl` (groundedness) and `rag_retrieval_v1.jsonl` (retrieval, when available).
+  - Metrics: faithfulness (1‑unsupported_ratio), citation coverage, claim_faithfulness (optional), Recall@10/MRR (retrieval track), TP95 latency.
+  - Record date + commit hash alongside the baseline numbers.
+- Baseline snapshot (2026-01-12, commit `dade47fe8aeafe71035baeae26dc6cdf646e6716`):
+  - Groundedness (nightly_rag_eval.jsonl, n=3): faithfulness_mean 1.00, citation_coverage_mean 0.00, TP95 0.212s.
+  - Retrieval (rag_retrieval_v1.jsonl, n=9): Recall@10 0.556, MRR 0.556, TP95 0.026s.
+  - Notes: corpus `Databases/user_databases/1/Media_DB_v2.db`; vector store unavailable (FTS fallback); HF NLI disabled (`TRANSFORMERS_OFFLINE=1`, `HF_HUB_OFFLINE=1`).
+
 ## 12) Risks & Mitigations
 
 - Latency bloat from PRF/multi‑vector: enforce strict per‑phase budgets and doc caps; prefer precomputed spans.
 - Query drift (PRF/expansion): constrain boosts; intersection/union merge with guardrails.
 - Calibrator overfitting: train/test split; shadow mode; versioning and rollback.
-- Storage growth (spans): compress vectors; per‑corpus opt‑in; TTL and GC.
+- Storage growth (spans): enforce per‑corpus caps (vectors/MB), integrate per‑user quotas, and apply retention/GC.
 
 ## 13) Dependencies
 
@@ -185,7 +213,7 @@ Instrumentation
 
 - Phase 1 enabled in staging with doc updates; no regression in TP95 > +20% in Precision mode.
 - On internal benchmark suite, achieve: Recall@10 +8% and claim-faithfulness +10% (target ranges above) with cost/latency within budgets.
-- API docs and WebUI helpers updated; feature flags documented.
+- API docs and tldw-frontend helpers updated; feature flags documented.
 
 ## 15) Timeline (tentative)
 
@@ -199,7 +227,7 @@ Instrumentation
 
 - Unit: PRF term extraction; fusion correctness; calibrator decision boundaries; span metadata invariants.
 - Integration: `/rag/search` with each flag; budgets honored; metadata fields present.
-- E2E: Benchmark scripts (Docs/RAG/RAG_Benchmarks.md) plus new ablations; WebUI RAG tab flows.
+- E2E: Benchmark scripts (Docs/RAG/RAG_Benchmarks.md) plus new ablations; tldw-frontend RAG search flows.
 - Performance: Soak tests with flags; record per-phase TP95 and timeouts.
 
 ## 17) Open Questions
@@ -208,7 +236,7 @@ Instrumentation
 - Minimum viable feature set for learned fusion before considering LTR?
 - Where to store calibrator artifacts and how to roll versions across multi-env deployments?
 
-## 18) Presets (for Docs/WebUI)
+## 18) Presets (for Docs/tldw-frontend)
 
 - Precision mode
   - `enable_multi_vector_passages=true`, `mv_flatten_to_spans=true`
@@ -252,7 +280,7 @@ mv_meta = (result.metadata or {}).get("multi_vector") or {}
 - `mv_meta` exposes how multi-vector spans were applied:
   - `enabled`, `span_chars`, `stride`, `max_spans_per_doc`, `flattened`, `precomputed_spans`
 
-Clients (including the WebUI) can surface these fields in a debug/advanced pane to explain why particular documents were selected or why additional evidence was pulled in.
+Clients (including tldw-frontend) can surface these fields in a debug/advanced pane to explain why particular documents were selected or why additional evidence was pulled in.
 
 ## 20) Implementation Status & Remaining Work (2025-11-16)
 
@@ -270,7 +298,7 @@ Current:
 - Adaptive rerun on low confidence is implemented as part of `enable_post_verification` + `adaptive_rerun_on_low_confidence`, with `metadata.post_verification` and `metadata.adaptive_rerun`.
 
 Remaining:
-- Tune and document “Precision” vs “Recall” presets more explicitly in docs/WebUI, including recommended combinations of reranking strategy, hybrid weights, and guardrail defaults.
+- Tune and document “Precision” vs “Recall” presets more explicitly in docs/tldw-frontend, including recommended combinations of reranking strategy, hybrid weights, and guardrail defaults.
 - Run and bake in benchmark-driven thresholds (MMR, intent routing, numeric fidelity defaults) instead of current heuristic values.
 
 ### Phase 2 — Retrieval Quality & Stability
@@ -340,15 +368,15 @@ Remaining:
 - Implement a graph retrieval path that, when enabled, retrieves graph neighbors and blends them with standard retrieval using `graph_alpha`.
 - Expose `metadata.graph_retrieval` (communities, neighbors_k, alpha, basic stats) and add minimal graph-related metrics.
 
-### Cross-Cutting: WebUI, Benchmarks, & Ops
+### Cross-Cutting: tldw-frontend, Benchmarks, & Ops
 
 Current:
 - Core flags and metadata are documented in the RAG README and API docs; the server exposes the necessary toggles via `/api/v1/rag/search`.
 
 Remaining:
-- WebUI:
-  - Add checkboxes/controls for PRF, multi-vector/precomputed spans, learned fusion + abstention, and decomposition in the RAG tab.
-  - Surface `metadata.prf`, `metadata.multi_vector`, `metadata.reranking_calibration`, and `metadata.decomposition` in an advanced/debug view.
+- tldw-frontend:
+  - Add checkboxes/controls for PRF, multi-vector/precomputed spans, learned fusion + abstention, and decomposition in `tldw-frontend/pages/search.tsx`.
+  - Surface `metadata.prf`, `metadata.multi_vector`, `metadata.reranking_calibration`, and `metadata.decomposition` in an advanced/debug view (search page + any shared RAG panels).
 - Benchmarking:
   - Implement the ablation matrix described in this PRD (baseline vs +PRF, +precomputed spans, +learned fusion, +decomposition) using the existing RAG benchmarking scripts.
   - Use results to finalize defaults for presets and environment knobs.

@@ -6,7 +6,9 @@ from tldw_Server_API.app.core.config import clear_config_cache
 
 
 def _client(monkeypatch) -> TestClient:
-    # Minimal app with only sandbox router to avoid heavy imports
+
+
+     # Minimal app with only sandbox router to avoid heavy imports
     monkeypatch.setenv("TEST_MODE", "1")
     # Ensure execution is enabled for advertising purposes
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
@@ -21,6 +23,8 @@ def _client(monkeypatch) -> TestClient:
 
 
 def test_interactive_supported_advertised_when_execution_enabled(monkeypatch) -> None:
+
+
     with _client(monkeypatch) as client:
         r = client.get("/api/v1/sandbox/runtimes")
         assert r.status_code == 200

@@ -90,6 +90,8 @@ async def test_stress_run_creation_burst(workflows_dual_backend_db):
 
 
 def test_stress_step_heartbeat(workflows_dual_backend_db):
+
+
     backend_label, db = workflows_dual_backend_db
     definition = _create_definition(
         db,
@@ -142,6 +144,8 @@ def test_stress_step_heartbeat(workflows_dual_backend_db):
 
 
 def test_stress_events_and_artifacts(workflows_dual_backend_db):
+
+
     backend_label, db = workflows_dual_backend_db
     definition = _create_definition(
         db,

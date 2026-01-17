@@ -26,6 +26,7 @@ class _RecordingCursor:
         self._fetched = False
 
     def fetchall(self):
+
         if self._row is None:
             return []
         if not self._fetched:
@@ -34,6 +35,7 @@ class _RecordingCursor:
         return []
 
     def fetchone(self):
+
         if self._fetched:
             return None
         self._fetched = True
@@ -44,11 +46,13 @@ class RecordingConnection:
     """Connection stub that records executed SQL."""
 
     def __init__(self):
+
         self.executed_sql = []
         self.committed = False
         self._next_id = 1
 
     def execute(self, sql, params=None):
+
         self.executed_sql.append(sql)
         row = None
         if "returning id" in sql.lower():
@@ -57,12 +61,15 @@ class RecordingConnection:
         return _RecordingCursor(sql, row=row)
 
     def commit(self):
+
         self.committed = True
 
     def __enter__(self):
+
         return self
 
     def __exit__(self, exc_type, exc, tb):
+
         return False
 
 
@@ -70,6 +77,7 @@ class UniqueViolationConnection(RecordingConnection):
     """Connection stub that simulates a unique constraint violation."""
 
     def execute(self, sql, params=None):
+
         self.executed_sql.append(sql)
         if "INSERT INTO CHAT_DICTIONARIES" in sql.upper():
             raise CharactersRAGDBError("duplicate key value violates unique constraint")
@@ -80,10 +88,12 @@ class StubDB:
     """Minimal DB stub that hands out predetermined connection objects."""
 
     def __init__(self, connections):
+
         self.backend_type = BackendType.POSTGRESQL
         self._connections = list(connections)
 
     def get_connection(self):
+
         if not self._connections:
             raise AssertionError("No stub connections remaining for test")
         return self._connections.pop(0)

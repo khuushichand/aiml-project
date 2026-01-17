@@ -427,6 +427,7 @@ async def create_version(
     "/{media_id:int}/versions/{version_number:int}",
     summary="Soft Delete Media Version",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def delete_version(
     media_id: int = Path(..., description="The ID of the media item"),

@@ -620,7 +620,7 @@ EMBEDDING_PROVIDER=huggingface
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 
 # Database paths
-USER_DB_BASE_DIR=/path/to/user/databases
+USER_DB_BASE_DIR=/path/to/user/databases  # per-user DB root; USER_DB_BASE is deprecated alias
 CHROMA_DB_PATH=/path/to/chroma
 
 # API configuration
@@ -632,6 +632,8 @@ RAG_NUM_WORKERS=4
 RAG_CACHE_SIZE=1000
 RAG_TIMEOUT_SECONDS=30
 ```
+
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 ### Loading Configuration
 

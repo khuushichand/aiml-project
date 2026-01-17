@@ -41,7 +41,6 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _enable_anthropic_native(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_ANTHROPIC", "1")
     yield
 
@@ -79,7 +78,6 @@ def test_anthropic_tool_choice_none_omits_tools(monkeypatch):
 
     tools = [
         {"type": "function", "function": {"name": "lookup", "description": "d", "parameters": {"type": "object"}}},
-        "bad-entry",
     ]
     a = AnthropicAdapter()
     request = {
@@ -120,9 +118,10 @@ def test_anthropic_tool_choice_specific_maps(monkeypatch):
     assert payload.get("tool_choice") == {"type": "tool", "name": "lookup"}
 
 
-def test_anthropic_malformed_tools_ignored(monkeypatch):
+def test_anthropic_malformed_tools_rejected(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter as anth_mod
+    from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
 
     captured: Dict[str, Any] = {}
     monkeypatch.setattr(anth_mod, "http_client_factory", lambda *a, **k: _FakeClient(captured), raising=True)
@@ -135,10 +134,8 @@ def test_anthropic_malformed_tools_ignored(monkeypatch):
         "api_key": "k",
         "tools": tools,
     }
-    _ = a.chat(request)
-    payload = captured.get("json") or {}
-    # No valid tool entries -> no 'tools' in payload
-    assert "tools" not in payload
+    with pytest.raises(ChatBadRequestError):
+        _ = a.chat(request)
 
 
 def test_anthropic_multimodal_image_data_url(monkeypatch):

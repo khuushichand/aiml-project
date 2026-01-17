@@ -35,6 +35,7 @@ class TestChatExceptions:
     """Test custom exception classes."""
 
     def test_chat_module_exception_creation(self):
+
         """Test creating a ChatModuleException with all fields."""
         error = ChatModuleException(
             code=ChatErrorCode.INT_UNEXPECTED_ERROR,
@@ -53,6 +54,7 @@ class TestChatExceptions:
         assert isinstance(error.timestamp, datetime)
 
     def test_exception_to_log_dict(self):
+
         """Test converting exception to log dictionary."""
         original_error = ValueError("Original error")
         error = ChatModuleException(
@@ -73,6 +75,7 @@ class TestChatExceptions:
         assert "timestamp" in log_dict
 
     def test_exception_to_response_dict(self):
+
         """Test converting exception to safe response dictionary."""
         error = ChatModuleException(
             code=ChatErrorCode.AUTH_INVALID_TOKEN,
@@ -92,6 +95,7 @@ class TestChatExceptions:
         assert "request_id" in response_dict["error"]
 
     def test_specific_exception_classes(self):
+
         """Test specific exception subclasses."""
         # Authentication error
         auth_error = ChatAuthenticationError("Invalid token")
@@ -143,6 +147,7 @@ class TestRequestIDContext:
     """Test request ID context management."""
 
     def test_set_and_get_request_id(self):
+
         """Test setting and getting request ID."""
         # Set a specific request ID
         request_id = "test-request-123"
@@ -152,6 +157,7 @@ class TestRequestIDContext:
         assert get_request_id() == request_id
 
     def test_auto_generate_request_id(self):
+
         """Test automatic request ID generation."""
         # Don't provide an ID
         request_id = set_request_id()
@@ -161,6 +167,7 @@ class TestRequestIDContext:
         assert get_request_id() == request_id
 
     def test_request_id_in_exception(self):
+
         """Test that exceptions capture the current request ID."""
         request_id = set_request_id("exception-test-123")
 
@@ -180,6 +187,7 @@ class TestErrorHandlerUtilities:
     """Test error handler utility functions."""
 
     def test_handle_database_error_integrity(self):
+
         """Test handling database integrity errors."""
         error = sqlite3.IntegrityError("UNIQUE constraint failed")
 
@@ -192,6 +200,7 @@ class TestErrorHandlerUtilities:
         assert result == "default_value"
 
     def test_handle_database_error_operational(self):
+
         """Test handling database operational errors."""
         error = sqlite3.OperationalError("database is locked")
 
@@ -204,6 +213,7 @@ class TestErrorHandlerUtilities:
         assert result is None
 
     def test_handle_database_error_generic(self):
+
         """Test handling generic database errors."""
         error = Exception("Unknown database error")
 
@@ -216,6 +226,7 @@ class TestErrorHandlerUtilities:
         assert result == []
 
     def test_sanitize_error_message_removes_paths(self):
+
         """Test that file paths are sanitized from error messages."""
         error = Exception("Error in /home/user/project/secret/file.py at line 42")
 
@@ -226,6 +237,7 @@ class TestErrorHandlerUtilities:
         assert "at line 42" in sanitized
 
     def test_sanitize_error_message_removes_ips(self):
+
         """Test that IP addresses are sanitized from error messages."""
         error = Exception("Connection failed to 192.168.1.100:8080")
 
@@ -236,6 +248,7 @@ class TestErrorHandlerUtilities:
         assert ":8080" in sanitized
 
     def test_sanitize_error_message_removes_secrets(self):
+
         """Test that potential secrets are sanitized from error messages."""
         error = Exception("API key sk_test_abcdef1234567890abcdef1234567890 is invalid")
 
@@ -246,6 +259,7 @@ class TestErrorHandlerUtilities:
         assert "is invalid" in sanitized
 
     def test_sanitize_error_message_truncates_long(self):
+
         """Test that long error messages are truncated."""
         long_message = "Error: " + "x" * 300
         error = Exception(long_message)
@@ -264,6 +278,7 @@ class TestErrorHandlerContext:
     """Test ErrorHandler context manager."""
 
     def test_error_handler_success(self):
+
         """Test ErrorHandler with successful operation."""
         with ErrorHandler("test_operation") as handler:
             # Successful operation
@@ -273,6 +288,7 @@ class TestErrorHandlerContext:
         # No exception should be raised
 
     def test_error_handler_catches_exception(self):
+
         """Test ErrorHandler catches and wraps exceptions."""
         with ErrorHandler("test_operation", default_return="default"):
             # This will raise an exception
@@ -282,12 +298,14 @@ class TestErrorHandlerContext:
         # (returns True from __exit__)
 
     def test_error_handler_preserves_chat_exceptions(self):
+
         """Test ErrorHandler preserves ChatModuleException."""
         with pytest.raises(ChatAuthenticationError):
             with ErrorHandler("test_operation"):
                 raise ChatAuthenticationError("Auth failed")
 
     def test_error_handler_sets_request_id(self):
+
         """Test ErrorHandler sets a request ID."""
         initial_id = get_request_id()
 
@@ -341,6 +359,7 @@ class TestErrorHandlingIntegration:
         mock_logger.critical.assert_called_once()
 
     def test_error_chain_with_cause(self):
+
         """Test error chaining with cause tracking."""
         original_error = ValueError("Original problem")
 

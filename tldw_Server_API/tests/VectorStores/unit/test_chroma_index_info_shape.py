@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.unit
 def test_chroma_index_info_has_no_ef_search(monkeypatch):
-    # Force in-memory Chroma stub and inject minimal module shims
+     # Force in-memory Chroma stub and inject minimal module shims
     monkeypatch.setenv("CHROMADB_FORCE_STUB", "true")
 
     chroma_mod = ModuleType("chromadb")

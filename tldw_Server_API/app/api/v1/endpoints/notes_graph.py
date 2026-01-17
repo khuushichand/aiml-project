@@ -98,8 +98,8 @@ router = APIRouter()
             },
             {
                 "lang": "python",
-                "label": "httpx",
-                "source": "import httpx\nresp = httpx.get('http://127.0.0.1:8000/api/v1/notes/graph', params={'center_note_id':'note:123','radius':1,'edge_types':'manual,wikilink,tag_membership'})\nprint(resp.json())",
+                "label": "urllib",
+                "source": "import json\nfrom urllib.parse import urlencode\nfrom urllib.request import Request, urlopen\n\nparams = {\n    \"center_note_id\": \"note:123\",\n    \"radius\": 1,\n    \"edge_types\": \"manual,wikilink,tag_membership\",\n}\nurl = \"http://127.0.0.1:8000/api/v1/notes/graph?\" + urlencode(params)\nreq = Request(url, headers={\"Authorization\": \"Bearer <token>\"})\nwith urlopen(req) as resp:\n    print(json.load(resp))",
             },
         ]
     },

@@ -81,6 +81,7 @@ class TestSettingsGenerationCounter:
     """Tests for settings generation tracking."""
 
     def test_settings_generation_increments_on_reset(self, monkeypatch):
+
         """Verify settings generation counter increments on reset."""
         from tldw_Server_API.app.core.AuthNZ.settings import (
             get_settings,
@@ -108,6 +109,7 @@ class TestSettingsGenerationCounter:
         reset_settings()
 
     def test_settings_accessed_without_reset_keeps_generation(self, monkeypatch):
+
         """Verify accessing settings without reset maintains the same generation."""
         from tldw_Server_API.app.core.AuthNZ.settings import (
             get_settings,

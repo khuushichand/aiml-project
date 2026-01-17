@@ -33,11 +33,7 @@ def test_public_reranking_basic(mock_factory, client: TestClient):
         "model": "/models/Qwen3-Embedding-0.6B_f16.gguf",
         "query": "What is panda?",
         "top_n": 2,
-        "documents": [
-            "hi",
-            "it is a bear",
-            "The giant panda (Ailuropoda melanoleuca) ..."
-        ]
+        "documents": ["hi", "it is a bear", "The giant panda (Ailuropoda melanoleuca) ..."],
     }
     resp = client.post("/v1/reranking", json=payload)
     assert resp.status_code == 200, resp.text
@@ -46,7 +42,7 @@ def test_public_reranking_basic(mock_factory, client: TestClient):
     assert len(data["results"]) == 2
     # Should be in decreasing order of score
     scores = [r["score"] for r in data["results"]]
-    assert all(scores[i] >= scores[i+1] for i in range(len(scores)-1))
+    assert all(scores[i] >= scores[i + 1] for i in range(len(scores) - 1))
 
 
 @patch("tldw_Server_API.app.core.RAG.rag_service.advanced_reranking.create_reranker", autospec=True)
@@ -59,9 +55,9 @@ def test_llamacpp_reranking_passages(mock_factory, client: TestClient):
         "passages": [
             {"id": "a", "text": "Llamas eat bananas"},
             {"id": "b", "text": "Llamas in pyjamas"},
-            {"id": "c", "text": "A bowl of fruit salad"}
+            {"id": "c", "text": "A bowl of fruit salad"},
         ],
-        "model": "/models/Qwen3-Embedding-0.6B_f16.gguf"
+        "model": "/models/Qwen3-Embedding-0.6B_f16.gguf",
     }
     resp = client.post("/api/v1/llamacpp/reranking", json=payload)
     assert resp.status_code == 200, resp.text

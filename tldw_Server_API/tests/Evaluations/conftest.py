@@ -37,6 +37,7 @@ from tldw_Server_API.app.core.DB_Management.migrations import create_evaluations
 # ============================================================================
 
 def pytest_configure(config):
+
     """Register custom markers."""
     # Ensure TEST_MODE is enabled for the Evaluations test suite to bypass
     # global API rate limiting paths that are unrelated to unit correctness.
@@ -204,7 +205,7 @@ def mock_rate_limiter(monkeypatch):
     """
     from unittest.mock import Mock, AsyncMock
 
-    # Create a mock rate limiter that always allows requests
+    # Create a stub rate limiter that always allows calls
     mock_limiter = Mock()
     mock_limiter.check_rate_limit = AsyncMock(return_value=(True, {"remaining": 100, "reset_at": None}))
     mock_limiter.update_usage = AsyncMock()
@@ -449,6 +450,7 @@ def mock_embeddings(monkeypatch):
     import numpy as np
 
     def mock_create_embedding(text, provider="openai", model="text-embedding-3-small", api_key=None):
+
         """Generate deterministic fake embeddings based on text hash."""
         # Generate a deterministic embedding based on the input text
         import hashlib
@@ -865,9 +867,11 @@ def performance_timer():
             self.end_time = None
 
         def start(self):
+
             self.start_time = time.perf_counter()
 
         def stop(self):
+
             self.end_time = time.perf_counter()
             return self.elapsed
 
@@ -918,6 +922,7 @@ def evaluation_data_generator():
     import string
 
     def generate():
+
         return {
             "name": ''.join(random.choices(string.ascii_letters, k=10)),
             "eval_type": random.choice(["model_graded", "g_eval", "rag", "response_quality"]),
@@ -945,7 +950,7 @@ def mock_rag_evaluator(monkeypatch):
 
     # Mock the LLM analyze function for RAG tests
     def mock_analyze(*args, **kwargs):
-        # Return scores based on what's being evaluated
+             # Return scores based on what's being evaluated
         prompt = args[0] if args else kwargs.get('prompt', '')
         if 'faithfulness' in prompt.lower():
             return "0.85"
@@ -974,7 +979,7 @@ def auto_mock_llm_for_unit_tests(request, monkeypatch):
     if "test_rag_evaluator" in request.node.module.__name__:
         # Mock the LLM analyze function with correct signature
         def mock_analyze(api_name, input_data, custom_prompt_arg="", api_key="", system_message="", temp=0.1, **kwargs):
-            # Check both input_data and custom_prompt_arg for keywords
+                     # Check both input_data and custom_prompt_arg for keywords
             combined_text = f"{input_data} {custom_prompt_arg}".lower()
             if 'faithfulness' in combined_text:
                 return "4.7"  # Use same value as mock_llm_analyze

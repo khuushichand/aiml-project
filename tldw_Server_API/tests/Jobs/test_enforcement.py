@@ -5,7 +5,9 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def test_enforcement_blocks_stale_worker(monkeypatch, tmp_path):
-    # Enable enforcement (default) and ensure compatibility flag is disabled for this test
+
+
+     # Enable enforcement (default) and ensure compatibility flag is disabled for this test
     monkeypatch.delenv("JOBS_DISABLE_LEASE_ENFORCEMENT", raising=False)
     monkeypatch.setenv("JOBS_ENFORCE_LEASE_ACK", "true")
     db_path = tmp_path / "jobs.db"
@@ -35,6 +37,8 @@ def test_enforcement_blocks_stale_worker(monkeypatch, tmp_path):
 
 
 def test_enforcement_is_default(monkeypatch, tmp_path):
+
+
     monkeypatch.delenv("JOBS_DISABLE_LEASE_ENFORCEMENT", raising=False)
     monkeypatch.delenv("JOBS_ENFORCE_LEASE_ACK", raising=False)
     db_path = tmp_path / "jobs_default.db"

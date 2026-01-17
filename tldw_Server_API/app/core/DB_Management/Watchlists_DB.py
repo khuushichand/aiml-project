@@ -30,13 +30,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.DB_Management.content_backend import (
+    load_content_db_settings,
+    get_content_backend,
+)
 from .backends.base import DatabaseBackend, DatabaseConfig, BackendType
 from .backends.factory import DatabaseBackendFactory
+from .backends.query_utils import prepare_backend_statement
 from .db_path_utils import DatabasePaths
 
 
@@ -180,10 +187,7 @@ class WatchlistsDatabase:
         self.user_id = str(user_id)
         db_key: Optional[str] = None
         if backend is None:
-            db_path = str(DatabasePaths.get_media_db_path(int(user_id)))
-            cfg = DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=db_path)
-            backend = DatabaseBackendFactory.create_backend(cfg)
-            db_key = f"sqlite:{db_path}"
+            backend, db_key = self._resolve_backend()
         else:
             # Fallback key when external backend is supplied (best-effort de-dupe)
             db_key = f"backend:{id(backend)}"
@@ -200,158 +204,366 @@ class WatchlistsDatabase:
     def for_user(cls, user_id: int | str) -> "WatchlistsDatabase":
         return cls(user_id=user_id)
 
+    def _resolve_backend(self) -> Tuple[DatabaseBackend, Optional[str]]:
+        backend_mode_env = (os.getenv("TLDW_CONTENT_DB_BACKEND") or "").strip().lower()
+        if backend_mode_env in {"postgres", "postgresql"}:
+            parser = load_comprehensive_config()
+            resolved = get_content_backend(parser)
+            if resolved is None:
+                raise RuntimeError("PostgreSQL content backend requested but not initialized")
+            return resolved, f"postgres:{resolved.config.connection_string or resolved.config.pg_database}"
+
+        try:
+            parser = load_comprehensive_config()
+        except Exception:
+            parser = None
+
+        if parser is not None:
+            try:
+                content_settings = load_content_db_settings(parser)
+                if content_settings.backend_type == BackendType.POSTGRESQL:
+                    resolved = get_content_backend(parser)
+                    if resolved is None:
+                        raise RuntimeError("PostgreSQL content backend requested but not initialized")
+                    return resolved, f"postgres:{resolved.config.connection_string or resolved.config.pg_database}"
+            except Exception:
+                pass
+
+        db_path = str(DatabasePaths.get_media_db_path(int(self.user_id)))
+        cfg = DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=db_path)
+        return DatabaseBackendFactory.create_backend(cfg), f"sqlite:{db_path}"
+
+    def _execute_insert(self, query: str, params: Tuple[Any, ...]) -> Any:
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            prepared_query, prepared_params = prepare_backend_statement(
+                BackendType.POSTGRESQL,
+                query,
+                params,
+                apply_default_transform=True,
+                ensure_returning=True,
+            )
+            return self.backend.execute(prepared_query, prepared_params)
+        return self.backend.execute(query, params)
+
+    @staticmethod
+    def _extract_lastrowid(result: Any) -> Optional[int]:
+        try:
+            if result is None:
+                return None
+            lastrowid = getattr(result, "lastrowid", None)
+            if lastrowid:
+                return int(lastrowid)
+            first = getattr(result, "first", None)
+            if isinstance(first, dict) and first.get("id") is not None:
+                return int(first.get("id"))
+        except Exception:
+            return None
+        return None
+
     def ensure_schema(self) -> None:
-        ddl = """
-        CREATE TABLE IF NOT EXISTS sources (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            url TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            active INTEGER NOT NULL DEFAULT 1,
-            settings_json TEXT,
-            last_scraped_at TEXT,
-            etag TEXT,
-            last_modified TEXT,
-            defer_until TEXT,
-            status TEXT,
-            consec_not_modified INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_sources_user_url ON sources(user_id, url);
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            ddl = """
+            CREATE TABLE IF NOT EXISTS sources (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                settings_json TEXT,
+                last_scraped_at TEXT,
+                etag TEXT,
+                last_modified TEXT,
+                defer_until TEXT,
+                status TEXT,
+                consec_not_modified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_sources_user_url ON sources(user_id, url);
 
-        CREATE TABLE IF NOT EXISTS groups (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            description TEXT,
-            parent_group_id INTEGER
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_groups_user_name ON groups(user_id, name);
+            CREATE TABLE IF NOT EXISTS groups (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                parent_group_id BIGINT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_groups_user_name ON groups(user_id, name);
 
-        CREATE TABLE IF NOT EXISTS source_groups (
-            source_id INTEGER NOT NULL,
-            group_id INTEGER NOT NULL,
-            UNIQUE (source_id, group_id)
-        );
+            CREATE TABLE IF NOT EXISTS source_groups (
+                source_id BIGINT NOT NULL,
+                group_id BIGINT NOT NULL,
+                UNIQUE (source_id, group_id)
+            );
 
-        CREATE TABLE IF NOT EXISTS tags (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            UNIQUE (user_id, name)
-        );
-        CREATE TABLE IF NOT EXISTS source_tags (
-            source_id INTEGER NOT NULL,
-            tag_id INTEGER NOT NULL,
-            UNIQUE (source_id, tag_id)
-        );
+            CREATE TABLE IF NOT EXISTS tags (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                UNIQUE (user_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS source_tags (
+                source_id BIGINT NOT NULL,
+                tag_id BIGINT NOT NULL,
+                UNIQUE (source_id, tag_id)
+            );
 
-        CREATE TABLE IF NOT EXISTS scrape_jobs (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            description TEXT,
-            scope_json TEXT,
-            schedule_expr TEXT,
-            active INTEGER NOT NULL DEFAULT 1,
-            max_concurrency INTEGER,
-            per_host_delay_ms INTEGER,
-            retry_policy_json TEXT,
-            output_prefs_json TEXT,
-            job_filters_json TEXT,
-            schedule_timezone TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            last_run_at TEXT,
-            next_run_at TEXT,
-            wf_schedule_id TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_jobs_user ON scrape_jobs(user_id);
+            CREATE TABLE IF NOT EXISTS scrape_jobs (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                scope_json TEXT,
+                schedule_expr TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                max_concurrency INTEGER,
+                per_host_delay_ms INTEGER,
+                retry_policy_json TEXT,
+                output_prefs_json TEXT,
+                job_filters_json TEXT,
+                schedule_timezone TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                wf_schedule_id TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_jobs_user ON scrape_jobs(user_id);
 
-        CREATE TABLE IF NOT EXISTS scrape_runs (
-            id INTEGER PRIMARY KEY,
-            job_id INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            started_at TEXT,
-            finished_at TEXT,
-            stats_json TEXT,
-            error_msg TEXT,
-            log_path TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_runs_job ON scrape_runs(job_id);
+            CREATE TABLE IF NOT EXISTS scrape_runs (
+                id BIGSERIAL PRIMARY KEY,
+                job_id BIGINT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                stats_json TEXT,
+                error_msg TEXT,
+                log_path TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_runs_job ON scrape_runs(job_id);
 
-        CREATE TABLE IF NOT EXISTS scrape_run_items (
-            run_id INTEGER NOT NULL,
-            media_id INTEGER NOT NULL,
-            source_id INTEGER,
-            UNIQUE (run_id, media_id)
-        );
+            CREATE TABLE IF NOT EXISTS scrape_run_items (
+                run_id BIGINT NOT NULL,
+                media_id BIGINT NOT NULL,
+                source_id BIGINT,
+                UNIQUE (run_id, media_id)
+            );
 
-        -- Track per-source seen RSS/Atom items for deduplication
-        CREATE TABLE IF NOT EXISTS source_seen_items (
-            source_id INTEGER NOT NULL,
-            item_key TEXT NOT NULL,
-            etag TEXT,
-            last_modified TEXT,
-            first_seen_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            UNIQUE (source_id, item_key)
-        );
+            CREATE TABLE IF NOT EXISTS source_seen_items (
+                source_id BIGINT NOT NULL,
+                item_key TEXT NOT NULL,
+                etag TEXT,
+                last_modified TEXT,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                UNIQUE (source_id, item_key)
+            );
 
-        CREATE TABLE IF NOT EXISTS scraped_items (
-            id INTEGER PRIMARY KEY,
-            run_id INTEGER NOT NULL,
-            job_id INTEGER NOT NULL,
-            source_id INTEGER NOT NULL,
-            media_id INTEGER,
-            media_uuid TEXT,
-            url TEXT,
-            title TEXT,
-            summary TEXT,
-            published_at TEXT,
-            tags_json TEXT,
-            status TEXT NOT NULL,
-            reviewed INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_scraped_items_run ON scraped_items(run_id);
-        CREATE INDEX IF NOT EXISTS idx_scraped_items_job ON scraped_items(job_id);
-        CREATE INDEX IF NOT EXISTS idx_scraped_items_source ON scraped_items(source_id);
-        CREATE INDEX IF NOT EXISTS idx_scraped_items_status ON scraped_items(status);
-        CREATE INDEX IF NOT EXISTS idx_scraped_items_reviewed ON scraped_items(reviewed);
-        CREATE INDEX IF NOT EXISTS idx_scraped_items_created ON scraped_items(created_at);
+            CREATE TABLE IF NOT EXISTS scraped_items (
+                id BIGSERIAL PRIMARY KEY,
+                run_id BIGINT NOT NULL,
+                job_id BIGINT NOT NULL,
+                source_id BIGINT NOT NULL,
+                media_id BIGINT,
+                media_uuid TEXT,
+                url TEXT,
+                title TEXT,
+                summary TEXT,
+                published_at TEXT,
+                tags_json TEXT,
+                status TEXT NOT NULL,
+                reviewed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_run ON scraped_items(run_id);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_job ON scraped_items(job_id);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_source ON scraped_items(source_id);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_status ON scraped_items(status);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_reviewed ON scraped_items(reviewed);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_created ON scraped_items(created_at);
 
-        CREATE TABLE IF NOT EXISTS watchlist_outputs (
-            id INTEGER PRIMARY KEY,
-            run_id INTEGER NOT NULL,
-            job_id INTEGER NOT NULL,
-            type TEXT NOT NULL,
-            format TEXT NOT NULL,
-            title TEXT,
-            content TEXT,
-            storage_path TEXT,
-            metadata_json TEXT,
-            media_item_id INTEGER,
-            chatbook_path TEXT,
-            version INTEGER NOT NULL DEFAULT 1,
-            expires_at TEXT,
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_run ON watchlist_outputs(run_id);
-        CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_job ON watchlist_outputs(job_id);
+            CREATE TABLE IF NOT EXISTS watchlist_outputs (
+                id BIGSERIAL PRIMARY KEY,
+                run_id BIGINT NOT NULL,
+                job_id BIGINT NOT NULL,
+                type TEXT NOT NULL,
+                format TEXT NOT NULL,
+                title TEXT,
+                content TEXT,
+                storage_path TEXT,
+                metadata_json TEXT,
+                media_item_id BIGINT,
+                chatbook_path TEXT,
+                version INTEGER NOT NULL DEFAULT 1,
+                expires_at TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_run ON watchlist_outputs(run_id);
+            CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_job ON watchlist_outputs(job_id);
 
-        CREATE TABLE IF NOT EXISTS watchlist_clusters (
-            job_id INTEGER NOT NULL,
-            cluster_id INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE (job_id, cluster_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_job ON watchlist_clusters(job_id);
-        CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_cluster ON watchlist_clusters(cluster_id);
-        """
+            CREATE TABLE IF NOT EXISTS watchlist_clusters (
+                job_id BIGINT NOT NULL,
+                cluster_id BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (job_id, cluster_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_job ON watchlist_clusters(job_id);
+            CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_cluster ON watchlist_clusters(cluster_id);
+            """
+        else:
+            ddl = """
+            CREATE TABLE IF NOT EXISTS sources (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                settings_json TEXT,
+                last_scraped_at TEXT,
+                etag TEXT,
+                last_modified TEXT,
+                defer_until TEXT,
+                status TEXT,
+                consec_not_modified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_sources_user_url ON sources(user_id, url);
+
+            CREATE TABLE IF NOT EXISTS groups (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                parent_group_id INTEGER
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_groups_user_name ON groups(user_id, name);
+
+            CREATE TABLE IF NOT EXISTS source_groups (
+                source_id INTEGER NOT NULL,
+                group_id INTEGER NOT NULL,
+                UNIQUE (source_id, group_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                UNIQUE (user_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS source_tags (
+                source_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                UNIQUE (source_id, tag_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS scrape_jobs (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                scope_json TEXT,
+                schedule_expr TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                max_concurrency INTEGER,
+                per_host_delay_ms INTEGER,
+                retry_policy_json TEXT,
+                output_prefs_json TEXT,
+                job_filters_json TEXT,
+                schedule_timezone TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                wf_schedule_id TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_jobs_user ON scrape_jobs(user_id);
+
+            CREATE TABLE IF NOT EXISTS scrape_runs (
+                id INTEGER PRIMARY KEY,
+                job_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                stats_json TEXT,
+                error_msg TEXT,
+                log_path TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_runs_job ON scrape_runs(job_id);
+
+            CREATE TABLE IF NOT EXISTS scrape_run_items (
+                run_id INTEGER NOT NULL,
+                media_id INTEGER NOT NULL,
+                source_id INTEGER,
+                UNIQUE (run_id, media_id)
+            );
+
+            -- Track per-source seen RSS/Atom items for deduplication
+            CREATE TABLE IF NOT EXISTS source_seen_items (
+                source_id INTEGER NOT NULL,
+                item_key TEXT NOT NULL,
+                etag TEXT,
+                last_modified TEXT,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                UNIQUE (source_id, item_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS scraped_items (
+                id INTEGER PRIMARY KEY,
+                run_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                source_id INTEGER NOT NULL,
+                media_id INTEGER,
+                media_uuid TEXT,
+                url TEXT,
+                title TEXT,
+                summary TEXT,
+                published_at TEXT,
+                tags_json TEXT,
+                status TEXT NOT NULL,
+                reviewed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_run ON scraped_items(run_id);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_job ON scraped_items(job_id);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_source ON scraped_items(source_id);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_status ON scraped_items(status);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_reviewed ON scraped_items(reviewed);
+            CREATE INDEX IF NOT EXISTS idx_scraped_items_created ON scraped_items(created_at);
+
+            CREATE TABLE IF NOT EXISTS watchlist_outputs (
+                id INTEGER PRIMARY KEY,
+                run_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                format TEXT NOT NULL,
+                title TEXT,
+                content TEXT,
+                storage_path TEXT,
+                metadata_json TEXT,
+                media_item_id INTEGER,
+                chatbook_path TEXT,
+                version INTEGER NOT NULL DEFAULT 1,
+                expires_at TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_run ON watchlist_outputs(run_id);
+            CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_job ON watchlist_outputs(job_id);
+
+            CREATE TABLE IF NOT EXISTS watchlist_clusters (
+                job_id INTEGER NOT NULL,
+                cluster_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (job_id, cluster_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_job ON watchlist_clusters(job_id);
+            CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_cluster ON watchlist_clusters(cluster_id);
+            """
         self.backend.create_tables(ddl)
         # Backfill columns in case tables existed (guarded to avoid noisy duplicate-column errors)
         def _col_exists(table: str, col: str) -> bool:
@@ -418,9 +630,8 @@ class WatchlistsDatabase:
             insert_exc: Optional[Exception] = None
             tag_id: Optional[int] = None
             try:
-                res = self.backend.execute(insert_sql, params)
-                if res.lastrowid:
-                    tag_id = int(res.lastrowid)
+                res = self._execute_insert(insert_sql, params)
+                tag_id = self._extract_lastrowid(res)
             except Exception as exc:
                 insert_exc = exc
             if tag_id is None:
@@ -498,11 +709,11 @@ class WatchlistsDatabase:
         # Try insert; if UNIQUE(user_id,url) violates, fetch existing id and proceed idempotently
         sid: Optional[int] = None
         try:
-            res = self.backend.execute(
+            res = self._execute_insert(
                 "INSERT INTO sources (user_id, name, url, source_type, active, settings_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (self.user_id, name, url, source_type, 1 if active else 0, settings_json, now, now),
             )
-            sid = int(res.lastrowid or 0)
+            sid = self._extract_lastrowid(res)
         except Exception:
             # Look up existing source for idempotency
             try:
@@ -760,11 +971,14 @@ class WatchlistsDatabase:
     def create_group(self, name: str, description: Optional[str], parent_group_id: Optional[int]) -> GroupRow:
         # Idempotent by (user_id, name)
         try:
-            res = self.backend.execute(
+            res = self._execute_insert(
                 "INSERT INTO groups (user_id, name, description, parent_group_id) VALUES (?, ?, ?, ?)",
                 (self.user_id, name, description, parent_group_id),
             )
-            return self.get_group(int(res.lastrowid or 0))
+            new_id = self._extract_lastrowid(res)
+            if not new_id:
+                raise RuntimeError("failed_to_create_group")
+            return self.get_group(new_id)
         except Exception:
             # On UNIQUE violation, fetch existing
             row = self.backend.execute(
@@ -836,7 +1050,7 @@ class WatchlistsDatabase:
         job_filters_json: Optional[str] = None,
     ) -> JobRow:
         now = _utcnow_iso()
-        res = self.backend.execute(
+        res = self._execute_insert(
             """
             INSERT INTO scrape_jobs (user_id, name, description, scope_json, schedule_expr, active, max_concurrency,
             per_host_delay_ms, retry_policy_json, output_prefs_json, job_filters_json, schedule_timezone, created_at, updated_at)
@@ -859,7 +1073,10 @@ class WatchlistsDatabase:
                 now,
             ),
         )
-        return self.get_job(int(res.lastrowid or 0))
+        new_id = self._extract_lastrowid(res)
+        if not new_id:
+            raise RuntimeError("failed_to_create_job")
+        return self.get_job(new_id)
 
     def get_job(self, job_id: int) -> JobRow:
         row = self.backend.execute(
@@ -996,11 +1213,14 @@ class WatchlistsDatabase:
         )
 
     def create_run(self, job_id: int, status: str = "queued") -> RunRow:
-        res = self.backend.execute(
+        res = self._execute_insert(
             "INSERT INTO scrape_runs (job_id, status, started_at) VALUES (?, ?, ?)",
             (job_id, status, _utcnow_iso()),
         )
-        return self.get_run(int(res.lastrowid or 0))
+        new_id = self._extract_lastrowid(res)
+        if not new_id:
+            raise RuntimeError("failed_to_create_run")
+        return self.get_run(new_id)
 
     def get_run(self, run_id: int) -> RunRow:
         row = self.backend.execute(
@@ -1117,7 +1337,7 @@ class WatchlistsDatabase:
     ) -> ScrapedItemRow:
         created_at = _utcnow_iso()
         tags_json = json.dumps(tags or [])
-        res = self.backend.execute(
+        res = self._execute_insert(
             """
             INSERT INTO scraped_items (
                 run_id, job_id, source_id, media_id, media_uuid, url, title,
@@ -1139,7 +1359,10 @@ class WatchlistsDatabase:
                 created_at,
             ),
         )
-        return self.get_item(int(res.lastrowid or 0))
+        new_id = self._extract_lastrowid(res)
+        if not new_id:
+            raise RuntimeError("failed_to_record_scraped_item")
+        return self.get_item(new_id)
 
     def get_item(self, item_id: int) -> ScrapedItemRow:
         row = self.backend.execute(
@@ -1276,7 +1499,7 @@ class WatchlistsDatabase:
         expires_at: Optional[str] = None,
     ) -> OutputRow:
         created_at = _utcnow_iso()
-        res = self.backend.execute(
+        res = self._execute_insert(
             """
             INSERT INTO watchlist_outputs (
                 run_id, job_id, type, format, title, content, storage_path,
@@ -1299,7 +1522,10 @@ class WatchlistsDatabase:
                 created_at,
             ),
         )
-        return self.get_output(int(res.lastrowid or 0))
+        new_id = self._extract_lastrowid(res)
+        if not new_id:
+            raise RuntimeError("failed_to_create_output")
+        return self.get_output(new_id)
 
     def get_output(self, output_id: int) -> OutputRow:
         row = self.backend.execute(
@@ -1360,6 +1586,7 @@ class WatchlistsDatabase:
         metadata: Optional[Dict[str, Any]] = None,
         chatbook_path: Optional[str] = None,
         storage_path: Optional[str] = None,
+        media_item_id: Optional[int] = None,
     ) -> OutputRow:
         assignments: List[str] = []
         params: List[Any] = []
@@ -1372,6 +1599,9 @@ class WatchlistsDatabase:
         if storage_path is not None:
             assignments.append("storage_path = ?")
             params.append(storage_path)
+        if media_item_id is not None:
+            assignments.append("media_item_id = ?")
+            params.append(media_item_id)
         if not assignments:
             return self.get_output(output_id)
         params.append(output_id)
@@ -1380,6 +1610,13 @@ class WatchlistsDatabase:
             tuple(params),
         )
         return self.get_output(output_id)
+
+    def delete_output(self, output_id: int) -> bool:
+        res = self.backend.execute(
+            "DELETE FROM watchlist_outputs WHERE id = ?",
+            (output_id,),
+        )
+        return res.rowcount > 0
 
     def update_run(
         self,

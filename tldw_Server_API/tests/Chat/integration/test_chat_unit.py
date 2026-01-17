@@ -2,6 +2,7 @@
 Unit tests for chat functionality using isolated fixtures.
 These tests don't require external services or global state modifications.
 """
+
 import os
 import pytest
 from fastapi import status
@@ -18,8 +19,7 @@ class TestChatUnit:
     def test_chat_completion_basic(self, unit_test_client, sample_chat_request):
         """Test basic chat completion with mocked LLM."""
         response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=sample_chat_request.model_dump()
+            "/api/v1/chat/completions", json_data=sample_chat_request.model_dump()
         )
 
         assert response.status_code == status.HTTP_200_OK
@@ -31,27 +31,26 @@ class TestChatUnit:
     def test_chat_with_character(self, unit_test_client, isolated_db):
         """Test chat with specific character."""
         # Add a test character
-        char_id = isolated_db.add_character_card({
-            "name": "TestBot",
-            "description": "A test bot",
-            "personality": "Friendly",
-            "scenario": "Testing",
-            "system_prompt": "You are TestBot",
-            "first_message": "Hello from TestBot!",
-            "creator_notes": "Test"
-        })
+        char_id = isolated_db.add_character_card(
+            {
+                "name": "TestBot",
+                "description": "A test bot",
+                "personality": "Friendly",
+                "scenario": "Testing",
+                "system_prompt": "You are TestBot",
+                "first_message": "Hello from TestBot!",
+                "creator_notes": "Test",
+            }
+        )
 
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
             "messages": [{"role": "user", "content": "Hello"}],
-            "character_id": str(char_id)
+            "character_id": str(char_id),
         }
 
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         if response.status_code != status.HTTP_200_OK:
             print(f"Response status: {response.status_code}")
@@ -67,14 +66,11 @@ class TestChatUnit:
             "model": "test-model",
             "api_provider": "openai",
             "messages": [{"role": "user", "content": "Hello"}],
-            "save_to_db": True
+            "save_to_db": True,
             # No conversation_id - let endpoint create one
         }
 
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         assert response.status_code == status.HTTP_200_OK
 
@@ -86,7 +82,7 @@ class TestChatUnit:
 
         # Get the latest conversation
         latest_conv = conversations[-1]
-        conv_id = latest_conv.get('id')
+        conv_id = latest_conv.get("id")
 
         # Check that messages were saved
         messages = isolated_db.get_messages_for_conversation(conv_id)
@@ -97,15 +93,14 @@ class TestChatUnit:
         request_data = {
             "model": "test-model",
             "api_provider": "nonexistent_provider",  # Provider that doesn't exist
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
 
         # Remove the provider from mock keys to simulate missing key
-        with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "sk-mock-key-12345"}, clear=True):
-            response = unit_test_client.post_with_auth(
-                "/api/v1/chat/completions",
-                json_data=request_data
-            )
+        with patch.dict(
+            "tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "sk-mock-key-12345"}, clear=True
+        ):
+            response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         assert response.status_code >= status.HTTP_400_BAD_REQUEST
         payload = response.json()
@@ -118,13 +113,10 @@ class TestChatUnit:
             "model": "test-model",
             "api_provider": "openai",
             "messages": [{"role": "user", "content": "Hello"}],
-            "stream": True
+            "stream": True,
         }
 
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         # Even with stream=True, TestClient returns regular response
         assert response.status_code == status.HTTP_200_OK
@@ -136,14 +128,11 @@ class TestChatUnit:
             "api_provider": "openai",
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant"},
-                {"role": "user", "content": "Hello"}
-            ]
+                {"role": "user", "content": "Hello"},
+            ],
         }
 
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -155,13 +144,10 @@ class TestChatUnit:
             "model": "test-model",
             "api_provider": "openai",
             "messages": [{"role": "user", "content": "Hello"}],
-            "temperature": 0.5
+            "temperature": 0.5,
         }
 
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         assert response.status_code == status.HTTP_200_OK
 
@@ -171,13 +157,10 @@ class TestChatUnit:
             "model": "test-model",
             "api_provider": "openai",
             "messages": [{"role": "user", "content": "Hello"}],
-            "max_tokens": 100
+            "max_tokens": 100,
         }
 
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         assert response.status_code == status.HTTP_200_OK
 
@@ -185,30 +168,19 @@ class TestChatUnit:
         """Test that missing messages field returns error."""
         request_data = {
             "model": "test-model",
-            "api_provider": "openai"
+            "api_provider": "openai",
             # messages field missing
         }
 
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
-
     def test_empty_messages(self, unit_test_client):
         """Test that empty messages array returns error."""
-        request_data = {
-            "model": "test-model",
-            "api_provider": "openai",
-            "messages": []
-        }
+        request_data = {"model": "test-model", "api_provider": "openai", "messages": []}
 
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         assert response.status_code >= 400
 
@@ -233,15 +205,11 @@ class TestChatUnit:
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
 
         # Make request without auth token
-        response = client.post(
-            "/api/v1/chat/completions",
-            json=request_data,
-            headers={"X-CSRF-Token": csrf_token}
-        )
+        response = client.post("/api/v1/chat/completions", json=request_data, headers={"X-CSRF-Token": csrf_token})
 
         # In single-user mode, should require Token header
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
@@ -270,17 +238,14 @@ class TestChatUnit:
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
 
         # Make request with invalid auth token
         response = client.post(
             "/api/v1/chat/completions",
             json=request_data,
-            headers={
-                "X-CSRF-Token": csrf_token,
-                "Token": "Bearer invalid-token-xyz"
-            }
+            headers={"X-CSRF-Token": csrf_token, "Token": "Bearer invalid-token-xyz"},
         )
 
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
@@ -301,6 +266,7 @@ class TestChatErrorHandling:
 
         # Create test user
         test_user = User(id=1, username="test_user", email="test@example.com", is_active=True)
+
         async def mock_get_request_user(api_key=None, token=None):
             return test_user
 
@@ -316,22 +282,25 @@ class TestChatErrorHandling:
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
 
         # Mock the LLM call to raise an exception and API keys
-        with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform, \
-             patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
+        with (
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform,
+            patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+        ):
             mock_perform.side_effect = Exception("LLM API Error")
 
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
             settings = get_settings()
             api_key = settings.SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
 
             response = client.post(
                 "/api/v1/chat/completions",
                 json=request_data,
-                headers={"X-CSRF-Token": csrf_token, "X-API-KEY": api_key}
+                headers={"X-CSRF-Token": csrf_token, "X-API-KEY": api_key},
             )
 
             assert response.status_code >= 500
@@ -347,14 +316,11 @@ class TestChatErrorHandling:
             "model": "test-model",
             "api_provider": "openai",
             "messages": [{"role": "user", "content": "Hello"}],
-            "conversation_id": "invalid-conv-id"
+            "conversation_id": "invalid-conv-id",
         }
 
         # The endpoint should handle invalid conversation ID gracefully
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         # Should handle the invalid ID gracefully - creates new conversation or returns success
         # When conversation ID is invalid, the endpoint creates a new conversation
@@ -365,14 +331,9 @@ class TestChatErrorHandling:
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
-            "messages": [
-                {"role": "invalid-role", "content": "Hello"}  # Invalid role
-            ]
+            "messages": [{"role": "invalid-role", "content": "Hello"}],  # Invalid role
         }
 
-        response = unit_test_client.post_with_auth(
-            "/api/v1/chat/completions",
-            json_data=request_data
-        )
+        response = unit_test_client.post_with_auth("/api/v1/chat/completions", json_data=request_data)
 
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT

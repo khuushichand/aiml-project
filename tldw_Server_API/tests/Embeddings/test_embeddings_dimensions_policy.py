@@ -25,6 +25,8 @@ def client():
 
 
 def _override_user(admin=False):
+
+
     async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=admin)
@@ -40,7 +42,7 @@ class _MC:
 
 @pytest.mark.unit
 def test_dimensions_reduce_policy(client, monkeypatch):
-    # Force reduce
+     # Force reduce
     os.environ["EMBEDDINGS_DIMENSION_POLICY"] = "reduce"
     os.environ["USE_REAL_OPENAI_IN_TESTS"] = "true"  # force async path
 

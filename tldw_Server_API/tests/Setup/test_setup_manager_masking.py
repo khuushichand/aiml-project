@@ -2,6 +2,8 @@ from tldw_Server_API.app.core.Setup.setup_manager import get_config_snapshot, SE
 
 
 def test_secret_values_are_masked_in_config_snapshot():
+
+
     snapshot = get_config_snapshot()
     sections = snapshot.get("sections", [])
 

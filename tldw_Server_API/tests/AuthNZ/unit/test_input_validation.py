@@ -2,6 +2,8 @@ from tldw_Server_API.app.core.AuthNZ.input_validation import InputValidator
 
 
 def test_username_with_common_patterns_is_accepted():
+
+
     """Common usernames with visually distinct characters should be allowed."""
     validator = InputValidator()
     # 'l' and '1' are visually distinct - allow
@@ -18,6 +20,8 @@ def test_username_with_common_patterns_is_accepted():
 
 
 def test_username_with_truly_confusing_chars_is_rejected():
+
+
     """Usernames with truly confusing character pairs should be rejected."""
     validator = InputValidator()
 
@@ -33,6 +37,8 @@ def test_username_with_truly_confusing_chars_is_rejected():
 
 
 def test_username_with_repeated_specials_still_rejected():
+
+
     validator = InputValidator()
     ok, error = validator.validate_username("foo__bar")
     assert ok is False

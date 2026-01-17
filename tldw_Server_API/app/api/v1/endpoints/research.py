@@ -11,7 +11,6 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Query, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 from loguru import logger
-import httpx
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 #

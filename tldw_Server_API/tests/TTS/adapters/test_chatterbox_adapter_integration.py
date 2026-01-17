@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
 # Helper Functions
 
 def check_chatterbox_installed():
+
     """Check if Chatterbox library and model are available"""
     try:
         # Try to import upstream chatterbox package
@@ -52,6 +53,7 @@ def check_chatterbox_installed():
         return False, None
 
 def get_compute_capability():
+
     """Detect compute capabilities"""
     if platform.system() == "Darwin":
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():

@@ -73,6 +73,7 @@ class TestKanbanDbCacheShutdown:
                 self.closed = False
 
             def close(self) -> None:
+
                 self.closed = True
 
         dummy = DummyDB()

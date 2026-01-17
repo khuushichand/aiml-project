@@ -14,14 +14,22 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+import os
 
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import (
+    InvalidTemplateFormatError,
+    InvalidTemplateNameError,
+    InvalidTemplatePathError,
+)
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 _SUPPORTED_SUFFIXES = {".md", ".html"}
+_TEMPLATE_PATH_ERROR = "Template path must stay within the watchlist template directory"
+_INVALID_TEMPLATE_NAME_ERROR = "Template name must match ^[A-Za-z0-9_\\-]{1,64}$"
+_INVALID_TEMPLATE_FORMAT_ERROR = "Template format must be 'md' or 'html'"
 
 
 @dataclass
@@ -29,7 +37,7 @@ class TemplateRecord:
     name: str
     format: str
     content: str
-    description: Optional[str]
+    description: str | None
     updated_at: str
 
 
@@ -42,7 +50,7 @@ class TemplateExistsError(FileExistsError):
 
 
 def _resolved_dir() -> Path:
-    configured = settings.get("WATCHLIST_TEMPLATE_DIR")
+    configured = os.getenv("WATCHLIST_TEMPLATE_DIR") or settings.get("WATCHLIST_TEMPLATE_DIR")
     if configured:
         base = Path(configured)
     else:
@@ -57,29 +65,83 @@ def _resolved_dir() -> Path:
     return base
 
 
+def _assert_within_base(path: Path, base: Path) -> None:
+    """Validate that a path stays within the base directory.
+
+    Args:
+        path: The path to validate (may be relative or absolute).
+        base: The base directory that must contain the path.
+
+    Raises:
+        InvalidTemplatePathError: If the resolved path escapes the base directory.
+    """
+    # Ensure that any path derived from user input stays within the base directory.
+    # Using only `path.name` prevents directory traversal via subdirectories.
+    resolved_base = base.resolve()
+    candidate = path.resolve()
+    try:
+        # Ensure the candidate path is within the resolved base directory
+        candidate.relative_to(resolved_base)
+    except ValueError as err:
+        raise InvalidTemplatePathError(_TEMPLATE_PATH_ERROR) from err
+
+
 def _template_path(name: str, fmt: str) -> Path:
+    """Construct and validate a template file path.
+
+    Args:
+        name: Template name (sanitized).
+        fmt: Format ("md" or "html").
+
+    Returns:
+        Validated path within the template directory.
+
+    Raises:
+        InvalidTemplateNameError: If the name is invalid.
+        InvalidTemplatePathError: If the path escapes the base directory.
+    """
+    name = _sanitize_name(name)
     fmt = fmt.lower()
     suffix = ".md" if fmt == "md" else ".html"
-    return _resolved_dir() / f"{name}{suffix}"
+    base = _resolved_dir()
+    path = base / f"{name}{suffix}"
+    _assert_within_base(path, base)
+    return path
 
 
 def _meta_path(name: str) -> Path:
-    return _resolved_dir() / f"{name}.meta.json"
+    """Construct and validate a metadata file path.
+
+    Args:
+        name: Template name (sanitized).
+
+    Returns:
+        Validated path to the .meta.json file within the template directory.
+
+    Raises:
+        InvalidTemplateNameError: If the name is invalid.
+        InvalidTemplatePathError: If the path escapes the base directory.
+    """
+    name = _sanitize_name(name)
+    base = _resolved_dir()
+    path = base / f"{name}.meta.json"
+    _assert_within_base(path, base)
+    return path
 
 
-def _load_description(meta_file: Path) -> Optional[str]:
+def _load_description(meta_file: Path) -> str | None:
     if not meta_file.exists():
         return None
     try:
         data = json.loads(meta_file.read_text(encoding="utf-8"))
         desc = data.get("description")
         return str(desc) if desc is not None else None
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.debug(f"Failed to read template metadata from {meta_file}: {exc}")
         return None
 
 
-def _save_description(meta_file: Path, description: Optional[str]) -> None:
+def _save_description(meta_file: Path, description: str | None) -> None:
     if description:
         meta_file.write_text(json.dumps({"description": description}, ensure_ascii=False, indent=2), encoding="utf-8")
     elif meta_file.exists():
@@ -88,13 +150,13 @@ def _save_description(meta_file: Path, description: Optional[str]) -> None:
 
 def _sanitize_name(name: str) -> str:
     if not _SLUG_RE.fullmatch(name):
-        raise ValueError("Template name must match ^[A-Za-z0-9_\\-]{1,64}$")
+        raise InvalidTemplateNameError(_INVALID_TEMPLATE_NAME_ERROR)
     return name
 
 
-def list_templates() -> List[TemplateRecord]:
+def list_templates() -> list[TemplateRecord]:
     directory = _resolved_dir()
-    records: List[TemplateRecord] = []
+    records: list[TemplateRecord] = []
     for path in sorted(directory.glob("*")):
         if not path.is_file() or path.suffix.lower() not in _SUPPORTED_SUFFIXES:
             continue
@@ -119,6 +181,7 @@ def load_template(name: str) -> TemplateRecord:
     directory = _resolved_dir()
     for suffix in _SUPPORTED_SUFFIXES:
         candidate = directory / f"{name}{suffix}"
+        _assert_within_base(candidate, directory)
         if candidate.exists():
             fmt = suffix.lstrip(".")
             content = candidate.read_text(encoding="utf-8")
@@ -139,20 +202,23 @@ def save_template(
     fmt: str,
     content: str,
     *,
-    description: Optional[str] = None,
+    description: str | None = None,
     overwrite: bool = False,
 ) -> TemplateRecord:
     name = _sanitize_name(name)
     fmt = fmt.lower()
     if fmt not in {"md", "html"}:
-        raise ValueError("Template format must be 'md' or 'html'")
+        raise InvalidTemplateFormatError(_INVALID_TEMPLATE_FORMAT_ERROR)
     path = _template_path(name, fmt)
     directory = path.parent
 
     # Determine if any variant exists
-    existing_variants = [
-        directory / f"{name}{suffix}" for suffix in _SUPPORTED_SUFFIXES if (directory / f"{name}{suffix}").exists()
-    ]
+    existing_variants = []
+    for suffix in _SUPPORTED_SUFFIXES:
+        candidate = directory / f"{name}{suffix}"
+        _assert_within_base(candidate, directory)
+        if candidate.exists():
+            existing_variants.append(candidate)
     if existing_variants and not overwrite:
         raise TemplateExistsError(name)
 
@@ -172,6 +238,7 @@ def delete_template(name: str) -> None:
     removed = False
     for suffix in _SUPPORTED_SUFFIXES:
         candidate = directory / f"{name}{suffix}"
+        _assert_within_base(candidate, directory)
         if candidate.exists():
             candidate.unlink()
             removed = True

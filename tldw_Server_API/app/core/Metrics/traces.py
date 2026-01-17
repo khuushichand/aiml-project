@@ -368,7 +368,7 @@ def trace_operation(
                 manager = get_tracing_manager()
 
                 # Build attributes
-                span_attributes = attributes or {}
+                span_attributes = dict(attributes) if attributes else {}
                 span_attributes["function"] = func.__name__
                 span_attributes["module"] = func.__module__
 
@@ -406,7 +406,7 @@ def trace_operation(
                 manager = get_tracing_manager()
 
                 # Build attributes
-                span_attributes = attributes or {}
+                span_attributes = dict(attributes) if attributes else {}
                 span_attributes["function"] = func.__name__
                 span_attributes["module"] = func.__module__
 
@@ -456,7 +456,7 @@ def trace_method(
             span_name = name or f"{self.__class__.__name__}.{func.__name__}"
 
             manager = get_tracing_manager()
-            span_attributes = attributes or {}
+            span_attributes = dict(attributes) if attributes else {}
             span_attributes["class"] = self.__class__.__name__
             span_attributes["method"] = func.__name__
 

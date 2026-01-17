@@ -54,6 +54,7 @@ class TestServiceInitialization:
         results = []
 
         def access_db():
+
             prompts = service.list_prompts()
             results.append(prompts)
 

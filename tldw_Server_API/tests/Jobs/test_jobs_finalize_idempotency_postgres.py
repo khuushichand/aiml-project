@@ -11,6 +11,8 @@ pytestmark = pytest.mark.pg_jobs
 
 
 def _require_pg(monkeypatch):
+
+
     db_url = os.getenv("JOBS_DB_URL", "")
     if not db_url or not db_url.startswith("postgres"):
         pytest.skip("JOBS_DB_URL not configured for Postgres tests")
@@ -22,6 +24,8 @@ def _require_pg(monkeypatch):
 
 
 def test_pg_complete_idempotent_with_token(monkeypatch):
+
+
     _require_pg(monkeypatch)
     jm = JobManager(backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
@@ -37,6 +41,8 @@ def test_pg_complete_idempotent_with_token(monkeypatch):
 
 
 def test_pg_fail_idempotent_with_token(monkeypatch):
+
+
     _require_pg(monkeypatch)
     jm = JobManager(backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")

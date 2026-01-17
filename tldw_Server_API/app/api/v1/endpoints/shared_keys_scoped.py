@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
@@ -18,6 +18,8 @@ from tldw_Server_API.app.api.v1.schemas.user_keys import (
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
+    is_trusted_base_url_request,
+    validate_base_url_override,
     validate_credential_fields,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_testing import test_provider_credentials
@@ -118,6 +120,7 @@ async def _touch_shared_last_used_if_match(
 async def upsert_org_shared_key(
     org_id: int,
     payload: UserProviderKeyUpsertRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ) -> SharedProviderKeyResponse:
     _require_byok_enabled()
@@ -131,8 +134,24 @@ async def upsert_org_shared_key(
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
 
+    allow_base_url = is_trusted_base_url_request(request, user=user)
+    raw_fields = payload.credential_fields or {}
+    if isinstance(raw_fields, dict) and "base_url" in raw_fields and not allow_base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="base_url override requires admin or service principal",
+        )
+
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            payload.credential_fields,
+            allow_base_url=allow_base_url,
+        )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -158,6 +177,7 @@ async def upsert_org_shared_key(
 
     repo = await _get_shared_byok_repo()
     now = datetime.now(timezone.utc)
+    actor_id = int(user.get("id"))
     row = await repo.upsert_secret(
         scope_type="org",
         scope_id=org_id,
@@ -166,6 +186,8 @@ async def upsert_org_shared_key(
         key_hint=key_hint_for_api_key(api_key),
         metadata=payload.metadata,
         updated_at=now,
+        created_by=actor_id,
+        updated_by=actor_id,
     )
     return SharedProviderKeyResponse(
         scope_type="org",
@@ -206,6 +228,7 @@ async def list_org_shared_keys(
 async def test_org_shared_key(
     org_id: int,
     payload: ProviderKeyTestRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ) -> SharedProviderKeyTestResponse:
     _require_byok_enabled()
@@ -231,11 +254,22 @@ async def test_org_shared_key(
     if not api_key:
         raise HTTPException(status_code=404, detail="Key not found")
 
+    allow_base_url = is_trusted_base_url_request(request, user=user)
+    credential_fields_raw = stored_payload.get("credential_fields") or {}
+    if isinstance(credential_fields_raw, dict) and "base_url" in credential_fields_raw and not allow_base_url:
+        credential_fields_raw = dict(credential_fields_raw)
+        credential_fields_raw.pop("base_url", None)
+
     try:
         credential_fields = validate_credential_fields(
             provider_norm,
-            stored_payload.get("credential_fields") or {},
+            credential_fields_raw,
+            allow_base_url=allow_base_url,
         )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -272,18 +306,26 @@ async def test_org_shared_key(
 @router.delete(
     "/orgs/{org_id}/keys/shared/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def delete_org_shared_key(
     org_id: int,
     provider: str,
     user: dict = Depends(get_current_user),
-) -> None:
+) -> Response:
     _require_byok_enabled()
     await _require_org_manager(user, org_id)
     repo = await _get_shared_byok_repo()
-    deleted = await repo.delete_secret("org", org_id, normalize_provider_name(provider))
+    actor_id = int(user.get("id"))
+    deleted = await repo.delete_secret(
+        "org",
+        org_id,
+        normalize_provider_name(provider),
+        revoked_by=actor_id,
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -294,6 +336,7 @@ async def delete_org_shared_key(
 async def upsert_team_shared_key(
     team_id: int,
     payload: UserProviderKeyUpsertRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ) -> SharedProviderKeyResponse:
     _require_byok_enabled()
@@ -307,8 +350,24 @@ async def upsert_team_shared_key(
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
 
+    allow_base_url = is_trusted_base_url_request(request, user=user)
+    raw_fields = payload.credential_fields or {}
+    if isinstance(raw_fields, dict) and "base_url" in raw_fields and not allow_base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="base_url override requires admin or service principal",
+        )
+
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            payload.credential_fields,
+            allow_base_url=allow_base_url,
+        )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -334,6 +393,7 @@ async def upsert_team_shared_key(
 
     repo = await _get_shared_byok_repo()
     now = datetime.now(timezone.utc)
+    actor_id = int(user.get("id"))
     row = await repo.upsert_secret(
         scope_type="team",
         scope_id=team_id,
@@ -342,6 +402,8 @@ async def upsert_team_shared_key(
         key_hint=key_hint_for_api_key(api_key),
         metadata=payload.metadata,
         updated_at=now,
+        created_by=actor_id,
+        updated_by=actor_id,
     )
     return SharedProviderKeyResponse(
         scope_type="team",
@@ -382,6 +444,7 @@ async def list_team_shared_keys(
 async def test_team_shared_key(
     team_id: int,
     payload: ProviderKeyTestRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ) -> SharedProviderKeyTestResponse:
     _require_byok_enabled()
@@ -407,11 +470,22 @@ async def test_team_shared_key(
     if not api_key:
         raise HTTPException(status_code=404, detail="Key not found")
 
+    allow_base_url = is_trusted_base_url_request(request, user=user)
+    credential_fields_raw = stored_payload.get("credential_fields") or {}
+    if isinstance(credential_fields_raw, dict) and "base_url" in credential_fields_raw and not allow_base_url:
+        credential_fields_raw = dict(credential_fields_raw)
+        credential_fields_raw.pop("base_url", None)
+
     try:
         credential_fields = validate_credential_fields(
             provider_norm,
-            stored_payload.get("credential_fields") or {},
+            credential_fields_raw,
+            allow_base_url=allow_base_url,
         )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -448,15 +522,23 @@ async def test_team_shared_key(
 @router.delete(
     "/teams/{team_id}/keys/shared/{provider}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def delete_team_shared_key(
     team_id: int,
     provider: str,
     user: dict = Depends(get_current_user),
-) -> None:
+) -> Response:
     _require_byok_enabled()
     await _require_team_manager(user, team_id)
     repo = await _get_shared_byok_repo()
-    deleted = await repo.delete_secret("team", team_id, normalize_provider_name(provider))
+    actor_id = int(user.get("id"))
+    deleted = await repo.delete_secret(
+        "team",
+        team_id,
+        normalize_provider_name(provider),
+        revoked_by=actor_id,
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -2,7 +2,7 @@
 
 ## 1. Descriptive of Current Feature Set
 
-- Purpose: OpenAI-compatible embeddings API with production safeguards and an optional scale-out worker pipeline (chunk → embed → store). Focus on reliability (circuit breaker, retries), performance (TTL cache, connection pooling, batching), and observability (metrics, health, DLQ tools).
+- Purpose: OpenAI-compatible embeddings API with production safeguards and a Redis Streams worker for media embeddings stages (Jobs remains the root status/billing record). Focus on reliability (circuit breaker, retries), performance (TTL cache, connection pooling, batching), and observability (metrics, health, DLQ tools).
 - Capabilities:
   - OpenAI-compatible embeddings endpoint with provider auto-detect (OpenAI, HuggingFace/Transformers, ONNX, Local API)
   - TTL cache, request batching, connection pooling, per-provider circuit breakers
@@ -31,17 +31,16 @@
   - API: `embeddings_v5_production_enhanced.py` handles request validation, caching, policy, circuit breaker, metrics, and admin ops
   - Engine: `Embeddings_Server/Embeddings_Create.py` provides provider adapters, batching, warmup, and model storage resolution
   - Vector store: `ChromaDB_Library.py` manages per-user collections and safe pathing; pgvector via RAG vector store factory
-  - Workers: `workers/` stages (chunking → embedding → storage) with schemas (`queue_schemas.py`, `messages.py`) and orchestration (`worker_orchestrator.py`)
+  - Redis worker: `services/redis_worker.py` (media embeddings via Redis Streams; root Jobs status)
 - Key Components:
   - Circuit breaker and registry — `circuit_breaker.py`
   - Connection pooling — `connection_pool.py` (aiohttp clients)
   - Request batching — `request_batching.py`
   - Cache — `multi_tier_cache.py` (TTL, size, hit/miss metrics)
   - Rate limiting/backpressure — `rate_limiter.py`, per-endpoint limiters
-  - Services — `services/reembed_worker.py`, `services/reembed_consumer.py`, `services/vector_compactor.py`
+  - Services — `services/redis_worker.py` (media + content stages), `services/jobs_worker.py` (legacy Jobs worker), `services/vector_compactor.py`
 - Data Models & DB:
   - ChromaDB per-user collections; helpers in `vector_store_meta_db.py`, `vector_store_batches_db.py`
-  - Media job tracking — `media_embedding_jobs_db.py`
 - Configuration:
   - Throughput/limits: `EMBEDDINGS_MAX_BATCH_SIZE`, `EMBEDDINGS_CONNECTION_POOL_SIZE`, `EMBEDDINGS_REQUEST_TIMEOUT`, `EMBEDDINGS_MAX_RETRIES`
   - Cache: `EMBEDDINGS_CACHE_TTL_SECONDS`, `EMBEDDINGS_CACHE_MAX_SIZE`, `EMBEDDINGS_CACHE_CLEANUP_INTERVAL`, `EMBEDDINGS_TTLCACHE_DAEMON`
@@ -49,6 +48,7 @@
   - Dimensions: `EMBEDDINGS_DIMENSION_POLICY` (reduce|pad|ignore)
   - Backpressure: `EMBEDDINGS_RATE_LIMIT`, `EMB_BACKPRESSURE_*`, Redis `REDIS_URL`
   - Model ops: `PRELOAD_EMBEDDING_MODELS`, `AUTO_DOWNLOAD_MODELS`, `TRUSTED_HF_REMOTE_CODE_MODELS`
+  - Redis pipeline: `EMBEDDINGS_REDIS_STREAM_*`, `EMBEDDINGS_REDIS_GROUP_*`, `EMBEDDINGS_REDIS_WORKERS_*`, `EMBEDDINGS_REDIS_ALLOW_STUB`
   - Testing: `TESTING`, `USE_REAL_OPENAI_IN_TESTS`, `CHROMADB_FORCE_STUB`
 - Concurrency & Performance:
   - Batching by `MAX_BATCH_SIZE`; connection reuse; async I/O; per-provider breakers

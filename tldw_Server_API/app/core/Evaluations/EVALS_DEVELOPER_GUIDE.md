@@ -473,23 +473,27 @@ class CustomScorer:
 # custom_data_source.py
 
 from typing import List, Dict, Any
-import requests
+import json
+import urllib.parse
+import urllib.request
 
 class APIDataSource:
     """Load datasets from API endpoints."""
 
     def __init__(self, api_key: str = None):
         self.api_key = api_key
-        self.session = requests.Session()
-        if api_key:
-            self.session.headers['Authorization'] = f'Bearer {api_key}'
 
     def load_from_api(self, endpoint: str, params: Dict = None) -> List[Dict[str, Any]]:
         """Load dataset from API."""
-        response = self.session.get(endpoint, params=params)
-        response.raise_for_status()
-
-        data = response.json()
+        url = endpoint
+        if params:
+            url = f"{endpoint}?{urllib.parse.urlencode(params)}"
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
 
         # Transform to standard format
         return self._transform_api_data(data)

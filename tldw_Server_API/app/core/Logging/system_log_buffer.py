@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime
+import json
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 import os
+import time
+from pathlib import Path
 
 from loguru import logger
+
+from tldw_Server_API.app.core.Utils.Utils import get_database_dir
 
 
 _DEFAULT_BUFFER_SIZE = 2000
@@ -14,6 +20,21 @@ _BUFFER_SIZE = max(100, int(os.getenv("SYSTEM_LOG_BUFFER_SIZE", str(_DEFAULT_BUF
 _BUFFER: deque[Dict[str, Any]] = deque(maxlen=_BUFFER_SIZE)
 _BUFFER_LOCK = Lock()
 _SINK_ID: Optional[int] = None
+
+_DEFAULT_LOG_FILE_ENTRIES = 5000
+_LOG_FILE_SETTINGS_LOCK = Lock()
+_LOG_FILE_SETTINGS_INITIALIZED = False
+_LOG_FILE_MAX_ENTRIES = _DEFAULT_LOG_FILE_ENTRIES
+_LOG_FILE_ENABLED = True
+_LOG_FILE_PATH = Path(get_database_dir()) / "system_logs.jsonl"
+_LOG_FILE_LOCK_TIMEOUT = 5.0
+
+try:
+    import fcntl  # type: ignore
+
+    _HAS_FCNTL = True
+except Exception:
+    _HAS_FCNTL = False
 
 _EXTRA_FIELDS = {
     "request_id",
@@ -35,6 +56,12 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
         return None
 
 
+def _coerce_bool(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _extract_extra(extra: Dict[str, Any]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
     for key in _EXTRA_FIELDS:
@@ -46,6 +73,183 @@ def _extract_extra(extra: Dict[str, Any]) -> Dict[str, Any]:
         else:
             payload[key] = val if val is not None else None
     return payload
+
+
+def _init_log_file_settings() -> None:
+    global _LOG_FILE_MAX_ENTRIES
+    global _LOG_FILE_ENABLED
+    global _LOG_FILE_PATH
+    global _LOG_FILE_LOCK_TIMEOUT
+    global _LOG_FILE_SETTINGS_INITIALIZED
+
+    if _LOG_FILE_SETTINGS_INITIALIZED:
+        return
+    with _LOG_FILE_SETTINGS_LOCK:
+        if _LOG_FILE_SETTINGS_INITIALIZED:
+            return
+
+        env_enabled = os.getenv("SYSTEM_LOG_FILE_ENABLED")
+        env_path = os.getenv("SYSTEM_LOG_FILE_PATH")
+        env_max_entries = os.getenv("SYSTEM_LOG_FILE_MAX_ENTRIES")
+        env_lock_timeout = os.getenv("SYSTEM_LOG_FILE_LOCK_TIMEOUT")
+
+        config_path = None
+        config_max_entries = None
+        if env_path is None or env_max_entries is None:
+            try:
+                from tldw_Server_API.app.core.config import load_comprehensive_config
+
+                parser = load_comprehensive_config()
+                if hasattr(parser, "has_section") and parser.has_section("Logging"):
+                    if env_path is None:
+                        config_path = parser.get("Logging", "system_log_file_path", fallback=None)
+                    if env_max_entries is None:
+                        config_max_entries = parser.get("Logging", "system_log_file_max_entries", fallback=None)
+            except Exception as exc:
+                logger.debug("System log settings config read failed: {}", exc)
+
+        _LOG_FILE_ENABLED = _coerce_bool(env_enabled, True)
+        path_value = env_path or config_path
+        if path_value:
+            _LOG_FILE_PATH = Path(path_value)
+        else:
+            _LOG_FILE_PATH = Path(get_database_dir()) / "system_logs.jsonl"
+
+        max_raw = env_max_entries if env_max_entries is not None else config_max_entries
+        try:
+            max_entries = int(str(max_raw).strip()) if max_raw else _DEFAULT_LOG_FILE_ENTRIES
+        except (TypeError, ValueError):
+            max_entries = _DEFAULT_LOG_FILE_ENTRIES
+        _LOG_FILE_MAX_ENTRIES = max(100, max_entries)
+
+        if env_lock_timeout:
+            try:
+                _LOG_FILE_LOCK_TIMEOUT = float(env_lock_timeout)
+            except (TypeError, ValueError):
+                _LOG_FILE_LOCK_TIMEOUT = 5.0
+
+        _LOG_FILE_SETTINGS_INITIALIZED = True
+
+
+@contextmanager
+def _log_file_lock(timeout: float = _LOG_FILE_LOCK_TIMEOUT):
+    _init_log_file_settings()
+    lock_path = _LOG_FILE_PATH.with_suffix(_LOG_FILE_PATH.suffix + ".lock")
+    lock_fd = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        start_time = time.time()
+        if _HAS_FCNTL:
+            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except (IOError, OSError):
+                    if time.time() - start_time > timeout:
+                        raise RuntimeError(f"Failed to acquire system log lock within {timeout}s")
+                    time.sleep(0.05)
+        else:
+            while True:
+                try:
+                    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+                    break
+                except FileExistsError:
+                    try:
+                        lock_stat = os.stat(lock_path)
+                        if time.time() - lock_stat.st_mtime > timeout * 2:
+                            os.unlink(lock_path)
+                            continue
+                    except (OSError, FileNotFoundError):
+                        pass
+                    if time.time() - start_time > timeout:
+                        raise RuntimeError(f"Failed to acquire system log lock within {timeout}s")
+                    time.sleep(0.05)
+        yield
+    finally:
+        if lock_fd is not None:
+            if _HAS_FCNTL:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+            try:
+                os.close(lock_fd)
+            except Exception:
+                pass
+        if not _HAS_FCNTL:
+            try:
+                lock_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _coerce_timestamp(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        raw = value.strip().replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _append_log_file(entry: Dict[str, Any]) -> None:
+    _init_log_file_settings()
+    if not _LOG_FILE_ENABLED:
+        return
+    payload = dict(entry)
+    timestamp = payload.get("timestamp")
+    if isinstance(timestamp, datetime):
+        payload["timestamp"] = timestamp.isoformat()
+    try:
+        _LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _log_file_lock():
+            with _LOG_FILE_PATH.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
+            if _LOG_FILE_MAX_ENTRIES > 0:
+                try:
+                    lines = _LOG_FILE_PATH.read_text(encoding="utf-8").splitlines()
+                except FileNotFoundError:
+                    return
+                if len(lines) > _LOG_FILE_MAX_ENTRIES:
+                    trimmed = lines[-_LOG_FILE_MAX_ENTRIES:]
+                    tmp_path = _LOG_FILE_PATH.with_suffix(_LOG_FILE_PATH.suffix + ".tmp")
+                    tmp_path.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
+                    tmp_path.replace(_LOG_FILE_PATH)
+    except Exception as exc:
+        logger.debug("Failed to append system log file: {}", exc)
+
+
+def _read_log_file_entries() -> List[Dict[str, Any]]:
+    _init_log_file_settings()
+    if not _LOG_FILE_ENABLED:
+        return []
+    if not _LOG_FILE_PATH.exists():
+        return []
+    entries: List[Dict[str, Any]] = []
+    try:
+        with _log_file_lock():
+            lines = _LOG_FILE_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:
+        logger.debug("Failed to read system log file: {}", exc)
+        return []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        timestamp = _coerce_timestamp(entry.get("timestamp"))
+        if timestamp is not None:
+            entry["timestamp"] = timestamp
+        entries.append(entry)
+    return entries
 
 
 def _log_sink(message: Any) -> None:
@@ -63,12 +267,36 @@ def _log_sink(message: Any) -> None:
     }
     with _BUFFER_LOCK:
         _BUFFER.append(entry)
+    _append_log_file(entry)
+
+
+def _sink_still_present(sink_id: int) -> bool:
+    """Check if a loguru sink with the given ID still exists.
+
+    WARNING: This function accesses loguru's private internals and may break
+    with future loguru versions. It returns False if the sink is not found
+    or if any error occurs during the check.
+
+    Args:
+        sink_id: The integer ID returned by logger.add().
+
+    Returns:
+        True if the sink appears to still exist, False otherwise.
+    """
+    # Loguru doesn't expose a public API for checking removed sinks.
+    try:
+        core = getattr(logger, "_core", None)
+        handlers = getattr(core, "handlers", None)
+        return isinstance(handlers, dict) and sink_id in handlers
+    except (AttributeError, TypeError, KeyError):
+        return False
 
 
 def ensure_system_log_buffer() -> None:
     """Attach a Loguru sink to capture recent logs into an in-memory ring buffer."""
     global _SINK_ID
-    if _SINK_ID is not None:
+    _init_log_file_settings()
+    if _SINK_ID is not None and _sink_still_present(_SINK_ID):
         return
     _SINK_ID = logger.add(
         _log_sink,
@@ -97,14 +325,16 @@ def query_system_logs(
     service_norm = service.strip().lower() if service else None
     query_norm = query.strip().lower() if query else None
 
-    with _BUFFER_LOCK:
-        entries = list(_BUFFER)
+    entries = _read_log_file_entries()
+    if not entries:
+        with _BUFFER_LOCK:
+            entries = list(_BUFFER)
 
     filtered: List[Dict[str, Any]] = []
     org_id_set = {org_id} if org_id is not None else set(org_ids or [])
     for entry in entries:
-        timestamp = entry.get("timestamp")
-        if isinstance(timestamp, datetime):
+        timestamp = _coerce_timestamp(entry.get("timestamp"))
+        if timestamp:
             if start and timestamp < start:
                 continue
             if end and timestamp > end:
@@ -123,6 +353,8 @@ def query_system_logs(
                 continue
         if user_id is not None and entry.get("user_id") != user_id:
             continue
+        if timestamp and not isinstance(entry.get("timestamp"), datetime):
+            entry["timestamp"] = timestamp
         filtered.append(entry)
 
     filtered.sort(key=lambda item: item.get("timestamp") or datetime.min, reverse=True)

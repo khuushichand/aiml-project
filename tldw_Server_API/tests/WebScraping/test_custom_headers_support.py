@@ -4,68 +4,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import ASGITransport, AsyncClient
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
-from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
-    CookieManager,
-    DEFAULT_USER_AGENT,
-)
+from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import CookieManager
 
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_cookie_manager_session_keys_respect_headers(tmp_path):
+async def test_cookie_manager_stores_and_returns_cookies(tmp_path):
     manager = CookieManager(storage_path=tmp_path / "cookies.json")
 
     try:
-        default_session = await manager.get_session("https://example.com")
-        repeat_default = await manager.get_session("https://example.com")
-
-        assert default_session is repeat_default
-        assert default_session.headers["User-Agent"] == DEFAULT_USER_AGENT
-
-        custom_agent = "MyCustomAgent/1.0"
-        agent_session = await manager.get_session(
-            "https://example.com",
-            user_agent=custom_agent,
+        manager.add_cookies(
+            "example.com",
+            [{"name": "foo", "value": "bar"}, {"token": "abc"}],
         )
-        agent_session_repeat = await manager.get_session(
-            "https://example.com",
-            user_agent=custom_agent,
-        )
-
-        assert agent_session is agent_session_repeat
-        assert agent_session is not default_session
-        assert agent_session.headers["User-Agent"] == custom_agent
-
-        header_overrides = {"Authorization": "Bearer token"}
-        header_session = await manager.get_session(
-            "https://example.com",
-            custom_headers=header_overrides,
-        )
-        header_session_repeat = await manager.get_session(
-            "https://example.com",
-            custom_headers=header_overrides,
-        )
-
-        assert header_session is header_session_repeat
-        assert header_session is not default_session
-        assert header_session.headers["Authorization"] == "Bearer token"
-        assert header_session.headers["User-Agent"] == DEFAULT_USER_AGENT
-
-        headers_with_agent = {"User-Agent": "HeaderAgent/2.0", "X-Test": "yes"}
-        header_agent_session = await manager.get_session(
-            "https://example.com",
-            custom_headers=headers_with_agent,
-        )
-        header_agent_repeat = await manager.get_session(
-            "https://example.com",
-            custom_headers=headers_with_agent,
-        )
-
-        assert header_agent_session is header_agent_repeat
-        assert header_agent_session.headers["User-Agent"] == "HeaderAgent/2.0"
-        assert header_agent_session.headers["X-Test"] == "yes"
-        assert headers_with_agent["User-Agent"] == "HeaderAgent/2.0"
+        cookies = manager.get_cookies("https://example.com/some/path")
+        assert cookies == [{"name": "foo", "value": "bar"}, {"token": "abc"}]
+        assert manager.get_cookies("https://other.example") is None
 
     finally:
         await manager.close_all()

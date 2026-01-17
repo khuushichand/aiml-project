@@ -171,6 +171,17 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
         **filtered_kwargs
     )
 
+    # Normalize method to infer a conservative chunk_type
+    try:
+        method_norm = getattr(method, "value", method)
+    except Exception:
+        method_norm = method
+    method_norm = str(method_norm or "").strip().lower()
+    if method_norm in {"code", "code_ast"}:
+        inferred_chunk_type = "code"
+    else:
+        inferred_chunk_type = "text"
+
     # Format for embedding
     result = []
     import hashlib as _hashlib
@@ -206,6 +217,7 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
                 'start_char': chunk.metadata.start_char,
                 'end_char': chunk.metadata.end_char,
                 'chunk_uid': chunk_uid,
+                'chunk_type': inferred_chunk_type,
                 # Structured/fielded metadata for indexing/boosting
                 'headings': headings,
                 'captions': captions,

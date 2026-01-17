@@ -9,6 +9,8 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter imp
 
 
 def _records(dim=8):
+
+
     return (
         ["a","b","c"],
         [[0.0]*dim, [0.1]*dim, [0.2]*dim],

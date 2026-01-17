@@ -55,7 +55,7 @@ def mock_metrics():
          patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.embedding_request_duration', mock_histogram), \
          patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.embedding_cache_hits', mock_counter), \
          patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.active_embedding_requests', mock_gauge):
-        yield
+             yield
 
 
 # Module-level setup fixture for all test classes
@@ -334,6 +334,7 @@ class TestRetryLogic:
         attempt_count = 0
 
         def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
+
             nonlocal attempt_count
             attempt_count += 1
 
@@ -397,6 +398,7 @@ class TestRetryLogic:
         attempt_count = 0
 
         def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
+
             nonlocal attempt_count
             attempt_count += 1
             raise ValueError("Invalid input")

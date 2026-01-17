@@ -62,6 +62,7 @@ class _DummyTranscriber:
         self.reset_called = False
 
     def initialize(self) -> None:
+
         """Simulate transcriber initialization."""
         return None
 
@@ -70,10 +71,12 @@ class _DummyTranscriber:
         return {"type": "partial", "text": "hi"}
 
     def get_full_transcript(self) -> str:
+
         """Return a fixed full transcript."""
         return "hello world"
 
     def reset(self) -> None:
+
         """Record that reset was called."""
         self.reset_called = True
 
@@ -97,6 +100,7 @@ class _DummyRegistry:
     """Simple in-memory metrics registry stub."""
 
     def __init__(self) -> None:
+
         self.records: List[tuple[str, str, Any, Optional[Dict[str, Any]]]] = []
         self.registered: List[Any] = []
 
@@ -275,6 +279,7 @@ async def test_audio_chat_ws_records_metrics(monkeypatch: pytest.MonkeyPatch) ->
             return self.items.pop(0)
 
         def get_nowait(self) -> Any:
+
             if not self.items:
                 raise asyncio.QueueEmpty
             return self.items.pop(0)
@@ -283,6 +288,7 @@ async def test_audio_chat_ws_records_metrics(monkeypatch: pytest.MonkeyPatch) ->
         """Metrics registry stub used to capture increments and observations."""
 
         def __init__(self) -> None:
+
             self.increments = []
             self.observes = []
             self.registered = []

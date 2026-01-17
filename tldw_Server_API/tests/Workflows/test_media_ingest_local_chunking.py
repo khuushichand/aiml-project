@@ -14,7 +14,8 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_wf(tmp_path, auth_headers):
+def client_with_wf(tmp_path, monkeypatch, auth_headers):
+    monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(tmp_path))
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
@@ -47,6 +48,7 @@ def client_with_wf(tmp_path, auth_headers):
         return principal
 
     def override_db():
+
         return db
 
     app.dependency_overrides[get_request_user] = override_user

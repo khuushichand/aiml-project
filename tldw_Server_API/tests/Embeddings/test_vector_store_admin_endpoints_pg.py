@@ -31,7 +31,9 @@ def _env_defaults(monkeypatch):
 
 
 def test_admin_set_ef_search_happy(monkeypatch):
-    # Patch adapter factory path
+
+
+     # Patch adapter factory path
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as mod
     async def _fake_get_adapter_for_user(_user, _dim):
         return _FakeAdapterWithIndex()
@@ -44,6 +46,8 @@ def test_admin_set_ef_search_happy(monkeypatch):
 
 
 def test_admin_rebuild_index_happy(monkeypatch):
+
+
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as mod
     async def _fake_get_adapter_for_user(_user, _dim):
         return _FakeAdapterWithIndex()
@@ -57,6 +61,8 @@ def test_admin_rebuild_index_happy(monkeypatch):
 
 
 def test_admin_rebuild_index_not_supported(monkeypatch):
+
+
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as mod
     async def _fake_get_adapter_for_user(_user, _dim):
         return _FakeAdapterNoIndex()

@@ -4,6 +4,8 @@ Purpose: consolidate Chat and Chat_NEW tests under a single folder, reduce dupli
 
 Date: 2025-10-16
 
+Update: `Chat/unit/test_chat_functions.py` was removed during the adapter registry migration; routing/exception coverage now lives in `tests/LLM_Calls/test_adapter_*` and `Chat/unit/test_chat_service_*`.
+
 ## What Changed
 - Moved unique tests from `tldw_Server_API/tests/Chat_NEW` into `tldw_Server_API/tests/Chat/`:
   - Added `tldw_Server_API/tests/Chat/unit/test_chat_processing_unit.py` with:
@@ -21,10 +23,10 @@ No existing Chat tests were modified.
 ## Overlap Summary
 
 ### Provider routing and exception mapping
-- Duplicate coverage:
-  - `Chat_NEW/unit/test_chat_functions.py::TestChatAPICall.*`
-  - `Chat/test_chat_functions.py` (more comprehensive param mapping and exception mapping)
-- Resolution: Kept `Chat/test_chat_functions.py` as source of truth; removed duplicates from Chat_NEW.
+- Legacy duplicates were removed; the current coverage lives in:
+  - `tldw_Server_API/tests/LLM_Calls/test_adapter_*`
+  - `tldw_Server_API/tests/Chat/unit/test_chat_service_fallback.py`
+  - `tldw_Server_API/tests/Chat/unit/test_chat_service_normalization.py`
 
 ### Input processing and content update
 - Unique to Chat_NEW:
@@ -45,7 +47,6 @@ No existing Chat tests were modified.
 ## Normalized Layout
 - `tldw_Server_API/tests/Chat/`
   - `unit/`
-    - `test_chat_functions.py`
     - `test_streaming_utils.py`
     - `test_chat_request_schemas.py`
     - `test_prompt_template_manager.py`
@@ -57,6 +58,7 @@ No existing Chat tests were modified.
     - `test_chat_dictionary_endpoints.py`
     - `test_chat_processing_unit.py` (migrated)
     - `test_chat_service_fallback.py` (migrated)
+    - `test_chat_service_normalization.py`
   - `integration/`
     - `test_chat_endpoint.py`
     - `test_chat_endpoint_integration.py`

@@ -4,6 +4,8 @@ from tldw_Server_API.app.core.Writing.note_title import generate_note_title_heur
 
 
 def test_heuristic_basic_markdown_strip():
+
+
     content = """
     # My Big Document Title
 
@@ -20,6 +22,8 @@ def test_heuristic_basic_markdown_strip():
 
 
 def test_heuristic_link_and_image_stripping():
+
+
     content = """
     [Awesome Guide](https://example.com) — an introduction
     ![logo](https://example.com/logo.png)
@@ -34,6 +38,8 @@ def test_heuristic_link_and_image_stripping():
 
 
 def test_generate_note_title_entrypoint_defaults():
+
+
     content = "   "
     # Empty content should fallback to timestamp title and be truncated
     t = generate_note_title(content, options=TitleGenOptions(max_len=20))

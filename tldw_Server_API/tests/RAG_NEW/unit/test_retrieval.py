@@ -24,6 +24,7 @@ class TestRetrievalConfig:
         assert cfg.include_metadata is True
 
     def test_custom_configuration_preserves_values(self):
+
         start = datetime(2024, 1, 1)
         end = datetime(2024, 12, 31)
         cfg = RetrievalConfig(

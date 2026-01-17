@@ -5,6 +5,7 @@ Search conversations (titles) and messages (content) and retrieve conversation c
 FTS-only search backed by ChaChaNotes DB.
 """
 
+import asyncio
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
@@ -125,6 +126,87 @@ class ChatsModule(BaseModule):
         character_id = args.get("character_id")
         sender = args.get("sender")
 
+        return await asyncio.to_thread(
+            self._search_sync,
+            context,
+            query,
+            by,
+            limit,
+            offset,
+            snippet_len,
+            character_id,
+            sender,
+        )
+
+    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+        if tool_name == "chats.search":
+            q = arguments.get("query")
+            if not isinstance(q, str) or not (1 <= len(q) <= 1000):
+                raise ValueError("query must be 1..1000 chars")
+            by = arguments.get("by", "both")
+            if by not in {"both", "title", "message"}:
+                raise ValueError("by must be both|title|message")
+            limit = int(arguments.get("limit", 10))
+            offset = int(arguments.get("offset", 0))
+            snip = int(arguments.get("snippet_length", 300))
+            if limit < 1 or limit > 100:
+                raise ValueError("limit must be 1..100")
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
+            if snip < 50 or snip > 2000:
+                raise ValueError("snippet_length must be 50..2000")
+            if arguments.get("character_id") is not None and not isinstance(arguments.get("character_id"), int):
+                raise ValueError("character_id must be int when provided")
+            if arguments.get("sender") is not None and not isinstance(arguments.get("sender"), str):
+                raise ValueError("sender must be string when provided")
+        elif tool_name == "chats.get":
+            cid = arguments.get("conversation_id")
+            if not isinstance(cid, str) or not cid:
+                raise ValueError("conversation_id must be a non-empty string")
+            retrieval = arguments.get("retrieval") or {}
+            if not isinstance(retrieval, dict):
+                raise ValueError("retrieval must be an object")
+            snip = int(retrieval.get("snippet_length", 300))
+            if snip < 50 or snip > 2000:
+                raise ValueError("retrieval.snippet_length must be 50..2000")
+            loc = retrieval.get("loc")
+            if loc is not None:
+                if not isinstance(loc, dict):
+                    raise ValueError("retrieval.loc must be an object")
+                if loc.get("message_id") is not None and not isinstance(loc.get("message_id"), str):
+                    raise ValueError("retrieval.loc.message_id must be a string if provided")
+
+    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        conversation_id: str = args.get("conversation_id")
+        retrieval = args.get("retrieval") or {}
+        mode = retrieval.get("mode", "snippet")
+        snippet_len = int(retrieval.get("snippet_length", 300))
+        max_tokens = retrieval.get("max_tokens")
+        cpt = int(retrieval.get("chars_per_token", 4))
+        loc = retrieval.get("loc") or {}
+
+        return await asyncio.to_thread(
+            self._get_sync,
+            context,
+            conversation_id,
+            mode,
+            snippet_len,
+            max_tokens,
+            cpt,
+            loc,
+        )
+
+    def _search_sync(
+        self,
+        context: Any | None,
+        query: str,
+        by: str,
+        limit: int,
+        offset: int,
+        snippet_len: int,
+        character_id: Any,
+        sender: Any,
+    ) -> Dict[str, Any]:
         db = self._open_db(context)
         try:
             max_fetch = limit + offset
@@ -206,53 +288,16 @@ class ChatsModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after chats search: {}", exc)
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
-        if tool_name == "chats.search":
-            q = arguments.get("query")
-            if not isinstance(q, str) or not (1 <= len(q) <= 1000):
-                raise ValueError("query must be 1..1000 chars")
-            by = arguments.get("by", "both")
-            if by not in {"both", "title", "message"}:
-                raise ValueError("by must be both|title|message")
-            limit = int(arguments.get("limit", 10))
-            offset = int(arguments.get("offset", 0))
-            snip = int(arguments.get("snippet_length", 300))
-            if limit < 1 or limit > 100:
-                raise ValueError("limit must be 1..100")
-            if offset < 0:
-                raise ValueError("offset must be >= 0")
-            if snip < 50 or snip > 2000:
-                raise ValueError("snippet_length must be 50..2000")
-            if arguments.get("character_id") is not None and not isinstance(arguments.get("character_id"), int):
-                raise ValueError("character_id must be int when provided")
-            if arguments.get("sender") is not None and not isinstance(arguments.get("sender"), str):
-                raise ValueError("sender must be string when provided")
-        elif tool_name == "chats.get":
-            cid = arguments.get("conversation_id")
-            if not isinstance(cid, str) or not cid:
-                raise ValueError("conversation_id must be a non-empty string")
-            retrieval = arguments.get("retrieval") or {}
-            if not isinstance(retrieval, dict):
-                raise ValueError("retrieval must be an object")
-            snip = int(retrieval.get("snippet_length", 300))
-            if snip < 50 or snip > 2000:
-                raise ValueError("retrieval.snippet_length must be 50..2000")
-            loc = retrieval.get("loc")
-            if loc is not None:
-                if not isinstance(loc, dict):
-                    raise ValueError("retrieval.loc must be an object")
-                if loc.get("message_id") is not None and not isinstance(loc.get("message_id"), str):
-                    raise ValueError("retrieval.loc.message_id must be a string if provided")
-
-    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
-        conversation_id: str = args.get("conversation_id")
-        retrieval = args.get("retrieval") or {}
-        mode = retrieval.get("mode", "snippet")
-        snippet_len = int(retrieval.get("snippet_length", 300))
-        max_tokens = retrieval.get("max_tokens")
-        cpt = int(retrieval.get("chars_per_token", 4))
-        loc = retrieval.get("loc") or {}
-
+    def _get_sync(
+        self,
+        context: Any | None,
+        conversation_id: str,
+        mode: str,
+        snippet_len: int,
+        max_tokens: Any,
+        cpt: int,
+        loc: Dict[str, Any],
+    ) -> Dict[str, Any]:
         db = self._open_db(context)
         try:
             conv = db.get_conversation_by_id(conversation_id)

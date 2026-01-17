@@ -106,6 +106,13 @@ def test_initialize_request_sets_session_header(client: TestClient):
     assert result.get("serverInfo", {}).get("name") == "tldw-mcp-unified"
 
 
+def test_http_notification_returns_204(client: TestClient):
+    payload = {"jsonrpc": "2.0", "method": "ping"}
+    r = client.post("/api/v1/mcp/request", json=payload)
+    assert r.status_code == 204
+    assert r.content in (b"",)
+
+
 def test_resources_and_modules_mappings_unauth_forbidden(client: TestClient):
     # Unauthenticated should be forbidden for resources/modules
     r0 = client.get("/api/v1/mcp/resources")

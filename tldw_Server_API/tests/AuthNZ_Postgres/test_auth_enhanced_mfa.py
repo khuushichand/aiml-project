@@ -30,6 +30,7 @@ async def test_mfa_setup_and_verify_roundtrip_pg(monkeypatch, setup_test_databas
             return b"PNGDATA"
 
         def generate_backup_codes(self):
+
             return ["code1", "code2", "code3"]
 
         def verify_totp(self, secret: str, token: str) -> bool:
@@ -54,10 +55,10 @@ async def test_mfa_setup_and_verify_roundtrip_pg(monkeypatch, setup_test_databas
     setattr(email_stub, "get_email_service", lambda: _StubEmail())
     sys.modules['tldw_Server_API.app.core.AuthNZ.email_service'] = email_stub
 
-    import tldw_Server_API.app.api.v1.endpoints.auth_enhanced as _auth_enh
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
     # Unit-style call: setup_mfa (allowed only because PG is real)
-    res = await _auth_enh.setup_mfa(
+    res = await auth.setup_mfa(
         current_user=User(id=1, username="alice", email="alice@example.com", is_active=True),
         db=SimpleNamespace(),
     )
@@ -67,8 +68,8 @@ async def test_mfa_setup_and_verify_roundtrip_pg(monkeypatch, setup_test_databas
 
     # Unit-style call: verify_mfa_setup
     req = SimpleNamespace(headers={"X-MFA-Secret": res.secret}, client=SimpleNamespace(host="127.0.0.1"))
-    out = await _auth_enh.verify_mfa_setup(
-        data=_auth_enh.MFAVerifyRequest(token="000000"),
+    out = await auth.verify_mfa_setup(
+        data=auth.MFAVerifyRequest(token="000000"),
         request=req,
         current_user=User(id=1, username="alice", email="alice@example.com", is_active=True),
     )

@@ -16,17 +16,20 @@ class FakeCollection:
         self.support_update = support_update
 
     def upsert(self, ids, embeddings, documents=None, metadatas=None):
+
         if not self.support_upsert:
             raise AttributeError("no upsert")
         for i, e in zip(ids, embeddings):
             self.vectors[str(i)] = list(e)
 
     def add(self, ids, embeddings, documents=None, metadatas=None):
-        # Simulate add semantics that overwrite by id as well (Chroma upsert would be preferred)
+
+             # Simulate add semantics that overwrite by id as well (Chroma upsert would be preferred)
         for i, e in zip(ids, embeddings):
             self.vectors[str(i)] = list(e)
 
     def update(self, ids, embeddings, documents=None, metadatas=None):
+
         if not self.support_update:
             raise AttributeError("no update")
         for i, e in zip(ids, embeddings):

@@ -58,7 +58,8 @@
 7. **Configuration & Voice Mapping** (`tts_config.py`, `tts_providers_config.yaml`, `Config_Files/config.txt`)
    - Defines provider priority, voice aliases, fallback rules, and performance logging.
 8. **Voice Manager** (`voice_manager.py`)
-   - Stores user voices under `Databases/user_databases/<uid>/voices`, performs format/duration validation, and exposes preview integration.
+   - Stores user voices under `<USER_DB_BASE_DIR>/<uid>/voices`, performs format/duration validation, and exposes preview integration.
+   - `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 ## 6. Functional Requirements
 ### 6.1 API Surface
@@ -112,7 +113,7 @@
 - Python extras: `pyproject.toml` defines `TTS_All`, `TTS_kokoro`, etc. for selective installs.
 
 ## 9. Data & Storage
-- Voice uploads stored under `Databases/user_databases/<user_id>/voices/{uploads,processed,temp}` with metadata tracked in-memory (`voice_manager.py`).
+- Voice uploads stored under `<USER_DB_BASE_DIR>/<user_id>/voices/{uploads,processed,temp}` with metadata tracked in-memory (`voice_manager.py`).
 - No central DB table for voices yet; future work may persist voice registry for multi-node deployments.
 - Provider runtime artifacts (models, caches) follow paths in YAML/config; respect auto-download toggles to avoid surprise network calls.
 

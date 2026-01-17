@@ -84,6 +84,7 @@ class TestMLXPerformance(TranscriptionBenchmark):
         model = MagicMock()
 
         def mock_transcribe(audio_path, **kwargs):
+
             # Simulate processing time based on audio length
             time.sleep(0.01)  # Base processing time
 
@@ -194,6 +195,7 @@ class TestONNXPerformance(TranscriptionBenchmark):
         session = MagicMock()
 
         def mock_run(output_names, input_dict):
+
             # Simulate inference time
             time.sleep(0.015)
 
@@ -257,6 +259,7 @@ class TestBufferedTranscriptionPerformance(TranscriptionBenchmark):
     """Performance benchmarks for buffered transcription."""
 
     def test_merge_algorithm_performance(self):
+
         """Compare performance of different merge algorithms."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriber,
@@ -347,6 +350,7 @@ class TestComparativePerformance(TranscriptionBenchmark):
     """Comparative benchmarks across all implementations."""
 
     def test_all_implementations_comparison(self):
+
         """Compare all transcription implementations."""
 
         results = {
@@ -435,6 +439,7 @@ class TestRealWorldScenarios(TranscriptionBenchmark):
     """Test real-world usage scenarios."""
 
     def test_podcast_transcription(self):
+
         """Simulate podcast transcription (long audio)."""
         # Simulate 1-hour podcast
         audio = self.generate_test_audio(3600)
@@ -460,6 +465,7 @@ class TestRealWorldScenarios(TranscriptionBenchmark):
             print(f"Real-time factor: {3600/metrics['time']:.1f}x")
 
     def test_meeting_transcription(self):
+
         """Simulate meeting transcription with multiple speakers."""
         # Simulate 30-minute meeting
         audio = self.generate_test_audio(1800)
@@ -489,6 +495,7 @@ class TestRealWorldScenarios(TranscriptionBenchmark):
             print(f"Real-time factor: {1800/metrics['time']:.1f}x")
 
     def test_batch_processing(self):
+
         """Test batch processing of multiple files."""
         # Create multiple audio files
         audio_files = []

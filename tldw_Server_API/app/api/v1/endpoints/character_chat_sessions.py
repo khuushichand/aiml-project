@@ -78,10 +78,12 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
 )
 
 # For chat completions
-from tldw_Server_API.app.core.Chat.chat_orchestrator import (
-    chat_api_call as perform_chat_api_call
+from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
 )
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
 # Completion schemas centralized in schemas/chat_session_schemas.py
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
@@ -188,10 +190,15 @@ class _BoundedThrottleCache:
     def __init__(self):
         self._data: Dict[str, deque] = {}
         self._last_access: Dict[str, float] = {}
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def get(self, key: str) -> deque:
         """Concurrency-safe access to throttle window for a given key."""
+        current_loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not current_loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = current_loop
         async with self._lock:
             now = time.time()
             # Cleanup if too many keys
@@ -221,6 +228,12 @@ class _BoundedThrottleCache:
                 self._last_access.pop(k, None)
 
 _complete_windows = _BoundedThrottleCache()
+
+
+def reset_complete_windows() -> None:
+    """Reset legacy /complete throttle cache (useful in tests)."""
+    global _complete_windows
+    _complete_windows = _BoundedThrottleCache()
 
 # ========================================================================
 # Helper Functions
@@ -364,7 +377,7 @@ async def create_chat_session(
         if seed_first_message:
             try:
                 raw_name = character.get('name') or 'Assistant'
-                char_name = sanitize_sender_name(raw_name)
+                sender_name = sanitize_sender_name(raw_name)
                 choice_text: Optional[str] = None
                 if greeting_strategy in {"alternate_random", "alternate_index"}:
                     ag = character.get('alternate_greetings')
@@ -378,10 +391,10 @@ async def create_chat_session(
                     if isinstance(fm, str) and fm.strip():
                         choice_text = fm
                 if isinstance(choice_text, str) and choice_text.strip():
-                    content = replace_placeholders(choice_text, char_name, 'User')
+                    content = choice_text
                     db.add_message({
                         'conversation_id': created_id,
-                        'sender': char_name,
+                        'sender': sender_name,
                         'content': content,
                         'client_id': str(current_user.id),
                         'version': 1
@@ -546,7 +559,7 @@ async def complete_chat_legacy(
         dep_headers = {
             "Deprecation": "true",
             "Sunset": sunset,
-            "Link": "</api/v1/chats/{chat_id}/complete-v2>; rel=successor-version",
+            "Link": f"</api/v1/chats/{chat_id}/complete-v2>; rel=successor-version",
         }
         try:
             if response is not None:
@@ -624,7 +637,7 @@ async def prepare_chat_completion(
         paginated = messages
 
         formatted: List[Dict[str, Any]] = []
-        if include_ctx and character:
+        if include_ctx and character and offset == 0:
             parts = [
                 f"You are {character.get('name', 'Assistant')}.",
                 character.get('description', ''),
@@ -706,13 +719,23 @@ async def character_chat_completion(
         include_ctx = bool(body.include_character_context)
         limit = body.limit
         offset = body.offset
+        stream_requested = bool(body.stream)
+        save_to_db = body.save_to_db
+        if save_to_db is None:
+            # Default from Chat API settings when not specified explicitly.
+            try:
+                from tldw_Server_API.app.api.v1.endpoints.chat import DEFAULT_SAVE_TO_DB as CHAT_DEFAULT_SAVE
+                save_to_db = CHAT_DEFAULT_SAVE
+            except Exception:
+                save_to_db = False
+        will_persist = bool(save_to_db) and not stream_requested
 
         messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset) or []
         messages = [m for m in messages if not m.get('deleted')]
         paginated = messages
 
         formatted: List[Dict[str, Any]] = []
-        if include_ctx and character:
+        if include_ctx and character and offset == 0:
             parts = [
                 f"You are {character.get('name', 'Assistant')}.",
                 character.get('description', ''),
@@ -739,13 +762,16 @@ async def character_chat_completion(
         provider = (body.provider or os.getenv("CHAR_CHAT_PROVIDER") or "local-llm").strip()
         model = (body.model or os.getenv("CHAR_CHAT_MODEL") or "local-test").strip()
 
-        # If we will persist, ensure message cap won't be exceeded
-        will_add = 1 if body.append_user_message else 0
-        will_add += 1  # assistant reply
+        # If we will persist, ensure message cap won't be exceeded.
+        # Otherwise enforce a soft cap for non-persisted completions.
         try:
-            # Use efficient counter to avoid loading large message lists into memory
             current_count = db.count_messages_for_conversation(chat_id)
-            await rate_limiter.check_message_limit(chat_id, current_count + will_add)
+            if will_persist:
+                will_add = 1 if body.append_user_message else 0
+                will_add += 1  # assistant reply
+                await rate_limiter.check_message_limit(chat_id, current_count + will_add)
+            else:
+                await rate_limiter.check_soft_message_limit(chat_id, current_count)
         except HTTPException:
             raise
         except Exception:
@@ -774,6 +800,16 @@ async def character_chat_completion(
             fallback_resolver=_fallback_resolver,
         )
         api_key = byok_resolution.api_key
+        provider_key = (provider or "").strip().lower()
+        if provider_requires_api_key(provider_key) and not api_key:
+            record_byok_missing_credentials(provider_key, operation="character_chat")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "missing_provider_credentials",
+                    "message": f"Provider '{provider}' requires an API key.",
+                },
+            )
 
         # Attempt provider call; allow offline simulation for local-llm in test/dev.
         # Offline simulation toggle (supports new flags for clarity, backward compatible with ALLOW_LOCAL_LLM_CALLS)
@@ -781,6 +817,7 @@ async def character_chat_completion(
         disable_offline_sim = parse_boolean(os.getenv("DISABLE_OFFLINE_SIM"))
         legacy_allow_local = parse_boolean(os.getenv("ALLOW_LOCAL_LLM_CALLS"))
         offline_sim = provider == "local-llm" and not (enable_local_llm or disable_offline_sim or legacy_allow_local)
+        streams_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "on", "yes"}
         llm_resp = None
         if not offline_sim:
             # Enforce per-minute completion rate only for real provider calls
@@ -848,6 +885,8 @@ async def character_chat_completion(
                 return ""
             if isinstance(resp, str):
                 return resp
+            if isinstance(resp, (bytes, bytearray)):
+                return resp.decode("utf-8", errors="replace")
             if isinstance(resp, dict):
                 # OpenAI-style
                 try:
@@ -858,6 +897,61 @@ async def character_chat_completion(
                 return str(resp)
             except Exception:
                 return ""
+
+        def _chunk_text(text: str, size: int = 2000) -> List[str]:
+            if not text:
+                return []
+            return [text[i : i + size] for i in range(0, len(text), size)]
+
+        def _stream_text_as_sse(text: str) -> StreamingResponse:
+            async def _stream_text():
+                try:
+                    created_ts = int(time.time())
+                    stream_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+                    model_id = model or "local-test"
+
+                    head = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_ts,
+                        "model": model_id,
+                        "choices": [
+                            {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                        ],
+                    }
+                    yield f"data: {json.dumps(head)}\n\n"
+
+                    for chunk in _chunk_text(text):
+                        data = {
+                            "id": stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_ts,
+                            "model": model_id,
+                            "choices": [
+                                {"index": 0, "delta": {"content": chunk}, "finish_reason": None}
+                            ],
+                        }
+                        yield f"data: {json.dumps(data)}\n\n"
+
+                    tail = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_ts,
+                        "model": model_id,
+                        "choices": [
+                            {"index": 0, "delta": {}, "finish_reason": "stop"}
+                        ],
+                    }
+                    yield f"data: {json.dumps(tail)}\n\n"
+                    yield "data: [DONE]\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    yield "data: [DONE]\n\n"
+
+            headers = {}
+            if streams_unified:
+                headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+            return StreamingResponse(_stream_text(), media_type="text/event-stream", headers=headers)
 
         # Initialize assistant_text to avoid potential UnboundLocalError in edge cases
         assistant_text = ""
@@ -873,60 +967,7 @@ async def character_chat_completion(
             assistant_tool_calls = []
             # Streaming stub for offline-sim: emit SSE with plain text chunks and [DONE]
             if bool(body.stream):
-                async def _offline_sse():
-                    try:
-                        import time as _time
-                        created_ts = int(_time.time())
-                        stream_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-                        model_id = model or "local-test"
-
-                        # Initial role chunk (OpenAI-style)
-                        head = {
-                            "id": stream_id,
-                            "object": "chat.completion.chunk",
-                            "created": created_ts,
-                            "model": model_id,
-                            "choices": [
-                                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
-                            ],
-                        }
-                        yield f"data: {json.dumps(head)}\n\n"
-
-                        # Content chunks
-                        text = assistant_text or "OK"
-                        words = text.split()
-                        step = 20
-                        if not words:
-                            words = ["OK"]
-                        for i in range(0, len(words), step):
-                            chunk = " ".join(words[i : i + step])
-                            data = {
-                                "id": stream_id,
-                                "object": "chat.completion.chunk",
-                                "created": created_ts,
-                                "model": model_id,
-                                "choices": [
-                                    {"index": 0, "delta": {"content": chunk}, "finish_reason": None}
-                                ],
-                            }
-                            yield f"data: {json.dumps(data)}\n\n"
-
-                        # Finish chunk
-                        tail = {
-                            "id": stream_id,
-                            "object": "chat.completion.chunk",
-                            "created": created_ts,
-                            "model": model_id,
-                            "choices": [
-                                {"index": 0, "delta": {}, "finish_reason": "stop"}
-                            ],
-                        }
-                        yield f"data: {json.dumps(tail)}\n\n"
-                        yield "data: [DONE]\n\n"
-                    except Exception as e:
-                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                        yield "data: [DONE]\n\n"
-                return StreamingResponse(_offline_sse(), media_type="text/event-stream")
+                return _stream_text_as_sse(assistant_text or "OK")
         else:
             # For streaming, assistant text is not finalized here; skip extraction.
             assistant_tool_calls = []
@@ -945,7 +986,7 @@ async def character_chat_completion(
         if not offline_sim and bool(body.stream):
             try:
                 # Feature flag: use unified SSEStream when enabled
-                if str(os.getenv("STREAMS_UNIFIED", "0")).strip() in {"1", "true", "on", "yes"}:
+                if streams_unified:
                     stream = SSEStream(
                         labels={"component": "chat", "endpoint": "character_chat_stream"}
                     )
@@ -1101,22 +1142,15 @@ async def character_chat_completion(
             except Exception:
                 # Fall through to non-streaming response
                 pass
+            if isinstance(llm_resp, (dict, str, bytes, bytearray)):
+                assistant_text_fallback = _extract_text(llm_resp).strip()
+                return _stream_text_as_sse(assistant_text_fallback)
         if not assistant_text:
             assistant_text = ""
 
-        # Persistence decision
-        save_to_db = body.save_to_db
-        if save_to_db is None:
-            # default from Chat API settings
-            try:
-                from tldw_Server_API.app.api.v1.endpoints.chat import DEFAULT_SAVE_TO_DB as CHAT_DEFAULT_SAVE
-                save_to_db = CHAT_DEFAULT_SAVE
-            except Exception:
-                save_to_db = False
-
         saved = False
         assistant_msg_id: Optional[str] = None
-        if save_to_db:
+        if will_persist:
             # Persist appended user message first, if any
             if body.append_user_message:
                 try:
@@ -1336,14 +1370,19 @@ async def update_chat_session(
         )
 
 
-@router.delete("/{chat_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Delete chat session", tags=["Chat Sessions"])
+@router.delete(
+    "/{chat_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Delete chat session",
+    tags=["Chat Sessions"],
+)
 async def delete_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
-):
+) -> Response:
     """
     Soft delete a chat session.
 
@@ -1425,6 +1464,7 @@ async def delete_chat_session(
         db.soft_delete_conversation(chat_id, exp_ver)
 
         logger.info(f"Soft deleted chat session {chat_id} by user {current_user.id}")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     except ConflictError as e:
         logger.warning(f"Conflict deleting chat session {chat_id}: {e}")

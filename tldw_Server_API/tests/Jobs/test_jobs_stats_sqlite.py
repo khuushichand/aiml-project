@@ -7,6 +7,8 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _set_env(monkeypatch):
+
+
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -15,6 +17,8 @@ def _set_env(monkeypatch):
 
 
 def _map_by_key(rows):
+
+
     out: Dict[Tuple[str, str, str], Dict] = {}
     for r in rows:
         out[(r["domain"], r["queue"], r["job_type"])] = r
@@ -22,7 +26,9 @@ def _map_by_key(rows):
 
 
 def test_jobs_stats_shape_and_counts_sqlite(monkeypatch, tmp_path):
-    # Isolate DB in a temp CWD so Databases/jobs.db is per-test
+
+
+     # Isolate DB in a temp CWD so Databases/jobs.db is per-test
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
@@ -79,6 +85,8 @@ def test_jobs_stats_shape_and_counts_sqlite(monkeypatch, tmp_path):
 
 
 def test_jobs_stats_filters_sqlite(monkeypatch, tmp_path):
+
+
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 

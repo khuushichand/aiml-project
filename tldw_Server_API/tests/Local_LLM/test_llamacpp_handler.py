@@ -20,6 +20,7 @@ class DummyProcess:
         return 0
 
     def terminate(self):
+
         self.returncode = 0
 
 
@@ -44,6 +45,7 @@ async def test_llamacpp_start_server_with_readiness(monkeypatch, tmp_path: Path)
     # Stub subprocess and readiness
     async def _fake_cpe(*a, **k):
         return DummyProcess()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
     from tldw_Server_API.app.core.Local_LLM import http_utils
 
@@ -52,6 +54,42 @@ async def test_llamacpp_start_server_with_readiness(monkeypatch, tmp_path: Path)
     res = await handler.start_server(model.name, server_args={"port": 8099})
     assert res["status"] == "started"
     assert res["port"] == 8099
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_start_server_wildcard_host_uses_loopback(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model = model_dir / "toy.gguf"
+    model.write_text("fake")
+
+    cfg = LlamaCppConfig(
+        executable_path=exe,
+        models_dir=model_dir,
+        default_host="127.0.0.1",
+        default_port=8099,
+    )
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    async def _fake_cpe(*a, **k):
+        return DummyProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
+    import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
+    captured = {}
+
+    async def fake_ready(base_url, *a, **k):
+        captured["base_url"] = base_url
+        return True
+
+    monkeypatch.setattr(llama_mod, "wait_for_http_ready", fake_ready)
+
+    res = await handler.start_server(model.name, server_args={"host": "0.0.0.0", "port": 8099})
+    assert res["status"] == "started"
+    assert captured["base_url"] == "http://127.0.0.1:8099"
 
 
 @pytest.mark.asyncio
@@ -71,6 +109,108 @@ async def test_llamacpp_inference_requires_running_server(tmp_path: Path):
 
     with pytest.raises(ServerError):
         await handler.inference(prompt="hi")
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_inference_wildcard_host_uses_loopback(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+
+    cfg = LlamaCppConfig(
+        executable_path=exe,
+        models_dir=model_dir,
+        default_host="127.0.0.1",
+        default_port=8199,
+    )
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    class RunningProc:
+        pid = 1
+        returncode = None
+
+    handler._active_server_process = RunningProc()
+    handler._active_server_host = "0.0.0.0"
+    handler._active_server_port = 8199
+
+    import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None, **kwargs):
+        captured["url"] = url
+        return {"ok": True}
+
+    monkeypatch.setattr(llama_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi")
+    assert captured["url"].startswith("http://127.0.0.1:8199")
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_inference_completions_uses_prompt(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, default_port=8199)
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    class RunningProc:
+        pid = 1
+        returncode = None
+
+    handler._active_server_process = RunningProc()
+    handler._active_server_host = "127.0.0.1"
+    handler._active_server_port = 8199
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None, **kwargs):
+        captured["payload"] = json
+        return {"ok": True}
+
+    import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
+    monkeypatch.setattr(llama_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi", api_endpoint="/v1/completions")
+    assert "prompt" in captured["payload"]
+    assert "messages" not in captured["payload"]
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_inference_drops_timeout(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, default_port=8199)
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    class RunningProc:
+        pid = 1
+        returncode = None
+
+    handler._active_server_process = RunningProc()
+    handler._active_server_host = "127.0.0.1"
+    handler._active_server_port = 8199
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None, **kwargs):
+        captured["payload"] = json
+        return {"ok": True}
+
+    import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
+    monkeypatch.setattr(llama_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi", timeout=1.5)
+    assert "timeout" not in captured["payload"]
 
 
 @pytest.mark.asyncio
@@ -102,12 +242,14 @@ async def test_llamacpp_inference_http_5xx(monkeypatch, tmp_path: Path):
     class RunningProc:
         pid = 1
         returncode = None
+
     handler._active_server_process = RunningProc()
     handler._active_server_host = "127.0.0.1"
     handler._active_server_port = 8199
 
     # Make request_json raise HTTPStatusError
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
     req = httpx.Request("POST", "http://127.0.0.1:8199/v1/chat/completions")
     resp = httpx.Response(500, request=req, text="server error")
     err = httpx.HTTPStatusError("error", request=req, response=resp)
@@ -119,8 +261,11 @@ async def test_llamacpp_inference_http_5xx(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_llamacpp_stop_timeout(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "toy.gguf").write_text("fake")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "toy.gguf").write_text("fake")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
     handler = LlamaCppHandler(cfg, global_app_config={})
 
@@ -128,8 +273,10 @@ async def test_llamacpp_stop_timeout(monkeypatch, tmp_path: Path):
         def __init__(self):
             self.pid = 88
             self.returncode = None
+
         async def wait(self):
             return 0
+
         def terminate(self):
             self.returncode = None
 
@@ -143,14 +290,20 @@ async def test_llamacpp_stop_timeout(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
     import os as _os
+
     monkeypatch.setattr(_os, "killpg", lambda *a, **k: None, raising=False)
 
     msg = await handler.stop_server()
     assert "stopped" in msg.lower() or "terminated" in msg.lower()
+
+
 @pytest.mark.asyncio
 async def test_llamacpp_start_server_not_ready(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "toy.gguf").write_text("fake")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "toy.gguf").write_text("fake")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, default_port=8099)
     handler = LlamaCppHandler(cfg, global_app_config={})
 
@@ -159,11 +312,16 @@ async def test_llamacpp_start_server_not_ready(monkeypatch, tmp_path: Path):
         returncode = None
         stdout = None
         stderr = None
-        def terminate(self): pass
+
+        def terminate(self):
+            pass
+
     async def _fake_cpe2(*a, **k):
         return DP()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe2)
     from tldw_Server_API.app.core.Local_LLM import http_utils
+
     monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=False))
 
     with pytest.raises(ServerError):
@@ -173,8 +331,11 @@ async def test_llamacpp_start_server_not_ready(monkeypatch, tmp_path: Path):
 @pytest.mark.asyncio
 async def test_llamacpp_allow_unvalidated_args_unknown_flags_passthrough(monkeypatch, tmp_path: Path):
     # Prepare dummy executable and model
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "toy.gguf").write_text("fake")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "toy.gguf").write_text("fake")
 
     # Enable allow_unvalidated_args to allow passthrough of unknown flags
     cfg = LlamaCppConfig(
@@ -194,6 +355,7 @@ async def test_llamacpp_allow_unvalidated_args_unknown_flags_passthrough(monkeyp
         returncode = None
         stdout = None
         stderr = None
+
         async def wait(self):
             return 0
 
@@ -205,6 +367,7 @@ async def test_llamacpp_allow_unvalidated_args_unknown_flags_passthrough(monkeyp
 
     # Patch the symbol imported into the module (not http_utils) to avoid 30s wait
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
     monkeypatch.setattr(llama_mod, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
 
     # Unknown flags should be converted to --unknown-flag and --bool-flag (no value)
@@ -227,3 +390,34 @@ async def test_llamacpp_allow_unvalidated_args_unknown_flags_passthrough(monkeyp
     assert "--bool-unknown" in args  # boolean True => flag only
     # None/False should not append a value or flag
     assert "--none-unknown" not in args
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_inference_forces_non_streaming(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    class RunningProc:
+        pid = 1
+        returncode = None
+
+    handler._active_server_process = RunningProc()
+    handler._active_server_host = "127.0.0.1"
+    handler._active_server_port = 8199
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None, **kwargs):
+        captured["payload"] = json
+        return {"ok": True}
+
+    import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
+    monkeypatch.setattr(llama_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi", stream=True)
+    assert captured["payload"]["stream"] is False

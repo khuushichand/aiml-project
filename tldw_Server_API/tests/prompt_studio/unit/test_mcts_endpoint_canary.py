@@ -28,6 +28,8 @@ def _mk_prompt(client, project_id: int, backend_label: str) -> int:
 
 
 def test_create_mcts_optimization_canary(prompt_studio_dual_backend_client, monkeypatch):
+
+
     backend_label, client, db = prompt_studio_dual_backend_client
 
     # Enable MCTS (gated by default)

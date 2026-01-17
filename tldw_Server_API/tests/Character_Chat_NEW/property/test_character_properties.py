@@ -527,6 +527,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
     """Stateful testing for character chat operations."""
 
     def __init__(self):
+
         super().__init__()
         self.manager = None
         self.character_ids = set()
@@ -653,6 +654,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
                     assert len(user_messages) == len(data['messages'])
 
     def teardown(self):
+
         """Clean up after test."""
         if self.manager:
             self.manager.close()

@@ -126,7 +126,7 @@ v1 Enhancements (in progress)
 - Privacy: no telemetry; logs are local; do not store credentials
 
 ## 11) Data Model (Current Implementation)
-All tables live in each user’s primary SQLite Media DB (`Databases/user_databases/<user_id>/Media_DB_v2.db`). Postgres parity is future work.
+All tables live in each user’s primary SQLite Media DB (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`). Postgres parity is future work. `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root); override via environment variable or `Config_Files/config.txt` as needed.
 
 | Table | Purpose | Key Columns |
 | --- | --- | --- |
@@ -222,7 +222,7 @@ Concurrency & Scheduling
 
 ## 15) Security & Compliance
 - Respect robots.txt by default; explicit opt-out shows warning
-- Rate limiting with slowapi or internal limiter for endpoints that trigger runs
+- Rate limiting with Resource Governor (RG) for endpoints that trigger runs
 - Input validation for URLs/types; sanitize selectors; size limits on responses
 - Never log secrets; redact URLs with tokens if any
 

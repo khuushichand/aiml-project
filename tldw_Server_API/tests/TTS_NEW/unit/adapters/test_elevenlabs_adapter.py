@@ -70,7 +70,7 @@ class TestElevenLabsAdapterInitialization:
         assert "eleven_turbo_v2" in adapter.supported_models
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.get')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_fetch_available_voices(self, mock_get):
         """Test fetching available voices from API."""
         mock_response = MagicMock()
@@ -183,7 +183,7 @@ class TestAudioGeneration:
     """Test audio generation functionality."""
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_generate_basic_audio(self, mock_post):
         """Test basic audio generation."""
         mock_response = MagicMock()
@@ -206,7 +206,7 @@ class TestAudioGeneration:
         assert response.model == "eleven_monolingual_v1"
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_generate_with_multilingual_model(self, mock_post):
         """Test generation with multilingual model."""
         mock_response = MagicMock()
@@ -228,7 +228,7 @@ class TestAudioGeneration:
         assert response.audio_content == b"multilingual_audio"
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_generate_with_voice_settings(self, mock_post):
         """Test generation with custom voice settings."""
         mock_response = MagicMock()
@@ -255,7 +255,7 @@ class TestAudioGeneration:
         assert call_kwargs['json']['voice_settings']['stability'] == 0.3
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_generate_with_turbo_model(self, mock_post):
         """Test generation with turbo model for low latency."""
         mock_response = MagicMock()
@@ -283,36 +283,28 @@ class TestStreamingGeneration:
     """Test streaming audio generation."""
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.stream')
-    async def test_streaming_generation(self, mock_stream):
+    async def test_streaming_generation(self):
         """Test streaming audio generation."""
-        async def mock_iter():
+        async def fake_stream(*args, **kwargs):
             for chunk in [b"chunk1", b"chunk2", b"chunk3"]:
                 yield chunk
 
-        mock_response = AsyncMock()
-        mock_response.aiter_bytes = mock_iter
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock()
+        with patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.astream_bytes', new=fake_stream):
+            adapter = ElevenLabsTTSAdapter({"api_key": "test-key"})
+            request = TTSRequest(
+                text="Stream this",
+                voice="domi",
+                model="eleven_monolingual_v1"
+            )
 
-        mock_stream.return_value = mock_response
+            chunks = []
+            async for chunk in adapter.generate_stream(request):
+                chunks.append(chunk)
 
-        adapter = ElevenLabsTTSAdapter({"api_key": "test-key"})
-        request = TTSRequest(
-            text="Stream this",
-            voice="domi",
-            model="eleven_monolingual_v1"
-        )
-
-        chunks = []
-        async for chunk in adapter.generate_stream(request):
-            chunks.append(chunk)
-
-        assert chunks == [b"chunk1", b"chunk2", b"chunk3"]
+            assert chunks == [b"chunk1", b"chunk2", b"chunk3"]
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.stream')
-    async def test_streaming_with_websocket(self, mock_stream):
+    async def test_streaming_with_websocket(self):
         """Test streaming via WebSocket for ultra-low latency."""
         # ElevenLabs supports WebSocket streaming for certain models
         adapter = ElevenLabsTTSAdapter({
@@ -332,7 +324,7 @@ class TestVoiceManagement:
     """Test voice management features."""
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.get')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_get_voice_details(self, mock_get):
         """Test getting details for a specific voice."""
         mock_response = MagicMock()
@@ -355,7 +347,7 @@ class TestVoiceManagement:
         assert voice_info["labels"]["gender"] == "female"
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_clone_voice(self, mock_post):
         """Test voice cloning functionality."""
         mock_response = MagicMock()
@@ -383,7 +375,7 @@ class TestErrorHandling:
     """Test error handling in ElevenLabs adapter."""
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_handle_rate_limit_error(self, mock_post):
         """Test handling of rate limit errors."""
         mock_response = MagicMock()
@@ -409,7 +401,7 @@ class TestErrorHandling:
         assert exc_info.value.retry_after == 30
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_handle_quota_exceeded(self, mock_post):
         """Test handling of quota exceeded errors."""
         mock_response = MagicMock()
@@ -432,7 +424,7 @@ class TestErrorHandling:
             await adapter.generate(request)
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_handle_invalid_voice_error(self, mock_post):
         """Test handling of invalid voice errors."""
         mock_response = MagicMock()
@@ -464,7 +456,7 @@ class TestUsageAndQuota:
     """Test usage tracking and quota management."""
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.get')
+    @patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch')
     async def test_get_usage_info(self, mock_get):
         """Test getting usage information."""
         mock_response = MagicMock()

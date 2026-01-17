@@ -36,6 +36,7 @@ async def test_max_messages_per_chat_limit():
     clear_config_cache()
     try:
         import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+
         crl._rate_limiter = None
 
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -92,6 +93,7 @@ async def test_max_chats_per_user_limit():
     original_max_chats = os.environ.get("MAX_CHATS_PER_USER")
     try:
         import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+
         crl._rate_limiter = None
 
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -142,7 +144,82 @@ async def test_max_chats_per_user_limit():
 
 
 @pytest.mark.asyncio
+async def test_soft_message_limit_blocks_non_persisted_completion():
+    tmpdir = tempfile.mkdtemp(prefix="chacha_soft_limit_")
+    env_overrides = {
+        "USER_DB_BASE_DIR": tmpdir,
+        "MAX_MESSAGES_PER_CHAT_SOFT": "1",
+    }
+    original_env = {key: os.environ.get(key) for key in env_overrides}
+    os.environ.update(env_overrides)
+    clear_config_cache()
+    crl = None
+    cl = None
+    try:
+        import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+        from tldw_Server_API.app.core.Character_Chat import character_limits as cl  # noqa: WPS433
+
+        crl._rate_limiter = None
+        cl._limits = None
+
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            # Add a single message to hit the soft cap
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/messages",
+                headers=headers,
+                json={"role": "user", "content": "first"},
+            )
+            assert r.status_code == 201
+
+            # Non-persisted completion should be blocked by soft cap
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/complete-v2",
+                headers=headers,
+                json={
+                    "provider": "local-llm",
+                    "model": "local-test",
+                    "save_to_db": False,
+                    "include_character_context": False,
+                },
+            )
+            assert r.status_code == 403
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        clear_config_cache()
+        try:
+            if crl is not None:
+                crl._rate_limiter = None
+        except Exception:
+            pass
+        try:
+            if cl is not None:
+                cl._limits = None
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_per_minute_rate_limit():
+    if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+        pytest.skip("Character chat rate limits are enforced by Resource Governor when enabled.")
     tmpdir = tempfile.mkdtemp(prefix="chacha_limit_complete_")
     env_overrides = {
         "USER_DB_BASE_DIR": tmpdir,
@@ -154,6 +231,7 @@ async def test_chat_completion_per_minute_rate_limit():
     original_max_chats = os.environ.get("MAX_CHATS_PER_USER")
     try:
         import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+
         crl._rate_limiter = None
 
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings

@@ -5,7 +5,10 @@
 
   Non‑streaming usage (stream: false), handling JSON errors vs audio:
 ```python
-  import os, json, requests
+  import json
+  import os
+  from urllib.error import HTTPError
+  from urllib.request import Request, urlopen
 
   BASE_URL = os.getenv("TLDW_BASE_URL", "http://127.0.0.1:8000")
   API_KEY = os.environ["SINGLE_USER_API_KEY"]
@@ -19,47 +22,65 @@
       "stream": False,
   }
 
-  resp = requests.post(url, headers={"X-API-KEY": API_KEY}, json=payload)
-
-  if resp.status_code != 200:
-      # Structured error path
-      try:
-          err = resp.json()
-      except ValueError:
-          err = {"detail": resp.text}
-      raise RuntimeError(f"TTS failed ({resp.status_code}): {err.get('detail', err)}")
-
-  # Success: treat as audio
-  with open("speech.mp3", "wb") as f:
-      f.write(resp.content)
-```
-
-Streaming variant (Python, httpx):
-```python
-  import httpx, os, json
-
-  client = httpx.Client(timeout=None)
-  resp = client.post(
+  req = Request(
       url,
-      headers={"X-API-KEY": API_KEY},
-      json={**payload, "stream": True},
-      stream=True,
+      data=json.dumps(payload).encode("utf-8"),
+      headers={"Content-Type": "application/json", "X-API-KEY": API_KEY},
+      method="POST",
   )
 
-  if resp.status_code != 200:
-      err = resp.json()
-      raise RuntimeError(f"TTS failed ({resp.status_code}): {err.get('detail', err)}")
+  try:
+      with urlopen(req) as resp:
+          # Success: treat as audio
+          with open("speech.mp3", "wb") as f:
+              f.write(resp.read())
+  except HTTPError as err:
+      # Structured error path
+      body = err.read().decode("utf-8")
+      try:
+          err_json = json.loads(body)
+      except json.JSONDecodeError:
+          err_json = {"detail": body}
+      detail = err_json.get("detail", err_json)
+      raise RuntimeError(f"TTS failed ({err.code}): {detail}")
+```
 
-  with open("speech_streamed.mp3", "wb") as f:
-      for chunk in resp.iter_bytes():
-          if chunk:
-              f.write(chunk)
-  client.close()
+Streaming variant (Python):
+```python
+  import json
+  import os
+  from urllib.error import HTTPError
+  from urllib.request import Request, urlopen
+
+  payload_stream = {**payload, "stream": True}
+  req = Request(
+      url,
+      data=json.dumps(payload_stream).encode("utf-8"),
+      headers={"Content-Type": "application/json", "X-API-KEY": API_KEY},
+      method="POST",
+  )
+
+  try:
+      with urlopen(req) as resp:
+          with open("speech_streamed.mp3", "wb") as f:
+              while True:
+                  chunk = resp.read(8192)
+                  if not chunk:
+                      break
+                  f.write(chunk)
+  except HTTPError as err:
+      body = err.read().decode("utf-8")
+      try:
+          err_json = json.loads(body)
+      except json.JSONDecodeError:
+          err_json = {"detail": body}
+      detail = err_json.get("detail", err_json)
+      raise RuntimeError(f"TTS failed ({err.code}): {detail}")
 ```
   Key points for all Python clients:
 
-  - Always check status_code.
-  - Only treat body as audio when status_code == 200.
+  - Use try/except HTTPError to catch non-2xx responses.
+  - Only treat body as audio when the request succeeds (no exception).
   - On non‑200, parse JSON and surface detail to the caller.
 
   ———

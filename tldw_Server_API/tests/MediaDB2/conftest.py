@@ -21,17 +21,17 @@ except ImportError as e:
         def close_connection(self): pass
         def get_sync_log_entries(self, *args, **kwargs): return []
         def execute_query(self, *args, **kwargs):
-             class MockCursor:
-                  rowcount = 0
-                  def fetchone(self): return None
-                  def fetchall(self): return []
-                  def execute(self, *a, **k): pass
-             return MockCursor()
+            class MockCursor:
+                rowcount = 0
+                def fetchone(self): return None
+                def fetchall(self): return []
+                def execute(self, *a, **k): pass
+            return MockCursor()
         def transaction(self):
-             class MockTransaction:
-                  def __enter__(self): return None # Return a mock connection/cursor if needed
-                  def __exit__(self, *args): pass
-             return MockTransaction()
+            class MockTransaction:
+                def __enter__(self): return None # Return a mock connection/cursor if needed
+                def __exit__(self, *args): pass
+            return MockTransaction()
 
 
 # --- Database Fixtures ---
@@ -79,4 +79,4 @@ def temp_state_file():
     yield state_path # Provide the path
     # Teardown: Ensure the file is deleted even if the test fails mid-write
     if os.path.exists(state_path):
-         os.remove(state_path)
+        os.remove(state_path)

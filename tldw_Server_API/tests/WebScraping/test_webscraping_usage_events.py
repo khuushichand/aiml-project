@@ -27,7 +27,7 @@ def test_webscrape_process_usage_event(client_with_ws_overrides):
         "url_input": "https://example.com\nhttps://example.org",
         "mode": "ephemeral",
         "max_pages": 5,
-        "max_depth": 2
+        "max_depth": 2,
     }
     r = client.post("/api/v1/media/process-web-scraping", json=payload)
     assert r.status_code == 200, r.text

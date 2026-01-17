@@ -8,6 +8,8 @@ import pytest
 
 
 def _has_psycopg() -> bool:
+
+
     try:
         import psycopg  # noqa: F401
         return True

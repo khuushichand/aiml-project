@@ -10,6 +10,8 @@ from tldw_Server_API.app.core.AuthNZ.settings import Settings
 
 
 def _gen_rsa_keypair_pem():
+
+
     """Generate an RSA keypair and return (private_pem, public_pem) as UTF-8 strings."""
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.hazmat.primitives import serialization
@@ -55,6 +57,7 @@ class TestJWTServiceRS256:
         )
 
     def test_rs256_access_token_roundtrip(self):
+
         priv, pub = _gen_rsa_keypair_pem()
         svc = JWTService(settings=self._rs_settings(priv, pub))
 
@@ -68,7 +71,8 @@ class TestJWTServiceRS256:
         assert "exp" in payload and "iat" in payload and "jti" in payload
 
     def test_rs256_dual_key_fallback_decode(self):
-        # Old keypair used to sign an existing token
+
+             # Old keypair used to sign an existing token
         old_priv, old_pub = _gen_rsa_keypair_pem()
         svc_old = JWTService(settings=self._rs_settings(old_priv, old_pub))
         old_token = svc_old.create_access_token(user_id=7, username="bob", role="user")
@@ -85,6 +89,7 @@ class TestJWTServiceRS256:
         assert payload["type"] == "access"
 
     def test_rs256_issuer_audience_enforced(self):
+
         priv, pub = _gen_rsa_keypair_pem()
         svc = JWTService(settings=self._rs_settings(priv, pub, JWT_ISSUER="tldw.rs", JWT_AUDIENCE="tldw.clients"))
         token = svc.create_access_token(user_id=5, username="eve", role="user")

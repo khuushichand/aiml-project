@@ -16,6 +16,7 @@ class _QStub:
         ]
 
     def get_recent_activity(self, limit=None):
+
         if limit is None:
             return list(self._items)
         return list(self._items)[-int(limit):]

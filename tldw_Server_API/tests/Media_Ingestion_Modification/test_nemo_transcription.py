@@ -41,6 +41,7 @@ class TestNemoTranscription:
         }
 
     def test_import_nemo_module(self):
+
         """Test that the Nemo module can be imported."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Nemo
@@ -63,6 +64,7 @@ class TestNemoTranscription:
         assert cache_dir.name == 'nemo'
 
     def test_model_cache_key_generation(self):
+
         """Test model cache key generation."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             _get_model_cache_key
@@ -188,6 +190,7 @@ class TestNemoTranscription:
         assert kwargs.get("target_lang") == "en"
 
     def test_transcribe_with_nemo_unified(self, sample_audio):
+
         """Test unified Nemo transcription entry point."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             transcribe_with_nemo
@@ -213,6 +216,7 @@ class TestNemoTranscription:
         assert "could not be loaded]" in result
 
     def test_unload_models(self):
+
         """Test unloading all Nemo models from cache."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             unload_nemo_models, _model_cache
@@ -313,6 +317,7 @@ class TestAudioTranscriptionLibIntegration:
         mock_transcribe_canary.assert_called_once()
 
     def test_unload_all_models(self):
+
         """Test unloading all transcription models."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             unload_all_transcription_models

@@ -24,6 +24,8 @@ def _build_app(db: CharactersRAGDB) -> TestClient:
 
 
 def test_knowledge_save_creates_note_with_backlinks(tmp_path):
+
+
     db_path = tmp_path / "chacha.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
     app = _build_app(db)
@@ -56,6 +58,8 @@ def test_knowledge_save_creates_note_with_backlinks(tmp_path):
 
 
 def test_knowledge_save_export_guard(tmp_path, monkeypatch):
+
+
     db_path = tmp_path / "chacha.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
     app = _build_app(db)
@@ -75,7 +79,8 @@ def test_knowledge_save_export_guard(tmp_path, monkeypatch):
     # Ensure flag is off
     monkeypatch.delenv("CHAT_CONNECTORS_V2_ENABLED", raising=False)
     resp = app.post("/api/v1/chat/knowledge/save", json=payload)
-    assert resp.status_code == 503
+    assert resp.status_code == 201
+    assert resp.json().get("export_status") == "skipped_disabled"
 
     # Enable and ensure it passes
     monkeypatch.setenv("CHAT_CONNECTORS_V2_ENABLED", "true")

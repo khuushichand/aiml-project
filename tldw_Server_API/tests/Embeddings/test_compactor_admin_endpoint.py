@@ -6,8 +6,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.mark.unit
 def test_compactor_admin_endpoint(monkeypatch, admin_user):
-
-    # Patch compact_once to avoid touching real DBs
+      # Patch compact_once to avoid touching real DBs
     called = {}
 
     async def _fake_compact_once(user_id: str, db_path=None) -> int:

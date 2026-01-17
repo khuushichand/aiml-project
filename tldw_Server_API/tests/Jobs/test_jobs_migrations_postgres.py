@@ -16,6 +16,8 @@ def _setup(jobs_pg_dsn):
 
 
 def test_pg_forward_migration_adds_missing_columns_and_partial_indexes(jobs_pg_dsn):
+
+
     ensure_jobs_tables_pg(jobs_pg_dsn)
     with psycopg.connect(jobs_pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:

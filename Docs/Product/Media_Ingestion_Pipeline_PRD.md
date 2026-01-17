@@ -69,7 +69,7 @@ Contributors must support new media types, improve processing fidelity, and conn
 - Downstream hooks include embeddings enqueue, claims extraction, watchlist output generation, and optional notifications.
 
 ## 8. Data Model (SQLite default, Postgres optional)
-- **Media DB v2 (per-user `Databases/user_databases/<user_id>/Media_DB_v2.db`):**
+- **Media DB v2 (per-user `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`):**
   - `Media`: canonical item record (title, url, type, status, metadata, favorite, soft delete).
   - `DocumentVersions`: versioned content body plus `safe_metadata`, prompts, analysis payloads.
   - `MediaChunks`: chunked text with embeddings metadata; triggers maintain `media_fts`.
@@ -81,6 +81,8 @@ Contributors must support new media types, improve processing fidelity, and conn
   - `sync_log`: change log for multi-device sync.
 - **Collections DB (per user):** `content_items`, `content_item_tags`, `content_item_tag_links` share user IDs with watchlists/reading services. Watchlist/reading pipelines dual-write here today so `/api/v1/items` reflects those flows; `/media` uploads will join via a future dual-write stage.
 - **Backends:** SQLite is default and fully supported; Postgres backend exists but some ingestion routines rely on SQLite-specific syntax (e.g., `INSERT OR IGNORE`). Stage 2 roadmap covers removing those assumptions.
+
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 ## 9. API Surface (developer focus)
 - `/api/v1/media/add` - process uploads/URLs and persist results (default path).

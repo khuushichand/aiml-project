@@ -12,6 +12,8 @@ pytestmark = pytest.mark.unit
 
 
 def test_validate_file_mime_mismatch_hard_fail(tmp_path, monkeypatch):
+
+
     """Reject when magic-detected MIME disagrees with allowed and do not accept fallback."""
     # Arrange: create a non-PDF file with .pdf extension
     p = tmp_path / "fake.pdf"
@@ -36,6 +38,8 @@ def test_validate_file_mime_mismatch_hard_fail(tmp_path, monkeypatch):
 
 
 def test_validate_archive_rejects_encrypted_zip(tmp_path, monkeypatch):
+
+
     """Explicitly reject encrypted ZIP entries using flag_bits check."""
     zpath = tmp_path / "enc.zip"
     with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -49,9 +53,11 @@ def test_validate_archive_rejects_encrypted_zip(tmp_path, monkeypatch):
         flag_bits = 0x1  # Encrypted
 
         def is_dir(self):
+
             return False
 
     def fake_infolist(self):
+
         return [DummyInfo()]
 
     monkeypatch.setattr(zipfile.ZipFile, "infolist", fake_infolist, raising=False)
@@ -65,6 +71,8 @@ def test_validate_archive_rejects_encrypted_zip(tmp_path, monkeypatch):
 
 
 def test_validate_archive_flags_zip_symlink(tmp_path, monkeypatch):
+
+
     """Symlink entries in ZIP are flagged and skipped."""
     zpath = tmp_path / "sym.zip"
     with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -80,9 +88,11 @@ def test_validate_archive_flags_zip_symlink(tmp_path, monkeypatch):
         flag_bits = 0
 
         def is_dir(self):
+
             return False
 
     def fake_infolist(self):
+
         return [DummyInfo()]
 
     monkeypatch.setattr(zipfile.ZipFile, "infolist", fake_infolist, raising=False)
@@ -96,6 +106,8 @@ def test_validate_archive_flags_zip_symlink(tmp_path, monkeypatch):
 
 
 def test_validate_archive_flags_tar_bad_types(tmp_path, monkeypatch):
+
+
     """Non-file TAR members are flagged and not extracted."""
     tpath = tmp_path / "bad.tar"
     with tarfile.open(tpath, "w") as tf:
@@ -111,18 +123,23 @@ def test_validate_archive_flags_tar_bad_types(tmp_path, monkeypatch):
         type = b"?"  # unknown type marker for message
 
         def isdir(self):
+
             return False
 
         def issym(self):
+
             return True
 
         def islnk(self):
+
             return False
 
         def isfile(self):
+
             return False
 
     def fake_getmembers(self):
+
         return [DummyTarInfo()]
 
     monkeypatch.setattr(tarfile.TarFile, "getmembers", fake_getmembers, raising=False)
@@ -136,6 +153,8 @@ def test_validate_archive_flags_tar_bad_types(tmp_path, monkeypatch):
 
 
 def test_svg_treated_as_xml_and_allowed(tmp_path):
+
+
     """SVG is handled under XML rules and accepted (sanitization path available)."""
     svg_path = tmp_path / "img.svg"
     svg_path.write_text("<svg xmlns='http://www.w3.org/2000/svg'><title>T</title></svg>")

@@ -3,7 +3,9 @@ import pytest
 
 
 def test_jobs_metrics_no_registry_noop(monkeypatch):
-    # Simulate environment where metrics registry is unavailable
+
+
+     # Simulate environment where metrics registry is unavailable
     from tldw_Server_API.app.core.Jobs import metrics as met
 
     # Force import-time registry symbol to None

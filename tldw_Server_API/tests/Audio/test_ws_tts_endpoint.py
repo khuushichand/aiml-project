@@ -96,6 +96,7 @@ async def test_websocket_tts_records_underrun(monkeypatch: pytest.MonkeyPatch):
             self.first_full = True
 
         def put_nowait(self, item):
+
             if self.first_full:
                 self.first_full = False
                 raise asyncio.QueueFull
@@ -110,6 +111,7 @@ async def test_websocket_tts_records_underrun(monkeypatch: pytest.MonkeyPatch):
             return self.items.pop(0)
 
         def get_nowait(self):
+
             if not self.items:
                 raise asyncio.QueueEmpty
             return self.items.pop(0)
@@ -119,6 +121,7 @@ async def test_websocket_tts_records_underrun(monkeypatch: pytest.MonkeyPatch):
             self.increments = []
 
         def increment(self, name, value=1, labels=None):
+
             self.increments.append((name, value, labels or {}))
 
         def observe(self, *_args, **_kwargs):  # noqa: ARG002

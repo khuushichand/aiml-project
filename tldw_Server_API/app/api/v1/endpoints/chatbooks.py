@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import hashlib
+from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
@@ -20,13 +21,13 @@ from fastapi.responses import FileResponse
 from loguru import logger
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
-from slowapi.util import get_remote_address
 
 # Unified audit service
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 
 from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ....core.DB_Management.db_path_utils import DatabasePaths
 from ....core.Chatbooks.chatbook_service import ChatbookService
 from ....core.Chatbooks.chatbook_models import ContentType, ConflictResolution, ExportStatus, ExportJob
 from ....core.Chatbooks.quota_manager import QuotaManager
@@ -54,8 +55,6 @@ from ..schemas.chatbook_schemas import (
 router = APIRouter(prefix="/chatbooks", tags=["chatbooks"])
 
 # Use central limiter instance
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
-
 
 def _safe_increment_metric(metric_name: str, labels: dict, error_context: str = "") -> None:
     """Safely increment a metric, logging failures without raising."""
@@ -81,33 +80,13 @@ def _setup_secure_temp_directory(user_id: str) -> Path:
     Raises:
         HTTPException: If directory setup fails or security checks fail
     """
-    import tempfile
-
-    base_temp = Path(tempfile.gettempdir()).resolve(strict=False)
-
-    # Use SHA256 hash of user_id for directory naming (collision-resistant, always safe)
-    safe_user_id = hashlib.sha256(str(user_id).encode('utf-8')).hexdigest()
-
-    # Establish a fixed uploads root under the system temp and ensure it's not a symlink
-    uploads_root = base_temp / "tldw_uploads"
-    uploads_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if uploads_root.is_symlink():
-        raise HTTPException(status_code=400, detail="Insecure temporary upload directory")
-    uploads_root_resolved = uploads_root.resolve(strict=True)
-
-    # Verify uploads_root is within the expected base temp directory using commonpath
-    base_temp_resolved = base_temp.resolve(strict=False)
-    if os.path.commonpath([str(uploads_root_resolved), str(base_temp_resolved)]) != str(base_temp_resolved):
-        raise HTTPException(status_code=400, detail="Invalid temporary directory base")
-
-    # Create and validate per-user directory
-    temp_dir = uploads_root_resolved / safe_user_id
-    temp_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temp_dir = DatabasePaths.get_user_chatbooks_temp_dir(user_id)
     if temp_dir.is_symlink():
-        raise HTTPException(status_code=400, detail="Insecure user temporary directory")
+        raise HTTPException(status_code=400, detail="Insecure chatbooks temp directory")
     temp_dir = temp_dir.resolve(strict=True)
-    if os.path.commonpath([str(temp_dir), str(uploads_root_resolved)]) != str(uploads_root_resolved):
-        raise HTTPException(status_code=400, detail="Invalid temporary directory path")
+    base_dir = DatabasePaths.get_user_chatbooks_dir(user_id).resolve(strict=True)
+    if os.path.commonpath([str(temp_dir), str(base_dir)]) != str(base_dir):
+        raise HTTPException(status_code=400, detail="Invalid chatbooks temp directory path")
 
     return temp_dir
 
@@ -125,9 +104,6 @@ def get_chatbook_service(
 async def chatbooks_health():
     """Lightweight health endpoint for the Chatbooks subsystem."""
     from datetime import datetime, timezone
-    from pathlib import Path
-    import os
-    import tempfile
 
     health = {
         "service": "chatbooks",
@@ -137,13 +113,7 @@ async def chatbooks_health():
     }
 
     try:
-        # Mirror base path selection logic from service
-        if os.environ.get('TLDW_USER_DATA_PATH'):
-            base_data_dir = Path(os.environ.get('TLDW_USER_DATA_PATH'))
-        elif os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI'):
-            base_data_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
-        else:
-            base_data_dir = Path('/var/lib/tldw/user_data')
+        base_data_dir = DatabasePaths.get_user_db_base_dir()
 
         exists = base_data_dir.exists()
         writable = False
@@ -174,7 +144,6 @@ async def chatbooks_health():
 
 
 @router.post("/export", response_model=CreateChatbookResponse)
-@limiter.limit("5/minute")  # Rate limit: 5 exports per minute
 async def create_chatbook(
     request_data: CreateChatbookRequest,
     background_tasks: BackgroundTasks,
@@ -363,7 +332,6 @@ async def create_chatbook(
 
 
 @router.post("/import", response_model=ImportChatbookResponse)
-@limiter.limit("5/minute")  # Rate limit: 5 imports per minute
 async def import_chatbook(
     background_tasks: BackgroundTasks,
     request: Request,
@@ -405,6 +373,28 @@ async def import_chatbook(
         if not allowed:
             raise HTTPException(status_code=429, detail=message)
 
+        # Reject unsupported import options until implemented
+        if import_request.import_media or import_request.import_embeddings:
+            raise HTTPException(
+                status_code=400,
+                detail="Media/embedding imports are not supported yet. Set import_media=false and import_embeddings=false.",
+            )
+        if import_request.content_selections:
+            unsupported = {"media", "embedding", "prompt", "evaluation", "generated_document"}
+            requested = []
+            for content_type in import_request.content_selections.keys():
+                ct_val = content_type.value if hasattr(content_type, "value") else str(content_type)
+                if ct_val in unsupported:
+                    requested.append(ct_val)
+            if requested:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Import for content types is not supported yet: "
+                        + ", ".join(sorted(set(requested)))
+                    ),
+                )
+
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
@@ -428,7 +418,7 @@ async def import_chatbook(
         temp_dir = _setup_secure_temp_directory(str(user.id))
 
         # Build the destination file path
-        temp_file = temp_dir / f"import_{safe_filename}"
+        temp_file = temp_dir / f"import_{uuid4().hex}_{safe_filename}"
         if temp_file.parent != temp_dir:
             raise HTTPException(status_code=400, detail="Invalid file path")
 
@@ -548,7 +538,6 @@ async def import_chatbook(
 
 
 @router.post("/preview", response_model=PreviewChatbookResponse)
-@limiter.limit("10/minute")  # Rate limit: 10 previews per minute
 async def preview_chatbook(
     request: Request,
     file: UploadFile = File(...),
@@ -600,7 +589,7 @@ async def preview_chatbook(
         temp_dir = _setup_secure_temp_directory(str(user.id))
 
         # Build the preview file path
-        temp_file = temp_dir / f"preview_{safe_filename}"
+        temp_file = temp_dir / f"preview_{uuid4().hex}_{safe_filename}"
         if temp_file.parent != temp_dir:
             raise HTTPException(status_code=400, detail="Invalid file path")
 
@@ -707,7 +696,6 @@ async def preview_chatbook(
 
 
 @router.get("/export/jobs", response_model=ListExportJobsResponse)
-@limiter.limit("30/minute")  # Rate limit: 30 list requests per minute
 async def list_export_jobs(
     request: Request,  # Required for rate limiting
     limit: int = Query(100, ge=1, le=1000),
@@ -833,7 +821,6 @@ async def get_export_job(
 
 
 @router.get("/import/jobs", response_model=ListImportJobsResponse)
-@limiter.limit("30/minute")  # Rate limit: 30 list requests per minute
 async def list_import_jobs(
     request: Request,  # Required for rate limiting
     limit: int = Query(100, ge=1, le=1000),
@@ -943,7 +930,6 @@ async def get_import_job(
 
 
 @router.get("/download/{job_id}")
-@limiter.limit("20/minute")  # Rate limit: 20 downloads per minute
 async def download_chatbook(
     job_id: str,
     request: Request,

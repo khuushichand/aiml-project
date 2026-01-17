@@ -8,6 +8,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, Qu
 
 
 def test_add_media_with_keywords_requires_db_instance():
+
     with pytest.raises(ValueError) as excinfo:
         # Intentionally omit db_instance to ensure the wrapper enforces it
         DB_Manager.add_media_with_keywords(url="https://example.com", title="T", media_type="text")
@@ -15,6 +16,7 @@ def test_add_media_with_keywords_requires_db_instance():
 
 
 def test_get_paginated_files_requires_db_instance():
+
     with pytest.raises(ValueError) as excinfo:
         # Intentionally omit db_instance to ensure the wrapper enforces it
         DB_Manager.get_paginated_files(page=1, results_per_page=10)
@@ -22,18 +24,21 @@ def test_get_paginated_files_requires_db_instance():
 
 
 def test_update_keywords_for_media_requires_db_instance():
+
     with pytest.raises(ValueError) as excinfo:
         DB_Manager.update_keywords_for_media(media_id=1, keywords=["x", "y"])  # no db_instance
     assert "requires 'db_instance'" in str(excinfo.value)
 
 
 def test_rollback_to_version_requires_db_instance():
+
     with pytest.raises(ValueError) as excinfo:
         DB_Manager.rollback_to_version(media_id=1, target_version_number=2)  # no db_instance
     assert "requires 'db_instance'" in str(excinfo.value)
 
 
 def test_delete_document_version_requires_db_instance():
+
     with pytest.raises(ValueError) as excinfo:
         DB_Manager.delete_document_version(version_uuid="deadbeef")  # no db_instance
     assert "requires 'db_instance'" in str(excinfo.value)
@@ -50,6 +55,7 @@ def force_postgres(monkeypatch):
 
 
 def test_add_media_and_paginated_files_success():
+
     db = _make_memory_db()
     mid, muuid, msg = DB_Manager.add_media_with_keywords(
         db_instance=db,
@@ -61,15 +67,14 @@ def test_add_media_and_paginated_files_success():
         analysis_content="a1",
     )
     assert isinstance(mid, int) and muuid and isinstance(muuid, str)
-    rows, total_pages, page, total_items = DB_Manager.get_paginated_files(
-        db_instance=db, page=1, results_per_page=10
-    )
+    rows, total_pages, page, total_items = DB_Manager.get_paginated_files(db_instance=db, page=1, results_per_page=10)
     assert total_items >= 1
     assert page == 1
     assert isinstance(rows, list)
 
 
 def test_update_keywords_for_media_success():
+
     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
@@ -78,14 +83,13 @@ def test_update_keywords_for_media_success():
         content="bravo content",
         keywords=["old"],
     )
-    DB_Manager.update_keywords_for_media(
-        db_instance=db, media_id=mid, keywords=["x", "y"]
-    )
+    DB_Manager.update_keywords_for_media(db_instance=db, media_id=mid, keywords=["x", "y"])
     kws = DB_Manager.fetch_keywords_for_media(media_id=mid, db_instance=db)
     assert set(kws) == {"x", "y"}
 
 
 def test_rollback_to_version_success_and_delete_version_success():
+
     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
@@ -102,29 +106,22 @@ def test_rollback_to_version_success_and_delete_version_success():
     )
     assert v2 and v2.get("version_number") == 2
 
-    rb = DB_Manager.rollback_to_version(
-        db_instance=db, media_id=mid, target_version_number=1
-    )
+    rb = DB_Manager.rollback_to_version(db_instance=db, media_id=mid, target_version_number=1)
     assert isinstance(rb, dict) and "success" in rb
 
-    latest = DB_Manager.get_document_version(
-        db_instance=db, media_id=mid, version_number=None, include_content=True
-    )
+    latest = DB_Manager.get_document_version(db_instance=db, media_id=mid, version_number=None, include_content=True)
     assert latest and latest.get("version_number") == 3
     assert latest.get("content") == "v1 content"
 
     # delete v2 should succeed (not last active)
-    v2_info = DB_Manager.get_document_version(
-        db_instance=db, media_id=mid, version_number=2, include_content=False
-    )
+    v2_info = DB_Manager.get_document_version(db_instance=db, media_id=mid, version_number=2, include_content=False)
     assert v2_info and v2_info.get("uuid")
-    ok = DB_Manager.delete_document_version(
-        db_instance=db, version_uuid=v2_info["uuid"]
-    )
+    ok = DB_Manager.delete_document_version(db_instance=db, version_uuid=v2_info["uuid"])
     assert ok is True
 
 
 def test_fetch_keywords_for_media_postgres_mode(force_postgres):
+
     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
@@ -143,6 +140,7 @@ def test_fetch_keywords_for_media_postgres_mode(force_postgres):
 
 
 def test_empty_trash_postgres_mode(force_postgres):
+
     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
@@ -157,6 +155,7 @@ def test_empty_trash_postgres_mode(force_postgres):
 
 
 def test_document_version_wrappers_postgres_mode(force_postgres):
+
     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
@@ -182,12 +181,14 @@ def test_document_version_wrappers_postgres_mode(force_postgres):
 
 
 def test_validate_postgres_content_backend_uses_queryresult_first(monkeypatch):
+
     expected_version = MediaDatabase._CURRENT_SCHEMA_VERSION
 
     class StubBackend:
         backend_type = BackendType.POSTGRESQL
 
         def __init__(self):
+
             self.queries = []
 
         @contextmanager
@@ -195,6 +196,7 @@ def test_validate_postgres_content_backend_uses_queryresult_first(monkeypatch):
             yield object()
 
         def execute(self, query, params=None, connection=None):
+
             self.queries.append(query)
             if "schema_version" in query:
                 return QueryResult(rows=[{"version": expected_version}], rowcount=1)
@@ -205,15 +207,18 @@ def test_validate_postgres_content_backend_uses_queryresult_first(monkeypatch):
         instances = []
 
         def __init__(self, *args, **kwargs):
+
             self.backend = kwargs.get("backend")
             self.checked_policies = []
             self.__class__.instances.append(self)
 
         def _postgres_policy_exists(self, conn, table, policy):
+
             self.checked_policies.append((table, policy))
             return True
 
         def close_connection(self):
+
             pass
 
     stub_backend = StubBackend()

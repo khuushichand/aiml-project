@@ -33,13 +33,15 @@ class _FakeTTSService:
 
 
 @pytest.fixture()
-def client_with_overrides(bypass_api_limits):
+def client_with_overrides(bypass_api_limits, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     dummy = _DummyLogger()
 
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
     def override_logger():
+
         return dummy
 
     async def override_tts():
@@ -50,13 +52,15 @@ def client_with_overrides(bypass_api_limits):
     fastapi_app.dependency_overrides[get_usage_event_logger] = override_logger
     fastapi_app.dependency_overrides[get_tts_service] = override_tts
 
-    with bypass_api_limits(fastapi_app, limiters=(audio_endpoints.limiter,)), TestClient(fastapi_app) as client:
+    with bypass_api_limits(fastapi_app), TestClient(fastapi_app) as client:
         yield client, dummy
 
     fastapi_app.dependency_overrides.clear()
 
 
 def test_tts_usage_event_logged(client_with_overrides):
+
+
     client, dummy = client_with_overrides
     payload = {
         "model": "tts-1",

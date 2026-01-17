@@ -20,6 +20,7 @@ class _Loader:
         self._policy = policy
 
     def get_snapshot(self):
+
         return self._snap
 
     def get_policy(self, policy_id: str):
@@ -62,6 +63,8 @@ class _Gov:
 
 
 def _make_app_with_tokens_headers():
+
+
     app = FastAPI()
     app.add_middleware(RGSimpleMiddleware)
 

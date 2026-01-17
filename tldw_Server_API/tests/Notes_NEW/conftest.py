@@ -32,6 +32,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 # =====================================================================
 
 def pytest_configure(config):
+
     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
@@ -272,7 +273,7 @@ def markdown_note():
 
 ```python
 def hello():
-    print("Hello")
+     print("Hello")
 ```
         """,
         'user_id': 'test_user'
@@ -517,6 +518,7 @@ def cleanup_after_test():
 # =====================================================================
 
 def create_test_note(db, **kwargs):
+
     """Helper to create a test note."""
     note_data = {
         'title': 'Test Note',
@@ -527,6 +529,7 @@ def create_test_note(db, **kwargs):
     return db.create_note(**note_data)
 
 def create_test_keyword(db, **kwargs):
+
     """Helper to create a test keyword."""
     keyword_data = {
         'keyword': 'test-keyword',

@@ -23,15 +23,18 @@ def client(monkeypatch):
     class FakeCol:
         def __init__(self):
             self.data={'ids':[], 'embeddings':[], 'documents':[], 'metadatas':[]}
-        def count(self): return len(self.data['ids'])
-        def get(self, **kw): return {'ids': []}
+        def count(self):
+            return len(self.data['ids'])
+        def get(self, **kw):
+            return {'ids': []}
     class FakeAdapter:
         def __init__(self):
             self._initialized=False
             self.config=types.SimpleNamespace(embedding_dim=32)
             self._col = FakeCol()
             self.manager = types.SimpleNamespace(get_or_create_collection=lambda name: self._col)
-        async def initialize(self): self._initialized=True
+        async def initialize(self):
+            self._initialized=True
         async def get_collection_stats(self, name):
             return {'dimension': self.config.embedding_dim, 'metadata':{}}
         async def upsert_vectors(self, collection_name, ids, vectors, documents, metadatas):

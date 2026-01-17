@@ -6,11 +6,10 @@ import os
 from typing import Optional, Dict, Any, AsyncGenerator, Set, List
 #
 # Third-party Imports
-import httpx
 from loguru import logger
 #
 # Local Imports
-from tldw_Server_API.app.core.http_client import afetch, _validate_egress_or_raise
+from tldw_Server_API.app.core.http_client import afetch, astream_bytes
 from .base import (
     TTSAdapter,
     TTSCapabilities,
@@ -43,6 +42,16 @@ from ..tts_resource_manager import get_resource_manager
 #######################################################################################################################
 #
 # ElevenLabs TTS Adapter Implementation
+
+def _is_httpx_exception(exc: Exception) -> bool:
+    module = getattr(exc.__class__, "__module__", "")
+    return module.startswith("httpx")
+
+
+def _is_http_status_error(exc: Exception) -> bool:
+    if not _is_httpx_exception(exc):
+        return False
+    return exc.__class__.__name__ == "HTTPStatusError"
 
 class ElevenLabsAdapter(TTSAdapter):
     """Adapter for ElevenLabs TTS API"""
@@ -179,7 +188,7 @@ class ElevenLabsAdapter(TTSAdapter):
         self.use_speaker_boost = self.config.get("elevenlabs_speaker_boost", True)
 
         # HTTP client
-        self.client: Optional[httpx.AsyncClient] = None
+        self.client: Optional[Any] = None
 
         # Cache for user voices
         self._user_voices: List[VoiceInfo] = []
@@ -225,7 +234,12 @@ class ElevenLabsAdapter(TTSAdapter):
         """Fetch available voices from ElevenLabs API"""
         try:
             headers = {"xi-api-key": self.api_key}
-            response = await self.client.get(f"{self.base_url}/voices", headers=headers)
+            response = await afetch(
+                method="GET",
+                url=f"{self.base_url}/voices",
+                client=self.client,
+                headers=headers,
+            )
 
             if response.status_code == 200:
                 data = response.json()
@@ -312,32 +326,13 @@ class ElevenLabsAdapter(TTSAdapter):
 
         try:
             if request.stream:
-                # Build request once so creation errors surface at generate() time
-                url = f"{self.base_url}/text-to-speech/{voice_id}/stream"
-                headers = {
-                    "Accept": self._get_accept_header(request.format),
-                    "xi-api-key": self.api_key,
-                    "Content-Type": "application/json",
-                }
-                voice_settings = {
-                    "stability": request.extra_params.get("stability", self.stability),
-                    "similarity_boost": request.extra_params.get("similarity_boost", self.similarity_boost),
-                    "style": request.extra_params.get("style", self.style),
-                    "use_speaker_boost": request.extra_params.get("speaker_boost", self.use_speaker_boost),
-                }
-                payload = {"text": request.text, "model_id": model_id, "voice_settings": voice_settings}
-                # Preflight: if patched to return an awaitable (not a CM), await it to surface errors here
-                import inspect
-                candidate = self.client.stream("POST", url, headers=headers, json=payload)
-                if inspect.isawaitable(candidate):
-                    # This path is primarily for tests that patch `.stream` as an async function
-                    await candidate  # will raise if the mock is configured to error
-
-                # Build the real context manager for streaming
-                stream_cm = self.client.stream("POST", url, headers=headers, json=payload)
-
                 return TTSResponse(
-                    audio_stream=self._stream_audio_from_cm(stream_cm, request),
+                    audio_stream=self._stream_audio_elevenlabs(
+                        text=request.text,
+                        voice_id=voice_id,
+                        model_id=model_id,
+                        request=request,
+                    ),
                     format=request.format,
                     sample_rate=self._infer_sample_rate(request.format),
                     channels=1,
@@ -402,56 +397,31 @@ class ElevenLabsAdapter(TTSAdapter):
         }
 
         try:
-            _validate_egress_or_raise(url)
-            async with self.client.stream("POST", url, headers=headers, json=payload) as response:
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    self._raise_mapped_http_error(e)
+            chunk_count = 0
+            async for chunk in astream_bytes(
+                method="POST",
+                url=url,
+                client=self.client,
+                headers=headers,
+                json=payload,
+                chunk_size=1024,
+            ):
+                if chunk:
+                    chunk_count += 1
+                    yield chunk
 
-                chunk_count = 0
-                async for chunk in response.aiter_bytes(chunk_size=1024):
-                    if chunk:
-                        chunk_count += 1
-                        yield chunk
+                    if chunk_count % 10 == 0:
+                        logger.debug(f"{self.provider_name}: Streamed {chunk_count} chunks")
 
-                        if chunk_count % 10 == 0:
-                            logger.debug(f"{self.provider_name}: Streamed {chunk_count} chunks")
+            logger.info(f"{self.provider_name}: Successfully streamed {chunk_count} chunks")
 
-                logger.info(f"{self.provider_name}: Successfully streamed {chunk_count} chunks")
-
-        except httpx.HTTPStatusError as e:
-            logger.error(f"{self.provider_name} HTTP error: {e.response.status_code} - {e.response.text}")
-            self._raise_mapped_http_error(e)
         except Exception as e:
-            logger.error(f"{self.provider_name} streaming error: {e}")
-            raise
-
-    async def _stream_audio_from_cm(
-        self,
-        stream_cm: Any,
-        request: TTSRequest
-    ) -> AsyncGenerator[bytes, None]:
-        """Stream audio using a pre-built httpx stream context manager."""
-        try:
-            async with stream_cm as response:
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    self._raise_mapped_http_error(e)
-
-                chunk_count = 0
-                async for chunk in response.aiter_bytes(chunk_size=1024):
-                    if chunk:
-                        chunk_count += 1
-                        yield chunk
-                        if chunk_count % 10 == 0:
-                            logger.debug(f"{self.provider_name}: Streamed {chunk_count} chunks")
-                logger.info(f"{self.provider_name}: Successfully streamed {chunk_count} chunks")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"{self.provider_name} HTTP error: {e.response.status_code} - {e.response.text}")
-            self._raise_mapped_http_error(e)
-        except Exception as e:
+            if _is_http_status_error(e):
+                response = getattr(e, "response", None)
+                status = getattr(response, "status_code", None)
+                body = getattr(response, "text", "")
+                logger.error(f"{self.provider_name} HTTP error: {status} - {body}")
+                self._raise_mapped_http_error(e)
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
 
@@ -489,15 +459,17 @@ class ElevenLabsAdapter(TTSAdapter):
             )
             try:
                 response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                self._raise_mapped_http_error(e)
+            except Exception as e:
+                if _is_http_status_error(e):
+                    self._raise_mapped_http_error(e)
+                raise
             return response.content or b""
-        except httpx.HTTPStatusError as e:
-            self._raise_mapped_http_error(e)
         except TTSError:
             # Propagate mapped TTS exceptions without wrapping/logging
             raise
         except Exception as e:
+            if _is_http_status_error(e):
+                self._raise_mapped_http_error(e)
             logger.error(f"{self.provider_name} non-stream error: {e}")
             raise
 
@@ -553,11 +525,12 @@ class ElevenLabsAdapter(TTSAdapter):
         # Default to 44100 for mp3/wav/pcm/ulaw
         return 44100
 
-    def _raise_mapped_http_error(self, e: httpx.HTTPStatusError) -> None:
+    def _raise_mapped_http_error(self, e: Exception) -> None:
         """Map HTTP errors to TTS exceptions for consistent handling upstream."""
-        status = e.response.status_code if e.response is not None else None
+        response = getattr(e, "response", None)
+        status = getattr(response, "status_code", None) if response is not None else None
         try:
-            text = e.response.text if e.response is not None else None
+            text = response.text if response is not None else None
         except Exception:
             text = None
         if status in (401, 403):
@@ -657,7 +630,12 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             from tldw_Server_API.app.core.http_client import create_async_client
             self.client = create_async_client()
         headers = {"xi-api-key": self.api_key}
-        resp = await self.client.get(f"{self.base_url}/voices", headers=headers)
+        resp = await afetch(
+            method="GET",
+            url=f"{self.base_url}/voices",
+            client=self.client,
+            headers=headers,
+        )
         resp.raise_for_status()
         data = resp.json() or {}
         return data.get("voices", [])
@@ -667,7 +645,12 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             from tldw_Server_API.app.core.http_client import create_async_client
             self.client = create_async_client()
         headers = {"xi-api-key": self.api_key}
-        resp = await self.client.get(f"{self.base_url}/voices/{voice_id}", headers=headers)
+        resp = await afetch(
+            method="GET",
+            url=f"{self.base_url}/voices/{voice_id}",
+            client=self.client,
+            headers=headers,
+        )
         resp.raise_for_status()
         return resp.json() or {}
 
@@ -677,7 +660,13 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             self.client = create_async_client()
         headers = {"xi-api-key": self.api_key, "Content-Type": "application/json"}
         payload = {"name": name, "samples": [s.decode("latin1") if isinstance(s, (bytes, bytearray)) else s for s in samples]}
-        resp = await self.client.post(f"{self.base_url}/voices/add", headers=headers, json=payload)
+        resp = await afetch(
+            method="POST",
+            url=f"{self.base_url}/voices/add",
+            client=self.client,
+            headers=headers,
+            json=payload,
+        )
         resp.raise_for_status()
         data = resp.json() or {}
         return data.get("voice_id") or data.get("id") or ""
@@ -687,7 +676,12 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             from tldw_Server_API.app.core.http_client import create_async_client
             self.client = create_async_client()
         headers = {"xi-api-key": self.api_key}
-        resp = await self.client.get(f"{self.base_url}/user", headers=headers)
+        resp = await afetch(
+            method="GET",
+            url=f"{self.base_url}/user",
+            client=self.client,
+            headers=headers,
+        )
         resp.raise_for_status()
         data = resp.json() or {}
         count = int(data.get("character_count", 0))
@@ -782,20 +776,26 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         payload = {"text": request.text, "model_id": model_id, "voice_settings": voice_settings}
 
         try:
-            async with self.client.stream("POST", url, headers=headers, json=payload) as resp:
-                async for chunk in resp.aiter_bytes():
-                    if chunk:
-                        yield chunk
-        except httpx.HTTPStatusError as e:
-            self._raise_mapped_http_error(e)
-        except Exception:
+            async for chunk in astream_bytes(
+                method="POST",
+                url=url,
+                client=self.client,
+                headers=headers,
+                json=payload,
+            ):
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            if _is_http_status_error(e):
+                self._raise_mapped_http_error(e)
             raise
 
     # Override error mapping to align with tests (invalid voice -> validation error, 429 cases)
-    def _raise_mapped_http_error(self, e: httpx.HTTPStatusError) -> None:
-        status = e.response.status_code if e.response is not None else None
+    def _raise_mapped_http_error(self, e: Exception) -> None:
+        response = getattr(e, "response", None)
+        status = getattr(response, "status_code", None) if response is not None else None
         try:
-            data = e.response.json() if e.response is not None else {}
+            data = response.json() if response is not None else {}
         except Exception:
             data = {}
         detail = data.get("detail", {}) if isinstance(data, dict) else {}
@@ -809,7 +809,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 raise TTSQuotaExceededError("elevenlabs quota exceeded", provider=self._provider_simple)
             retry = None
             try:
-                retry = int((e.response.headers or {}).get("retry-after", "0"))
+                retry = int((response.headers or {}).get("retry-after", "0")) if response is not None else None
             except Exception:
                 retry = None
             err = rate_limit_error(self._provider_simple, retry_after=retry)

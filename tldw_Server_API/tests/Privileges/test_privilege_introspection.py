@@ -71,6 +71,7 @@ def _make_async_dependency(
 
 
 def test_collect_privilege_route_registry_captures_metadata():
+
     catalog = _build_test_catalog()
     app = FastAPI()
     router = APIRouter()
@@ -127,6 +128,7 @@ def test_collect_privilege_route_registry_captures_metadata():
 
 
 def test_collect_privilege_route_registry_strict_unknown_scope():
+
     catalog = _build_test_catalog()
     app = FastAPI()
     router = APIRouter()
@@ -153,8 +155,10 @@ def test_validate_privilege_metadata_on_startup_invokes_strict_mode(monkeypatch:
     catalog = _build_test_catalog()
     sample_registry: Dict[str, List[object]] = {"media.ingest": []}
     calls: Dict[str, object] = {}
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "1")
 
     def fake_load_catalog() -> PrivilegeCatalog:
+
         calls["load_catalog"] = True
         return catalog
 
@@ -180,6 +184,7 @@ def test_validate_privilege_metadata_on_startup_invokes_strict_mode(monkeypatch:
 
 
 def test_serialize_route_registry_outputs_deterministic_structure():
+
     catalog = _build_test_catalog()
     app = FastAPI()
     router = APIRouter()
@@ -231,6 +236,7 @@ def test_serialize_route_registry_outputs_deterministic_structure():
 
 
 def test_privilege_registry_snapshot_matches_live_app():
+
     catalog = load_catalog()
     registry = collect_privilege_route_registry(fastapi_app, catalog, strict=True)
     serialized = serialize_route_registry(registry)
@@ -239,9 +245,7 @@ def test_privilege_registry_snapshot_matches_live_app():
     assert snapshot_path.exists(), "Missing privilege registry snapshot fixture."
     expected = json.loads(snapshot_path.read_text(encoding="utf-8"))
 
-    assert (
-        serialized == expected
-    ), (
+    assert serialized == expected, (
         "Privilege route registry snapshot is stale. "
         "Run Helper_Scripts/update_privilege_registry_snapshot.py to regenerate and commit the updated snapshot."
     )

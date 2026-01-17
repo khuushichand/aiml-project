@@ -39,7 +39,7 @@ SAMPLE_DOCUMENTS = {
 
     "code_sample": """
     def train_model(data, labels, epochs=10):
-        model = NeuralNetwork()
+             model = NeuralNetwork()
         for epoch in range(epochs):
             predictions = model.forward(data)
             loss = calculate_loss(predictions, labels)
@@ -325,6 +325,7 @@ class ConfigContextManager:
         self.original_values = {}
 
     def __enter__(self):
+
         """Apply temporary config updates."""
         for key_path, value in self.updates.items():
             keys = key_path.split(".")
@@ -348,6 +349,7 @@ class ConfigContextManager:
         return self.config_dict
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+
         """Restore original config values."""
         for key_path, original_value in self.original_values.items():
             keys = key_path.split(".")

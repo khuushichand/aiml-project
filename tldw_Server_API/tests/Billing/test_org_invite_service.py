@@ -9,18 +9,18 @@ repository dependencies. Tests verify business logic without database access.
 Test Groups
 -----------
 1. **InviteValidationResult tests**: Verify the `is_valid` property correctly
-   reflects invite status (VALID, EXPIRED, EXHAUSTED, REVOKED, NOT_FOUND).
+    reflects invite status (VALID, EXPIRED, EXHAUSTED, REVOKED, NOT_FOUND).
 
 2. **RedemptionResult tests**: Verify result dataclass captures success/failure
-   states and idempotent redemption (was_already_member).
+    states and idempotent redemption (was_already_member).
 
 3. **OrgInviteService tests**: Core service logic including:
-   - **Creation validation**: Role restrictions (no owner grants), max_uses bounds,
-     expiry_days bounds, team-org membership verification.
-   - **Validation states**: All five invite states are correctly identified.
-   - **Redemption flows**: Invalid codes, already-member idempotency, new member
-     addition, team-specific invites.
-   - **Management operations**: Revoke, list, preview, cleanup.
+    - **Creation validation**: Role restrictions (no owner grants), max_uses bounds,
+        expiry_days bounds, team-org membership verification.
+    - **Validation states**: All five invite states are correctly identified.
+    - **Redemption flows**: Invalid codes, already-member idempotency, new member
+        addition, team-specific invites.
+    - **Management operations**: Revoke, list, preview, cleanup.
 
 Mocking Approach
 ----------------
@@ -41,12 +41,14 @@ from tldw_Server_API.app.services.org_invite_service import (
     RedemptionResult,
     get_invite_service,
 )
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 class TestInviteValidationResult:
     """Tests for InviteValidationResult dataclass."""
 
     def test_is_valid_true_when_valid(self):
+
         """is_valid should be True when status is VALID."""
         result = InviteValidationResult(
             status=InviteStatus.VALID,
@@ -55,6 +57,7 @@ class TestInviteValidationResult:
         assert result.is_valid is True
 
     def test_is_valid_false_when_expired(self):
+
         """is_valid should be False when status is EXPIRED."""
         result = InviteValidationResult(
             status=InviteStatus.EXPIRED,
@@ -64,6 +67,7 @@ class TestInviteValidationResult:
         assert result.is_valid is False
 
     def test_is_valid_false_when_exhausted(self):
+
         """is_valid should be False when status is EXHAUSTED."""
         result = InviteValidationResult(
             status=InviteStatus.EXHAUSTED,
@@ -72,6 +76,7 @@ class TestInviteValidationResult:
         assert result.is_valid is False
 
     def test_is_valid_false_when_revoked(self):
+
         """is_valid should be False when status is REVOKED."""
         result = InviteValidationResult(
             status=InviteStatus.REVOKED,
@@ -80,6 +85,7 @@ class TestInviteValidationResult:
         assert result.is_valid is False
 
     def test_is_valid_false_when_not_found(self):
+
         """is_valid should be False when status is NOT_FOUND."""
         result = InviteValidationResult(
             status=InviteStatus.NOT_FOUND,
@@ -91,6 +97,7 @@ class TestRedemptionResult:
     """Tests for RedemptionResult dataclass."""
 
     def test_successful_redemption(self):
+
         """Successful redemption should have success=True."""
         result = RedemptionResult(
             success=True,
@@ -102,6 +109,7 @@ class TestRedemptionResult:
         assert result.was_already_member is False
 
     def test_already_member_redemption(self):
+
         """Already member redemption should be marked."""
         result = RedemptionResult(
             success=True,
@@ -112,6 +120,7 @@ class TestRedemptionResult:
         assert result.was_already_member is True
 
     def test_failed_redemption(self):
+
         """Failed redemption should have success=False."""
         result = RedemptionResult(
             success=False,
@@ -347,6 +356,123 @@ class TestOrgInviteService:
         mock_orgs_repo.add_org_member.assert_called_once_with(org_id=1, user_id=100, role="member")
         mock_invites_repo.record_redemption.assert_called_once()
         mock_invites_repo.increment_uses_count.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_redeem_invite_domain_allowlist_mismatch(self, service, mock_invites_repo, mock_orgs_repo):
+        """Redeeming invite with mismatched domain should fail."""
+        tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat()
+        mock_invites_repo.get_invite_by_code.return_value = {
+            "id": 1,
+            "org_id": 1,
+            "org_name": "Test Org",
+            "is_active": True,
+            "expires_at": tomorrow,
+            "uses_count": 0,
+            "max_uses": 5,
+            "role_to_grant": "member",
+            "allowed_email_domain": "example.com",
+        }
+        mock_orgs_repo.get_org_member.return_value = None
+
+        result = await service.redeem_invite(
+            code="DOMAINCODE",
+            user_id=100,
+            user_email="user@other.com",
+        )
+
+        assert result.success is False
+        assert "allowed email domain" in (result.message or "").lower()
+        mock_orgs_repo.add_org_member.assert_not_called()
+        reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_redeem_invite_domain_allowlist_missing_email_blocks(
+        self, service, mock_invites_repo, mock_orgs_repo, monkeypatch
+    ):
+        """Redeeming invite without email should fail when fallback is disabled."""
+        monkeypatch.delenv("ORG_INVITE_ALLOW_MISSING_EMAIL", raising=False)
+        reset_settings()
+        tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat()
+        mock_invites_repo.get_invite_by_code.return_value = {
+            "id": 1,
+            "org_id": 1,
+            "org_name": "Test Org",
+            "is_active": True,
+            "expires_at": tomorrow,
+            "uses_count": 0,
+            "max_uses": 5,
+            "role_to_grant": "member",
+            "allowed_email_domain": "example.com",
+        }
+        mock_orgs_repo.get_org_member.return_value = None
+
+        result = await service.redeem_invite(
+            code="DOMAINMISS",
+            user_id=100,
+            user_email=None,
+        )
+
+        assert result.success is False
+        assert "allowed email domain" in (result.message or "").lower()
+        mock_orgs_repo.add_org_member.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_redeem_invite_domain_allowlist_missing_email_fallback(
+        self, service, mock_invites_repo, mock_orgs_repo, monkeypatch
+    ):
+        """Redeeming invite without email should succeed when fallback is enabled."""
+        monkeypatch.setenv("ORG_INVITE_ALLOW_MISSING_EMAIL", "true")
+        reset_settings()
+        tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat()
+        mock_invites_repo.get_invite_by_code.return_value = {
+            "id": 1,
+            "org_id": 1,
+            "org_name": "Test Org",
+            "is_active": True,
+            "expires_at": tomorrow,
+            "uses_count": 0,
+            "max_uses": 5,
+            "role_to_grant": "member",
+            "allowed_email_domain": "example.com",
+        }
+        mock_orgs_repo.get_org_member.return_value = None
+
+        result = await service.redeem_invite(
+            code="DOMAINFALLBACK",
+            user_id=100,
+            user_email=None,
+        )
+
+        assert result.success is True
+        mock_orgs_repo.add_org_member.assert_called_once_with(org_id=1, user_id=100, role="member")
+        monkeypatch.delenv("ORG_INVITE_ALLOW_MISSING_EMAIL", raising=False)
+        reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_redeem_invite_domain_allowlist_match(self, service, mock_invites_repo, mock_orgs_repo):
+        """Redeeming invite with matching domain should succeed."""
+        tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat()
+        mock_invites_repo.get_invite_by_code.return_value = {
+            "id": 1,
+            "org_id": 1,
+            "org_name": "Test Org",
+            "is_active": True,
+            "expires_at": tomorrow,
+            "uses_count": 0,
+            "max_uses": 5,
+            "role_to_grant": "member",
+            "allowed_email_domain": "example.com",
+        }
+        mock_orgs_repo.get_org_member.return_value = None
+
+        result = await service.redeem_invite(
+            code="DOMAINOK",
+            user_id=100,
+            user_email="User@Example.com",
+        )
+
+        assert result.success is True
+        mock_orgs_repo.add_org_member.assert_called_once_with(org_id=1, user_id=100, role="member")
 
     @pytest.mark.asyncio
     async def test_redeem_invite_with_team(self, service, mock_invites_repo, mock_orgs_repo):

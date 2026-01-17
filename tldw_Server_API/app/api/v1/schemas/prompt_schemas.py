@@ -92,6 +92,19 @@ class PromptSearchResponse(BaseModel):
     per_page: int
 
 
+class PromptVersionResponse(BaseModel):
+    version: int
+    created_at: Optional[datetime] = None
+    comment: Optional[str] = None
+    name: Optional[str] = None
+    author: Optional[str] = None
+    details: Optional[str] = None
+    system_prompt: Optional[str] = None
+    user_prompt: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ExportResponse(BaseModel):
     message: str
     file_path: Optional[str] = None  # Could be a download link or internal path for admin
@@ -110,6 +123,70 @@ class SyncLogEntryResponse(BaseModel):
     payload: Optional[Dict[str, Any]]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# --- Import/Export ---
+class PromptImportItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    content: Optional[str] = None
+    details: Optional[str] = None
+    author: Optional[str] = Field(None, max_length=100)
+    system_prompt: Optional[str] = Field(None, max_length=20000)
+    user_prompt: Optional[str] = Field(None, max_length=20000)
+    keywords: List[str] = Field(default_factory=list)
+
+
+class PromptImportRequest(BaseModel):
+    prompts: List[PromptImportItem] = Field(..., min_length=1)
+    skip_duplicates: bool = False
+
+
+class PromptImportResponse(BaseModel):
+    imported: int
+    failed: int
+    skipped: int
+    prompt_ids: List[int] = Field(default_factory=list)
+
+
+# --- Template Processing ---
+class TemplateVariablesRequest(BaseModel):
+    template: str = Field(..., min_length=1)
+
+
+class TemplateVariablesResponse(BaseModel):
+    variables: List[str]
+
+
+class TemplateRenderRequest(BaseModel):
+    template: str = Field(..., min_length=1)
+    variables: Dict[str, Any]
+
+
+class TemplateRenderResponse(BaseModel):
+    rendered: str
+
+
+# --- Bulk Operations ---
+class PromptBulkDeleteRequest(BaseModel):
+    prompt_ids: List[int] = Field(..., min_length=1)
+
+
+class PromptBulkDeleteResponse(BaseModel):
+    deleted: int
+    failed: int
+    failed_ids: List[int] = Field(default_factory=list)
+
+
+class PromptBulkKeywordsRequest(BaseModel):
+    prompt_ids: List[int] = Field(..., min_length=1)
+    add_keywords: List[str] = Field(default_factory=list)
+    remove_keywords: List[str] = Field(default_factory=list)
+
+
+class PromptBulkKeywordsResponse(BaseModel):
+    updated: int
+    failed: int
+    failed_ids: List[int] = Field(default_factory=list)
 
 #
 # End of prompts_schemas.py

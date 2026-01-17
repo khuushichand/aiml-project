@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+from typing import Any, Dict, Iterable, Optional, List, Union
+
+from .base import ChatProvider
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError, ChatProviderError
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
+from tldw_Server_API.app.core.LLM_Calls.error_utils import raise_chat_error_from_http
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
+    _sanitize_payload_for_logging,
+    merge_extra_body,
+    merge_extra_headers,
+)
+from tldw_Server_API.app.core.LLM_Calls.sse import finalize_stream, is_done_line, sse_done, sse_data
+from tldw_Server_API.app.core.LLM_Calls.sse import normalize_provider_line
+from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+    get_http_error_text,
+    get_http_status_from_exception,
+    is_chunked_encoding_error,
+    is_http_status_error,
+    is_network_error,
+)
+from tldw_Server_API.app.core.Utils.Utils import logging
+from tldw_Server_API.app.core.config import load_and_log_configs
+
+
+def _zai_request(
+    input_data: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    system_message: Optional[str] = None,
+    temp: Optional[float] = None,
+    maxp: Optional[float] = None,
+    streaming: Optional[bool] = False,
+    max_tokens: Optional[int] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    do_sample: Optional[bool] = None,
+    request_id: Optional[str] = None,
+    custom_prompt_arg: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    base_url: Optional[str] = None,
+):
+    loaded_config_data = app_config or load_and_log_configs()
+    zai_config = loaded_config_data.get("zai_api", {})
+
+    final_api_key = api_key or zai_config.get("api_key")
+    if not final_api_key:
+        logging.error("Z.AI: API key is missing.")
+        raise ChatConfigurationError(provider="zai", message="Z.AI API Key is required but not found.")
+
+    logging.debug("Z.AI: Using configured API key")
+
+    current_model = model or zai_config.get("model", "glm-4.5-flash")
+    current_temp = temp if temp is not None else _safe_cast(zai_config.get("temperature"), float, 0.7)
+    current_top_p = maxp if maxp is not None else _safe_cast(zai_config.get("top_p"), float, 0.95)
+    current_streaming_cfg = zai_config.get("streaming", False)
+    current_streaming = (
+        streaming
+        if streaming is not None
+        else (str(current_streaming_cfg).lower() == "true" if isinstance(current_streaming_cfg, str) else bool(current_streaming_cfg))
+    )
+    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(zai_config.get("max_tokens"), int, 4096)
+
+    api_messages = []
+    if system_message:
+        api_messages.append({"role": "system", "content": system_message})
+    api_messages.extend(input_data)
+
+    payload: Dict[str, Any] = {
+        "model": current_model,
+        "messages": api_messages,
+        "stream": current_streaming,
+    }
+
+    if current_temp is not None:
+        payload["temperature"] = current_temp
+    if current_top_p is not None:
+        payload["top_p"] = current_top_p
+    if current_max_tokens is not None:
+        payload["max_tokens"] = current_max_tokens
+    if do_sample is not None:
+        payload["do_sample"] = do_sample
+    if tools is not None:
+        payload["tools"] = tools
+    if request_id is not None:
+        payload["request_id"] = request_id
+
+    headers = {
+        "Authorization": f"Bearer {final_api_key}",
+        "Content-Type": "application/json",
+    }
+    headers = merge_extra_headers(headers, {"extra_headers": extra_headers})
+
+    api_base_url = base_url or zai_config.get("api_base_url", "https://api.z.ai/api/paas/v4")
+    api_url = api_base_url.rstrip("/") + "/chat/completions"
+
+    payload = merge_extra_body(payload, {"extra_body": extra_body})
+    payload_metadata = _sanitize_payload_for_logging(payload)
+    logging.debug(f"Z.AI request metadata: {payload_metadata}")
+
+    try:
+        if current_streaming:
+            logging.debug("Z.AI: Posting request (streaming)")
+            from tldw_Server_API.app.core.LLM_Calls import chat_calls as _chat_calls
+            session = _chat_calls.create_session_with_retries(
+                total=_safe_cast(zai_config.get("api_retries"), int, 3),
+                backoff_factor=_safe_cast(zai_config.get("api_retry_delay"), float, 1.0),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
+            try:
+                stream_timeout = _safe_cast(zai_config.get("api_timeout"), float, 90.0)
+                response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=stream_timeout)
+                response.raise_for_status()
+
+                def stream_generator():
+                    done_sent = False
+                    skip_finalize = False
+                    try:
+                        for raw_line in response.iter_lines(decode_unicode=True):
+                            if not raw_line:
+                                continue
+                            if is_done_line(raw_line):
+                                done_sent = True
+                            normalized = normalize_provider_line(raw_line)
+                            if normalized is None:
+                                continue
+                            yield normalized
+                        if not done_sent:
+                            done_sent = True
+                            yield sse_done()
+                    except GeneratorExit:
+                        skip_finalize = True
+                        try:
+                            response.close()
+                        finally:
+                            try:
+                                session.close()
+                            except Exception:
+                                pass
+                        raise
+                    except Exception as e_stream:
+                        if is_chunked_encoding_error(e_stream):
+                            logging.error(f"Z.AI: ChunkedEncodingError during stream: {e_stream}", exc_info=True)
+                            yield sse_data(
+                                {"error": {"message": f"Stream connection error: {str(e_stream)}", "type": "zai_stream_error"}}
+                            )
+                        else:
+                            logging.error(f"Z.AI: Error during stream iteration: {e_stream}", exc_info=True)
+                            yield sse_data(
+                                {"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "zai_stream_error"}}
+                            )
+                    finally:
+                        try:
+                            if not skip_finalize:
+                                for tail in finalize_stream(response, done_already=done_sent):
+                                    yield tail
+                        finally:
+                            try:
+                                session.close()
+                            except Exception:
+                                pass
+
+                return stream_generator()
+            except Exception:
+                try:
+                    session.close()
+                except Exception:
+                    pass
+                raise
+
+        logging.debug("Z.AI: Posting request (non-streaming)")
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _chat_calls
+        session = _chat_calls.create_session_with_retries(
+            total=_safe_cast(zai_config.get("api_retries"), int, 3),
+            backoff_factor=_safe_cast(zai_config.get("api_retry_delay"), float, 1.0),
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"],
+        )
+        try:
+            response = session.post(api_url, headers=headers, json=payload, timeout=120)
+            logging.debug(f"Z.AI: Full API response status: {response.status_code}")
+            response.raise_for_status()
+            try:
+                response_data = response.json()
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+            logging.debug("Z.AI: Non-streaming request successful.")
+            return response_data
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    except Exception as e:
+        if is_http_status_error(e):
+            status = get_http_status_from_exception(e)
+            if getattr(e, "response", None) is not None:
+                logging.error(f"Z.AI Full Error Response (status {status}): {get_http_error_text(e)}")
+            else:
+                logging.error(f"Z.AI HTTP error with no response object: {e}")
+            raise_chat_error_from_http("zai", e)
+        if is_network_error(e):
+            logging.error(f"Z.AI RequestException: {e}", exc_info=True)
+            raise ChatProviderError(provider="zai", message=f"Network error: {e}", status_code=504)
+        logging.error(f"Z.AI: Unexpected error in chat_with_zai: {e}", exc_info=True)
+        raise ChatProviderError(provider="zai", message=f"Unexpected error: {e}")
+
+
+class ZaiAdapter(ChatProvider):
+    name = "zai"
+
+    def capabilities(self) -> Dict[str, Any]:
+        return {
+            "supports_streaming": True,
+            "supports_tools": True,
+            "default_timeout_seconds": 90,
+            "max_output_tokens_default": 4096,
+        }
+
+    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+        stream_flag = request.get("stream")
+        if streaming is not None:
+            stream_flag = streaming
+        return {
+            "input_data": request.get("messages") or [],
+            "model": request.get("model"),
+            "api_key": request.get("api_key"),
+            "system_message": request.get("system_message"),
+            "temp": request.get("temperature"),
+            "maxp": request.get("top_p"),
+            "streaming": stream_flag,
+            "max_tokens": request.get("max_tokens"),
+            "tools": request.get("tools"),
+            "do_sample": request.get("do_sample"),
+            "request_id": request.get("request_id"),
+            "custom_prompt_arg": request.get("custom_prompt_arg"),
+            "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
+            "base_url": request.get("base_url"),
+        }
+
+    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        sanitized = validate_payload(self.name, request or {})
+        return _zai_request(**self._to_handler_args(sanitized, streaming=False))
+
+    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        sanitized = validate_payload(self.name, request or {})
+        return _zai_request(**self._to_handler_args(sanitized, streaming=True))

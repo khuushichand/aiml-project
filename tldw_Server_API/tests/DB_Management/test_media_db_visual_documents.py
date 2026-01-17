@@ -8,6 +8,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
 def _make_media_db() -> MediaDatabase:
+
     return MediaDatabase(db_path=":memory:", client_id="tests-visual")
 
 

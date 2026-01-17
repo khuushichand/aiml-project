@@ -1,6 +1,5 @@
 import asyncio
 import os
-import types
 import pytest
 
 
@@ -40,68 +39,54 @@ def test_policy_fail_closed_on_error():
 async def test_notion_download_renders_nested_blocks(monkeypatch):
     from tldw_Server_API.app.core.External_Sources.notion import NotionConnector
 
-    # Fake aiohttp session/response for Notion blocks children
+    # Fake afetch response for Notion blocks children
     class _Resp:
         def __init__(self, payload):
             self._payload = payload
-            self.status = 200
 
-        async def json(self):
+        def json(self):
             return self._payload
 
         def raise_for_status(self):
             return None
 
-        async def __aenter__(self):
-            return self
+        async def aclose(self):
+            return None
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
+    # Construct a minimal realistic Notion blocks payload
+    page_blocks = {
+        "results": [
+            {"object": "block", "id": "h1", "type": "heading_1", "heading_1": {"rich_text": [{"plain_text": "Title"}]}},
+            {"object": "block", "id": "li1", "type": "bulleted_list_item", "has_children": True,
+                "bulleted_list_item": {"rich_text": [{"plain_text": "Item"}]}},
+            {"object": "block", "id": "tbl1", "type": "table", "has_children": True, "table": {"table_width": 2}},
+        ],
+        "has_more": False,
+        "next_cursor": None,
+    }
 
-    class _Session:
-        def __init__(self, *a, **kw):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url, headers=None, params=None, timeout=None):
-            # Return a single page of blocks containing nested items
-            # Construct a minimal realistic Notion blocks payload
-            page_blocks = {
+    async def _fake_afetch(*, method, url, headers=None, params=None, json=None, timeout=None):
+        # Children for list item and table rows
+        if url.endswith("/blocks/li1/children"):
+            # One code child
+            payload = {"results": [{"object": "block", "id": "c1", "type": "code", "code": {"language": "python", "rich_text": [{"plain_text": "print('x')"}]}}], "has_more": False, "next_cursor": None}
+        elif url.endswith("/blocks/tbl1/children"):
+            # First row is header, second is value
+            payload = {
                 "results": [
-                    {"object": "block", "id": "h1", "type": "heading_1", "heading_1": {"rich_text": [{"plain_text": "Title"}]}},
-                    {"object": "block", "id": "li1", "type": "bulleted_list_item", "has_children": True,
-                     "bulleted_list_item": {"rich_text": [{"plain_text": "Item"}]}},
-                    {"object": "block", "id": "tbl1", "type": "table", "has_children": True, "table": {"table_width": 2}},
+                    {"object": "block", "type": "table_row", "table_row": {"cells": [[{"plain_text": "H1"}], [{"plain_text": "H2"}]]}},
+                    {"object": "block", "type": "table_row", "table_row": {"cells": [[{"plain_text": "V1"}], [{"plain_text": "V2"}]]}},
                 ],
                 "has_more": False,
                 "next_cursor": None,
             }
-            # Children for list item and table rows
-            if url.endswith("/blocks/li1/children"):
-                # One code child
-                payload = {"results": [{"object": "block", "id": "c1", "type": "code", "code": {"language": "python", "rich_text": [{"plain_text": "print('x')"}]}}], "has_more": False, "next_cursor": None}
-            elif url.endswith("/blocks/tbl1/children"):
-                # First row is header, second is value
-                payload = {
-                    "results": [
-                        {"object": "block", "type": "table_row", "table_row": {"cells": [[{"plain_text": "H1"}], [{"plain_text": "H2"}]]}},
-                        {"object": "block", "type": "table_row", "table_row": {"cells": [[{"plain_text": "V1"}], [{"plain_text": "V2"}]]}},
-                    ],
-                    "has_more": False,
-                    "next_cursor": None,
-                }
-            else:
-                payload = page_blocks
-            return _Resp(payload)
+        else:
+            payload = page_blocks
+        return _Resp(payload)
 
-    # Patch aiohttp in module
+    # Patch afetch in module
     import tldw_Server_API.app.core.External_Sources.notion as notion_mod
-    monkeypatch.setattr(notion_mod, "aiohttp", types.SimpleNamespace(ClientSession=_Session))
+    monkeypatch.setattr(notion_mod, "afetch", _fake_afetch)
 
     nc = NotionConnector(client_id="x", client_secret="y", redirect_base="http://localhost")
     md_bytes = await nc.download_file({"tokens": {"access_token": "tok"}}, file_id="page123")
@@ -147,7 +132,7 @@ async def test_worker_drive_recursive_traversal(monkeypatch):
         async def list_files(self, account, parent_remote_id, *, page_size=50, cursor=None):
             if parent_remote_id in ("root", "r1"):
                 return ([{"id": "F", "name": "Folder", "mimeType": "application/vnd.google-apps.folder", "is_folder": True},
-                         {"id": "A", "name": "DocA.txt", "mimeType": "text/plain", "size": 10}], None)
+                        {"id": "A", "name": "DocA.txt", "mimeType": "text/plain", "size": 10}], None)
             if parent_remote_id == "F":
                 return ([{"id": "B", "name": "DocB.txt", "mimeType": "text/plain", "size": 12}], None)
             return ([], None)

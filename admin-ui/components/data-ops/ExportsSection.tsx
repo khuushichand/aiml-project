@@ -7,7 +7,8 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { useToast } from '@/components/ui/toast';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
-import { getAuthHeaders } from '@/lib/auth';
+import { buildApiUrl } from '@/lib/api-config';
+import { buildAuthHeaders } from '@/lib/http';
 import { Download } from 'lucide-react';
 import { Field } from '@/components/data-ops/Field';
 
@@ -15,10 +16,6 @@ const EXPORT_FORMATS = [
   { value: 'csv', label: 'CSV' },
   { value: 'json', label: 'JSON' },
 ];
-
-const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const API_VERSION = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
-const API_URL = `${API_HOST.replace(/\/$/, '')}/api/${API_VERSION}`;
 
 type ExportsSectionProps = {
   refreshSignal: number;
@@ -98,8 +95,8 @@ const downloadExport = async (
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   const query = new URLSearchParams(params).toString();
   try {
-    const response = await fetch(`${API_URL}${endpoint}${query ? `?${query}` : ''}`, {
-      headers: getAuthHeaders(),
+    const response = await fetch(buildApiUrl(`${endpoint}${query ? `?${query}` : ''}`), {
+      headers: buildAuthHeaders('GET'),
       credentials: 'include',
       signal: controller.signal,
     });

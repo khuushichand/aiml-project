@@ -1,173 +1,22 @@
 'use client';
 
-import { getJWTToken, getApiKey, logout } from './auth';
-import type { BackupsResponse, IncidentsResponse, RetentionPoliciesResponse } from '@/types';
-
-// API configuration
-const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const API_VERSION = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
-const API_URL = `${API_HOST.replace(/\/$/, '')}/api/${API_VERSION}`;
-
-export class ApiError extends Error {
-  status: number;
-  detail?: unknown;
-
-  constructor(status: number, message: string, detail?: unknown) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-    this.detail = detail;
-  }
-}
+import { ApiError, requestJson, requestText } from './http';
+import { normalizeListResponse, normalizePagedResponse } from './normalize';
+import type {
+  AuditLog,
+  BackupsResponse,
+  IncidentsResponse,
+  RegistrationCode,
+  RetentionPoliciesResponse,
+  User,
+  UserWithKeyCount,
+} from '@/types';
+export { ApiError };
 
 type AddTeamMemberInput =
   | { email: string; role?: string }
   | { userId: string | number; role?: string }
   | { user_id: number; role?: string };
-
-/**
- * Get CSRF token from cookie
- */
-function getCsrfToken(): string | null {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie.match(
-    new RegExp('(?:^|; )csrf_token=([^;]*)')
-  );
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-/**
- * Build auth headers including JWT, API key, and CSRF token
- */
-function getAuthHeaders(method: string = 'GET'): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-
-  // JWT Bearer token
-  const token = getJWTToken();
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  // X-API-KEY for single-user mode
-  const apiKey = getApiKey();
-  if (apiKey) {
-    headers['X-API-KEY'] = apiKey;
-  }
-
-  // CSRF token for mutating requests (when not using API key auth)
-  const methodUpper = method.toUpperCase();
-  const needsCsrf = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUpper) && !apiKey;
-  if (needsCsrf) {
-    const csrf = getCsrfToken();
-    if (csrf) {
-      headers['X-CSRF-Token'] = csrf;
-    }
-  }
-
-  return headers;
-}
-
-/**
- * Generic request function with error handling
- */
-async function request<T = unknown>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const method = options.method || 'GET';
-  const headers = {
-    ...getAuthHeaders(method),
-    ...options.headers,
-  };
-
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    ...options,
-    headers,
-    credentials: 'include', // Include cookies for CSRF
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-
-    // Handle unauthorized - clear credentials and redirect
-    if (response.status === 401 && typeof window !== 'undefined') {
-      await logout();
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.href = '/login';
-      }
-    }
-
-    // Handle CSRF errors
-    if (response.status === 403) {
-      const detail = error.detail || '';
-      if (typeof detail === 'string' && detail.toLowerCase().includes('csrf')) {
-        throw new ApiError(
-          response.status,
-          'CSRF validation failed. Please refresh the page and try again.',
-          error
-        );
-      }
-    }
-
-    const message = String(error.detail || error.message || 'Request failed');
-    throw new ApiError(response.status, message, error);
-  }
-
-  // Handle empty responses
-  const text = await response.text();
-  if (!text) return {} as T;
-
-  return JSON.parse(text);
-}
-
-/**
- * Request helper that returns raw text (for Prometheus metrics).
- */
-async function requestText(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<string> {
-  const method = options.method || 'GET';
-  const headers = {
-    ...getAuthHeaders(method),
-    ...options.headers,
-  };
-
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    ...options,
-    headers,
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-
-    if (response.status === 401 && typeof window !== 'undefined') {
-      await logout();
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.href = '/login';
-      }
-    }
-
-    if (response.status === 403) {
-      const detail = error.detail || '';
-      if (typeof detail === 'string' && detail.toLowerCase().includes('csrf')) {
-        throw new ApiError(
-          response.status,
-          'CSRF validation failed. Please refresh the page and try again.',
-          error
-        );
-      }
-    }
-
-    const message = String(error.detail || error.message || 'Request failed');
-    throw new ApiError(response.status, message, error);
-  }
-
-  return response.text();
-}
 
 function normalizeTeamMemberInput(member: AddTeamMemberInput): Record<string, unknown> {
   if ('email' in member) {
@@ -189,16 +38,16 @@ function normalizeTeamMemberInput(member: AddTeamMemberInput): Record<string, un
 }
 
 export async function getTeam(teamId: string) {
-  return await request(`/admin/teams/${encodeURIComponent(teamId)}`);
+  return await requestJson(`/admin/teams/${encodeURIComponent(teamId)}`);
 }
 
 export async function getTeamMembers(teamId: string) {
-  return await request(`/admin/teams/${encodeURIComponent(teamId)}/members`);
+  return await requestJson(`/admin/teams/${encodeURIComponent(teamId)}/members`);
 }
 
 export async function addTeamMember(teamId: string, member: AddTeamMemberInput) {
   const payload = normalizeTeamMemberInput(member);
-  return await request(`/admin/teams/${encodeURIComponent(teamId)}/members`, {
+  return await requestJson(`/admin/teams/${encodeURIComponent(teamId)}/members`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -209,7 +58,7 @@ export async function removeTeamMember(teamId: string, memberId: string | number
   if (!memberValue) {
     throw new Error('memberId is required');
   }
-  return await request(`/admin/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberValue)}`, {
+  return await requestJson(`/admin/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberValue)}`, {
     method: 'DELETE',
   });
 }
@@ -221,114 +70,109 @@ export const api = {
   // ============================================
   // Dashboard & Stats
   // ============================================
-  getDashboardStats: () => request('/admin/stats'),
-  getDashboardActivity: (days = 7) => request(`/admin/activity?days=${days}`),
+  getDashboardStats: () => requestJson('/admin/stats'),
+  getDashboardActivity: (days = 7) => requestJson(`/admin/activity?days=${days}`),
 
   // ============================================
   // User Management
   // ============================================
-  getUsers: (params?: Record<string, string>) => {
+  getUsers: async (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/users${queryParams ? `?${queryParams}` : ''}`);
+    const response = await requestJson(`/admin/users${queryParams ? `?${queryParams}` : ''}`);
+    return normalizeListResponse<UserWithKeyCount>(response, ['users', 'items']);
   },
-  createUser: (data: Record<string, unknown>) => request('/admin/users', {
+  createUser: (data: Record<string, unknown>) => requestJson('/admin/users', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  getUser: (userId: string) => request(`/admin/users/${userId}`),
-  getUserOrgMemberships: (userId: string) => request(`/admin/users/${userId}/org-memberships`),
+  getUser: (userId: string) => requestJson(`/admin/users/${userId}`),
+  getUserOrgMemberships: (userId: string) => requestJson(`/admin/users/${userId}/org-memberships`),
   getUserEffectivePermissions: (userId: string) =>
-    request(`/admin/users/${userId}/effective-permissions`),
-  getUserSessions: (userId: string) => request(`/admin/users/${userId}/sessions`),
+    requestJson(`/admin/users/${userId}/effective-permissions`),
+  getUserSessions: (userId: string) => requestJson(`/admin/users/${userId}/sessions`),
   revokeUserSession: (userId: string, sessionId: string) =>
-    request(`/admin/users/${userId}/sessions/${sessionId}`, {
+    requestJson(`/admin/users/${userId}/sessions/${sessionId}`, {
       method: 'DELETE',
     }),
   revokeAllUserSessions: (userId: string) =>
-    request(`/admin/users/${userId}/sessions/revoke-all`, {
+    requestJson(`/admin/users/${userId}/sessions/revoke-all`, {
       method: 'POST',
     }),
-  getUserMfaStatus: (userId: string) => request(`/admin/users/${userId}/mfa`),
+  getUserMfaStatus: (userId: string) => requestJson(`/admin/users/${userId}/mfa`),
   disableUserMfa: (userId: string) =>
-    request(`/admin/users/${userId}/mfa/disable`, {
+    requestJson(`/admin/users/${userId}/mfa/disable`, {
       method: 'POST',
     }),
-  updateUser: (userId: string, data: Record<string, unknown>) => request(`/admin/users/${userId}`, {
+  updateUser: (userId: string, data: Record<string, unknown>) => requestJson(`/admin/users/${userId}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   }),
-  deleteUser: (userId: string) => request(`/admin/users/${userId}`, {
+  deleteUser: (userId: string) => requestJson(`/admin/users/${userId}`, {
     method: 'DELETE',
   }),
-  getCurrentUser: () => request('/users/me'),
+  getCurrentUser: () => requestJson('/users/me'),
 
   // ============================================
   // Registration Codes
   // ============================================
-  getRegistrationSettings: () => request('/admin/registration-settings'),
-  updateRegistrationSettings: (data: Record<string, unknown>) => request('/admin/registration-settings', {
+  getRegistrationSettings: () => requestJson('/admin/registration-settings'),
+  updateRegistrationSettings: (data: Record<string, unknown>) => requestJson('/admin/registration-settings', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
   getRegistrationCodes: async (includeExpired: boolean = false) => {
-    const response = await request(`/admin/registration-codes?include_expired=${includeExpired}`);
-    if (Array.isArray(response)) {
-      return response;
-    }
-    if (response && Array.isArray((response as { codes?: unknown }).codes)) {
-      return (response as { codes: unknown[] }).codes;
-    }
-    return [];
+    const response = await requestJson(`/admin/registration-codes?include_expired=${includeExpired}`);
+    return normalizeListResponse<RegistrationCode>(response, ['codes', 'items']);
   },
-  createRegistrationCode: (data: Record<string, unknown>) => request('/admin/registration-codes', {
+  createRegistrationCode: (data: Record<string, unknown>) => requestJson('/admin/registration-codes', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  deleteRegistrationCode: (codeId: number | string) => request(`/admin/registration-codes/${codeId}`, {
+  deleteRegistrationCode: (codeId: number | string) => requestJson(`/admin/registration-codes/${codeId}`, {
     method: 'DELETE',
   }),
 
   // ============================================
   // API Key Management
   // ============================================
-  getUserApiKeys: (userId: string) => request(`/admin/users/${userId}/api-keys`),
-  createApiKey: (userId: string, data: Record<string, unknown>) => request(`/admin/users/${userId}/api-keys`, {
+  getUserApiKeys: (userId: string) => requestJson(`/admin/users/${userId}/api-keys`),
+  createApiKey: (userId: string, data: Record<string, unknown>) => requestJson(`/admin/users/${userId}/api-keys`, {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  rotateApiKey: (userId: string, keyId: string) => request(`/admin/users/${userId}/api-keys/${keyId}/rotate`, {
+  rotateApiKey: (userId: string, keyId: string) => requestJson(`/admin/users/${userId}/api-keys/${keyId}/rotate`, {
     method: 'POST',
   }),
-  revokeApiKey: (userId: string, keyId: string) => request(`/admin/users/${userId}/api-keys/${keyId}`, {
+  revokeApiKey: (userId: string, keyId: string) => requestJson(`/admin/users/${userId}/api-keys/${keyId}`, {
     method: 'DELETE',
   }),
-  getApiKeyAuditLog: (keyId: string) => request(`/admin/api-keys/${keyId}/audit-log`),
+  getApiKeyAuditLog: (keyId: string) => requestJson(`/admin/api-keys/${keyId}/audit-log`),
 
   // ============================================
   // Organizations
   // ============================================
   getOrganizations: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/orgs${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/admin/orgs${queryParams ? `?${queryParams}` : ''}`);
   },
-  getOrganization: (orgId: string) => request(`/orgs/${orgId}`),
-  createOrganization: (data: Record<string, unknown>) => request('/admin/orgs', {
+  getOrganization: (orgId: string) => requestJson(`/orgs/${orgId}`),
+  createOrganization: (data: Record<string, unknown>) => requestJson('/admin/orgs', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  getOrgMembers: (orgId: string) => request(`/admin/orgs/${orgId}/members`),
-  addOrgMember: (orgId: string, data: Record<string, unknown>) => request(`/admin/orgs/${orgId}/members`, {
+  getOrgMembers: (orgId: string) => requestJson(`/admin/orgs/${orgId}/members`),
+  addOrgMember: (orgId: string, data: Record<string, unknown>) => requestJson(`/admin/orgs/${orgId}/members`, {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  removeOrgMember: (orgId: string, userId: string) => request(`/admin/orgs/${orgId}/members/${userId}`, {
+  removeOrgMember: (orgId: string, userId: string) => requestJson(`/admin/orgs/${orgId}/members/${userId}`, {
     method: 'DELETE',
   }),
-  updateOrgMemberRole: (orgId: string, userId: string, data: Record<string, unknown>) => request(`/admin/orgs/${orgId}/members/${userId}`, {
+  updateOrgMemberRole: (orgId: string, userId: string, data: Record<string, unknown>) => requestJson(`/admin/orgs/${orgId}/members/${userId}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
   }),
-  createOrgInvite: (orgId: string, data: Record<string, unknown>) => request(`/orgs/${orgId}/invite`, {
+  createOrgInvite: (orgId: string, data: Record<string, unknown>) => requestJson(`/orgs/${orgId}/invite`, {
     method: 'POST',
     body: JSON.stringify(data),
   }),
@@ -337,8 +181,8 @@ export const api = {
   // Teams
   // ============================================
   getTeam,
-  getTeams: (orgId: string) => request(`/admin/orgs/${orgId}/teams`),
-  createTeam: (orgId: string, data: Record<string, unknown>) => request(`/admin/orgs/${orgId}/teams`, {
+  getTeams: (orgId: string) => requestJson(`/admin/orgs/${orgId}/teams`),
+  createTeam: (orgId: string, data: Record<string, unknown>) => requestJson(`/admin/orgs/${orgId}/teams`, {
     method: 'POST',
     body: JSON.stringify(data),
   }),
@@ -349,43 +193,43 @@ export const api = {
   // ============================================
   // Roles & Permissions (RBAC)
   // ============================================
-  getRoles: () => request('/admin/roles'),
-  getRole: (roleId: string) => request(`/admin/roles/${roleId}`),
-  createRole: (data: Record<string, unknown>) => request('/admin/roles', {
+  getRoles: () => requestJson('/admin/roles'),
+  getRole: (roleId: string) => requestJson(`/admin/roles/${roleId}`),
+  createRole: (data: Record<string, unknown>) => requestJson('/admin/roles', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  updateRole: (roleId: string, data: Record<string, unknown>) => request(`/admin/roles/${roleId}`, {
+  updateRole: (roleId: string, data: Record<string, unknown>) => requestJson(`/admin/roles/${roleId}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   }),
-  deleteRole: (roleId: string) => request(`/admin/roles/${roleId}`, {
+  deleteRole: (roleId: string) => requestJson(`/admin/roles/${roleId}`, {
     method: 'DELETE',
   }),
-  getRolePermissions: (roleId: string) => request(`/admin/roles/${roleId}/permissions`),
-  assignPermissionToRole: (roleId: string, permissionId: string) => request(`/admin/roles/${roleId}/permissions/${permissionId}`, {
+  getRolePermissions: (roleId: string) => requestJson(`/admin/roles/${roleId}/permissions`),
+  assignPermissionToRole: (roleId: string, permissionId: string) => requestJson(`/admin/roles/${roleId}/permissions/${permissionId}`, {
     method: 'POST',
   }),
-  removePermissionFromRole: (roleId: string, permissionId: string) => request(`/admin/roles/${roleId}/permissions/${permissionId}`, {
+  removePermissionFromRole: (roleId: string, permissionId: string) => requestJson(`/admin/roles/${roleId}/permissions/${permissionId}`, {
     method: 'DELETE',
   }),
-  getRoleUsers: (roleId: string) => request(`/admin/roles/${roleId}/users`),
-  getPermissions: () => request('/admin/permissions'),
-  getPermission: (permId: string) => request(`/admin/permissions/${permId}`),
-  createPermission: (data: Record<string, unknown>) => request('/admin/permissions', {
+  getRoleUsers: (roleId: string) => requestJson(`/admin/roles/${roleId}/users`),
+  getPermissions: () => requestJson('/admin/permissions'),
+  getPermission: (permId: string) => requestJson(`/admin/permissions/${permId}`),
+  createPermission: (data: Record<string, unknown>) => requestJson('/admin/permissions', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  updatePermission: (permId: string, data: Record<string, unknown>) => request(`/admin/permissions/${permId}`, {
+  updatePermission: (permId: string, data: Record<string, unknown>) => requestJson(`/admin/permissions/${permId}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   }),
-  deletePermission: (permId: string) => request(`/admin/permissions/${permId}`, {
+  deletePermission: (permId: string) => requestJson(`/admin/permissions/${permId}`, {
     method: 'DELETE',
   }),
   // Tool permissions
-  getToolPermissions: () => request('/admin/tool-permissions'),
-  assignToolPermission: (data: Record<string, unknown>) => request('/admin/tool-permissions', {
+  getToolPermissions: () => requestJson('/admin/tool-permissions'),
+  assignToolPermission: (data: Record<string, unknown>) => requestJson('/admin/tool-permissions', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
@@ -393,20 +237,20 @@ export const api = {
   // ============================================
   // Provider Secrets (BYOK)
   // ============================================
-  getUserByokKeys: (userId: string) => request(`/admin/users/${userId}/byok-keys`),
-  createUserByokKey: (userId: string, data: Record<string, unknown>) => request(`/admin/users/${userId}/byok-keys`, {
+  getUserByokKeys: (userId: string) => requestJson(`/admin/users/${userId}/byok-keys`),
+  createUserByokKey: (userId: string, data: Record<string, unknown>) => requestJson(`/admin/users/${userId}/byok-keys`, {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  deleteUserByokKey: (userId: string, provider: string) => request(`/admin/users/${userId}/byok-keys/${provider}`, {
+  deleteUserByokKey: (userId: string, provider: string) => requestJson(`/admin/users/${userId}/byok-keys/${provider}`, {
     method: 'DELETE',
   }),
-  getOrgByokKeys: (orgId: string) => request(`/admin/orgs/${orgId}/byok-keys`),
-  createOrgByokKey: (orgId: string, data: Record<string, unknown>) => request(`/admin/orgs/${orgId}/byok-keys`, {
+  getOrgByokKeys: (orgId: string) => requestJson(`/admin/orgs/${orgId}/byok-keys`),
+  createOrgByokKey: (orgId: string, data: Record<string, unknown>) => requestJson(`/admin/orgs/${orgId}/byok-keys`, {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  deleteOrgByokKey: (orgId: string, provider: string) => request(`/admin/orgs/${orgId}/byok-keys/${provider}`, {
+  deleteOrgByokKey: (orgId: string, provider: string) => requestJson(`/admin/orgs/${orgId}/byok-keys/${provider}`, {
     method: 'DELETE',
   }),
 
@@ -415,28 +259,28 @@ export const api = {
   // ============================================
   getBudgets: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/budgets${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/admin/budgets${queryParams ? `?${queryParams}` : ''}`);
   },
 
   // ============================================
   // Data Ops
   // ============================================
-  getBackups: (params?: Record<string, string>) => {
+  getBackups: (params?: Record<string, string>, options?: RequestInit) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request<BackupsResponse>(`/admin/backups${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson<BackupsResponse>(`/admin/backups${queryParams ? `?${queryParams}` : ''}`, options);
   },
-  createBackup: (data: Record<string, unknown>) => request('/admin/backups', {
+  createBackup: (data: Record<string, unknown>) => requestJson('/admin/backups', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
   restoreBackup: (backupId: string, data: Record<string, unknown>) =>
-    request(`/admin/backups/${encodeURIComponent(backupId)}/restore`, {
+    requestJson(`/admin/backups/${encodeURIComponent(backupId)}/restore`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  getRetentionPolicies: () => request<RetentionPoliciesResponse>('/admin/retention-policies'),
+  getRetentionPolicies: () => requestJson<RetentionPoliciesResponse>('/admin/retention-policies'),
   updateRetentionPolicy: (policyKey: string, data: Record<string, unknown>) =>
-    request(`/admin/retention-policies/${encodeURIComponent(policyKey)}`, {
+    requestJson(`/admin/retention-policies/${encodeURIComponent(policyKey)}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
@@ -446,51 +290,51 @@ export const api = {
   // ============================================
   getSystemLogs: (params?: Record<string, string>, options?: RequestInit) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/system/logs${queryParams ? `?${queryParams}` : ''}`, options);
+    return requestJson(`/admin/system/logs${queryParams ? `?${queryParams}` : ''}`, options);
   },
-  getMaintenanceMode: (options?: RequestInit) => request('/admin/maintenance', options),
-  updateMaintenanceMode: (data: Record<string, unknown>) => request('/admin/maintenance', {
+  getMaintenanceMode: (options?: RequestInit) => requestJson('/admin/maintenance', options),
+  updateMaintenanceMode: (data: Record<string, unknown>) => requestJson('/admin/maintenance', {
     method: 'PUT',
     body: JSON.stringify(data),
   }),
   getFeatureFlags: (params?: Record<string, string>, options?: RequestInit) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/feature-flags${queryParams ? `?${queryParams}` : ''}`, options);
+    return requestJson(`/admin/feature-flags${queryParams ? `?${queryParams}` : ''}`, options);
   },
   upsertFeatureFlag: (flagKey: string, data: Record<string, unknown>) =>
-    request(`/admin/feature-flags/${encodeURIComponent(flagKey)}`, {
+    requestJson(`/admin/feature-flags/${encodeURIComponent(flagKey)}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
   deleteFeatureFlag: (flagKey: string, params: Record<string, string>) => {
     const queryParams = new URLSearchParams(params).toString();
-    return request(`/admin/feature-flags/${encodeURIComponent(flagKey)}?${queryParams}`, {
+    return requestJson(`/admin/feature-flags/${encodeURIComponent(flagKey)}?${queryParams}`, {
       method: 'DELETE',
     });
   },
   getIncidents: (params?: Record<string, string>, options?: RequestInit) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request<IncidentsResponse>(
+    return requestJson<IncidentsResponse>(
       `/admin/incidents${queryParams ? `?${queryParams}` : ''}`,
       options
     );
   },
-  createIncident: (data: Record<string, unknown>) => request('/admin/incidents', {
+  createIncident: (data: Record<string, unknown>) => requestJson('/admin/incidents', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
   updateIncident: (incidentId: string, data: Record<string, unknown>) =>
-    request(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
+    requestJson(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
   addIncidentEvent: (incidentId: string, data: Record<string, unknown>) =>
-    request(`/admin/incidents/${encodeURIComponent(incidentId)}/events`, {
+    requestJson(`/admin/incidents/${encodeURIComponent(incidentId)}/events`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
   deleteIncident: (incidentId: string) =>
-    request(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
+    requestJson(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
       method: 'DELETE',
     }),
 
@@ -499,15 +343,12 @@ export const api = {
   // ============================================
   getAuditLogs: async (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    const response = await request(`/admin/audit-log${queryParams ? `?${queryParams}` : ''}`);
-    const items = Array.isArray(response)
-      ? response
-      : (response && Array.isArray((response as { entries?: unknown }).entries))
-        ? (response as { entries: unknown[] }).entries
-        : (response && Array.isArray((response as { items?: unknown }).items))
-          ? (response as { items: unknown[] }).items
-          : [];
-    const mapped = items.map((entry) => {
+    const response = await requestJson(`/admin/audit-log${queryParams ? `?${queryParams}` : ''}`);
+    const { items, total, limit, offset } = normalizePagedResponse(
+      response,
+      ['entries', 'items']
+    );
+    const mapped: AuditLog[] = items.map((entry) => {
       const record = entry as Record<string, unknown>;
       const rawDetails = record.details;
       let details: Record<string, unknown> | undefined;
@@ -535,24 +376,15 @@ export const api = {
         raw: record,
       };
     });
-    const total = typeof (response as { total?: unknown })?.total === 'number'
-      ? Number((response as { total?: unknown }).total)
-      : mapped.length;
-    const limit = typeof (response as { limit?: unknown })?.limit === 'number'
-      ? Number((response as { limit?: unknown }).limit)
-      : undefined;
-    const offset = typeof (response as { offset?: unknown })?.offset === 'number'
-      ? Number((response as { offset?: unknown }).offset)
-      : undefined;
     return { entries: mapped, total, limit, offset };
   },
 
   // ============================================
   // Configuration
   // ============================================
-  getSetupStatus: () => request('/setup/status'),
-  getConfig: () => request('/setup/config'),
-  updateConfig: (data: Record<string, unknown>) => request('/setup/config', {
+  getSetupStatus: () => requestJson('/setup/status'),
+  getConfig: () => requestJson('/setup/config'),
+  updateConfig: (data: Record<string, unknown>) => requestJson('/setup/config', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
@@ -560,17 +392,17 @@ export const api = {
   // ============================================
   // LLM Providers
   // ============================================
-  getLLMProviders: () => request('/llm/providers'),
-  getLLMProviderOverrides: () => request('/admin/llm/providers/overrides'),
-  getLLMProviderOverride: (provider: string) => request(`/admin/llm/providers/overrides/${encodeURIComponent(provider)}`),
-  updateLLMProviderOverride: (provider: string, data: Record<string, unknown>) => request(`/admin/llm/providers/overrides/${encodeURIComponent(provider)}`, {
+  getLLMProviders: () => requestJson('/llm/providers'),
+  getLLMProviderOverrides: () => requestJson('/admin/llm/providers/overrides'),
+  getLLMProviderOverride: (provider: string) => requestJson(`/admin/llm/providers/overrides/${encodeURIComponent(provider)}`),
+  updateLLMProviderOverride: (provider: string, data: Record<string, unknown>) => requestJson(`/admin/llm/providers/overrides/${encodeURIComponent(provider)}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   }),
-  deleteLLMProviderOverride: (provider: string) => request(`/admin/llm/providers/overrides/${encodeURIComponent(provider)}`, {
+  deleteLLMProviderOverride: (provider: string) => requestJson(`/admin/llm/providers/overrides/${encodeURIComponent(provider)}`, {
     method: 'DELETE',
   }),
-  testLLMProvider: (data: Record<string, unknown>) => request('/admin/llm/providers/test', {
+  testLLMProvider: (data: Record<string, unknown>) => requestJson('/admin/llm/providers/test', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
@@ -578,61 +410,61 @@ export const api = {
   // ============================================
   // Monitoring
   // ============================================
-  getWatchlists: () => request('/monitoring/watchlists'),
-  createWatchlist: (data: Record<string, unknown>) => request('/monitoring/watchlists', {
+  getWatchlists: () => requestJson('/monitoring/watchlists'),
+  createWatchlist: (data: Record<string, unknown>) => requestJson('/monitoring/watchlists', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  updateWatchlist: (watchlistId: string, data: Record<string, unknown>) => request(`/monitoring/watchlists/${watchlistId}`, {
+  updateWatchlist: (watchlistId: string, data: Record<string, unknown>) => requestJson(`/monitoring/watchlists/${watchlistId}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   }),
-  deleteWatchlist: (watchlistId: string) => request(`/monitoring/watchlists/${watchlistId}`, {
+  deleteWatchlist: (watchlistId: string) => requestJson(`/monitoring/watchlists/${watchlistId}`, {
     method: 'DELETE',
   }),
-  getAlerts: () => request('/monitoring/alerts'),
-  acknowledgeAlert: (alertId: string) => request(`/monitoring/alerts/${alertId}/acknowledge`, {
+  getAlerts: () => requestJson('/monitoring/alerts'),
+  acknowledgeAlert: (alertId: string) => requestJson(`/monitoring/alerts/${alertId}/acknowledge`, {
     method: 'POST',
   }),
-  dismissAlert: (alertId: string) => request(`/monitoring/alerts/${alertId}`, {
+  dismissAlert: (alertId: string) => requestJson(`/monitoring/alerts/${alertId}`, {
     method: 'DELETE',
   }),
-  getHealth: () => request('/health'),
-  getHealthMetrics: () => request('/health/metrics'),
-  getLlmHealth: () => request('/llm/health'),
-  getMetrics: () => request('/metrics'),
+  getHealth: () => requestJson('/health'),
+  getHealthMetrics: () => requestJson('/health/metrics'),
+  getLlmHealth: () => requestJson('/llm/health'),
+  getMetrics: () => requestJson('/metrics'),
   getMetricsText: () => requestText('/metrics/text'),
-  getRagHealth: () => request('/rag/health'),
+  getRagHealth: () => requestJson('/rag/health'),
 
   // ============================================
   // Jobs
   // ============================================
   getJobs: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/jobs/list${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/jobs/list${queryParams ? `?${queryParams}` : ''}`);
   },
   getJobDetail: (jobId: string | number, params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/jobs/${encodeURIComponent(String(jobId))}${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/jobs/${encodeURIComponent(String(jobId))}${queryParams ? `?${queryParams}` : ''}`);
   },
   getJobsStats: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/jobs/stats${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/jobs/stats${queryParams ? `?${queryParams}` : ''}`);
   },
   getJobsStale: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/jobs/stale${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/jobs/stale${queryParams ? `?${queryParams}` : ''}`);
   },
-  cancelJobs: (data: Record<string, unknown>) => request('/jobs/batch/cancel', {
+  cancelJobs: (data: Record<string, unknown>) => requestJson('/jobs/batch/cancel', {
     method: 'POST',
     headers: { 'X-Confirm': 'true' },
     body: JSON.stringify(data),
   }),
-  retryJobsNow: (data: Record<string, unknown>) => request('/jobs/retry-now', {
+  retryJobsNow: (data: Record<string, unknown>) => requestJson('/jobs/retry-now', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  requeueQuarantinedJobs: (data: Record<string, unknown>) => request('/jobs/batch/requeue_quarantined', {
+  requeueQuarantinedJobs: (data: Record<string, unknown>) => requestJson('/jobs/batch/requeue_quarantined', {
     method: 'POST',
     headers: { 'X-Confirm': 'true' },
     body: JSON.stringify(data),
@@ -643,19 +475,19 @@ export const api = {
   // ============================================
   getUsageDaily: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/usage/daily${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/admin/usage/daily${queryParams ? `?${queryParams}` : ''}`);
   },
   getUsageTop: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/usage/top${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/admin/usage/top${queryParams ? `?${queryParams}` : ''}`);
   },
   getLlmUsageSummary: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/llm-usage/summary${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/admin/llm-usage/summary${queryParams ? `?${queryParams}` : ''}`);
   },
   getLlmTopSpenders: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/llm-usage/top-spenders${queryParams ? `?${queryParams}` : ''}`);
+    return requestJson(`/admin/llm-usage/top-spenders${queryParams ? `?${queryParams}` : ''}`);
   },
 };
 

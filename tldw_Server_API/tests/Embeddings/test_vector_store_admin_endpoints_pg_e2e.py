@@ -10,7 +10,8 @@ pytestmark = pytest.mark.usefixtures("admin_user")
 
 def test_admin_endpoints_e2e_pg(pgvector_dsn, monkeypatch):
 
-    # Patch factory to return a real PG adapter using DSN
+
+      # Patch factory to return a real PG adapter using DSN
     def _create_from_settings(_settings, user_id: str = '0'):
         cfg = VectorStoreConfig(
             store_type=VectorStoreType.PGVECTOR,

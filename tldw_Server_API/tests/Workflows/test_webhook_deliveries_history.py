@@ -16,6 +16,7 @@ def client_with_wf_db(tmp_path, auth_headers):
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
 
     def override_db():
+
         return db
 
     app.dependency_overrides[get_request_user] = override_user
@@ -28,6 +29,8 @@ def client_with_wf_db(tmp_path, auth_headers):
 
 
 def test_get_webhook_deliveries_history(client_with_wf_db):
+
+
     client, db = client_with_wf_db
     # Create and run a trivial workflow, then append synthetic webhook events
     definition = {"name": "x", "version": 1, "steps": [{"id": "l1", "type": "log", "config": {"message": "hi"}}]}

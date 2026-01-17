@@ -34,6 +34,7 @@ async def test_jobs_crypto_rotate_worker_invokes_rotate(monkeypatch, tmp_path):
             raise
 
     def fake_rotate(self, *, domain=None, queue=None, job_type=None, old_key_b64=None, new_key_b64=None, fields=None, limit=1000, dry_run=False):
+
         calls["n"] += 1
         return 3
 
@@ -59,6 +60,7 @@ async def test_jobs_crypto_rotate_worker_repeats_on_timeout(monkeypatch, tmp_pat
     from tldw_Server_API.app.core.Jobs import manager as mgr_mod
 
     def fake_rotate(self, **kwargs):
+
         calls["n"] += 1
         return 1
 

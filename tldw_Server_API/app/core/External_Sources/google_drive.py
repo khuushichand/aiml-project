@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 from .connector_base import BaseConnector
-import aiohttp
+from tldw_Server_API.app.core.http_client import afetch
 
 
 class GoogleDriveConnector(BaseConnector):
@@ -51,10 +51,14 @@ class GoogleDriveConnector(BaseConnector):
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, data=data, timeout=30) as resp:
-                resp.raise_for_status()
-                tok = await resp.json()
+        resp = await afetch(method="POST", url=token_url, data=data, timeout=30)
+        try:
+            resp.raise_for_status()
+            tok = resp.json()
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
         # We requested profile scopes; email may be fetched via userinfo endpoint in callback
         return {
             "access_token": tok.get("access_token"),
@@ -78,10 +82,14 @@ class GoogleDriveConnector(BaseConnector):
             "refresh_token": refresh_token,
             "grant_type": "refresh_token",
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, data=data, timeout=30) as resp:
-                resp.raise_for_status()
-                tok = await resp.json()
+        resp = await afetch(method="POST", url=token_url, data=data, timeout=30)
+        try:
+            resp.raise_for_status()
+            tok = resp.json()
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
         return {
             "access_token": tok.get("access_token"),
             "refresh_token": tok.get("refresh_token") or refresh_token,
@@ -106,10 +114,20 @@ class GoogleDriveConnector(BaseConnector):
         }
         if cursor:
             params["pageToken"] = cursor
-        async with aiohttp.ClientSession() as session:
-            async with session.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=params, timeout=30) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        resp = await afetch(
+            method="GET",
+            url="https://www.googleapis.com/drive/v3/files",
+            headers=headers,
+            params=params,
+            timeout=30,
+        )
+        try:
+            resp.raise_for_status()
+            data = resp.json()
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
         files = data.get("files", [])
         items = []
         for f in files:
@@ -131,22 +149,43 @@ class GoogleDriveConnector(BaseConnector):
         headers = {"Authorization": f"Bearer {token}"}
         # If mime_type is a Google Docs type, use export
         mt = (mime_type or "").lower()
-        async with aiohttp.ClientSession() as session:
-            if mt.startswith("application/vnd.google-apps."):
-                # Choose export format: allow caller override (export_mime). Defaults aim for text where possible, PDF for slides.
-                default_export_map = {
-                    "application/vnd.google-apps.document": "text/plain",
-                    "application/vnd.google-apps.spreadsheet": "text/csv",
-                    # Export Slides to PDF so downstream can extract text via PDF pipeline
-                    "application/vnd.google-apps.presentation": "application/pdf",
-                }
-                exp = export_mime or default_export_map.get(mt, "text/plain")
-                url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export"
-                async with session.get(url, headers=headers, params={"mimeType": exp}, timeout=60) as resp:
-                    resp.raise_for_status()
-                    return await resp.read()
-            # Binary download for normal files
-            url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
-            async with session.get(url, headers=headers, params={"alt": "media"}, timeout=60) as resp:
+        if mt.startswith("application/vnd.google-apps."):
+            # Choose export format: allow caller override (export_mime). Defaults aim for text where possible, PDF for slides.
+            default_export_map = {
+                "application/vnd.google-apps.document": "text/plain",
+                "application/vnd.google-apps.spreadsheet": "text/csv",
+                # Export Slides to PDF so downstream can extract text via PDF pipeline
+                "application/vnd.google-apps.presentation": "application/pdf",
+            }
+            exp = export_mime or default_export_map.get(mt, "text/plain")
+            url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export"
+            resp = await afetch(
+                method="GET",
+                url=url,
+                headers=headers,
+                params={"mimeType": exp},
+                timeout=60,
+            )
+            try:
                 resp.raise_for_status()
-                return await resp.read()
+                return resp.content
+            finally:
+                close = getattr(resp, "aclose", None)
+                if callable(close):
+                    await close()
+        # Binary download for normal files
+        url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+        resp = await afetch(
+            method="GET",
+            url=url,
+            headers=headers,
+            params={"alt": "media"},
+            timeout=60,
+        )
+        try:
+            resp.raise_for_status()
+            return resp.content
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()

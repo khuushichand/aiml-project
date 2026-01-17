@@ -22,9 +22,11 @@ def test_points_backend_sglang_mock(monkeypatch):
         text = "{\"choices\":[{\"message\":{\"content\":\"MOCK_TEXT\"}}]}"
 
         def raise_for_status(self):
+
             return None
 
         def json(self):
+
             import json as _json
             return _json.loads(self.text)
 

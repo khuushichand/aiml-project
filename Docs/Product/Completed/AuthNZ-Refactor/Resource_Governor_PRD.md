@@ -16,7 +16,7 @@ Multiple independent rate limiters and quota mechanisms exist across the codebas
   - Chat token bucket + per-conversation limits: `tldw_Server_API/app/core/Chat/rate_limiter.py:1`
   - MCP in-memory/Redis limiter + category limiters: `tldw_Server_API/app/core/MCP_unified/auth/rate_limiter.py:1`
   - Embeddings sliding window limiter: `tldw_Server_API/app/core/Embeddings/rate_limiter.py:1`
-  - Global SlowAPI limiter: `tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py:1`
+  - Legacy ingress limiter (removed): `tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py` (deleted)
   - Audio quotas (daily minutes, concurrent streams/jobs): `tldw_Server_API/app/core/Usage/audio_quota.py:1`
 - Additional duplications not originally listed but present:
   - AuthNZ DB/Redis limiter: `tldw_Server_API/app/core/AuthNZ/rate_limiter.py:1`
@@ -27,7 +27,7 @@ Multiple independent rate limiters and quota mechanisms exist across the codebas
 
 Symptoms:
 - Inconsistent burst multipliers and windows; different interpretations of “per minute”.
-- Hard-to-reason interactions between limiters (e.g., SlowAPI + per-module meters).
+- Hard-to-reason interactions between limiters (e.g., legacy ingress limiter + per-module meters).
 - Divergent test bypass logic (varied env flags, ad-hoc behavior).
 - Inconsistent metrics (names, labels, presence) and poor cross-feature visibility.
 - Code complexity and maintenance overhead; bugs from drift and duplicated env parsing.
@@ -45,9 +45,9 @@ Symptoms:
 Non-goals (v1):
 - Redesigning pricing/billing or tier models.
 - Replacing durable ledgers where they make sense (e.g., daily minutes table for audio).
-- Removing SlowAPI entirely; it can remain as an ingress façade backed by the governor.
+- Removing the legacy ingress limiter entirely; RG middleware is the sole ingress path.
 
-For scope management, v1.0 focused on delivering the core governor, policy layer, and initial high-impact integrations (MCP, Chat, Embeddings, Audio, SlowAPI). v1.1 extends this with DB-backed policy management, a shared `ResourceDailyLedger` for additional daily caps, and early cost-unit/analytics wiring; further follow-ups remain under “Post v1.1”.
+For scope management, v1.0 focused on delivering the core governor, policy layer, and initial high-impact integrations (MCP, Chat, Embeddings, Audio, ingress enforcement). v1.1 extends this with DB-backed policy management, a shared `ResourceDailyLedger` for additional daily caps, and early cost-unit/analytics wiring; further follow-ups remain under “Post v1.1”.
 
 ## Personas & Entities
 
@@ -310,7 +310,7 @@ policies:
   - `streams.max_concurrent` / `streams.ttl_sec` and `jobs.max_concurrent` / `jobs.ttl_sec` — concurrency limits with lease TTLs.
   - `minutes.daily_cap` / `minutes.rounding` — daily ledger caps (in minutes) with explicit rounding semantics.
   - `scopes` — list of scopes that apply for a policy (for example, `["global", "user", "conversation"]`).
-- Routes attach `policy_id` via FastAPI route tags or decorators. An ASGI middleware reads the tag and consults the governor. SlowAPI decorators remain as config carriers only.
+- Routes attach `policy_id` via FastAPI route tags. An ASGI middleware reads the tag and consults the governor. Legacy decorator-based ingress limiters are removed.
 - Policy reload: file watcher or periodic TTL check; swap policies atomically. Invalid updates are rejected with clear logs.
 - Per-category overrides: policy `fail_mode` may override `RG_REDIS_FAIL_MODE` for that policy/category.
 - Stub location: `tldw_Server_API/Config_Files/resource_governor_policies.yaml` provides default examples and hot-reload settings.
@@ -356,9 +356,9 @@ Phase 2 — Chat
 - Keep per-conversation policy by composing the entity key `conversation:{id}` in addition to `user:{id}`.
 - Maintain `initialize_rate_limiter` signature; under the hood, use ResourceGovernor.
 
-Phase 3 — SlowAPI façade
-- Configure `API_Deps/rate_limiting.py` to use `limiter.key_func` for ingress scoping (`ip`/`user`) and delegate allow/deny to ResourceGovernor `requests` category before handlers.
-- Keep decorator usage (`@limiter.limit(...)`) as a config carrier only. Map decorator strings to RG policies using route tags (e.g., `tags={"policy_id": "chat.default"}`) and an ASGI middleware that consults the governor. No in-SlowAPI counters.
+Phase 3 — Ingress middleware
+- Attach `RGSimpleMiddleware` to enforce ingress request limits using route_map/policy tags.
+- Remove decorator-based ingress limiters; route tags map directly to RG policies.
 - Policy resolution reads from the YAML policy file (see Policy DSL & Route Mapping) with hot-reload support.
 
 Phase 4 — Embeddings
@@ -411,7 +411,7 @@ Phase 7 — Cleanup & removal
   - `X-RateLimit-Remaining: <remaining>` reflects the remaining headroom under that strictest scope after the decision.
   - `X-RateLimit-Reset: <epoch_seconds>` or `<seconds>` until reset, aligned to the governing window.
 - For concurrency denials (e.g., `streams`), return `429` with `Retry-After` set from the category decision; do not emit misleading `X-RateLimit-*` unless the route is also governed by `requests`.
-- Maintain SlowAPI-compatible behavior on migrated routes to avoid client regressions.
+- Maintain backward-compatible 429/header behavior on migrated routes to avoid client regressions.
 
 - Tokens and per-minute headers (when applicable):
   - When a `tokens` policy is active for a route and the middleware/enforcement layer peeks token usage, include:
@@ -579,7 +579,7 @@ Notes:
   - Replace MCP limiter via façade; verify 429 and retry headers remain correct.
   - Chat path: estimated token reservation and refund with actual usage from provider responses.
   - Audio streaming: enforce `streams` concurrency and daily `minutes` cap, including heartbeat.
-  - SlowAPI façade routes: verify ingress keys map to governor and rate limits apply consistently.
+  - Ingress routes: verify ingress keys map to governor and rate limits apply consistently.
   - Failover modes: verify `fail_closed`, `fail_open`, and `fallback_memory` behaviors under Redis outage simulation.
 
 - Chaos tests:
@@ -613,7 +613,7 @@ Notes:
 - General rules:
   - When both legacy and RG envs are set, RG envs take precedence.
   - On process start, detect legacy envs in use and log a once-per-process deprecation warning with the mapped `RG_*` equivalent and a removal target version.
-  - Where applicable, legacy decorator parameters (e.g., SlowAPI) are ignored once RG integration is enabled; their presence is logged as informational with the resolved `policy_id`.
+  - Where applicable, legacy decorator parameters are ignored once RG integration is enabled; their presence is logged as informational with the resolved `policy_id`.
 
 - MCP (examples):
   - `MCP_RATE_LIMIT_RPM` → policy `mcp.ingestion.requests.rpm`
@@ -628,10 +628,9 @@ Notes:
   - `CHAT_PER_USER_TOKENS_PER_MINUTE` → policy `chat.default.tokens.per_min`
   - `TEST_CHAT_*` → `RG_TEST_*` or policy test overrides
 
-- SlowAPI (examples):
-  - `SLOWAPI_GLOBAL_RPM` → policy `ingress.default.requests.rpm`
-  - `SLOWAPI_GLOBAL_BURST` → policy `ingress.default.requests.burst`
-  - Decorator strings remain as config carriers; when `RGSimpleMiddleware` is attached (automatically when `RG_ENABLED=true`, unless forced off), the global SlowAPI limiter’s key function returns `None` so enforcement is handled by ResourceGovernor while decorators provide metadata only.
+- Ingress (examples):
+  - Ingress caps are set in policy `ingress.default.requests.*`.
+  - Configure via the RG policy store; legacy envs/decorators are removed.
 
 - Audio (examples):
   - `AUDIO_DAILY_MINUTES_CAP` → policy `audio.default.minutes.daily_cap`
@@ -648,14 +647,14 @@ Notes:
   - `CHARACTER_CHAT_RPM` → policy `character_chat.default.requests.rpm`
   - `WEB_SCRAPING_RPM` → policy `web_scraping.default.requests.rpm`
 
-### SlowAPI ASGI Middleware
+### Ingress ASGI Middleware
 
-- Provide an ASGI middleware adapter (e.g., `RGSlowAPIMiddleware`) that:
+- Provide an ASGI middleware adapter (e.g., `RGSimpleMiddleware`) that:
   - Extracts `policy_id` from route tags/decorators.
   - Derives the effective entity (auth scopes preferred; IP fallback with trusted-proxy rules).
   - Calls the governor’s `reserve` API before handler for enforcement; on deny, returns 429 with headers; on allow, sets `X-RateLimit-*` headers and proceeds. `check` is used only for diagnostics and shadow-mode comparisons.
   - On completion, performs `commit/refund` as applicable; handles streaming by renewing/releasing leases.
-  - When `RG_ENABLED=false`, middleware is disabled and legacy SlowAPI behavior remains.
+  - When `RG_ENABLED=false`, middleware is disabled and ingress limits are not enforced by RG.
 
 ## Risks & Mitigations
 
@@ -683,7 +682,7 @@ Notes:
 ## Acceptance Criteria
 
 - New `ResourceGovernor` module with memory + Redis backends and the specified API.
-- MCP, Chat, and SlowAPI ingress paths migrated to the unified governor with no regression in public API or tests.
+- MCP, Chat, and ingress paths migrated to the unified governor with no regression in public API or tests.
 - Audio streams concurrency enforced via the governor and daily minutes enforced via the shared `ResourceDailyLedger` when available, with the legacy `audio_usage_daily` tables retained as a compatibility/fallback ledger.
 - Embeddings limiter replaced; Evaluations/AuthNZ/Character Chat/Web Scraping scheduled for follow-on.
 - Consistent test-mode bypass and refund semantics demonstrated in tests.
@@ -711,9 +710,9 @@ Notes:
 - Embeddings:
   - Async embeddings paths (`async_embeddings.py` and `request_batching.py`) consult `AsyncRateLimiter`, which delegates token accounting to the ResourceGovernor when global RG is enabled (using `embeddings.default` policy and `RGRequest(entity="user:{id}", categories={"tokens": {"units": tokens_units}})` when available). Request-rate limiting is enforced at ingress via `RGSimpleMiddleware` for `/api/v1/embeddings*` to avoid double-enforcement; the per-user sliding-window `UserRateLimiter` remains as a fallback compatibility shim when RG is disabled or unavailable.
   - Route-map entries for `/api/v1/embeddings*` are wired through `RGSimpleMiddleware`, and end-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py` exercise success and 429 deny behavior (with `Retry-After` / `X-RateLimit-*` headers) on `/api/v1/embeddings/providers-config` when RG is enabled.
-- MCP & SlowAPI:
+- MCP & ingress:
   - MCP unified `RateLimiter.check_rate_limit` enforces via the ResourceGovernor when global RG is enabled, reserving against `mcp.{category}` policies (`entity="client:{key}"`, `categories={"requests": {"units": 1}}`) and raising `RateLimitExceeded` based on RG decisions; the in-memory/Redis limiter is retained as a fallback-only compatibility path when RG is disabled or errors, with cutover behavior locked in by `tldw_Server_API/tests/Resource_Governance/test_rg_cutover_embeddings_mcp.py`.
-  - SlowAPI-decorated routes now treat the global limiter as a configuration carrier when `RGSimpleMiddleware` is attached: the key function returns `None` in that case so enforcement is handled by ResourceGovernor, and end-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py` assert RG-style headers on representative chat, MCP, audio, and embeddings routes.
+  - Ingress routes rely on `RGSimpleMiddleware` for request enforcement; legacy decorator-based limiters are removed. End-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py` assert RG-style headers on representative chat, MCP, audio, and embeddings routes.
 - Evaluations:
   - The per-user `UserRateLimiter.check_rate_limit` in `tldw_Server_API/app/core/Evaluations/user_rate_limiter.py` consults the ResourceGovernor when global RG is enabled (via `_maybe_enforce_with_rg_evaluations`, using `entity="user:{user_id}"` and reserving `categories={"evaluations": {"units": 1}}` plus optional `tokens` against the `evals.default` policy). Ingress `requests` are enforced by `RGSimpleMiddleware` via `route_map.by_path` for `/api/v1/evaluations/*`; the legacy per-minute counters remain compatibility-only and are bypassed whenever an RG decision exists. Daily evaluations/tokens caps consult the shared `ResourceDailyLedger` when available (with `daily_usage` retained for cost and upgrade backfill).
   - Note on “cost/day” caps: unified evaluations endpoints currently pass `estimated_cost=0.0`, and cost caps are not enforced under RG-first decisions. If real cost enforcement is needed, introduce an RG category + daily ledger for cost units once a stable cost estimator exists; otherwise treat cost caps as deprecated/legacy-only.
@@ -742,9 +741,9 @@ Notes:
   - Before: DB-backed daily minutes + in-process/Redis counters for streams/jobs.
   - After: `minutes` via durable ledger adapter; `streams`/`jobs` via `ConcurrencyLimiter` with TTL heartbeat.
 
-- SlowAPI
-  - Before: global limiter with key_func sentinel for TEST_MODE.
-  - After: façade that derives entity key and delegates to `requests` governor, retaining decorators for route config.
+- Ingress limiter (removed)
+  - Before: global decorator-based limiter with a TEST_MODE key-func sentinel.
+  - After: `RGSimpleMiddleware` derives entity keys and enforces `requests` policies; decorators removed.
 
 - Embeddings
   - Before: sliding window per user.
@@ -809,12 +808,12 @@ Stage 3 — Policy Layer (Store/Loader) & Health
 Stage 4 — Ingress Middleware & Header Compatibility
 - Goal: Replace ingress counting with a thin governor façade.
 - Deliverables:
-  - ASGI middleware (SlowAPI façade) reading route tags/decorators to resolve `policy_id` and derive entity (auth scopes preferred; IP fallback with trusted-proxy rules).
+  - ASGI middleware (ingress façade) reading route tags to resolve `policy_id` and derive entity (auth scopes preferred; IP fallback with trusted-proxy rules).
   - Enforce via `reserve` pre-handler; `commit/refund` post-handler; support streaming renew/release. Use `check` only for diagnostics and shadow-mode comparisons.
   - Standard headers mapping: `Retry-After`, `X-RateLimit-*` for `requests` where applicable.
   - Logging: mask/HMAC sensitive fields; include `handle_id`, `op_id`, `policy_id`, `denial_reason`.
 - Success Criteria:
-  - No double-counting; header compatibility verified; décor strings map to policies via tags.
+  - No double-counting; header compatibility verified; route tags map to policies.
 - Tests:
   - Integration tests covering allowed/denied paths, header values, proxy scoping with `RG_TRUSTED_PROXIES` and `RG_CLIENT_IP_HEADER`.
 
@@ -837,7 +836,7 @@ Stage 6 — Admin API, Observability & Rollout
   - Admin policy endpoints (PUT/DELETE/GET) gated by admin auth; file store remains read-only.
   - Postgres seeder for `rg_policies` and example seed data.
   - Shadow-mode decision delta metric (legacy vs RG) and basic dashboards for `rg_*` metrics.
-  - Compat map + deprecation warnings; staged rollout plan (enable MCP/Chat first, then Embeddings/SlowAPI, then Audio).
+  - Compat map + deprecation warnings; staged rollout plan (enable MCP/Chat first, then Embeddings/ingress, then Audio).
 - Success Criteria:
   - Admin endpoints tested; dashboards populated; shadow-mode shows near-zero drift pre-cutover; policies/route-map allow safe rollback.
 - Tests:
@@ -956,25 +955,22 @@ This section turns the v1 roadmap into concrete, repo-level steps that can be ta
   - Add Postgres-backed tests using the existing AuthNZ fixtures where available.
   - Add an integration test for the `/health` endpoint to ensure it reflects live policy snapshot data.
 
-### Milestone 4 — Ingress Middleware & SlowAPI Façade
+### Milestone 4 — Ingress Middleware
 
 **Goal:** Replace ingress counting with a governor-backed façade while preserving existing public behavior and headers.
 
 - Implementation
-  - Add an ASGI middleware adapter (for example, `RGSlowAPIMiddleware` under `tldw_Server_API/app/core/Resource_Governance/middleware.py`) that:
-    - Extracts `policy_id` from FastAPI route tags/decorators.
+  - Add an ASGI middleware adapter (for example, `RGSimpleMiddleware` under `tldw_Server_API/app/core/Resource_Governance/middleware_simple.py`) that:
+    - Extracts `policy_id` from FastAPI route tags.
     - Derives the entity key using auth scopes or IP (per “Ingress Scoping & IP Derivation”).
     - Calls `reserve` before invoking handlers; on deny, returns 429 with `Retry-After` and `X-RateLimit-*` headers.
     - On completion, invokes `commit` / `refund` as appropriate and handles streaming renew/release.
-  - Update `tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py` to:
-    - Keep SlowAPI decorators as config carriers only.
-    - Map decorator strings / tags to `policy_id`s used by the middleware.
-    - Respect the global `RG_ENABLED` flag.
+  - Ensure ingress enforcement is handled by `RGSimpleMiddleware`, using route tags to resolve `policy_id`.
 - Tests
   - Add integration tests for representative routes verifying:
     - Allow/deny behavior and `Retry-After`/`X-RateLimit-*` headers.
     - IP scoping behavior with and without `RG_TRUSTED_PROXIES` / `RG_CLIENT_IP_HEADER`.
-    - Backward compatibility for SlowAPI-decorated routes when RG is disabled.
+    - Backward compatibility for ingress header/429 behavior when RG is disabled.
 
 ### Milestone 5 — Module Integrations (MCP, Chat, Embeddings, Audio)
 
@@ -1030,7 +1026,7 @@ This section turns the v1 roadmap into concrete, repo-level steps that can be ta
     - `DELETE /api/v1/resource-governor/policy/{policy_id}`
   - Wire these endpoints through AuthNZ to require an `admin` role (single-user mode treated as admin).
 - Shadow mode & metrics
-  - Add a shadow-mode path in the major modules (MCP, Chat, Embeddings, SlowAPI ingress) that:
+  - Add a shadow-mode path in the major modules (MCP, Chat, Embeddings, ingress) that:
     - Evaluates both the legacy limiter and the governor.
     - Emits `rg_shadow_decision_mismatch_total` when decisions differ.
   - Build basic dashboards/alerts around `rg_*` metrics for drift and failover visibility.
@@ -1038,7 +1034,7 @@ This section turns the v1 roadmap into concrete, repo-level steps that can be ta
   - Implement legacy→RG env mappings and once-per-process deprecation warnings as described in “Compat Map”.
   - Plan a staged enablement:
     - Enable RG for MCP and Chat first in shadow mode, then full enforcement.
-    - Move Embeddings and SlowAPI ingress next.
+    - Move Embeddings and ingress next.
     - Finally enable Audio concurrency once validated.
   - Update documentation and examples to reference `RG_*` envs and policies as the canonical configuration surface.
 
@@ -1073,7 +1069,7 @@ Use this checklist to track when modules move from “RG + legacy limiter” to 
 | Character Chat | `tldw_Server_API/app/core/Character_Chat/character_rate_limiter.py::CharacterRateLimiter` | `RG_ENABLED`, `RG_CHARACTER_CHAT_POLICY_ID`      | RG + legacy (shadow/fallback)      | Confirm RG coverage and convert legacy limiter to a thin shim or retire it             |
 | Web scraping | `tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py` internal limiter paths | `RG_ENABLED`, `RG_WEB_SCRAPING_POLICY_ID`        | RG wired; legacy helpers present   | Verify RG covers production paths; deprecate old per-module counters where safe        |
 | Audio        | `tldw_Server_API/app/core/Usage/audio_quota.py` per-user counters (streams/jobs) | `RG_ENABLED`                                     | RG for concurrency; legacy minutes | Keep minutes ledger as designed; consider phasing out non-RG stream/job counters       |
-| SlowAPI ingress | `tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py` (SlowAPI decorators) | `RG_ENABLED`      | Middleware + legacy decorators     | Move remaining ingress counting to RG middleware only and leave decorators as tags     |
+| Ingress middleware | `tldw_Server_API/app/core/Resource_Governance/middleware_simple.py` | `RG_ENABLED`      | RGSimpleMiddleware only           | Enforce ingress limits via RG policies and route tags                                  |
 
 ### Remaining adoption checklist (AuthNZ + RG integration)
 

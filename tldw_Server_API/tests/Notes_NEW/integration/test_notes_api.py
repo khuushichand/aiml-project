@@ -30,6 +30,7 @@ def client_with_notes_db(tmp_path, monkeypatch):
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
     def override_db_dep():
+
         return db
 
     # Use full app profile so Notes routes are included

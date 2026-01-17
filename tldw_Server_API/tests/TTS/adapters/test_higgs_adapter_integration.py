@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
 # Helper Functions
 
 def check_higgs_model_exists():
+
     """Check if Higgs model and library are available"""
     try:
         from boson_multimodal.serve.serve_engine import HiggsAudioServeEngine
@@ -44,6 +45,7 @@ def check_higgs_model_exists():
         return False, None
 
 def get_compute_capability():
+
     """Detect compute capabilities"""
     if torch.cuda.is_available():
         return "cuda"

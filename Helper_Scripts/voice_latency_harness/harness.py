@@ -11,11 +11,34 @@ Extend with WS STT commit/final timing once VAD/commit is in place to compute
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 import time
 import uuid
 from typing import Dict, Any, List
+from pathlib import Path
+
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
+
+from common.repo_utils import configure_local_egress, ensure_repo_root
+
+ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except ImportError as err:
+    print(
+        f"tldw_Server_API not available; run from the repo root or set PYTHONPATH. ({err})",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from err
 
 
 def _now() -> float:
@@ -41,13 +64,7 @@ def _p90(values: List[float]) -> float:
     return s[k]
 
 
-def measure_tts_ttfb(base: str, token: str | None, text: str, runs: int = 5) -> Dict[str, Any]:
-    try:
-        import httpx  # type: ignore
-    except Exception:
-        print("Please `pip install httpx` to run the harness.", file=sys.stderr)
-        sys.exit(2)
-
+async def measure_tts_ttfb(base: str, token: str | None, text: str, runs: int = 5) -> Dict[str, Any]:
     url = f"{base.rstrip('/')}/api/v1/audio/speech"
     headers = {"Accept": "application/octet-stream", "Content-Type": "application/json"}
     if token:
@@ -70,18 +87,22 @@ def measure_tts_ttfb(base: str, token: str | None, text: str, runs: int = 5) -> 
         first = None
         total_bytes = 0
         try:
-            with httpx.stream("POST", url, headers=headers, json=payload, timeout=60.0) as r:
-                r.raise_for_status()
-                for chunk in r.iter_bytes():
-                    if not chunk:
-                        continue
-                    total_bytes += len(chunk)
-                    if first is None:
-                        first = _now()
-                        ttfb = max(0.0, first - start)
-                        ttfb_runs.append(ttfb)
-                        # Continue consuming to validate stream is healthy
-        except (httpx.HTTPError, httpx.RequestError) as e:
+            async for chunk in http_client.astream_bytes(
+                method="POST",
+                url=url,
+                headers=headers,
+                json=payload,
+                timeout=60.0,
+            ):
+                if not chunk:
+                    continue
+                total_bytes += len(chunk)
+                if first is None:
+                    first = _now()
+                    ttfb = max(0.0, first - start)
+                    ttfb_runs.append(ttfb)
+                    # Continue consuming to validate stream is healthy
+        except Exception as e:
             per_run.append({"run": i + 1, "ok": False, "error": str(e)})
             continue
         per_run.append({"run": i + 1, "ok": True, "ttfb_s": ttfb_runs[-1] if ttfb_runs else None, "bytes": total_bytes, "request_id": req_id})
@@ -106,7 +127,15 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.mode == "tts":
-        result = measure_tts_ttfb(args.base, args.token, args.text, args.runs)
+        configure_local_egress(args.base)
+        try:
+            result = asyncio.run(measure_tts_ttfb(args.base, args.token, args.text, args.runs))
+        finally:
+            try:
+                asyncio.run(http_client.shutdown_http_client())
+            except Exception as err:
+                # Best-effort cleanup; do not fail the harness on cleanup issues.
+                print(f"Warning: failed to shutdown http client: {err}", file=sys.stderr)
         print(json.dumps(result, indent=2))
         return
 

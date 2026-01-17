@@ -312,7 +312,7 @@ Start execution. Response `{ "test_id": "...", "status": "running", "progress": 
 Summary: `{ "test_id": "...", "status": "...", "arms": [ {"arm_id":"...","provider":"...","model":"...","metrics": {"ndcg": 0.72}, "latency_ms": {"p50": 30.3} } ] }`.
 
 `GET /api/v1/evaluations/embeddings/abtest/{test_id}/results`
-Paginated results. Response `{ "summary": {...}, "page": 1, "page_size": 50, "total": 120 }`.
+Paginated results. Response `{ "summary": {...}, "results": [ { "result_id": "...", "test_id": "...", "arm_id": "...", "query_id": "...", "ranked_ids": ["..."], "scores": [0.9], "metrics": {"ndcg": 0.72}, "latency_ms": 12.3, "ranked_distances": [0.1], "ranked_metadatas": [{"source": "..."}], "ranked_documents": ["..."], "rerank_scores": [0.7], "created_at": "2026-01-12T00:00:00Z" } ], "page": 1, "page_size": 50, "total": 120 }`.
 
 `GET /api/v1/evaluations/embeddings/abtest/{test_id}/significance?metric=ndcg`
 Statistical significance for chosen metric.
@@ -772,11 +772,21 @@ All errors follow a consistent format:
 
 ### Python (requests)
 ```python
-import requests
+import json
+from urllib.request import Request, urlopen
 
 API_KEY = "your-key"
 BASE = "http://localhost:8000/api/v1/evaluations"
 headers = {"X-API-KEY": API_KEY}
+
+def request_json(method, url, payload=None, headers=None):
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update(headers)
+    req = Request(url, data=data, headers=hdrs, method=method)
+    with urlopen(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 # Create evaluation
 payload = {
@@ -785,13 +795,18 @@ payload = {
   "eval_spec": {"metrics": ["fluency"], "model": "gpt-4"},
   "dataset": [{"input": {"text": "hi"}, "expected": {"text": "hi"}}]
 }
-e = requests.post(BASE, json=payload, headers=headers).json()
+e = request_json("POST", BASE, payload=payload, headers=headers)
 
 # Start a run
-r = requests.post(f"{BASE}/{e['id']}/runs", json={"target_model": "gpt-4"}, headers=headers).json()
+r = request_json(
+    "POST",
+    f"{BASE}/{e['id']}/runs",
+    payload={"target_model": "gpt-4"},
+    headers=headers,
+)
 
 # Poll run status
-status = requests.get(f"{BASE}/runs/{r['id']}", headers=headers).json()
+status = request_json("GET", f"{BASE}/runs/{r['id']}", headers=headers)
 ```
 
 ### Pipeline Presets & Cleanup

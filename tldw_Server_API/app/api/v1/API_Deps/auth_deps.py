@@ -8,6 +8,7 @@ import asyncio
 import threading
 import re
 import os
+import time
 from weakref import WeakKeyDictionary
 #
 # 3rd-party imports
@@ -55,12 +56,15 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import get_pol
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
 _TEST_SESSION_LOCKS: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
 _TEST_SESSION_LOCK_GUARD = threading.Lock()
 _TEST_SESSION_STATE_GUARD = threading.Lock()
+_TEST_EPHEMERAL_STATE: dict = {"values": {}}
+_TEST_EPHEMERAL_STATE_GUARD = threading.Lock()
 
 _SENSITIVE_USER_KEY_PATTERN = re.compile(
     r"(password|secret|token|api[_-]?key|ssn|totp|otp|mfa|backup_codes|recovery_codes)",
@@ -85,6 +89,124 @@ def _public_user_dict(user: Mapping[str, Any]) -> Dict[str, Any]:
     return safe
 
 
+def _looks_like_jwt(token: Optional[str]) -> bool:
+    if not isinstance(token, str):
+        return False
+    return token.count(".") == 2
+
+
+async def _authenticate_api_key_from_request(request: Request, api_key: str) -> Dict[str, Any]:
+    test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+    if test_mode:
+        # SECURITY: Warn loudly about TEST_MODE and block in production unless explicitly allowed
+        allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
+        environment = os.getenv("ENVIRONMENT", "").strip().lower()
+        prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
+        is_production = environment in {"production", "prod"} or prod_flag
+        if is_production:
+            if not allow_test_in_prod:
+                logger.critical(
+                    "TEST_MODE is enabled in production environment! "
+                    "This is a SEVERE security risk. Set ALLOW_TEST_MODE_IN_PRODUCTION=1 to override (NOT recommended)."
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Server configuration error"
+                )
+            else:
+                logger.warning(
+                    "TEST_MODE is enabled in production with explicit override. "
+                    "This bypasses normal authentication and should only be used for debugging."
+                )
+        else:
+            logger.debug("TEST_MODE is enabled for non-production environment")
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        allowed_keys: set[str] = set()
+        test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+        if test_key:
+            allowed_keys.add(test_key)
+        if settings and settings.SINGLE_USER_API_KEY:
+            allowed_keys.add(settings.SINGLE_USER_API_KEY)
+        if api_key in allowed_keys:
+            client_ip = None
+            try:
+                client = getattr(request, "client", None)
+                if client is not None:
+                    client_ip = getattr(client, "host", None)
+            except Exception:
+                client_ip = None
+            if settings and settings.AUTH_MODE == "single_user":
+                if not is_single_user_ip_allowed(client_ip, settings):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or missing API Key",
+                    )
+            try:
+                if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
+                    from pathlib import Path as _Path
+                    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz_tables
+                    db_path = settings.DATABASE_URL.replace("sqlite:///", "")
+                    _ensure_authnz_tables(_Path(db_path))
+            except Exception as _ensure_err:
+                logger.debug("AuthNZ test fallback: ensure_authnz_tables skipped/failed: {}", _ensure_err)
+            fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", 1)
+            user = {
+                "id": fixed_id,
+                "username": "single_user",
+                "email": None,
+                "role": "admin",
+                "roles": ["admin"],
+                "permissions": ["*"],
+                "is_active": True,
+                "is_verified": True,
+            }
+            user = _public_user_dict(user)
+            try:
+                request.state.user_id = fixed_id
+                request.state.team_ids = []
+                request.state.org_ids = []
+            except Exception as state_exc:
+                logger.debug(
+                    "API key test-mode path: unable to attach state context: {}",
+                    state_exc,
+                )
+            return user
+    try:
+        # Force API key manager resolution through this module so tests can
+        # monkeypatch `auth_deps.get_api_key_manager` and assert error logging
+        # does not leak exception messages outside TEST_MODE.
+        await get_api_key_manager()
+        user_obj = await authenticate_api_key_user(request, api_key)
+        # Normalize User model to a plain dict for response serialization.
+        if hasattr(user_obj, "model_dump"):
+            user_dict = user_obj.model_dump()  # type: ignore[call-arg]
+        elif hasattr(user_obj, "dict"):
+            user_dict = user_obj.dict()  # type: ignore[call-arg]
+        elif isinstance(user_obj, Mapping):
+            user_dict = dict(user_obj)
+        else:
+            user_dict = {"id": getattr(user_obj, "id", None)}
+        return _public_user_dict(user_dict)
+    except HTTPException:
+        # Propagate explicit HTTP errors unchanged (401/403, etc.)
+        raise
+    except Exception as e:
+        if _is_test_mode():
+            logger.exception("API key authentication error in get_current_user (TEST_MODE)")
+        else:
+            logger.error(
+                "API key authentication error in get_current_user (type={})",
+                type(e).__name__,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate API key",
+        )
+
+
 def _get_test_session_lock() -> asyncio.Lock:
     """
     Lazily initialize and return a test session lock scoped to the current event loop.
@@ -100,6 +222,12 @@ def _get_test_session_lock() -> asyncio.Lock:
             lock = asyncio.Lock()
             _TEST_SESSION_LOCKS[loop] = lock
         return lock
+
+
+def reset_test_ephemeral_state() -> None:
+    """Clear the test-only in-process ephemeral KV store (pytest/TEST_MODE)."""
+    with _TEST_EPHEMERAL_STATE_GUARD:
+        _TEST_EPHEMERAL_STATE["values"].clear()
 
 #######################################################################################################################
 #
@@ -367,6 +495,34 @@ async def get_session_manager_dep() -> SessionManager:
                                     changed += 1
                             return changed
 
+                async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int) -> None:
+                    ttl = max(int(ttl_seconds), 1)
+                    now = time.monotonic()
+                    expires_at = now + ttl
+                    with _TEST_EPHEMERAL_STATE_GUARD:
+                        # Opportunistic pruning to keep long-running test suites bounded.
+                        values = _TEST_EPHEMERAL_STATE["values"]
+                        for k, (_v, exp) in list(values.items()):
+                            if exp <= now:
+                                values.pop(k, None)
+                        values[key] = (value, expires_at)
+
+                async def get_ephemeral_value(self, key: str) -> Optional[str]:
+                    now = time.monotonic()
+                    with _TEST_EPHEMERAL_STATE_GUARD:
+                        entry = _TEST_EPHEMERAL_STATE["values"].get(key)
+                        if not entry:
+                            return None
+                        value, expires_at = entry
+                        if expires_at <= now:
+                            _TEST_EPHEMERAL_STATE["values"].pop(key, None)
+                            return None
+                        return value
+
+                async def delete_ephemeral_value(self, key: str) -> None:
+                    with _TEST_EPHEMERAL_STATE_GUARD:
+                        _TEST_EPHEMERAL_STATE["values"].pop(key, None)
+
             return _StubSessionManager()  # type: ignore[return-value]
     except Exception as exc:
         logger.debug(
@@ -376,23 +532,10 @@ async def get_session_manager_dep() -> SessionManager:
     return await get_session_manager()
 
 
-async def get_rate_limiter_dep() -> RateLimiter:
-    """Get rate limiter dependency"""
-    # In TEST_MODE, avoid touching the database by returning a disabled, initialized limiter
-    try:
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
-            from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter as _RL
-            rl = _RL(db_pool=None)
-            rl.enabled = False
-            rl._initialized = True
-            return rl
-    except Exception as exc:
-        # Fall back to normal path if any issue
-        logger.debug(
-            "get_rate_limiter_dep: TEST_MODE stub resolution failed; using real RateLimiter: {}",
-            exc,
-        )
-    return await get_rate_limiter()
+async def get_rate_limiter_dep(request: Request) -> RateLimiter:
+    """Get AuthNZ rate limiter dependency (lockout only)."""
+    _ = request
+    return get_rate_limiter()
 
 
 async def get_registration_service_dep() -> RegistrationService:
@@ -420,8 +563,9 @@ async def get_current_user(
     """
     Resolve and return the current authenticated user.
 
-    Supports both Bearer JWT authentication and `X-API-KEY` authentication. If an
-    upstream dependency already populated `request.state.auth` and
+    Supports Bearer JWT authentication and API keys via `X-API-KEY` or
+    Authorization Bearer (non-JWT tokens). If an upstream dependency already
+    populated `request.state.auth` and
     `request.state._auth_user`, this function reuses that request-scoped cache to
     avoid repeating token/API-key validation within a single request.
 
@@ -524,117 +668,25 @@ async def get_current_user(
             exc,
         )
 
-    # If Authorization is absent but X-API-KEY present, attempt API-key auth (SQLite/Postgres multi-user).
-    if not credentials and x_api_key:
-        test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        if test_mode:
-            # SECURITY: Warn loudly about TEST_MODE and block in production unless explicitly allowed
-            allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
-            environment = os.getenv("ENVIRONMENT", "").strip().lower()
-            prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
-            is_production = environment in {"production", "prod"} or prod_flag
-            if is_production:
-                if not allow_test_in_prod:
-                    logger.critical(
-                        "TEST_MODE is enabled in production environment! "
-                        "This is a SEVERE security risk. Set ALLOW_TEST_MODE_IN_PRODUCTION=1 to override (NOT recommended)."
-                    )
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Server configuration error"
-                    )
-                else:
-                    logger.warning(
-                        "TEST_MODE is enabled in production with explicit override. "
-                        "This bypasses normal authentication and should only be used for debugging."
-                    )
-            else:
-                logger.debug("TEST_MODE is enabled for non-production environment")
-            try:
-                settings = get_settings()
-            except Exception:
-                settings = None
-            allowed_keys: set[str] = set()
-            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-            if test_key:
-                allowed_keys.add(test_key)
-            if settings and settings.SINGLE_USER_API_KEY:
-                allowed_keys.add(settings.SINGLE_USER_API_KEY)
-            if x_api_key in allowed_keys:
-                client_ip = None
-                try:
-                    client = getattr(request, "client", None)
-                    if client is not None:
-                        client_ip = getattr(client, "host", None)
-                except Exception:
-                    client_ip = None
-                if settings and settings.AUTH_MODE == "single_user":
-                    if not is_single_user_ip_allowed(client_ip, settings):
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid or missing API Key",
-                        )
-                try:
-                    if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
-                        from pathlib import Path as _Path
-                        from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz_tables
-                        db_path = settings.DATABASE_URL.replace("sqlite:///", "")
-                        _ensure_authnz_tables(_Path(db_path))
-                except Exception as _ensure_err:
-                    logger.debug("AuthNZ test fallback: ensure_authnz_tables skipped/failed: {}", _ensure_err)
-                fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", 1)
-                user = {
-                    "id": fixed_id,
-                    "username": "single_user",
-                    "email": None,
-                    "role": "admin",
-                    "roles": ["admin"],
-                    "permissions": ["*"],
-                    "is_active": True,
-                    "is_verified": True,
-                }
-                user = _public_user_dict(user)
-                try:
-                    request.state.user_id = fixed_id
-                    request.state.team_ids = []
-                    request.state.org_ids = []
-                except Exception as state_exc:
-                    logger.debug(
-                        "API key test-mode path: unable to attach state context: {}",
-                        state_exc,
-                    )
-                return user
+    # Single-user compatibility: accept Authorization Bearer as API key when no X-API-KEY is present.
+    if credentials and not x_api_key:
         try:
-            # Force API key manager resolution through this module so tests can
-            # monkeypatch `auth_deps.get_api_key_manager` and assert error logging
-            # does not leak exception messages outside TEST_MODE.
-            await get_api_key_manager()
-            user_obj = await authenticate_api_key_user(request, x_api_key)
-            # Normalize User model to a plain dict for response serialization.
-            if hasattr(user_obj, "model_dump"):
-                user_dict = user_obj.model_dump()  # type: ignore[call-arg]
-            elif hasattr(user_obj, "dict"):
-                user_dict = user_obj.dict()  # type: ignore[call-arg]
-            elif isinstance(user_obj, Mapping):
-                user_dict = dict(user_obj)
-            else:
-                user_dict = {"id": getattr(user_obj, "id", None)}
-            return _public_user_dict(user_dict)
-        except HTTPException:
-            # Propagate explicit HTTP errors unchanged (401/403, etc.)
-            raise
-        except Exception as e:
-            if _is_test_mode():
-                logger.exception("API key authentication error in get_current_user (TEST_MODE)")
-            else:
-                logger.error(
-                    "API key authentication error in get_current_user (type={})",
-                    type(e).__name__,
-                )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate API key",
-            )
+            settings = get_settings()
+        except Exception:
+            settings = None
+        if settings and getattr(settings, "AUTH_MODE", None) == "single_user":
+            x_api_key = credentials.credentials
+            credentials = None
+
+    bearer_token = credentials.credentials if credentials else None
+    bearer_is_jwt = _looks_like_jwt(bearer_token) if bearer_token else False
+    api_key_candidate = x_api_key
+    if not api_key_candidate and bearer_token and not bearer_is_jwt:
+        api_key_candidate = bearer_token
+
+    # If Authorization is absent or not a JWT but API key present, attempt API-key auth.
+    if api_key_candidate and (not credentials or not bearer_is_jwt):
+        return await _authenticate_api_key_from_request(request, api_key_candidate)
 
     # Otherwise, require Bearer token
     if not credentials:
@@ -645,7 +697,7 @@ async def get_current_user(
                 present_headers = ",".join(h for h in ("Authorization", "X-API-KEY") if request.headers.get(h)) or "none"
                 extra_headers["X-TLDW-Auth-Reason"] = "missing-bearer"
                 extra_headers["X-TLDW-Auth-Headers"] = present_headers
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "get_current_user: failed to set TEST_MODE missing-bearer diagnostic headers: {}",
                     exc,
@@ -675,8 +727,11 @@ async def get_current_user(
             if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
                 try:
                     extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{exc.detail}"
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
+                        exc,
+                    )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication required",
@@ -696,8 +751,11 @@ async def get_current_user(
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             try:
                 extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
+                    exc,
+                )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
@@ -878,8 +936,8 @@ def require_api_key_scope(
             # Retrieve scope from request.state (populated during auth)
             key_scope = getattr(request.state, "_api_key_scope", None)
             if key_scope is None:
-                # Fallback: allow if no scope info (graceful degradation for single-user mode)
-                if is_single_user_mode():
+                # Fallback: allow only for explicit single-user principals.
+                if getattr(principal, "subject", None) == "single_user":
                     return principal
                 # In multi-user mode, missing scope is an error
                 if _is_test_mode():
@@ -990,33 +1048,21 @@ async def get_current_active_user(
 
 async def get_user_org_policy(
     db: Any = Depends(get_db_transaction),  # noqa: B008
+    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
     current_user: Dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
 ) -> Dict[str, Any]:
     """
-    Resolve the active org policy for the current user and fail closed on errors.
+    Deprecated compatibility shim for user-dict org policy lookups.
 
-    Behaviour:
-    - If the user has explicit org memberships, the first membership's org_id is used.
-    - Otherwise, HTTP 400 is raised when no organization can be resolved.
-
-    New code should prefer ``get_org_policy_from_principal``, which is
-    principal-first and profile/flag-aware. This helper is retained as a
-    compatibility shim for user-dict based flows.
+    New code should prefer ``get_org_policy_from_principal``. This helper
+    now delegates to the claim-first resolver so org policy resolution stays
+    consistent across all authentication flows.
     """
-    memberships = current_user.get("org_memberships") or []
-    if memberships:
-        org_id = memberships[0].get("org_id")
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User has no organization memberships",
-        )
-    if org_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Organization membership is missing org_id",
-        )
-    return await _load_org_policy(db, org_id)
+    return await get_org_policy_from_principal(
+        db=db,
+        principal=principal,
+        current_user=current_user,
+    )
 
 
 async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
@@ -1244,127 +1290,177 @@ async def get_optional_current_user(
 #
 # Rate Limiting Dependencies
 
-async def check_rate_limit(
-    request: Request,
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep)
-):
+def _rg_enabled_for_request(request: Request) -> bool:
+    state = getattr(request, "state", None)
+    return bool(state is not None and getattr(state, "rg_policy_id", None))
+
+
+async def check_rate_limit(request: Request, rate_limiter=None) -> None:
     """
-    Check rate limit for the current request
+    RG-first rate limit dependency with legacy fallback.
 
-    Args:
-        request: FastAPI request object
-        rate_limiter: Rate limiter instance
-
-    Raises:
-        HTTPException: If rate limit exceeded
+    When Resource Governor (RG) has already governed this request, this is a
+    no-op. Otherwise it uses the legacy AuthNZ rate limiter (user-scoped when
+    available, else IP-scoped).
     """
-    # In test mode, bypass rate limiting entirely for deterministic tests
-    if _is_test_mode():
-        return  # Skip enforcement in test environments
+    # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
+    if _rg_enabled_for_request(request):
+        return
 
-    # If ResourceGovernor ingress has already governed this route, avoid
-    # double-enforcement via legacy AuthNZ rate limiter.
-    try:
-        if getattr(request.state, "rg_policy_id", None):
-            return
-    except Exception as exc:
-        logger.debug("AuthNZ rate-limit bypass: unable to read request.state.rg_policy_id: {}", exc)
+    settings = get_settings()
+    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
+        return
 
-    # Additional bypass: allow the bootstrapped single-user admin principal
-    # to skip global IP rate limits. Detection is principal/claim-first
-    # and does not branch on AUTH_MODE here.
+    principal = None
     try:
         ctx = getattr(request.state, "auth", None)
-        principal = ctx.principal if isinstance(ctx, AuthContext) else None
+        if isinstance(ctx, AuthContext):
+            principal = ctx.principal
     except Exception:
         principal = None
 
-    if principal is not None and principal.is_admin and is_single_user_principal(principal):
+    if is_single_user_principal(principal):
         return
 
-    # Get client IP
-    client_ip = request.client.host if request.client else "unknown"
+    # Claim-first governor hook (primarily for test invariants)
+    await get_auth_governor()
 
-    # Get endpoint key
-    endpoint = f"{request.method}:{request.url.path}"
+    # In test mode, bypass rate limiting entirely for deterministic tests.
+    if _is_test_mode():
+        return
 
-    # Check rate limit via AuthGovernor (wraps RateLimiter)
-    auth_gov = await get_auth_governor()
-    allowed, metadata = await auth_gov.check_rate_limit(
-        identifier=client_ip,
-        endpoint=endpoint,
-        rate_limiter=rate_limiter,
-    )
+    try:
+        if rate_limiter is None:
+            rate_limiter = get_rate_limiter()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        metrics.record_rate_limit_fallback()
+        logger.warning(
+            "Legacy rate limiter unavailable; skipping rate limit check; error={}",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable.",
+        ) from exc
+
+    if not getattr(rate_limiter, "enabled", False):
+        return
+
+    endpoint = request.url.path if getattr(request, "url", None) else "unknown"
+    client_ip = request.client.host if getattr(request, "client", None) else "unknown"
+    user_id = getattr(request.state, "user_id", None)
+    try:
+        if user_id is not None:
+            allowed, meta = await rate_limiter.check_user_rate_limit(
+                int(user_id),
+                endpoint,
+                limit=settings.RATE_LIMIT_PER_MINUTE,
+                window_minutes=1,
+            )
+        else:
+            allowed, meta = await rate_limiter.check_rate_limit(
+                identifier=f"ip:{client_ip}",
+                endpoint=endpoint,
+                limit=settings.RATE_LIMIT_PER_MINUTE,
+                window_minutes=1,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        metrics.record_rate_limit_fallback()
+        logger.warning(
+            "Legacy rate limiter check failed; skipping rate limit check; error={}",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable.",
+        ) from exc
 
     if not allowed:
-        retry_after = 60
-        try:
-            if isinstance(metadata, dict):
-                retry_after = int(metadata.get("retry_after", retry_after))
-        except Exception:
-            # Fallback to default if parsing fails
-            retry_after = 60
+        detail = meta.get("error") if isinstance(meta, dict) else None
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded. Retry after {retry_after} seconds",
-            headers={"Retry-After": str(retry_after)}
+            detail=detail or "Rate limit exceeded.",
         )
 
 
-async def check_auth_rate_limit(
-    request: Request,
-    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep)
-):
-    """
-    Check stricter rate limit for authentication endpoints
-
-    Args:
-        request: FastAPI request object
-        rate_limiter: Rate limiter instance
-
-    Raises:
-        HTTPException: If rate limit exceeded
-    """
-    # In test mode, bypass rate limiting entirely for deterministic tests
-    if _is_test_mode():
+async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
+    """RG-first auth rate limit dependency with legacy fallback (IP-scoped)."""
+    # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
+    if _rg_enabled_for_request(request):
         return
 
-    # Additional bypass: allow the bootstrapped single-user admin principal
-    # to skip auth-specific IP rate limits. Detection is principal/claim-first
-    # and does not branch on AUTH_MODE here.
+    settings = get_settings()
+    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
+        return
+
+    principal = None
     try:
         ctx = getattr(request.state, "auth", None)
-        principal = ctx.principal if isinstance(ctx, AuthContext) else None
+        if isinstance(ctx, AuthContext):
+            principal = ctx.principal
     except Exception:
         principal = None
 
-    if principal is not None and principal.is_admin and is_single_user_principal(principal):
+    if is_single_user_principal(principal):
         return
 
-    # Get client IP
-    client_ip = request.client.host if request.client else "unknown"
+    # Claim-first governor hook (primarily for test invariants)
+    await get_auth_governor()
 
-    # Use stricter limits for auth endpoints via AuthGovernor
-    auth_gov = await get_auth_governor()
-    allowed, metadata = await auth_gov.check_rate_limit(
-        identifier=client_ip,
-        endpoint="auth",
-        limit=5,  # Stricter limit (5 requests per minute)
-        window_minutes=1,
-        rate_limiter=rate_limiter,
-    )
-    retry_after = 60
-    if isinstance(metadata, dict):
-        try:
-            retry_after = int(metadata.get("retry_after", retry_after))
-        except Exception:
-            retry_after = 60
+    # In test mode, bypass rate limiting entirely for deterministic tests.
+    if _is_test_mode():
+        return
+
+    try:
+        if rate_limiter is None:
+            rate_limiter = get_rate_limiter()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        metrics.record_rate_limit_fallback()
+        logger.warning(
+            "Legacy rate limiter unavailable; skipping auth rate limit check; error={}",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable.",
+        ) from exc
+
+    if not getattr(rate_limiter, "enabled", False):
+        return
+
+    endpoint = request.url.path if getattr(request, "url", None) else "auth"
+    client_ip = request.client.host if getattr(request, "client", None) else "unknown"
+    try:
+        allowed, meta = await rate_limiter.check_rate_limit(
+            identifier=f"ip:{client_ip}",
+            endpoint=f"auth:{endpoint}",
+            limit=settings.RATE_LIMIT_PER_MINUTE,
+            window_minutes=1,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        metrics.record_rate_limit_fallback()
+        logger.warning(
+            "Legacy auth rate limiter check failed; skipping auth rate limit check; error={}",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable.",
+        ) from exc
 
     if not allowed:
+        detail = meta.get("error") if isinstance(meta, dict) else None
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Too many authentication attempts. Retry after {retry_after} seconds",
-            headers={"Retry-After": str(retry_after)}
+            detail=detail or "Rate limit exceeded.",
         )
 
 
@@ -1462,8 +1558,11 @@ def rbac_rate_limit(resource: str):
         await enforce_rbac_rate_limit(request, resource, db_pool)
     try:
         setattr(_dep, "_tldw_rate_limit_resource", resource)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(
+            "rbac_rate_limit: unable to attach rate-limit metadata to dependency: {}",
+            exc,
+        )
     return _dep
 
 
@@ -1495,6 +1594,7 @@ def require_token_scope(
       match the request path param `schedule_path_param` when present, or header `schedule_header`.
     - In single-user mode, or when no bearer token is present, this check is bypassed.
     - If `allow_admin_bypass=True`, admin users skip this enforcement.
+    - If the bearer token is not a JWT, enforce API key constraints using that token.
     """
     async def _checker(
         request: Request,
@@ -1510,30 +1610,33 @@ def require_token_scope(
                 jwt_service = await get_jwt_service_dep()
             if isinstance(db_pool, _Depends) or db_pool is None:
                 db_pool = await get_db_pool()
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
             # Best effort: if resolution fails, leave as-is; downstream code handles missing services.
-            pass
+            logger.debug(
+                "require_token_scope: dependency resolution failed; continuing with provided services: {}",
+                exc,
+            )
 
-        # If we have Authorization bearer, apply JWT-based checks; otherwise, try X-API-KEY checks
-        if credentials:
-            token = credentials.credentials
+        token = credentials.credentials if credentials else None
+        token_is_jwt = _looks_like_jwt(token) if token else False
+
+        # If we have Authorization bearer and it looks like a JWT, apply JWT-based checks.
+        if token and token_is_jwt:
             try:
                 payload = jwt_service.decode_access_token(token)
-            except Exception:
+            except (InvalidTokenError, TokenExpiredError):
+                # Defensive: malformed tokens should fall back to upstream auth handling.
                 return None
             # Optional admin bypass based on token role claim
-            try:
-                if allow_admin_bypass and str(payload.get("role", "")) == "admin":
-                    return None
-            except Exception:
-                pass
+            if allow_admin_bypass and str(payload.get("role", "")) == "admin":
+                return None
             tok_scope = str(payload.get("scope") or "").strip()
             if tok_scope:
                 try:
                     request.state._token_scope_enforced = True
                     request.state._token_scope_claim = tok_scope
                     request.state._token_scope_required = str(scope)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     logger.debug("require_token_scope: failed to attach scope enforcement marker to request.state")
             if tok_scope and require_if_present and tok_scope != str(scope):
                 raise HTTPException(status_code=403, detail="Forbidden: invalid token scope")
@@ -1547,8 +1650,11 @@ def require_token_scope(
                             raise HTTPException(status_code=403, detail="Forbidden: endpoint not permitted for token")
             except HTTPException:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "require_token_scope: endpoint allowlist enforcement failed; continuing: {}",
+                    exc,
+                )
 
             # Enforce HTTP method allowlist
             try:
@@ -1559,8 +1665,11 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: method not permitted for token")
             except HTTPException:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "require_token_scope: method allowlist enforcement failed; continuing: {}",
+                    exc,
+                )
 
             # Enforce path prefix allowlist
             try:
@@ -1571,8 +1680,11 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: path not permitted for token")
             except HTTPException:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "require_token_scope: path allowlist enforcement failed; continuing: {}",
+                    exc,
+                )
 
             # Quotas: simple per-token counters (DB-backed; fallback to process-local)
             try:
@@ -1598,30 +1710,37 @@ def require_token_scope(
                                     raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
                             except HTTPException:
                                 raise
-                            except Exception:
+                            except Exception as err:
+                                # Defensive: fall back to process-local counters if quota backend fails.
                                 cur = int(_VK_USAGE.get(key, 0))
                                 if cur >= int(max_calls):
-                                    raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
+                                    raise HTTPException(
+                                        status_code=403,
+                                        detail="Forbidden: token quota exceeded",
+                                    ) from err
                                 _VK_USAGE[key] = cur + 1
             except HTTPException:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "require_token_scope: token constraints evaluation failed; continuing: {}",
+                    exc,
+                )
 
             if require_schedule_match:
                 try:
                     tok_sid = payload.get("schedule_id")
-                except Exception:
+                except Exception:  # noqa: BLE001
                     tok_sid = None
                 expected = None
                 try:
                     expected = request.path_params.get(schedule_path_param)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     expected = None
                 if expected is None:
                     try:
                         expected = request.headers.get(schedule_header)
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         expected = None
                 if tok_sid is not None and expected is not None and str(tok_sid) != str(expected):
                     raise HTTPException(status_code=403, detail="Forbidden: schedule scope mismatch")
@@ -1631,11 +1750,13 @@ def require_token_scope(
         # Fallback: X-API-KEY constraints enforcement (if header present and key is valid)
         try:
             api_key = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
-        except Exception:
+        except Exception:  # noqa: BLE001
+            # Defensive: request headers access should never block the fallback path.
             api_key = None
+        if not api_key and token and not token_is_jwt:
+            api_key = token
         if api_key:
             try:
-                from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
                 api_mgr = await get_api_key_manager()
                 client_ip = request.client.host if getattr(request, "client", None) else None
                 info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
@@ -1651,7 +1772,7 @@ def require_token_scope(
                     import json as _json
                     try:
                         allowed_eps = _json.loads(allowed_eps)
-                    except Exception:
+                    except (ValueError, TypeError):
                         allowed_eps = None
                 if endpoint_id and isinstance(allowed_eps, list) and allowed_eps:
                     if endpoint_id not in [str(x) for x in allowed_eps]:
@@ -1662,7 +1783,7 @@ def require_token_scope(
                     import json as _json
                     try:
                         meta = _json.loads(meta)
-                    except Exception:
+                    except (ValueError, TypeError):
                         meta = None
                 if isinstance(meta, dict):
                     am = meta.get("allowed_methods")
@@ -1696,15 +1817,19 @@ def require_token_scope(
                                         raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
                                 except HTTPException:
                                     raise
-                                except Exception:
+                                except Exception as err:
+                                    # Defensive: fall back to process-local counters if quota backend fails.
                                     key = (f"apikey:{key_id}", str(count_as))
                                     cur = int(_VK_USAGE.get(key, 0))
                                     if cur >= int(quota):
-                                        raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
+                                        raise HTTPException(
+                                            status_code=403,
+                                            detail="Forbidden: API key quota exceeded",
+                                        ) from err
                                     _VK_USAGE[key] = cur + 1
             except HTTPException:
                 raise
-            except Exception:
+            except Exception:  # noqa: BLE001
                 # Best-effort: do not block if metadata not available
                 return None
         return None
@@ -1714,8 +1839,11 @@ def require_token_scope(
         setattr(_checker, "_tldw_scope_name", scope)
         setattr(_checker, "_tldw_token_scope", True)
         setattr(_checker, "_tldw_token_scope_required", str(scope))
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "require_token_scope: unable to attach metadata to dependency: {}",
+            exc,
+        )
 
     return _checker
 #

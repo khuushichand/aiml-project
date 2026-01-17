@@ -83,14 +83,16 @@ Routers are mounted in `main.py` with prefix `/api/v1`.
   - Root-level path `Databases/Media_DB_v2.db` is deprecated
   - Backends layer wired for PostgreSQL but SQLite is default
 - AuthNZ (Users):
-  - `DATABASE_URL` (env) - default in single-user mode resolves to `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`
+  - `DATABASE_URL` (env) - default in single-user mode resolves to `sqlite:///<USER_DB_BASE_DIR>/<SINGLE_USER_FIXED_ID>/tldw.db`
   - PostgreSQL recommended for multi-user mode
 - Evaluations DB: `Databases/evaluations.db` (unified schema + audit; DI can map per-user audit paths)
 - Per-user notes/chats: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
-- Per-user prompts/Prompt Studio: `<USER_DB_BASE_DIR>/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`
+- Per-user prompts: `<USER_DB_BASE_DIR>/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`
+- Prompt Studio DB: `<USER_DB_BASE_DIR>/<user_id>/prompt_studio_dbs/prompt_studio.db`
 - Vector store (per user): ChromaDB at `<USER_DB_BASE_DIR>/<user_id>/chroma_storage/` with meta/jobs SQLite under `vector_store/`
+- Per-user storage (non-DB assets): outputs (`<USER_DB_BASE_DIR>/<user_id>/outputs/`), voices (`<USER_DB_BASE_DIR>/<user_id>/voices/`), rewrite cache (`<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl`), personalization (`<USER_DB_BASE_DIR>/<user_id>/rag_personalization.json`)
 
-Note: All paths can be overridden by environment or config. `USER_DB_BASE_DIR` controls the per-user root (defaults to `Databases/user_databases`).
+Note: All paths can be overridden by environment variable or `Config_Files/config.txt`. `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` and controls the per-user root (defaults to `Databases/user_databases/`); `USER_DB_BASE` is deprecated and only used as an alias for rewrite cache resolution.
 
 ## Key Flows
 

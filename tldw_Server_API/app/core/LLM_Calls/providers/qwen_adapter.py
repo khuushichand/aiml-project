@@ -13,6 +13,9 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
@@ -59,34 +62,50 @@ class QwenAdapter(ChatProvider):
             "app_config": request.get("app_config"),
         }
 
-    def _use_native_http(self) -> bool:
-        # Under pytest:
-        # - If the http client factory is monkeypatched at this module alias, prefer adapter path
-        # - Otherwise, if legacy callable is monkeypatched, prefer legacy path
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            try:
-                # If our exposed factory differs from the module's default, tests patched it
-                from tldw_Server_API.app.core import http_client as _hc_mod
-                _default_factory = getattr(_hc_mod, "create_client", None)
-                if _default_factory is not None and http_client_factory is not _default_factory:
-                    return True
-                # Otherwise, if legacy callable is monkeypatched, allow legacy path
-                from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-                fn = getattr(_legacy, "chat_with_qwen", None)
-                if callable(fn):
-                    mod = getattr(fn, "__module__", "") or ""
-                    fname = getattr(fn, "__name__", "") or ""
-                    if (mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
-                        return False
-            except Exception:
-                pass
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
-            return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_QWEN")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+    def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(request)
+        cfg = (merged.get("app_config") or {}).get("qwen_api", {})
+        if merged.get("api_key") is None and cfg.get("api_key") is not None:
+            merged["api_key"] = cfg.get("api_key")
+        if merged.get("model") is None:
+            merged["model"] = cfg.get("model") or "qwen-plus"
+        if merged.get("temperature") is None and cfg.get("temperature") is not None:
+            merged["temperature"] = cfg.get("temperature")
+        if merged.get("top_p") is None and cfg.get("top_p") is not None:
+            merged["top_p"] = cfg.get("top_p")
+        if merged.get("max_tokens") is None and cfg.get("max_tokens") is not None:
+            merged["max_tokens"] = cfg.get("max_tokens")
+        if merged.get("seed") is None and cfg.get("seed") is not None:
+            merged["seed"] = cfg.get("seed")
+        if merged.get("stop") is None and cfg.get("stop") is not None:
+            merged["stop"] = cfg.get("stop")
+        if merged.get("response_format") is None and cfg.get("response_format") is not None:
+            merged["response_format"] = cfg.get("response_format")
+        if merged.get("n") is None and cfg.get("n") is not None:
+            merged["n"] = cfg.get("n")
+        if merged.get("user") is None and cfg.get("user") is not None:
+            merged["user"] = cfg.get("user")
+        if merged.get("tools") is None and cfg.get("tools") is not None:
+            merged["tools"] = cfg.get("tools")
+        if merged.get("tool_choice") is None and cfg.get("tool_choice") is not None:
+            merged["tool_choice"] = cfg.get("tool_choice")
+        if merged.get("logit_bias") is None and cfg.get("logit_bias") is not None:
+            merged["logit_bias"] = cfg.get("logit_bias")
+        if merged.get("presence_penalty") is None and cfg.get("presence_penalty") is not None:
+            merged["presence_penalty"] = cfg.get("presence_penalty")
+        if merged.get("frequency_penalty") is None and cfg.get("frequency_penalty") is not None:
+            merged["frequency_penalty"] = cfg.get("frequency_penalty")
+        if merged.get("logprobs") is None and cfg.get("logprobs") is not None:
+            merged["logprobs"] = cfg.get("logprobs")
+        if merged.get("top_logprobs") is None and cfg.get("top_logprobs") is not None:
+            merged["top_logprobs"] = cfg.get("top_logprobs")
+        return merged
 
-    def _base_url(self, cfg: Optional[Dict[str, Any]]) -> str:
+    def _base_url(self, cfg: Optional[Dict[str, Any]], request: Optional[Dict[str, Any]] = None) -> str:
         # DashScope OpenAI-compatible endpoint
+        override = (request or {}).get("base_url")
+        if isinstance(override, str) and override.strip():
+            return override.strip().rstrip("/")
         default_base = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
         api_base = None
         if cfg:
@@ -152,88 +171,77 @@ class QwenAdapter(ChatProvider):
         return payload
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        # Native httpx path
-        if self._use_native_http():
-            api_key = request.get("api_key")
-            cfg = request.get("app_config") or {}
-            url = f"{self._base_url(cfg)}/chat/completions"
-            headers = self._headers(api_key)
-            payload = self._build_payload(request)
-            payload["stream"] = False
-            try:
-                resolved_timeout = self._resolve_timeout(request, timeout)
-                with http_client_factory(timeout=resolved_timeout) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    return resp.json()
-            except Exception as e:
-                raise self.normalize_error(e)
-
-        # Legacy delegate for parity
-        kwargs = self._to_handler_args(request)
-        if "stream" not in request and "streaming" not in request:
-            kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        fn = getattr(_legacy, "chat_with_qwen", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            fname = getattr(fn, "__name__", "") or ""
-            if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_qwen(**kwargs)
+        request = self._apply_config_defaults(request or {})
+        request = validate_payload(self.name, request or {})
+        api_key = request.get("api_key")
+        if not api_key:
+            from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+            raise ChatConfigurationError(provider=self.name, message="Qwen API Key required.")
+        cfg = request.get("app_config") or {}
+        url = f"{self._base_url(cfg, request)}/chat/completions"
+        headers = self._headers(api_key)
+        payload = self._build_payload(request)
+        payload["stream"] = False
+        payload = merge_extra_body(payload, request)
+        headers = merge_extra_headers(headers, request)
+        try:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            with http_client_factory(timeout=resolved_timeout) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:
+            raise self.normalize_error(e)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
-        if self._use_native_http():
-            api_key = request.get("api_key")
-            cfg = request.get("app_config") or {}
-            url = f"{self._base_url(cfg)}/chat/completions"
-            headers = self._headers(api_key)
-            payload = self._build_payload(request)
-            payload["stream"] = True
-            try:
-                resolved_timeout = self._resolve_timeout(request, timeout)
-                with http_client_factory(timeout=resolved_timeout) as client:
-                    with client.stream("POST", url, headers=headers, json=payload) as resp:
-                        resp.raise_for_status()
-                        seen_done = False
-                        for raw in resp.iter_lines():
-                            if not raw:
-                                continue
-                            try:
-                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                            except Exception:
-                                line = str(raw)
-                            if is_done_line(line):
-                                if not seen_done:
-                                    seen_done = True
-                                    yield sse_done()
-                                continue
-                            normalized = normalize_provider_line(line)
-                            if normalized is not None:
-                                yield normalized
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
-                return
-            except Exception as e:
-                raise self.normalize_error(e)
-
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        fn = getattr(_legacy, "chat_with_qwen", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            fname = getattr(fn, "__name__", "") or ""
-            if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_qwen(**kwargs)
+        request = self._apply_config_defaults(request or {})
+        request = validate_payload(self.name, request or {})
+        api_key = request.get("api_key")
+        if not api_key:
+            from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+            raise ChatConfigurationError(provider=self.name, message="Qwen API Key required.")
+        cfg = request.get("app_config") or {}
+        url = f"{self._base_url(cfg, request)}/chat/completions"
+        headers = self._headers(api_key)
+        payload = self._build_payload(request)
+        payload["stream"] = True
+        payload = merge_extra_body(payload, request)
+        headers = merge_extra_headers(headers, request)
+        try:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            with http_client_factory(timeout=resolved_timeout) as client:
+                with client.stream("POST", url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    seen_done = False
+                    for raw in resp.iter_lines():
+                        if not raw:
+                            continue
+                        try:
+                            line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        except Exception:
+                            line = str(raw)
+                        if is_done_line(line):
+                            if not seen_done:
+                                seen_done = True
+                                yield sse_done()
+                            continue
+                        normalized = normalize_provider_line(line)
+                        if normalized is not None:
+                            yield normalized
+                    for tail in finalize_stream(response=resp, done_already=seen_done):
+                        yield tail
+            return
+        except Exception as e:
+            raise self.normalize_error(e)
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ( ))):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+            log_http_400_body,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -242,12 +250,13 @@ class QwenAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             detail = None
             if isinstance(body, dict) and isinstance(body.get("error"), dict):
                 eobj = body["error"]
@@ -255,10 +264,7 @@ class QwenAdapter(ChatProvider):
                 typ = (eobj.get("type") or "").strip()
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):
@@ -274,6 +280,5 @@ class QwenAdapter(ChatProvider):
         return self.chat(request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
-        gen = self.stream(request, timeout=timeout)
-        for item in gen:
+        async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item

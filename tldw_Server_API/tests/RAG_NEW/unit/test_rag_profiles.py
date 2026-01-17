@@ -18,6 +18,7 @@ class TestRAGProfiles:
         assert "cheap" in profiles
 
     def test_get_profile_kwargs_merges_overrides(self):
+
         base = get_profile_kwargs("cheap")
         assert base["search_mode"] in {"fts", "hybrid"}
         # Override a couple of knobs and ensure they take precedence
@@ -27,6 +28,7 @@ class TestRAGProfiles:
         assert merged["enable_generation"] is False
 
     def test_apply_profile_to_existing_kwargs(self):
+
         existing = {"search_mode": "vector", "top_k": 5}
         merged = apply_profile_to_kwargs("production", existing)
         # Existing keys should win over profile defaults
@@ -36,6 +38,7 @@ class TestRAGProfiles:
         assert merged["enable_security_filter"] is True
 
     def test_multi_tenant_safe_kwargs_enforces_namespace_and_observability(self):
+
         ns = "tenant-xyz"
         kwargs = get_multi_tenant_safe_kwargs(ns)
         assert kwargs["index_namespace"] == ns
@@ -44,6 +47,7 @@ class TestRAGProfiles:
         assert kwargs["enable_monitoring"] is True
 
     def test_multi_tenant_safe_kwargs_requires_namespace(self):
+
         for bad in ("", "   ", None):
             with pytest.raises(ValueError):
                 # type: ignore[arg-type]

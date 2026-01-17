@@ -16,11 +16,13 @@ def _require_env_or_skip(var_name: str):
 
 
 def _require_external():
+
     if os.getenv("RUN_EXTERNAL_API_TESTS", "0") != "1":
         pytest.skip("External API tests disabled. Set RUN_EXTERNAL_API_TESTS=1 to enable.")
 
 
 def test_acm_search_openalex_integration(client_with_auth):
+
     _require_external()
     client = client_with_auth
     resp = client.get(
@@ -43,6 +45,7 @@ def test_acm_search_openalex_integration(client_with_auth):
 
 
 def test_wiley_search_openalex_integration(client_with_auth):
+
     _require_external()
     client = client_with_auth
     resp = client.get(
@@ -63,6 +66,7 @@ def test_wiley_search_openalex_integration(client_with_auth):
 
 
 def test_crossref_by_doi_lookup(client_with_auth):
+
     _require_external()
     client = client_with_auth
     doi = "10.1038/nature14539"  # Nature AlphaGo paper
@@ -75,6 +79,7 @@ def test_crossref_by_doi_lookup(client_with_auth):
 
 
 def test_ieee_returns_not_configured_without_key(client_with_auth):
+
     client = client_with_auth
     # Ensure key not set
     if os.getenv("IEEE_API_KEY"):
@@ -84,6 +89,7 @@ def test_ieee_returns_not_configured_without_key(client_with_auth):
 
 
 def test_springer_returns_not_configured_without_key(client_with_auth):
+
     client = client_with_auth
     if os.getenv("SPRINGER_NATURE_API_KEY"):
         pytest.skip("SPRINGER_NATURE_API_KEY present; this test targets missing-key behavior.")
@@ -92,6 +98,7 @@ def test_springer_returns_not_configured_without_key(client_with_auth):
 
 
 def test_scopus_returns_not_configured_without_key(client_with_auth):
+
     client = client_with_auth
     if os.getenv("ELSEVIER_API_KEY"):
         pytest.skip("ELSEVIER_API_KEY present; this test targets missing-key behavior.")

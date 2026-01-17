@@ -68,7 +68,7 @@ def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done(monkeypatch):
 
             # 2) Flip the test to completed after a short delay to allow heartbeats
             def _complete_later():
-                # Allow a couple of heartbeat intervals to pass
+                             # Allow a couple of heartbeat intervals to pass
                 time.sleep(0.2)
                 try:
                     user_id = DatabasePaths.get_single_user_id()

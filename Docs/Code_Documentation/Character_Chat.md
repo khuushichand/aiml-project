@@ -83,6 +83,7 @@ The Character Chat endpoints also expose a helper to prepare messages for comple
 - Messages
   - Create: `POST /api/v1/character_messages/chats/{chat_id}/messages` (supports parent message for threading and optional base64 image)
   - Get/List/Update/Delete: standard operations; search within a conversation.
+  - Completions format: `format_for_completions=true` supports `include_message_ids=true` to include base `message_id` fields.
   - Limits: per-chat message caps and send-rate limits via `character_rate_limiter`.
   - Access: conversation ownership verified for every message action.
 

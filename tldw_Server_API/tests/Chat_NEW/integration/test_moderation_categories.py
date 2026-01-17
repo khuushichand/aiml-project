@@ -19,6 +19,8 @@ app.include_router(chat_router, prefix="/api/v1/chat")
 
 
 def _make_test_db():
+
+
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
     db = CharactersRAGDB(db_path, "test_client")
@@ -41,6 +43,8 @@ def _post_with_csrf(client: TestClient, url: str, **kwargs):
 
 
 def _auth_headers(client):
+
+
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
     api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")

@@ -7,6 +7,7 @@ from tldw_Server_API.app.core.Local_LLM.http_utils import (
     request_json,
     redact_cmd_args,
     wait_for_http_ready,
+    LocalHTTPStatusError,
 )
 
 
@@ -35,7 +36,18 @@ async def test_request_json_retries_on_5xx():
     assert client.calls == 2
 
 
+@pytest.mark.asyncio
+async def test_request_json_retries_zero_makes_single_attempt():
+    client = FakeClient()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with pytest.raises(LocalHTTPStatusError):
+            await request_json(client, "GET", "http://x/y", retries=0, backoff=0)
+    assert client.calls == 1
+
+
 # --- Tests for redact_cmd_args improvements ---
+
 
 def test_redact_cmd_args_basic():
     """Test basic space-separated flag redaction."""
@@ -60,8 +72,17 @@ def test_redact_cmd_args_multiple_flags():
 
 def test_redact_cmd_args_new_flags():
     """Test redaction of newly added sensitive flags."""
-    new_flags = ["--password", "--secret", "--auth", "--bearer", "--credential",
-                 "--credentials", "--access-token", "--refresh-token", "--client-secret"]
+    new_flags = [
+        "--password",
+        "--secret",
+        "--auth",
+        "--bearer",
+        "--credential",
+        "--credentials",
+        "--access-token",
+        "--refresh-token",
+        "--client-secret",
+    ]
     for flag in new_flags:
         args = ["cmd", flag, "sensitive_value"]
         result = redact_cmd_args(args)
@@ -84,6 +105,7 @@ def test_redact_cmd_args_non_sensitive_equals():
 
 # --- Tests for wait_for_http_ready improvements ---
 
+
 @pytest.mark.asyncio
 async def test_wait_for_http_ready_accepts_200(monkeypatch):
     """Test that 200 OK is accepted as ready."""
@@ -95,6 +117,7 @@ async def test_wait_for_http_ready_accepts_200(monkeypatch):
         return httpx.Response(200, request=req)
 
     import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
+
     monkeypatch.setattr(http_utils, "afetch", mock_afetch)
 
     result = await wait_for_http_ready("http://localhost:8080", timeout_total=1.0, interval=0.1)
@@ -113,6 +136,7 @@ async def test_wait_for_http_ready_rejects_404_by_default(monkeypatch):
         return httpx.Response(404, request=req)
 
     import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
+
     monkeypatch.setattr(http_utils, "afetch", mock_afetch)
 
     result = await wait_for_http_ready("http://localhost:8080", timeout_total=0.5, interval=0.1)
@@ -130,13 +154,11 @@ async def test_wait_for_http_ready_legacy_accepts_404(monkeypatch):
         return httpx.Response(404, request=req)
 
     import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
+
     monkeypatch.setattr(http_utils, "afetch", mock_afetch)
 
     result = await wait_for_http_ready(
-        "http://localhost:8080",
-        timeout_total=1.0,
-        interval=0.1,
-        accept_any_non_5xx=True  # Legacy mode
+        "http://localhost:8080", timeout_total=1.0, interval=0.1, accept_any_non_5xx=True  # Legacy mode
     )
     assert result is True
 
@@ -144,23 +166,23 @@ async def test_wait_for_http_ready_legacy_accepts_404(monkeypatch):
 @pytest.mark.asyncio
 async def test_wait_for_http_ready_rejects_5xx(monkeypatch):
     """Test that 5xx errors are not accepted in any mode."""
+
     async def mock_afetch(method, url, client):
         req = httpx.Request(method, url)
         return httpx.Response(503, request=req)
 
     import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
+
     monkeypatch.setattr(http_utils, "afetch", mock_afetch)
 
     result = await wait_for_http_ready(
-        "http://localhost:8080",
-        timeout_total=0.5,
-        interval=0.1,
-        accept_any_non_5xx=True
+        "http://localhost:8080", timeout_total=0.5, interval=0.1, accept_any_non_5xx=True
     )
     assert result is False
 
 
 # --- Test for deprecation warning on non-AsyncClient ---
+
 
 @pytest.mark.asyncio
 async def test_request_json_deprecation_warning():

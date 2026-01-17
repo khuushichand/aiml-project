@@ -39,6 +39,7 @@ class TestDatabaseTransactions:
     """Test database transaction atomicity and rollback scenarios."""
 
     def test_transaction_rollback_on_failure(self, api_client, data_tracker):
+
         """Test that failed operations don't leave partial data."""
         # Add delay to avoid rate limiting from previous tests (skip in TEST_MODE)
         _maybe_sleep(0.2)
@@ -109,6 +110,7 @@ class TestDatabaseTransactions:
                 os.unlink(file_path)
 
     def test_multi_step_operation_atomicity(self, api_client, data_tracker):
+
         """Test atomicity of operations that touch multiple tables."""
         # Create media with tags and notes in a batch operation
         content = "Test content for atomic operations"
@@ -177,6 +179,7 @@ class TestOptimisticLocking:
     """Test optimistic locking and concurrent update handling."""
 
     def test_concurrent_media_updates(self, api_client, data_tracker):
+
         """Test concurrent updates to the same media item."""
         # Create a media item
         content = "Content for concurrent update testing"
@@ -228,6 +231,7 @@ class TestOptimisticLocking:
                 os.unlink(file_path)
 
     def test_character_version_conflicts(self, api_client):
+
         """Test version conflict handling for character updates."""
         # Import a character
         character_data = TestDataGenerator.sample_character_card()
@@ -237,8 +241,8 @@ class TestOptimisticLocking:
         import_response = api_client.client.post(
             "/api/v1/characters/import",
             files={"file": ("character.json",
-                           json.dumps(character_data).encode(),
-                           "application/json")}
+                        json.dumps(character_data).encode(),
+                        "application/json")}
         )
 
         if import_response.status_code != 200:
@@ -299,6 +303,7 @@ class TestSoftDeleteRecovery:
     """Test soft delete and recovery mechanisms."""
 
     def test_media_version_soft_delete(self, api_client, data_tracker):
+
         """Test soft delete of media versions."""
         # Create media with content
         content = "Initial content for soft delete testing"
@@ -357,6 +362,7 @@ class TestSoftDeleteRecovery:
                 os.unlink(file_path)
 
     def test_note_soft_delete_and_recovery(self, api_client):
+
         """Test soft delete and recovery of notes."""
         # Create a note
         time.sleep(RATE_LIMIT_DELAY)  # Add delay to avoid rate limiting
@@ -420,6 +426,7 @@ class TestDatabasePerformance:
     """Test database performance under load."""
 
     def test_bulk_insert_with_rate_limiting(self, api_client):
+
         """Test bulk inserts with rate limiting consideration."""
         note_ids = []
 
@@ -451,6 +458,7 @@ class TestDatabasePerformance:
         print(f"✓ Created {len(note_ids)} notes with rate limiting")
 
     def test_concurrent_read_write(self, api_client, data_tracker):
+
         """Test concurrent read and write operations."""
         # Create initial media
         content = "Test content for concurrent operations"
@@ -520,6 +528,7 @@ class TestUUIDAndSync:
     """Test UUID generation and sync mechanisms."""
 
     def test_uuid_uniqueness(self, api_client):
+
         """Test that UUIDs are unique across created items."""
         uuids = set()
 
@@ -551,6 +560,7 @@ class TestUUIDAndSync:
             print("✓ UUID tracking not exposed in API responses")
 
     def test_client_id_tracking(self, api_client):
+
         """Test that client IDs are properly tracked."""
         # Create items and verify they're associated with client
         items_created = []

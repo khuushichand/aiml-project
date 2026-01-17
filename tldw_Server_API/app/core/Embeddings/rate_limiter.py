@@ -2,6 +2,7 @@
 # Per-user rate limiting for embeddings service
 
 import asyncio
+import configparser
 import os
 import time
 import threading
@@ -432,7 +433,8 @@ def get_rate_limiter() -> UserRateLimiter:
             try:
                 if cfg and cfg.has_section('Embeddings-Module'):
                     emb_cfg = dict(cfg.items('Embeddings-Module'))
-            except Exception:
+            except (AttributeError, KeyError, TypeError, configparser.Error) as exc:
+                logger.debug(f"Embeddings rate limiter: failed to read Embeddings-Module config: {exc}")
                 emb_cfg = {}
 
             # Environment overrides take precedence
@@ -445,44 +447,61 @@ def get_rate_limiter() -> UserRateLimiter:
                 env_rate = os.getenv('EMBEDDINGS_RATE_LIMIT_PER_MINUTE')
                 if env_rate is not None:
                     rate_limit = max(1, int(env_rate))
-            except Exception:
-                pass
+            except (TypeError, ValueError) as exc:
+                logger.debug(f"Embeddings rate limiter: invalid EMBEDDINGS_RATE_LIMIT_PER_MINUTE: {exc}")
             try:
                 env_win = os.getenv('EMBEDDINGS_WINDOW_SECONDS')
                 if env_win is not None:
                     win_seconds = max(1, int(env_win))
-            except Exception:
-                pass
+            except (TypeError, ValueError) as exc:
+                logger.debug(f"Embeddings rate limiter: invalid EMBEDDINGS_WINDOW_SECONDS: {exc}")
             try:
                 env_pl = os.getenv('EMBEDDINGS_PREMIUM_LIMIT')
                 if env_pl is not None:
                     premium_limit = max(1, int(env_pl))
-            except Exception:
-                pass
+            except (TypeError, ValueError) as exc:
+                logger.debug(f"Embeddings rate limiter: invalid EMBEDDINGS_PREMIUM_LIMIT: {exc}")
 
             # Config fallbacks if envs are not set
             if rate_limit is None:
                 if 'rate_limit_per_minute' in emb_cfg:
-                    rate_limit = max(1, int(emb_cfg.get('rate_limit_per_minute', 60)))
+                    try:
+                        rate_limit = max(1, int(emb_cfg.get('rate_limit_per_minute', 60)))
+                    except (TypeError, ValueError) as exc:
+                        logger.debug(f"Embeddings rate limiter: invalid rate_limit_per_minute: {exc}")
+                        rate_limit = 60
                 else:
                     # Legacy fallback to Chat-Module if Embeddings not configured
                     chat_cfg = {}
                     try:
                         if cfg and cfg.has_section('Chat-Module'):
                             chat_cfg = dict(cfg.items('Chat-Module'))
-                    except Exception:
+                    except (AttributeError, KeyError, TypeError, configparser.Error) as exc:
+                        logger.debug(f"Embeddings rate limiter: failed to read Chat-Module config: {exc}")
                         chat_cfg = {}
-                    rate_limit = max(1, int(chat_cfg.get('rate_limit_per_minute', 60)))
+                    try:
+                        rate_limit = max(1, int(chat_cfg.get('rate_limit_per_minute', 60)))
+                    except (TypeError, ValueError) as exc:
+                        logger.debug(f"Embeddings rate limiter: invalid chat rate_limit_per_minute: {exc}")
+                        rate_limit = 60
 
             if win_seconds is None:
-                win_seconds = int(emb_cfg.get('window_seconds', 60)) if emb_cfg else 60
+                if emb_cfg:
+                    try:
+                        win_seconds = int(emb_cfg.get('window_seconds', 60))
+                    except (TypeError, ValueError) as exc:
+                        logger.debug(f"Embeddings rate limiter: invalid window_seconds: {exc}")
+                        win_seconds = 60
+                else:
+                    win_seconds = 60
 
             if premium_limit is None:
                 # Allow premium multiplier or absolute limit
                 try:
                     mult = emb_cfg.get('premium_multiplier') if emb_cfg else None
                     premium_limit = int(float(mult) * rate_limit) if mult is not None else rate_limit * 3
-                except Exception:
+                except (TypeError, ValueError) as exc:
+                    logger.debug(f"Embeddings rate limiter: invalid premium_multiplier: {exc}")
                     premium_limit = rate_limit * 3
 
             _rate_limiter = UserRateLimiter(
@@ -490,7 +509,7 @@ def get_rate_limiter() -> UserRateLimiter:
                 window_seconds=win_seconds,
                 premium_limit=premium_limit,
             )
-        except Exception as e:
+        except (AttributeError, ImportError, KeyError, OSError, TypeError, ValueError, configparser.Error) as e:
             logger.warning(f"Could not load embeddings rate limit config: {e}. Using defaults.")
             _rate_limiter = UserRateLimiter()
 
@@ -525,11 +544,30 @@ class AsyncRateLimiter:
     """Async wrapper for UserRateLimiter"""
 
     def __init__(self, rate_limiter: Optional[UserRateLimiter] = None):
-        self.rate_limiter = rate_limiter or get_rate_limiter()
+        self.rate_limiter = rate_limiter
+        if self.rate_limiter is None and not _rg_embeddings_enabled():
+            self.rate_limiter = get_rate_limiter()
         self.executor = None
         # Shadow-mode flag for comparing legacy vs RG behavior without breaking callers
         self.shadow_enabled = (
             os.getenv("RG_SHADOW_EMBEDDINGS", "0").lower() in {"1", "true", "yes", "on"}
+        )
+
+    async def _legacy_check_rate_limit(
+        self,
+        user_id: str,
+        cost: int,
+        ip_address: Optional[str],
+    ) -> tuple[bool, Optional[int]]:
+        if self.rate_limiter is None:
+            self.rate_limiter = get_rate_limiter()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self.executor,
+            self.rate_limiter.check_rate_limit,
+            user_id,
+            cost,
+            ip_address,
         )
 
     async def check_rate_limit_async(
@@ -551,15 +589,10 @@ class AsyncRateLimiter:
             Tuple of (allowed, retry_after_seconds)
         """
         if not _rg_embeddings_enabled():
+            if self.rate_limiter is None:
+                self.rate_limiter = get_rate_limiter()
             # RG disabled: fall back to legacy limiter behavior.
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
-                self.executor,
-                self.rate_limiter.check_rate_limit,
-                user_id,
-                cost,
-                ip_address,
-            )
+            return await self._legacy_check_rate_limit(user_id, cost, ip_address)
 
         # Prefer Resource Governor when configured; use the legacy limiter only
         # as a fallback when RG is unavailable.
@@ -574,7 +607,7 @@ class AsyncRateLimiter:
 
             # Shadow comparison (best-effort): simulate legacy decision and record
             # mismatches between legacy allow/deny and RG allow/deny.
-            if self.shadow_enabled and record_shadow_mismatch is not None:
+            if self.shadow_enabled and record_shadow_mismatch is not None and self.rate_limiter is not None:
                 try:
                     loop = asyncio.get_running_loop()
                     if rg_allowed:
@@ -602,14 +635,14 @@ class AsyncRateLimiter:
                             legacy=legacy_dec,
                             rg=rg_dec,
                         )
-                except Exception:
+                except Exception:  # noqa: BLE001 - observability only
                     # Observability only: never affect enforcement path.
                     pass
 
             return rg_allowed, rg_decision.get("retry_after")
 
-        # Legacy limiter fallback retired; fail closed when RG is enabled but unavailable.
-        return False, 1
+        _log_rg_embeddings_fallback("rg_decision_unavailable")
+        return await self._legacy_check_rate_limit(user_id, cost, ip_address)
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""
@@ -618,6 +651,8 @@ class AsyncRateLimiter:
 
     async def get_user_usage_async(self, user_id: str) -> Dict[str, any]:
         """Get user usage statistics asynchronously"""
+        if self.rate_limiter is None:
+            return {"available": False, "reason": "rate_limiter_disabled"}
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self.executor,
@@ -642,13 +677,69 @@ def get_async_rate_limiter() -> AsyncRateLimiter:
 _rg_embeddings_governor = None
 _rg_embeddings_loader = None
 _rg_embeddings_lock = asyncio.Lock()
+_rg_embeddings_init_error: Optional[str] = None
+_rg_embeddings_init_error_logged = False
+_rg_embeddings_fallback_logged = False
+
+
+def _rg_embeddings_context() -> Dict[str, str]:
+    policy_path = os.getenv(
+        "RG_POLICY_PATH",
+        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+    )
+    try:
+        policy_path_resolved = os.path.abspath(policy_path)
+    except Exception:  # noqa: BLE001 - best-effort path resolution
+        policy_path_resolved = policy_path
+    return {
+        "backend": os.getenv("RG_BACKEND", "memory"),
+        "policy_path": policy_path,
+        "policy_path_resolved": policy_path_resolved,
+        "policy_store": os.getenv("RG_POLICY_STORE", ""),
+        "policy_reload_enabled": os.getenv("RG_POLICY_RELOAD_ENABLED", ""),
+        "policy_reload_interval": os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", ""),
+        "cwd": os.getcwd(),
+    }
+
+
+def _log_rg_embeddings_init_failure(exc: Exception) -> None:
+    global _rg_embeddings_init_error, _rg_embeddings_init_error_logged
+    _rg_embeddings_init_error = repr(exc)
+    if _rg_embeddings_init_error_logged:
+        return
+    _rg_embeddings_init_error_logged = True
+    ctx = _rg_embeddings_context()
+    logger.exception(
+        "Embeddings ResourceGovernor init failed; falling back to legacy limiter. "
+        "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
+        "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
+        "reload_interval={policy_reload_interval} cwd={cwd}",
+        **ctx,
+    )
+
+
+def _log_rg_embeddings_fallback(reason: str) -> None:
+    global _rg_embeddings_fallback_logged
+    if _rg_embeddings_fallback_logged:
+        return
+    _rg_embeddings_fallback_logged = True
+    ctx = _rg_embeddings_context()
+    logger.error(
+        "Embeddings ResourceGovernor unavailable; falling back to legacy limiter. "
+        "reason={} init_error={} backend={backend} policy_path={policy_path} "
+        "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
+        "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
+        reason,
+        _rg_embeddings_init_error,
+        **ctx,
+    )
 
 
 def _rg_embeddings_enabled() -> bool:
     if rg_enabled:
         try:
             return bool(rg_enabled(True))  # type: ignore[func-returns-value]
-        except Exception:
+        except Exception:  # noqa: BLE001 - RG should never break rate limiting
             return False
     return False
 
@@ -659,6 +750,7 @@ async def _get_embeddings_rg_governor():
     if not _rg_embeddings_enabled():
         return None
     if RGRequest is None or PolicyLoader is None:
+        _log_rg_embeddings_fallback("rg_components_unavailable")
         return None
     if _rg_embeddings_governor is not None:
         return _rg_embeddings_governor
@@ -679,8 +771,8 @@ async def _get_embeddings_rg_governor():
                 gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
             _rg_embeddings_governor = gov
             return gov
-        except Exception as exc:  # pragma: no cover - optional path
-            logger.debug(f"Embeddings RG governor init failed: {exc}")
+        except Exception as exc:  # pragma: no cover - optional path  # noqa: BLE001
+            _log_rg_embeddings_init_failure(exc)
             return None
 
 
@@ -706,7 +798,7 @@ async def _maybe_enforce_with_rg(
     try:
         try:
             tu = int(tokens_units or 0)
-        except Exception:
+        except Exception:  # noqa: BLE001 - defensive conversion
             tu = 0
         tu = max(0, tu)
 
@@ -731,7 +823,7 @@ async def _maybe_enforce_with_rg(
             if handle:
                 try:
                     await gov.commit(handle, None, op_id=op_id)
-                except Exception:
+                except Exception:  # noqa: BLE001 - logging-only fallback
                     logger.debug("Embeddings RG commit failed", exc_info=True)
             return {"allowed": True, "retry_after": None, "policy_id": policy_id}
         return {
@@ -739,6 +831,6 @@ async def _maybe_enforce_with_rg(
             "retry_after": decision.retry_after or 1,
             "policy_id": policy_id,
         }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - fallback to legacy limiter on RG errors
         logger.debug(f"Embeddings RG reserve failed; falling back to legacy: {exc}")
         return None

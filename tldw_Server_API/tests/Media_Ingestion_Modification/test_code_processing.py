@@ -7,6 +7,8 @@ from fastapi import status
 
 
 def check_batch_response(response, expected_status, expected_processed=None, expected_errors=None, check_results_len=None):
+
+
     assert response.status_code == expected_status, f"Expected {expected_status}, got {response.status_code}: {response.text}"
     data = response.json()
     assert isinstance(data, dict)
@@ -45,7 +47,7 @@ class TestProcessCode:
         code_path.write_text(
             """
 def add(a, b):
-    return a + b
+     return a + b
 """.strip(),
             encoding="utf-8",
         )
@@ -72,11 +74,12 @@ def add(a, b):
 import os
 
 def foo(x):
-    return x + 1
+
+     return x + 1
 
 class Bar:
     def baz(self):
-        return 42
+             return 42
 """.strip(),
             encoding="utf-8",
         )

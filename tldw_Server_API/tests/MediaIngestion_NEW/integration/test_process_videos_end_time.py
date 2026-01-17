@@ -13,6 +13,7 @@ def test_process_videos_threads_end_time(tmp_path):
     captured_kwargs = {}
 
     def fake_transcription(*args, **kwargs):
+
         captured_kwargs.update(kwargs)
         return "sample.wav", [{"Text": "hello world"}]
 

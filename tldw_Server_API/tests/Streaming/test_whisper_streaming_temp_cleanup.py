@@ -25,14 +25,17 @@ def test_whisper_streaming_tempfile_cleanup_on_error(monkeypatch, tmp_path):
     temp_path = tmp_path / "streaming_temp.wav"
 
     def fake_tempfile(*args, **kwargs):
+
         class _Dummy:
             name = str(temp_path)
 
             def __enter__(self):
+
                 temp_path.touch()
                 return self
 
             def __exit__(self, exc_type, exc, tb):
+
                 return False
 
         return _Dummy()

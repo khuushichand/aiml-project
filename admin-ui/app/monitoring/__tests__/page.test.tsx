@@ -8,7 +8,8 @@ import { api } from '@/lib/api-client';
 
 const confirmMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@/components/ProtectedRoute', () => ({
+vi.mock('@/components/PermissionGuard', () => ({
+  PermissionGuard: ({ children }: { children: ReactNode }) => <>{children}</>,
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 

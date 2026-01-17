@@ -1,0 +1,197 @@
+import aiosqlite
+import pytest
+
+from tldw_Server_API.app.core.Audit.audit_shared_migration import (
+    discover_audit_sources,
+    migrate_to_shared_audit_db,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    UnifiedAuditService,
+    AuditContext,
+    AuditEventType,
+)
+
+
+@pytest.mark.asyncio
+async def test_migrate_to_shared_db(tmp_path):
+    user_base = tmp_path / "user_dbs"
+    user_id = "101"
+    user_db_path = user_base / user_id / "audit" / "unified_audit.db"
+    shared_db_path = tmp_path / "Databases" / "audit_shared.db"
+    default_db_path = tmp_path / "Databases" / "unified_audit.db"
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+    default_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    svc_user = UnifiedAuditService(
+        db_path=str(user_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await svc_user.initialize(start_background_tasks=False)
+    await svc_user.log_event(
+        event_type=AuditEventType.DATA_READ,
+        context=AuditContext(user_id=user_id),
+        resource_type="doc",
+        resource_id="u1",
+    )
+    await svc_user.flush()
+    await svc_user.stop()
+
+    svc_default = UnifiedAuditService(
+        db_path=str(default_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await svc_default.initialize(start_background_tasks=False)
+    await svc_default.log_event(event_type=AuditEventType.SYSTEM_START)
+    await svc_default.log_event(
+        event_type=AuditEventType.DATA_READ,
+        resource_type="doc",
+        resource_id="default-missing",
+    )
+    await svc_default.flush()
+    await svc_default.stop()
+
+    report = await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=default_db_path,
+        system_tenant_id="system",
+        chunk_size=100,
+    )
+    assert report.total_events_inserted >= 2
+
+    async with aiosqlite.connect(shared_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT tenant_user_id FROM audit_events") as cur:
+            rows = await cur.fetchall()
+        tenants = {row["tenant_user_id"] for row in rows}
+        assert user_id in tenants
+        assert "system" in tenants
+        assert "unidentified_user" in tenants
+
+        async with db.execute("SELECT tenant_user_id FROM audit_daily_stats") as cur:
+            stats_rows = await cur.fetchall()
+        stats_tenants = {row["tenant_user_id"] for row in stats_rows}
+        assert user_id in stats_tenants
+        assert "system" in stats_tenants
+        assert "unidentified_user" in stats_tenants
+
+    report2 = await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=default_db_path,
+        system_tenant_id="system",
+        chunk_size=100,
+    )
+    assert report2.total_events_inserted == 0
+
+
+def test_discover_sources_with_subpath(tmp_path, monkeypatch):
+    base = tmp_path / "user_dbs"
+    subpath = "nested_users"
+    user_id = "404"
+    user_db_path = base / subpath / user_id / "audit" / "unified_audit.db"
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+    user_db_path.touch()
+
+    from tldw_Server_API.app.core.config import settings
+
+    monkeypatch.setitem(settings, "AUDIT_ETL_USER_SUBPATH", subpath)
+    sources = discover_audit_sources(user_db_base_dir=base)
+    assert any(src.path == user_db_path.resolve() for src in sources)
+
+
+@pytest.mark.asyncio
+async def test_migration_resume_checkpoint(tmp_path):
+    user_base = tmp_path / "user_dbs"
+    user_id = "202"
+    user_db_path = user_base / user_id / "audit" / "unified_audit.db"
+    shared_db_path = tmp_path / "Databases" / "audit_shared.db"
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    svc_user = UnifiedAuditService(
+        db_path=str(user_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await svc_user.initialize(start_background_tasks=False)
+    for idx in range(3):
+        await svc_user.log_event(
+            event_type=AuditEventType.DATA_READ,
+            context=AuditContext(user_id=user_id),
+            resource_type="doc",
+            resource_id=f"doc-{idx}",
+        )
+    await svc_user.flush()
+    await svc_user.stop()
+
+    missing_default = tmp_path / "Databases" / "missing_unified_audit.db"
+    report = await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=missing_default,
+        system_tenant_id="system",
+        chunk_size=1,
+    )
+    source_counts = next(c for c in report.sources if c.source.label == f"user:{user_id}")
+    assert source_counts.events_read == 3
+
+    svc_user = UnifiedAuditService(
+        db_path=str(user_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await svc_user.initialize(start_background_tasks=False)
+    await svc_user.log_event(
+        event_type=AuditEventType.DATA_READ,
+        context=AuditContext(user_id=user_id),
+        resource_type="doc",
+        resource_id="doc-new",
+    )
+    await svc_user.flush()
+    await svc_user.stop()
+
+    report2 = await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=missing_default,
+        system_tenant_id="system",
+        chunk_size=1,
+    )
+    source_counts2 = next(c for c in report2.sources if c.source.label == f"user:{user_id}")
+    assert source_counts2.events_read == 1
+
+
+@pytest.mark.asyncio
+async def test_migration_skips_corrupt_source(tmp_path):
+    user_base = tmp_path / "user_dbs"
+    user_id = "303"
+    user_db_path = user_base / user_id / "audit" / "unified_audit.db"
+    shared_db_path = tmp_path / "Databases" / "audit_shared.db"
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+    user_db_path.write_text("not a sqlite db", encoding="utf-8")
+
+    missing_default = tmp_path / "Databases" / "missing_unified_audit.db"
+    report = await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=missing_default,
+        system_tenant_id="system",
+        chunk_size=1,
+    )
+    source_counts = next(c for c in report.sources if c.source.label == f"user:{user_id}")
+    assert source_counts.failed is True
+    assert report.total_failures == 1

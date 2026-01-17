@@ -17,6 +17,11 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
+_HMAC_KDF_SALT_LEGACY = b"tldw_authnz_hmac_kdf_v1"
+_HMAC_KDF_SALT_PREFIX = b"tldw_authnz_hmac_kdf_v2:"
+_HMAC_KDF_ITERATIONS = 100_000
+_HMAC_KDF_DKLEN = 32
+
 
 def _ensure_secret_bytes(secret: Optional[str]) -> Optional[bytes]:
     if secret is None:
@@ -24,6 +29,32 @@ def _ensure_secret_bytes(secret: Optional[str]) -> Optional[bytes]:
     if isinstance(secret, bytes):
         return secret
     return str(secret).encode("utf-8")
+
+
+def _derive_hmac_kdf_salt(source: bytes) -> bytes:
+    # Derive a per-secret salt from a domain-separated fingerprint of the source.
+    return hashlib.sha256(_HMAC_KDF_SALT_PREFIX + hashlib.sha256(source).digest()).digest()
+
+
+def _derive_hmac_key_from_source(source: bytes, *, legacy: bool = False) -> bytes:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        source,
+        _HMAC_KDF_SALT_LEGACY if legacy else _derive_hmac_kdf_salt(source),
+        _HMAC_KDF_ITERATIONS,
+        dklen=_HMAC_KDF_DKLEN,
+    )
+
+
+def derive_hmac_key_from_source(raw: str | bytes, *, legacy: bool = False) -> bytes:
+    """Derive a 32-byte HMAC key from raw secret material using the configured KDF.
+
+    Args:
+        raw: Secret material to derive from.
+        legacy: When True, use the fixed legacy salt for backward compatibility.
+    """
+    source = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
+    return _derive_hmac_key_from_source(source, legacy=legacy)
 
 
 def derive_hmac_key(settings: Optional[Settings] = None) -> bytes:
@@ -35,7 +66,7 @@ def derive_hmac_key(settings: Optional[Settings] = None) -> bytes:
     - otherwise: JWT secrets/keys (HS or RS/ES)
     - fallback: only in explicit test contexts
 
-    The returned key is SHA256(material_bytes).digest() to produce
+    The returned key is derived using PBKDF2-HMAC-SHA256 to produce
     a uniform 32-byte key suitable for HMAC-SHA256.
     """
     keys = derive_hmac_key_candidates(settings)
@@ -52,12 +83,20 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
 
     Important: Public keys are intentionally excluded from HMAC/encryption key
     derivation to avoid using non-secret material as cryptographic input.
+    Legacy fixed-salt derivations are retained as secondary candidates to
+    preserve verification of stored hashes created before the per-secret salt.
     """
     s = settings or get_settings()
     auth_mode = getattr(s, "AUTH_MODE", "single_user")
 
     # Detect pytest context and known deterministic JWT secret used only for testing
     test_mode_env = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+    allow_test_fallback = test_mode_env or os.getenv("TLDW_ALLOW_TEST_FALLBACK_KEYS", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
     in_test_context = test_mode_env or pytest_active
     test_secret_env = os.getenv("JWT_SECRET_TEST_KEY", "test-secret-jwt-key-please-change-1234567890")
@@ -100,11 +139,12 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
     # Note: secondary public keys are also excluded by design
 
     if not digest_sources:
-        # Allow fallback only in explicit automated test scenarios to preserve fixture behaviour.
-        if not in_test_context:
+        # Allow fallback only with explicit test-mode intent to prevent production misuse.
+        if not allow_test_fallback:
             raise ValueError(
                 "derive_hmac_key could not locate a configured secret. "
-                "Set API_KEY_PEPPER (recommended) or provide JWT_SECRET_KEY / JWT_PRIVATE_KEY."
+                "Set API_KEY_PEPPER (recommended) or provide JWT_SECRET_KEY / JWT_PRIVATE_KEY. "
+                "For explicit test-only fallback, set TEST_MODE=1."
             )
         # SECURITY: Additional production guard - never use fallback in production environment
         environment = os.getenv("ENVIRONMENT", "").strip().lower()
@@ -126,13 +166,14 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
     # This is intentionally computationally expensive to harden low-entropy secrets
     # (for example, human-chosen API keys) against brute-force attacks.
     keys: list[bytes] = []
-    kdf_salt = b"tldw_authnz_hmac_kdf_v1"
-    kdf_iterations = 100_000
     for source in digest_sources:
-        hashed = hashlib.pbkdf2_hmac("sha256", source, kdf_salt, kdf_iterations, dklen=32)
+        hashed = _derive_hmac_key_from_source(source)
         if hashed not in keys:
             keys.append(hashed)
+        legacy = _derive_hmac_key_from_source(source, legacy=True)
+        if legacy not in keys:
+            keys.append(legacy)
     return keys
 
 
-__all__ = ["derive_hmac_key", "derive_hmac_key_candidates"]
+__all__ = ["derive_hmac_key", "derive_hmac_key_candidates", "derive_hmac_key_from_source"]

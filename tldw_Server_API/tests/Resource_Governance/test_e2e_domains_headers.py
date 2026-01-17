@@ -7,13 +7,16 @@ from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSim
 pytestmark = pytest.mark.rate_limit
 
 
-def _write_policy(*, tmp_path, policy_name: str, path_glob: str) -> str:
+def _write_policy(*, tmp_path, policy_name: str, path_glob: str, scopes: list[str] | None = None) -> str:
+    if scopes is None:
+        scopes = ["ip"]
+    scopes_yaml = ", ".join(scopes)
     policy = (
         "schema_version: 1\n"
         "policies:\n"
         f"  {policy_name}.small:\n"
         "    requests: { rpm: 1 }\n"
-        "    scopes: [ip]\n"
+        f"    scopes: [{scopes_yaml}]\n"
         "route_map:\n"
         "  by_path:\n"
         f"    {path_glob}: {policy_name}.small\n"
@@ -24,6 +27,8 @@ def _write_policy(*, tmp_path, policy_name: str, path_glob: str) -> str:
 
 
 def _assert_deny_headers(resp) -> None:
+
+
     assert resp.headers.get("Retry-After") is not None
     assert resp.headers.get("X-RateLimit-Limit") == "1"
     assert resp.headers.get("X-RateLimit-Remaining") == "0"
@@ -32,6 +37,8 @@ def _assert_deny_headers(resp) -> None:
 
 
 def test_e2e_rag_deny_headers_retry_after(monkeypatch, tmp_path):
+
+
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv("RG_POLICY_PATH", _write_policy(tmp_path=tmp_path, policy_name="rag", path_glob="/api/v1/rag/*"))
@@ -52,6 +59,8 @@ def test_e2e_rag_deny_headers_retry_after(monkeypatch, tmp_path):
 
 
 def test_e2e_media_deny_headers_retry_after(monkeypatch, tmp_path):
+
+
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv(
@@ -77,6 +86,8 @@ def test_e2e_media_deny_headers_retry_after(monkeypatch, tmp_path):
 
 
 def test_e2e_research_deny_headers_retry_after(monkeypatch, tmp_path):
+
+
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv(
@@ -87,6 +98,7 @@ def test_e2e_research_deny_headers_retry_after(monkeypatch, tmp_path):
     import tldw_Server_API.app.api.v1.endpoints.research as research_ep
 
     def _stub_generate_and_search(query, search_params):
+
         _ = search_params
         return {"web_search_results_dict": {"results": [], "query": query}, "sub_query_dict": {}}
 
@@ -116,12 +128,19 @@ def test_e2e_research_deny_headers_retry_after(monkeypatch, tmp_path):
         _assert_deny_headers(r2)
 
 
-def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path):
+def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path, auth_headers):
+
+
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv(
         "RG_POLICY_PATH",
-        _write_policy(tmp_path=tmp_path, policy_name="prompt_studio", path_glob="/api/v1/prompt-studio/*"),
+        _write_policy(
+            tmp_path=tmp_path,
+            policy_name="prompt_studio",
+            path_glob="/api/v1/prompt-studio/*",
+            scopes=["ip", "api_key"],
+        ),
     )
 
     from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
@@ -146,10 +165,10 @@ def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path):
     app.dependency_overrides[get_prompt_studio_db] = _stub_db
 
     with TestClient(app) as client:
-        r1 = client.get("/api/v1/prompt-studio/status")
+        r1 = client.get("/api/v1/prompt-studio/status", headers=auth_headers)
         assert r1.status_code == 200, r1.text
         assert r1.json().get("success") is True
 
-        r2 = client.get("/api/v1/prompt-studio/status")
+        r2 = client.get("/api/v1/prompt-studio/status", headers=auth_headers)
         assert r2.status_code == 429, r2.text
         _assert_deny_headers(r2)

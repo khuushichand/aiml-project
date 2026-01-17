@@ -17,6 +17,7 @@ class TestPromptTemplate:
     """Test the PromptTemplate model."""
 
     def test_template_creation(self):
+
         """Test creating a PromptTemplate."""
         template = PromptTemplate(
             name="Test Template",
@@ -33,6 +34,7 @@ class TestPromptTemplate:
         assert template.metadata["version"] == "1.0"
 
     def test_template_defaults(self):
+
         """Test PromptTemplate default values."""
         template = PromptTemplate(
             name="Minimal",
@@ -46,6 +48,7 @@ class TestPromptTemplate:
         assert template.few_shot_examples == []
 
     def test_template_with_few_shot(self):
+
         """Test template with few-shot examples."""
         examples = [
             {"input": "2+2", "output": "4"},
@@ -63,6 +66,7 @@ class TestPromptTemplate:
         assert template.few_shot_examples[0]["output"] == "4"
 
     def test_template_validation(self):
+
         """Test template validation."""
         # Valid template
         valid = PromptTemplate(
@@ -103,6 +107,7 @@ class TestPromptGenerator:
         return PromptGenerator(db=mock_db)
 
     def test_generator_initialization(self):
+
         """Test PromptGenerator initialization."""
         generator = PromptGenerator()
         assert hasattr(generator, 'templates')
@@ -110,6 +115,7 @@ class TestPromptGenerator:
         assert len(generator.templates) > 0  # Should have built-in templates
 
     def test_generate_basic_prompt(self, generator):
+
         """Test generating a basic prompt."""
         prompt = generator.generate(
             type=PromptType.BASIC,
@@ -123,6 +129,7 @@ class TestPromptGenerator:
         assert isinstance(prompt["user"], str)
 
     def test_generate_chain_of_thought(self, generator):
+
         """Test generating chain-of-thought prompt."""
         prompt = generator.generate(
             type=PromptType.CHAIN_OF_THOUGHT,
@@ -134,6 +141,7 @@ class TestPromptGenerator:
         assert len(prompt["user"]) > len("Calculate compound interest")
 
     def test_generate_prompt_parses_openai_response(self, generator_with_db, monkeypatch):
+
         """Ensure generate_prompt handles OpenAI-format responses."""
         payload = {
             "id": "chatcmpl-test",
@@ -152,8 +160,8 @@ class TestPromptGenerator:
         }
 
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_generator.chat_with_openai",
-            lambda **kwargs: payload,
+            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_generator._call_openai_adapter",
+            lambda request: payload,
         )
 
         result = generator_with_db.generate_prompt(
@@ -169,6 +177,7 @@ class TestPromptGenerator:
         generator_with_db.db.create_prompt.assert_called_once()
 
     def test_generate_few_shot(self, generator):
+
         """Test generating few-shot prompt."""
         examples = [
             {"input": "Hello", "output": "Hi there!"},
@@ -187,6 +196,7 @@ class TestPromptGenerator:
         assert "Good morning" in prompt["user"] or "Respond to greetings" in prompt["user"]
 
     def test_generate_react_prompt(self, generator):
+
         """Test generating ReAct prompt."""
         prompt = generator.generate(
             type=PromptType.REACT,
@@ -198,6 +208,7 @@ class TestPromptGenerator:
         assert "observation" in prompt["user"].lower() or "result" in prompt["user"].lower()
 
     def test_generate_with_custom_template(self, generator):
+
         """Test generating with custom template."""
         custom_template = PromptTemplate(
             name="Custom",
@@ -223,6 +234,7 @@ class TestPromptGenerator:
         assert "Please review: this Python function" in prompt["user"]
 
     def test_generate_with_strategy(self, generator):
+
         """Test generating with specific strategy."""
         prompt = generator.generate(
             type=PromptType.BASIC,
@@ -235,6 +247,7 @@ class TestPromptGenerator:
         assert len(prompt["user"]) > 50
 
     def test_generate_with_constraints(self, generator):
+
         """Test generating with constraints."""
         constraints = [
             "Output must be valid JSON",
@@ -253,6 +266,7 @@ class TestPromptGenerator:
         assert "100 tokens" in prompt["user"] or "100" in prompt["user"]
 
     def test_generate_with_modules(self, generator):
+
         """Test generating with prompt modules."""
         modules = [
             {"type": "thinking", "content": "Consider edge cases"},
@@ -269,6 +283,7 @@ class TestPromptGenerator:
         assert "markdown" in prompt["user"].lower()
 
     def test_template_caching(self, generator):
+
         """Test template caching for performance."""
         # First generation
         prompt1 = generator.generate(
@@ -288,6 +303,7 @@ class TestPromptGenerator:
         assert prompt1 == prompt2
 
     def test_batch_generation(self, generator):
+
         """Test batch prompt generation."""
         tasks = [
             {"description": "Summarize", "variables": {"text": "Article 1"}},
@@ -304,6 +320,7 @@ class TestPromptGenerator:
         assert all("system" in p and "user" in p for p in prompts)
 
     def test_template_composition(self, generator):
+
         """Test composing multiple templates."""
         composed = generator.compose_templates(
             templates=[
@@ -318,6 +335,7 @@ class TestPromptGenerator:
         assert "example" in composed["user"].lower()
 
     def test_validate_variables(self, generator):
+
         """Test variable validation."""
         # Valid variables
         valid = generator.validate_variables(
@@ -334,6 +352,7 @@ class TestPromptGenerator:
         assert invalid is False
 
     def test_optimize_prompt_length(self, generator):
+
         """Test prompt length optimization."""
         long_content = "Very " * 1000 + "long content"
 
@@ -349,6 +368,7 @@ class TestPromptGenerator:
         assert total_length <= 500
 
     def test_generate_with_persona(self, generator):
+
         """Test generating with specific persona."""
         prompt = generator.generate(
             type=PromptType.BASIC,
@@ -360,6 +380,7 @@ class TestPromptGenerator:
         assert "data scientist" in prompt["system"].lower() or "expert" in prompt["system"].lower()
 
     def test_generate_structured_output(self, generator):
+
         """Test generating prompts for structured output."""
         schema = {
             "type": "object",
@@ -392,6 +413,7 @@ class TestGenerationStrategies:
         return PromptGenerator()
 
     def test_concise_strategy(self, generator):
+
         """Test concise generation strategy."""
         prompt = generator.generate(
             type=PromptType.BASIC,
@@ -403,6 +425,7 @@ class TestGenerationStrategies:
         assert len(prompt["user"]) < 100
 
     def test_detailed_strategy(self, generator):
+
         """Test detailed generation strategy."""
         prompt = generator.generate(
             type=PromptType.BASIC,
@@ -414,6 +437,7 @@ class TestGenerationStrategies:
         assert len(prompt["user"]) > 100
 
     def test_creative_strategy(self, generator):
+
         """Test creative generation strategy."""
         prompt = generator.generate(
             type=PromptType.BASIC,
@@ -425,6 +449,7 @@ class TestGenerationStrategies:
         assert any(word in prompt["user"].lower() for word in creative_keywords)
 
     def test_analytical_strategy(self, generator):
+
         """Test analytical generation strategy."""
         prompt = generator.generate(
             type=PromptType.BASIC,
@@ -447,6 +472,7 @@ class TestErrorHandling:
         return PromptGenerator()
 
     def test_invalid_prompt_type(self, generator):
+
         """Test handling invalid prompt type."""
         with pytest.raises(ValueError):
             generator.generate(
@@ -455,6 +481,7 @@ class TestErrorHandling:
             )
 
     def test_missing_required_variables(self, generator):
+
         """Test handling missing required variables."""
         with pytest.raises(ValueError):
             generator.generate(
@@ -464,6 +491,7 @@ class TestErrorHandling:
             )
 
     def test_invalid_template_name(self, generator):
+
         """Test handling invalid template name."""
         with pytest.raises(ValueError):
             generator.generate(
@@ -473,6 +501,7 @@ class TestErrorHandling:
             )
 
     def test_invalid_few_shot_format(self, generator):
+
         """Test handling invalid few-shot examples."""
         with pytest.raises(ValueError):
             generator.generate(
@@ -493,6 +522,7 @@ class TestTemplateLibrary:
         return PromptGenerator()
 
     def test_list_available_templates(self, generator):
+
         """Test listing available templates."""
         templates = generator.list_templates()
 
@@ -501,6 +531,7 @@ class TestTemplateLibrary:
         assert all(hasattr(t, "type") for t in templates)
 
     def test_get_template_by_name(self, generator):
+
         """Test getting template by name."""
         # Assuming there's a built-in "summarization" template
         template = generator.get_template("summarization")
@@ -510,6 +541,7 @@ class TestTemplateLibrary:
             assert template.type in [t for t in PromptType]
 
     def test_register_custom_template(self, generator):
+
         """Test registering custom template."""
         custom = PromptTemplate(
             name="MyCustomTemplate",
@@ -526,6 +558,7 @@ class TestTemplateLibrary:
         assert retrieved.name == "MyCustomTemplate"
 
     def test_remove_template(self, generator):
+
         """Test removing template."""
         custom = PromptTemplate(
             name="ToRemove",
@@ -551,6 +584,7 @@ class TestAdvancedFeatures:
         return PromptGenerator()
 
     def test_dynamic_example_selection(self, generator):
+
         """Test dynamic few-shot example selection."""
         all_examples = [
             {"input": "Math: 2+2", "output": "4"},
@@ -573,6 +607,7 @@ class TestAdvancedFeatures:
         assert "2+2" in prompt["user"] or "3*3" in prompt["user"]
 
     def test_prompt_chaining(self, generator):
+
         """Test chaining multiple prompts."""
         chain = generator.create_chain([
             {"type": PromptType.BASIC, "task": "Extract key points"},
@@ -584,6 +619,7 @@ class TestAdvancedFeatures:
         assert all("system" in p and "user" in p for p in chain)
 
     def test_conditional_prompt_generation(self, generator):
+
         """Test conditional prompt generation."""
         conditions = {
             "language": "python",
@@ -601,6 +637,7 @@ class TestAdvancedFeatures:
         assert "json" in prompt["user"].lower()
 
     def test_prompt_mutation(self, generator):
+
         """Test prompt mutation for optimization."""
         original = generator.generate(
             type=PromptType.BASIC,

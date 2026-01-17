@@ -9,6 +9,8 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_traceparent
 
 
 def test_ensure_traceparent_sets_state_and_returns_value():
+
+
     class _State:  # minimal stand-in for request.state
         pass
 
@@ -31,6 +33,8 @@ def test_ensure_traceparent_sets_state_and_returns_value():
 
 
 def test_audio_jobs_submit_propagates_request_id(monkeypatch):
+
+
     # Capture kwargs sent to JobManager.create_job
     captured: Dict[str, Any] = {}
 
@@ -65,7 +69,47 @@ def test_audio_jobs_submit_propagates_request_id(monkeypatch):
     assert captured.get("request_id") == "req-123"
 
 
+def test_media_ingest_jobs_submit_propagates_request_id(monkeypatch, tmp_path):
+
+
+    captured: Dict[str, Any] = {}
+
+    from tldw_Server_API.app.core.Jobs import manager as jobs_manager
+
+    def fake_create_job(self, *, domain, queue, job_type, payload, owner_user_id, project_id=None,
+                        priority=5, max_retries=3, available_at=None, idempotency_key=None,
+                        request_id=None, trace_id=None):
+        captured.update({
+            "domain": domain,
+            "queue": queue,
+            "job_type": job_type,
+            "payload": payload,
+            "owner_user_id": owner_user_id,
+            "request_id": request_id,
+        })
+        return {"id": 77, "uuid": "u77", "domain": domain, "queue": queue, "job_type": job_type, "status": "queued"}
+
+    monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs_media_ingest.db"))
+    monkeypatch.delenv("JOBS_DB_URL", raising=False)
+    monkeypatch.setattr(jobs_manager.JobManager, "create_job", fake_create_job, raising=True)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/media/ingest/jobs",
+        data={"media_type": "audio", "urls": "https://example.com/a.mp3"},
+        headers={
+            "X-API-KEY": "test-api-key-12345",
+            "X-Request-ID": "req-789",
+            "traceparent": "00-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-ffffffffffffffff-01",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured.get("request_id") == "req-789"
+
+
 def test_reembed_schedule_propagates_request_id(monkeypatch):
+
+
     captured: Dict[str, Any] = {}
 
     from tldw_Server_API.app.core.Jobs import manager as jobs_manager

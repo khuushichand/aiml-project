@@ -19,86 +19,16 @@ This guide is for developers working on the tldw_server embeddings system codeba
 ### System Components
 
 ```mermaid
-classDiagram
-    class EmbeddingSystem {
-        <<interface>>
-        +create_embeddings()
-        +list_providers()
-        +get_health()
-    }
-
-    class SynchronousAPI {
-        -cache: TTLCache
-        -connection_pool: ConnectionPoolManager
-        -rate_limiter: Limiter
-        +create_embedding_endpoint()
-        +clear_cache()
-        +get_metrics()
-    }
-
-    class JobBasedAPI {
-        -job_manager: JobManager
-        -redis_client: Redis
-        +create_job()
-        +get_job_status()
-        +cancel_job()
-    }
-
-    class TTLCache {
-        -cache: Dict
-        -lock: Lock
-        -cleanup_task: Task
-        +get()
-        +set()
-        +cleanup_expired()
-    }
-
-    class ConnectionPoolManager {
-        -pools: Dict
-        +get_session()
-        +close_all()
-    }
-
-    class WorkerOrchestrator {
-        -worker_pools: Dict
-        +start_workers()
-        +scale_workers()
-        +shutdown()
-    }
-
-    class BaseWorker {
-        <<abstract>>
-        -config: WorkerConfig
-        -redis_client: Redis
-        +process_message()
-        +heartbeat()
-    }
-
-    class ChunkingWorker {
-        +chunk_text()
-        +process_message()
-    }
-
-    class EmbeddingWorker {
-        -model_cache: Dict
-        +create_embeddings()
-        +process_message()
-    }
-
-    class StorageWorker {
-        +store_embeddings()
-        +process_message()
-    }
-
-    EmbeddingSystem <|-- SynchronousAPI
-    EmbeddingSystem <|-- JobBasedAPI
-    SynchronousAPI --> TTLCache
-    SynchronousAPI --> ConnectionPoolManager
-    JobBasedAPI --> WorkerOrchestrator
-    WorkerOrchestrator --> BaseWorker
-    BaseWorker <|-- ChunkingWorker
-    BaseWorker <|-- EmbeddingWorker
-    BaseWorker <|-- StorageWorker
+flowchart LR
+    Client[API client] -->|POST /api/v1/embeddings| SyncEndpoint[embeddings_v5_production_enhanced.py]
+    Client -->|POST /api/v1/media/{id}/embeddings| JobEndpoint[media_embeddings.py]
+    SyncEndpoint --> Pipeline[Embeddings pipeline (chunking + Embeddings_Create + storage)]
+    JobEndpoint --> JobsAdapter[EmbeddingsJobsAdapter]
+    JobsAdapter --> JobManager[Core Jobs JobManager (root status/billing)]
+    JobsAdapter --> RedisStreams[Redis Streams queues]
+    RedisStreams --> RedisWorker[Embeddings redis_worker]
+    RedisWorker --> Pipeline
+    Pipeline --> Stores[ChromaDB + media DB updates]
 ```
 
 ### File Structure
@@ -113,14 +43,9 @@ tldw_Server_API/
 │   │
 │   └── core/
 │       └── Embeddings/
-│           ├── queue_schemas.py                 # Message schemas (WIP for workers)
-│           ├── job_manager.py                   # Job management (WIP)
-│           ├── worker_orchestrator.py           # Worker coordination (WIP)
-│           ├── workers/
-│           │   ├── base_worker.py               # Base worker class (WIP)
-│           │   ├── chunking_worker.py           # Text chunking (WIP)
-│           │   ├── embedding_worker.py          # Embedding generation (WIP)
-│           │   └── storage_worker.py            # Storage operations (WIP)
+│           ├── jobs_adapter.py                  # Core Jobs adapter for embeddings jobs
+│           ├── services/redis_worker.py         # Redis Streams worker for media + content stages
+│           ├── services/jobs_worker.py          # Legacy Jobs worker (compat only)
 │           └── Embeddings_Server/
 │               └── Embeddings_Create.py         # Core embedding logic (OpenAI/HF/ONNX/local)
 │
@@ -217,39 +142,51 @@ Notes:
 ### Using the Job-Based System
 
 ```python
-from tldw_Server_API.app.core.Embeddings.job_manager import (
-    EmbeddingJobManager,
-    JobManagerConfig
-)
+import asyncio
+from typing import List
 
-# Initialize job manager
-config = JobManagerConfig(
-    redis_url="redis://localhost:6379",
-    daily_quota_per_user={
-        "free": 1000,
-        "premium": 10000
-    }
-)
-job_manager = EmbeddingJobManager(config)
+import httpx
 
-# Create and monitor job
-async def process_large_batch(texts: List[str]):
-    job = await job_manager.create_job(
-        user_id="user123",
-        media_id=456,
-        content="\n".join(texts),
-        priority=50
-    )
+async def process_large_batch(texts: List[str]) -> dict:
+    async with httpx.AsyncClient(base_url="http://localhost:8000") as client:
+        # Create job
+        resp = await client.post(
+            "/api/v1/media/123/embeddings",
+            json={"embedding_model": "text-embedding-3-small"},
+            headers={"X-API-KEY": "your-api-key"}
+        )
+        resp.raise_for_status()
+        job_id = resp.json()["job_id"]
 
-    # Poll for status
-    while True:
-        status = await job_manager.get_job_status(job.job_id)
-        if status.status in ["completed", "failed"]:
-            break
-        await asyncio.sleep(1)
-
-    return status
+        # Poll status
+        while True:
+            status_resp = await client.get(
+                f"/api/v1/media/embeddings/jobs/{job_id}",
+                headers={"X-API-KEY": "your-api-key"}
+            )
+            status_resp.raise_for_status()
+            payload = status_resp.json()
+            status = payload.get("status")
+            if status in ["completed", "failed"]:
+                return payload
+            await asyncio.sleep(1)
 ```
+
+Via SDK (if direct integration is needed):
+
+```python
+from tldw_Server_API.app.core.Embeddings.jobs_adapter import EmbeddingsJobsAdapter
+
+adapter = EmbeddingsJobsAdapter()
+job = adapter.create_job(
+    user_id="user123",
+    media_id=123,
+    embedding_model="text-embedding-3-small"
+)
+job_status = adapter.get_job(job["id"], "user123")
+```
+
+See `tldw_Server_API/tests/Embeddings/test_media_embedding_jobs.py` for a complete working example.
 
 ## Adding New Providers
 

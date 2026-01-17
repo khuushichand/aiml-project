@@ -6,7 +6,16 @@ import time
 from typing import Dict, List, Any, Optional
 from loguru import logger
 
-from ....core.Chat.chat_orchestrator import chat_api_call
+from ....core.Chat.Chat_Deps import ChatConfigurationError
+from ....core.Chat.chat_helpers import extract_response_content
+from ....core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 
 class EvaluationManager:
     """Manages prompt evaluation runs and metrics calculation."""
@@ -19,6 +28,38 @@ class EvaluationManager:
             db_manager: Database manager instance
         """
         self.db = db_manager
+
+    @staticmethod
+    def _call_adapter_text(
+        *,
+        provider: str,
+        messages_payload: List[Dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+        api_key: Optional[str],
+        model: Optional[str],
+        app_config: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> str:
+        provider_name = normalize_provider(provider)
+        if not provider_name:
+            raise ChatConfigurationError(provider=provider, message="LLM provider is required.")
+        cfg = ensure_app_config(app_config)
+        resolved_model = model or resolve_provider_model(provider_name, cfg)
+        if not resolved_model:
+            raise ChatConfigurationError(provider=provider_name, message="Model is required for provider.")
+        system_message, cleaned_messages = split_system_message(messages_payload or [])
+        request: Dict[str, Any] = {
+            "messages": cleaned_messages,
+            "system_message": system_message,
+            "model": resolved_model,
+            "api_key": api_key or resolve_provider_api_key_from_config(provider_name, cfg),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "app_config": cfg,
+        }
+        response = get_adapter_or_raise(provider_name).chat(request, timeout=timeout)
+        return extract_response_content(response) or str(response)
 
     def run_evaluation(
         self,
@@ -87,21 +128,24 @@ class EvaluationManager:
             expected = test_case.get("expected_outputs") or {}
 
             # Format prompt with inputs
-            formatted_user_prompt = prompt.get("user_prompt", "")
+            formatted_user_prompt = prompt.get("user_prompt") or ""
             for key, value in inputs.items():
                 formatted_user_prompt = formatted_user_prompt.replace(f"{{{key}}}", str(value))
 
             # Call LLM
             try:
                 t_case0 = time.perf_counter()
-                response = chat_api_call(
-                    api_endpoint=provider,
+                messages_payload = []
+                system_prompt = prompt.get("system_prompt")
+                if system_prompt:
+                    messages_payload.append({"role": "system", "content": system_prompt})
+                messages_payload.append({"role": "user", "content": formatted_user_prompt})
+
+                response = self._call_adapter_text(
+                    provider=provider,
                     model=model,
-                    messages_payload=[
-                        {"role": "user", "content": formatted_user_prompt}
-                    ],
-                    system_message=prompt.get("system_prompt"),
-                    temp=temperature,
+                    messages_payload=messages_payload,
+                    temperature=temperature,
                     max_tokens=max_tokens,
                     api_key=api_key,
                     app_config=app_config,

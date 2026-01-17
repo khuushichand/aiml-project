@@ -15,6 +15,8 @@ import base64
 import tempfile
 import time
 import hashlib
+import uuid
+import weakref
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime, timedelta
 from enum import Enum
@@ -31,6 +33,53 @@ RATE_LIMIT_RETRY_DELAY = float(os.getenv("E2E_RATE_LIMIT_DELAY", "0.5"))  # Dela
 MAX_RETRIES = int(os.getenv("E2E_MAX_RETRIES", "3"))  # Max retries for rate limit errors
 SERVER_STARTUP_TIMEOUT = int(os.getenv("E2E_SERVER_STARTUP_TIMEOUT", "30"))  # Max time to wait for server
 E2E_INPROCESS = os.getenv("E2E_INPROCESS", "").lower() in {"1", "true", "yes", "on"}
+_INPROCESS_DB_URL: Optional[str] = None
+NO_RETRY_HEADER = "X-E2E-No-Retry"
+FALLBACK_CHAT_MODEL = "gpt4o"
+
+
+def _normalize_chat_model(model: Optional[str]) -> Optional[str]:
+    if not model:
+        return model
+    normalized = model.strip()
+    alias_map = {
+        "gpt4o": "gpt-4o",
+        "gpt4o-mini": "gpt-4o-mini",
+    }
+    return alias_map.get(normalized.lower(), normalized)
+
+
+def _looks_like_jwt(token: str) -> bool:
+    if not isinstance(token, str):
+        return False
+    token = token.strip()
+    if not token:
+        return False
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    return all(part for part in parts)
+
+
+def _retry_delay_from_response(response: httpx.Response, attempt: int) -> float:
+    delay = RATE_LIMIT_RETRY_DELAY * (2 ** attempt)
+    retry_after: Optional[float] = None
+    try:
+        header_val = response.headers.get("Retry-After")
+        if header_val is not None:
+            retry_after = float(header_val)
+    except Exception:
+        retry_after = None
+    if retry_after is None:
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                retry_after = float(body.get("retry_after"))
+        except Exception:
+            retry_after = None
+    if retry_after is not None:
+        delay = max(delay, retry_after)
+    return delay + (time.time() % 0.1)
 
 
 def _build_inprocess_httpx_client() -> httpx.Client:
@@ -40,29 +89,120 @@ def _build_inprocess_httpx_client() -> httpx.Client:
     This allows running e2e tests without opening a network socket (useful in
     restricted CI sandboxes) while exercising the real FastAPI application.
     """
+    # Ensure a fresh AuthNZ DB for in-process runs to avoid stale schemas.
+    global _INPROCESS_DB_URL
+    if _INPROCESS_DB_URL is None:
+        override = os.getenv("E2E_INPROCESS_DB_URL")
+        if override:
+            _INPROCESS_DB_URL = override
+            os.environ.setdefault("DATABASE_URL", override)
+        elif os.getenv("DATABASE_URL"):
+            _INPROCESS_DB_URL = os.environ["DATABASE_URL"]
+        else:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="tldw_e2e_authnz_"))
+            db_path = tmp_dir / "users.db"
+            _INPROCESS_DB_URL = f"sqlite:///{db_path}"
+            os.environ["DATABASE_URL"] = _INPROCESS_DB_URL
+    os.environ.setdefault("ENABLE_REGISTRATION", "true")
+    os.environ.setdefault("REQUIRE_REGISTRATION_CODE", "false")
+    os.environ.setdefault("REGISTRATION_ENABLED", os.environ["ENABLE_REGISTRATION"])
+    os.environ.setdefault("REGISTRATION_REQUIRE_CODE", os.environ["REQUIRE_REGISTRATION_CODE"])
+
     # Import lazily to avoid heavy init unless needed
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        reset_settings()
+    except Exception:
+        pass
     from tldw_Server_API.app.main import app
-    transport = httpx.ASGITransport(app=app, lifespan="on")
-    return httpx.Client(transport=transport, base_url="http://testserver", timeout=TEST_TIMEOUT)
+    try:
+        transport = httpx.ASGITransport(app=app, lifespan="on")
+    except TypeError:
+        # Older httpx releases do not accept the lifespan kwarg; prefer TestClient to
+        # ensure startup/shutdown hooks run (migrations, auth setup, etc.).
+        from starlette.testclient import TestClient
+        return TestClient(app, base_url="http://testserver", follow_redirects=True)
+    if not hasattr(transport, "handle_request"):
+        # Older httpx ASGITransport is async-only; fall back to TestClient.
+        from starlette.testclient import TestClient
+        return TestClient(app, base_url="http://testserver", follow_redirects=True)
+    return httpx.Client(
+        transport=transport,
+        base_url="http://testserver",
+        timeout=TEST_TIMEOUT,
+        follow_redirects=True,
+    )
 
 
 class APIClient:
     """Wrapper for API interactions with authentication support."""
 
-    def __init__(self, base_url: str = BASE_URL, client: Optional[httpx.Client] = None):
+    _registry: "weakref.WeakSet[APIClient]" = weakref.WeakSet()
+    _protected_ids: set[int] = set()
+
+    def __init__(
+        self,
+        base_url: str = BASE_URL,
+        client: Optional[httpx.Client] = None,
+        *,
+        keep_open: bool = False,
+        auto_auth: bool = True,
+    ):
         self.base_url = base_url
+        self._default_chat_model: Optional[str] = None
+        self._default_chat_model_checked = False
+        self._llm_providers_configured: Optional[bool] = None
         # Prefer provided client (e.g., in-process), otherwise decide based on env
         if client is not None:
             self.client = client
         elif E2E_INPROCESS:
             self.client = _build_inprocess_httpx_client()
         else:
-            self.client = httpx.Client(base_url=base_url, timeout=TEST_TIMEOUT)
+            self.client = httpx.Client(
+                base_url=base_url,
+                timeout=TEST_TIMEOUT,
+                follow_redirects=True,
+            )
         self.token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.user_id: Optional[int] = None
+        self._closed = False
+
+        APIClient._registry.add(self)
+        if keep_open:
+            APIClient._protected_ids.add(id(self))
+
+        self._wrap_client_for_rate_limits()
 
         # Note: TEST_MODE must be set on the server, not passed as header
+        if auto_auth:
+            self._maybe_set_single_user_auth()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    @classmethod
+    def close_open_clients(cls, *, include_protected: bool = False) -> None:
+        for inst in list(cls._registry):
+            if include_protected or id(inst) not in cls._protected_ids:
+                try:
+                    inst.close()
+                except Exception:
+                    pass
+
+    def _maybe_set_single_user_auth(self) -> None:
+        if "X-API-KEY" in self.client.headers or self.token:
+            return
+        mode = os.getenv("AUTH_MODE", "").lower()
+        if mode not in {"single_user", "single-user", "singleuser"}:
+            return
+        api_key = os.getenv("SINGLE_USER_TEST_API_KEY") or os.getenv("SINGLE_USER_API_KEY")
+        if api_key:
+            self.set_auth_token(api_key)
 
     def _handle_rate_limit(self, func: Callable, *args, **kwargs) -> Any:
         """Handle rate limiting with retry logic."""
@@ -72,26 +212,129 @@ class APIClient:
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     if attempt < MAX_RETRIES - 1:
-                        # Exponential backoff with jitter
-                        delay = RATE_LIMIT_RETRY_DELAY * (2 ** attempt) + (time.time() % 0.1)
+                        delay = _retry_delay_from_response(e.response, attempt)
                         print(f"Rate limited, retrying in {delay:.2f}s (attempt {attempt + 1}/{MAX_RETRIES})")
                         time.sleep(delay)
                         continue
                 raise
         return func(*args, **kwargs)
 
+    def _wrap_client_for_rate_limits(self) -> None:
+        if getattr(self.client, "_e2e_rate_limit_wrapped", False):
+            return
+        original_request = self.client.request
+
+        def _request_with_retry(method: str, url: str, **kwargs):
+            headers = kwargs.get("headers")
+            if headers:
+                no_retry = headers.get(NO_RETRY_HEADER)
+                if no_retry:
+                    safe_headers = dict(headers)
+                    safe_headers.pop(NO_RETRY_HEADER, None)
+                    kwargs["headers"] = safe_headers
+                    return original_request(method, url, **kwargs)
+
+            def _do_request():
+                response = original_request(method, url, **kwargs)
+                if response.status_code == 429:
+                    raise httpx.HTTPStatusError(
+                        "Rate limited",
+                        request=response.request,
+                        response=response,
+                    )
+                return response
+
+            return self._handle_rate_limit(_do_request)
+
+        self.client.request = _request_with_retry  # type: ignore[assignment]
+        setattr(self.client, "_e2e_rate_limit_wrapped", True)
+
+    def get_default_chat_model(self) -> Optional[str]:
+        if self._default_chat_model_checked:
+            return self._default_chat_model
+
+        def _fetch():
+            response = self.client.get(f"{API_PREFIX}/llm/providers")
+            response.raise_for_status()
+            return response.json()
+
+        try:
+            data = self._handle_rate_limit(_fetch)
+        except Exception:
+            return None
+
+        providers = data.get("providers") or []
+        total_configured = data.get("total_configured")
+        has_models = False
+        for provider in providers:
+            if not isinstance(provider, dict):
+                continue
+            default_model = provider.get("default_model")
+            models = provider.get("models") or []
+            if isinstance(default_model, str) and default_model.strip():
+                has_models = True
+                break
+            if any(isinstance(m, str) and m.strip() for m in models):
+                has_models = True
+                break
+        if isinstance(total_configured, int):
+            self._llm_providers_configured = total_configured > 0 and has_models
+        else:
+            self._llm_providers_configured = bool(providers) and has_models
+
+        default_provider = data.get("default_provider")
+
+        def _pick_model(provider: Dict[str, Any]) -> Optional[str]:
+            if not isinstance(provider, dict):
+                return None
+            model = provider.get("default_model")
+            if isinstance(model, str) and model.strip():
+                return model
+            models = provider.get("models") or []
+            if isinstance(models, list):
+                for item in models:
+                    if isinstance(item, str) and item.strip():
+                        return item
+            return None
+
+        chosen = None
+        if default_provider:
+            match = next(
+                (p for p in providers if isinstance(p, dict) and p.get("name") == default_provider),
+                None,
+            )
+            chosen = _pick_model(match or {})
+
+        if not chosen:
+            for provider in providers:
+                chosen = _pick_model(provider)
+                if chosen:
+                    break
+
+        self._default_chat_model = chosen
+        self._default_chat_model_checked = True
+        return chosen
+
+    def llm_configured(self) -> Optional[bool]:
+        if self._llm_providers_configured is not None:
+            return self._llm_providers_configured
+        self.get_default_chat_model()
+        return self._llm_providers_configured
+
     def set_auth_token(self, token: str, refresh_token: Optional[str] = None):
         """Set authentication tokens."""
         self.token = token
         self.refresh_token = refresh_token
-        # In single-user mode, use X-API-KEY header
-        # Also add Token header for some endpoints that expect it (case-sensitive)
-        # Add Bearer authorization for OpenAI-compatible endpoints
-        self.client.headers.update({
-            "X-API-KEY": token,
-            "Token": token,  # Some endpoints expect this (capital T)
-            "Authorization": f"Bearer {token}"  # For OpenAI-compatible endpoints
-        })
+        use_bearer = _looks_like_jwt(token)
+        if use_bearer:
+            self.client.headers["Authorization"] = f"Bearer {token}"
+            self.client.headers.pop("X-API-KEY", None)
+            self.client.headers.pop("Token", None)
+        else:
+            # Use API key headers for single-user and virtual-key flows.
+            self.client.headers["X-API-KEY"] = token
+            self.client.headers["Token"] = token  # Some endpoints expect this (capital T)
+            self.client.headers.pop("Authorization", None)
 
     def clear_auth(self):
         """Clear authentication."""
@@ -101,6 +344,8 @@ class APIClient:
             del self.client.headers["Authorization"]
         if "X-API-KEY" in self.client.headers:
             del self.client.headers["X-API-KEY"]
+        if "Token" in self.client.headers:
+            del self.client.headers["Token"]
 
     # Authentication endpoints
     def register(self, username: str, email: str, password: str) -> Dict[str, Any]:
@@ -120,7 +365,7 @@ class APIClient:
         """Login and obtain tokens."""
         response = self.client.post(
             f"{API_PREFIX}/auth/login",
-            json={
+            data={
                 "username": username,
                 "password": password
             }
@@ -155,8 +400,13 @@ class APIClient:
             return {"username": "single_user", "id": 1}
 
     # Media endpoints
-    def upload_media(self, file_path: str, title: str, media_type: str = "document",
-                     generate_embeddings: bool = False) -> Dict[str, Any]:
+    def upload_media(
+        self,
+        file_path: str,
+        title: str,
+        media_type: str = "document",
+        generate_embeddings: bool = False,
+    ) -> Dict[str, Any]:
         """Upload a media file."""
         with open(file_path, "rb") as f:
             # The endpoint expects 'files' (plural) not 'file'
@@ -178,9 +428,15 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
-    def process_media(self, url: Optional[str] = None, file_path: Optional[str] = None,
-                     title: Optional[str] = None, custom_prompt: Optional[str] = None,
-                     persist: bool = True, media_type: Optional[str] = None) -> Dict[str, Any]:
+    def process_media(
+        self,
+        url: Optional[str] = None,
+        file_path: Optional[str] = None,
+        title: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+        persist: bool = True,
+        media_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Process media from URL or file.
 
         Args:
@@ -312,19 +568,34 @@ class APIClient:
         return response.json()
 
     # Chat endpoints
-    def chat_completion(self, messages: List[Dict[str, str]],
-                        model: str = "gpt-3.5-turbo",
-                        temperature: float = 0.7,
-                        character_id: Optional[int] = None,
-                        conversation_id: Optional[str] = None,
-                        stream: bool = False) -> Dict[str, Any]:
+    def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = "gpt-3.5-turbo",
+        temperature: float = 0.7,
+        character_id: Optional[int] = None,
+        conversation_id: Optional[str] = None,
+        stream: bool = False,
+        api_provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Send chat completion request with optional character context."""
+        resolved_model = model
+        if resolved_model in (None, "", "gpt-3.5-turbo"):
+            fallback = self.get_default_chat_model()
+            if fallback:
+                resolved_model = fallback
         data = {
             "messages": messages,
-            "model": model,
             "temperature": temperature,
             "stream": stream
         }
+        normalized_model = _normalize_chat_model(resolved_model) if resolved_model else None
+        if normalized_model:
+            data["model"] = normalized_model
+            if api_provider:
+                data["api_provider"] = api_provider
+            elif normalized_model.replace("-", "").lower() == "gpt4o":
+                data["api_provider"] = "openai"
         if character_id is not None:
             data["character_id"] = str(character_id)  # API expects string
         if conversation_id is not None:
@@ -366,8 +637,13 @@ class APIClient:
 
         return self._handle_rate_limit(_get)
 
-    def update_note(self, note_id: str, title: Optional[str] = None,
-                   content: Optional[str] = None, version: int = 1) -> Dict[str, Any]:
+    def update_note(
+        self,
+        note_id: str,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+        version: int = 1,
+    ) -> Dict[str, Any]:
         """Update an existing note."""
         def _update():
             data = {}
@@ -635,7 +911,13 @@ class APIClient:
 
     def close(self):
         """Close the client connection."""
-        self.client.close()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.client.close()
+        finally:
+            APIClient._protected_ids.discard(id(self))
 
 
 def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTUP_TIMEOUT) -> Dict[str, Any]:
@@ -712,6 +994,66 @@ def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTU
     )
     pytest.skip(error_msg)
 
+def _resolve_single_user_api_key(health_info: Optional[Dict[str, Any]] = None) -> str:
+    """Resolve the API key to use for single-user auth in tests."""
+    # Prefer explicit env overrides from the test process.
+    for env_key in ("SINGLE_USER_TEST_API_KEY", "SINGLE_USER_API_KEY"):
+        value = os.getenv(env_key)
+        if value:
+            return value
+    # If the health endpoint exposes a test key, use it.
+    if health_info and health_info.get("test_api_key"):
+        return str(health_info["test_api_key"])
+    # Fallback to settings (may read config files in the test process).
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+        settings = get_settings()
+        if settings.SINGLE_USER_API_KEY:
+            return settings.SINGLE_USER_API_KEY
+    except Exception:
+        pass
+    return "test-api-key-12345"
+
+
+def _env_file_value(key: str) -> Optional[str]:
+    env_candidates = [
+        Path(__file__).resolve().parents[2] / "Config_Files" / ".env",
+        Path(__file__).resolve().parents[2] / "Config_Files" / ".ENV",
+    ]
+    for env_path in env_candidates:
+        try:
+            if not env_path.exists():
+                continue
+            for line in env_path.read_text().splitlines():
+                raw = line.strip()
+                if not raw or raw.startswith("#"):
+                    continue
+                if raw.startswith("export "):
+                    raw = raw[len("export "):].strip()
+                if "=" not in raw:
+                    continue
+                k, v = raw.split("=", 1)
+                if k.strip() != key:
+                    continue
+                val = v.strip().strip("'\"")
+                if val:
+                    return val
+        except Exception:
+            continue
+    return None
+
+
+def has_openai_api_key() -> bool:
+    if os.getenv("OPENAI_API_KEY"):
+        return True
+    return bool(_env_file_value("OPENAI_API_KEY"))
+
+
+def require_llm_or_skip(client: "APIClient") -> Optional[str]:
+    """Return a usable LLM model, falling back to gpt4o when none is configured."""
+    model = client.get_default_chat_model()
+    return _normalize_chat_model(model) or _normalize_chat_model(FALLBACK_CHAT_MODEL)
+
 
 @pytest.fixture(scope="session")
 def api_client():
@@ -721,25 +1063,33 @@ def api_client():
 
     # Build HTTP client matching the chosen mode
     httpx_client = _build_inprocess_httpx_client() if E2E_INPROCESS else None
-    client = APIClient(client=httpx_client)
+    client = APIClient(client=httpx_client, keep_open=True)
 
     # Check if single-user mode and set token
+    mode = (health_info.get("auth_mode") or os.getenv("AUTH_MODE", "single_user")).lower()
     try:
-        if (health_info.get("auth_mode") or os.getenv("AUTH_MODE", "single_user")) == "single_user":
-            # In test mode, get API key from health endpoint
-            if health_info.get("test_api_key"):
-                api_key = health_info.get("test_api_key")
-                print(f"Using test API key from health endpoint: {api_key[:8]}...")
-            else:
-                # Fallback to environment variable or settings
-                try:
-                    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-                    settings = get_settings()
-                    api_key = settings.SINGLE_USER_API_KEY
-                except:
-                    api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
+        if mode in {"single_user", "single-user", "singleuser"}:
+            api_key = _resolve_single_user_api_key(health_info)
             client.set_auth_token(api_key)
+        elif mode in {"multi_user", "multi-user", "multiuser"}:
+            username = os.getenv("E2E_TEST_USERNAME") or f"e2e_user_{uuid.uuid4().hex[:8]}"
+            email = os.getenv("E2E_TEST_EMAIL") or f"{username}@example.com"
+            password = os.getenv("E2E_TEST_PASSWORD") or "Tlp9!ZxVq8@M"
+            try:
+                client.register(username=username, email=email, password=password)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in (400, 409):
+                    raise
+            try:
+                client.login(username, password)
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(
+                    f"Multi-user login failed for '{username}'. "
+                    "Set E2E_TEST_USERNAME/E2E_TEST_PASSWORD to a valid account."
+                ) from exc
     except Exception as e:
+        if mode in {"multi_user", "multi-user", "multiuser"}:
+            pytest.fail(f"Failed to authenticate multi-user api_client: {e}")
         print(f"Warning: Failed to set API key: {e}")
     yield client
     client.close()
@@ -752,7 +1102,7 @@ def test_user_credentials():
     return {
         "username": f"e2e_test_user_{timestamp}",
         "email": f"e2e_test_{timestamp}@example.com",
-        "password": "TestPassword123!"
+        "password": "Tlp9!ZxVq8@M"
     }
 
 
@@ -763,18 +1113,7 @@ def authenticated_client(api_client, test_user_credentials):
     try:
         health = api_client.health_check()
         if health.get("auth_mode") == "single_user":
-            # In test mode, get API key from health endpoint
-            if health.get("test_api_key"):
-                api_key = health.get("test_api_key")
-                print(f"Authenticated client using test API key: {api_key[:8]}...")
-            else:
-                # Fallback to environment variable or settings
-                try:
-                    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-                    settings = get_settings()
-                    api_key = settings.SINGLE_USER_API_KEY
-                except:
-                    api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
+            api_key = _resolve_single_user_api_key(health)
             api_client.set_auth_token(api_key)
             return api_client
     except Exception as e:

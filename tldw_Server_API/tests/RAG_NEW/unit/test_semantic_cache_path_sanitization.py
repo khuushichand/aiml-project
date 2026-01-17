@@ -7,6 +7,8 @@ pytestmark = pytest.mark.unit
 
 
 def test_shared_cache_anchors_relative_persist_path(tmp_path, monkeypatch):
+
+
     base_dir = tmp_path / "cache_root"
     base_dir.mkdir()
     monkeypatch.setenv("RAG_SEMANTIC_CACHE_DIR", str(base_dir))
@@ -28,6 +30,8 @@ def test_shared_cache_anchors_relative_persist_path(tmp_path, monkeypatch):
 
 
 def test_shared_cache_rejects_absolute_persist_path_outside_base(tmp_path, monkeypatch):
+
+
     base_dir = tmp_path / "cache_root"
     base_dir.mkdir()
     outside_dir = tmp_path / "outside"

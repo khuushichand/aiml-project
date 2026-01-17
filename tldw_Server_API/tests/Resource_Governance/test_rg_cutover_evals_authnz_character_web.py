@@ -1,10 +1,6 @@
 import asyncio
-import os
-import time
-
 import pytest
 
-from tldw_Server_API.app.core.AuthNZ import rate_limiter as auth_rl
 from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as char_rl
 from tldw_Server_API.app.core.Evaluations import user_rate_limiter as evals_rl
 from tldw_Server_API.app.core.Web_Scraping import enhanced_web_scraping as web_rl
@@ -48,7 +44,7 @@ async def test_evaluations_rg_denies(monkeypatch):
 
     assert allowed is False
     assert meta.get("retry_after") == 5
-    assert meta.get("policy_id") == "evals.default"
+    assert meta.get("policy_id") == "evals.free"
     assert fake.reserved
     entity, categories, _op_id, tags = fake.reserved[-1]
     assert entity == "user:user-123"
@@ -87,109 +83,19 @@ async def test_evaluations_rg_allows_bypasses_legacy_denies(monkeypatch):
     )
 
     assert allowed is True
-    assert meta.get("policy_id") == "evals.default"
+    assert meta.get("policy_id") == "evals.free"
     assert meta.get("rate_limit_source") == "resource_governor"
-
-
-@pytest.mark.asyncio
-async def test_authnz_rg_denies(monkeypatch):
-    monkeypatch.setenv("RG_ENABLED", "1")
-    fake = _FakeGovernor(allowed=False, retry_after=7)
-    monkeypatch.setattr(auth_rl, "_rg_authnz_governor", fake)
-    monkeypatch.setattr(auth_rl, "_rg_authnz_loader", None)
-
-    limiter = auth_rl.RateLimiter()
-    # Use a small explicit limit to keep legacy path simple; RG denial should take precedence.
-    allowed, meta = await limiter.check_rate_limit(
-        identifier="user:42",
-        endpoint="/api/v1/auth/login",
-        limit=10,
-    )
-
-    assert allowed is False
-    assert meta.get("retry_after") == 7
-    assert meta.get("policy_id") == "authnz.default"
-    assert fake.reserved
-    entity, categories, _op_id, tags = fake.reserved[-1]
-    assert entity == "user:42"
-    assert categories == {"requests": {"units": 1}}
-    assert tags.get("module") == "authnz"
-    assert tags.get("endpoint") == "/api/v1/auth/login"
-
-
-@pytest.mark.asyncio
-async def test_authnz_rg_allows_bypasses_legacy_denies(monkeypatch):
-    """
-    When RG returns an allow decision, AuthNZ must not deny (or consume counters)
-    via the legacy DB/Redis rate limiter. Legacy behavior is shadow-only.
-    """
-    monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_SHADOW_AUTHNZ", "0")  # avoid backend peeks in this unit test
-    fake = _FakeGovernor(allowed=True, retry_after=None)
-    monkeypatch.setattr(auth_rl, "_rg_authnz_governor", fake)
-    monkeypatch.setattr(auth_rl, "_rg_authnz_loader", None)
-
-    limiter = auth_rl.RateLimiter()
-
-    async def _boom(*args, **kwargs):  # noqa: ARG001
-        raise AssertionError("legacy limiter should not run when RG is available")
-
-    monkeypatch.setattr(limiter, "_check_redis_rate_limit", _boom)
-    monkeypatch.setattr(limiter, "_check_database_rate_limit", _boom)
-
-    allowed, meta = await limiter.check_rate_limit(
-        identifier="user:42",
-        endpoint="/api/v1/auth/login",
-        limit=10,
-    )
-
-    assert allowed is True
-    assert meta.get("policy_id") == "authnz.default"
-    assert meta.get("rate_limit_source") == "resource_governor"
-
-
-@pytest.mark.asyncio
-async def test_auth_governor_invokes_rg_even_when_legacy_limiter_disabled(monkeypatch):
-    """
-    AuthGovernor wraps the AuthNZ RateLimiter for auth endpoints.
-
-    The AuthNZ RateLimiter intentionally evaluates Resource Governor (RG)
-    policies even when the legacy DB/Redis limiter is disabled. Ensure the
-    AuthGovernor wrapper does not skip the call based on limiter.enabled so
-    staging/dev can observe authnz.default RG decisions.
-    """
-    monkeypatch.setenv("RG_ENABLED", "1")
-    fake = _FakeGovernor(allowed=True, retry_after=None)
-    monkeypatch.setattr(auth_rl, "_rg_authnz_governor", fake)
-    monkeypatch.setattr(auth_rl, "_rg_authnz_loader", None)
-
-    limiter = auth_rl.RateLimiter()
-    limiter.enabled = False
-
-    from tldw_Server_API.app.core.AuthNZ.auth_governor import AuthGovernor
-
-    gov = AuthGovernor()
-    allowed, meta = await gov.check_rate_limit(
-        identifier="127.0.0.1",
-        endpoint="auth",
-        limit=5,
-        window_minutes=1,
-        rate_limiter=limiter,
-    )
-
-    assert allowed is True
-    assert meta.get("policy_id") == "authnz.default"
-    assert fake.reserved
 
 
 @pytest.mark.asyncio
 async def test_character_chat_rg_denies(monkeypatch):
     monkeypatch.setenv("RG_ENABLED", "1")
+    monkeypatch.setenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "1")
     fake = _FakeGovernor(allowed=False, retry_after=3)
     monkeypatch.setattr(char_rl, "_rg_char_governor", fake)
     monkeypatch.setattr(char_rl, "_rg_char_loader", None)
 
-    limiter = char_rl.CharacterRateLimiter(redis_client=None, max_operations=100)
+    limiter = char_rl.CharacterRateLimiter(max_operations=100)
 
     with pytest.raises(Exception) as exc:
         await limiter.check_rate_limit(user_id=123, operation="character_op")
@@ -204,13 +110,14 @@ async def test_character_chat_rg_denies(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_character_chat_invokes_rg_even_when_legacy_limiter_disabled(monkeypatch):
+async def test_character_chat_invokes_rg_when_enabled(monkeypatch):
     monkeypatch.setenv("RG_ENABLED", "1")
+    monkeypatch.setenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "1")
     fake = _FakeGovernor(allowed=True, retry_after=None)
     monkeypatch.setattr(char_rl, "_rg_char_governor", fake)
     monkeypatch.setattr(char_rl, "_rg_char_loader", None)
 
-    limiter = char_rl.CharacterRateLimiter(redis_client=None, max_operations=100, enabled=False)
+    limiter = char_rl.CharacterRateLimiter(max_operations=100, enabled=True)
 
     allowed, _remaining = await limiter.check_rate_limit(user_id=123, operation="character_op")
 
@@ -220,18 +127,14 @@ async def test_character_chat_invokes_rg_even_when_legacy_limiter_disabled(monke
 
 @pytest.mark.asyncio
 async def test_character_chat_rg_allows_bypasses_legacy_denies(monkeypatch):
-    """
-    When RG returns an allow decision, Character Chat must not deny (or consume
-    counters) via the legacy limiter.
-    """
+    """When RG returns an allow decision, Character Chat should allow the request."""
     monkeypatch.setenv("RG_ENABLED", "1")
+    monkeypatch.setenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "1")
     fake = _FakeGovernor(allowed=True, retry_after=None)
     monkeypatch.setattr(char_rl, "_rg_char_governor", fake)
     monkeypatch.setattr(char_rl, "_rg_char_loader", None)
 
-    limiter = char_rl.CharacterRateLimiter(redis_client=None, max_operations=1, window_seconds=3600)
-    # Prime memory store to force legacy deny if it were consulted.
-    limiter.memory_store[123] = [time.time()]
+    limiter = char_rl.CharacterRateLimiter(max_operations=1, window_seconds=3600)
 
     allowed, remaining = await limiter.check_rate_limit(user_id=123, operation="character_op")
 

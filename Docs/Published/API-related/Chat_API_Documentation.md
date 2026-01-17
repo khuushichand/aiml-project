@@ -7,6 +7,29 @@
 - Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
 - OpenAPI tags: `chat`, `chat-dictionaries`, `chat-documents`
 
+## Conversation Metadata Endpoints
+Conversation list/search, lifecycle updates, message trees, analytics, and knowledge-save endpoints live under `/api/v1/chat`. Session CRUD for character chats remains under `/api/v1/chats`.
+
+Endpoints:
+- `GET /api/v1/chat/conversations` — list/search conversations with filters and ranking (`order_by=bm25|recency|hybrid|topic`).
+- `PATCH /api/v1/chat/conversations/{id}` — update state/topic/keywords with optimistic locking (`version` in body).
+- `GET /api/v1/chat/conversations/{id}/tree` — root-thread tree view with `max_depth` + truncation.
+- `GET /api/v1/chat/analytics` — UTC histogram buckets by date/topic/state.
+- `POST /api/v1/chat/knowledge/save` — save a snippet to Notes/Flashcards with backlinks.
+
+Note:
+- `/api/v1/chats` continues to serve character chat session CRUD and exports.
+- Alias: `/api/v1/chats/conversations` maps to the conversation list/update/tree endpoints above.
+
+Parameter glossary:
+- `query`: full-text search term applied to conversation title.
+- `state`: conversation lifecycle state (`in-progress`, `resolved`, `backlog`, `non-viable`).
+- `topic_label`: exact topic label match; append `*` for prefix search.
+- `keywords`: repeatable query parameter; all values must match (AND).
+- `order_by`: `bm25` (text relevance), `recency` (last_modified), `hybrid` (weighted blend), `topic` (alphabetical topic).
+- `start_date`/`end_date`: ISO-8601 range bounds for analytics.
+- `bucket_granularity`: `day` or `week` for analytics buckets.
+
 ## Authentication
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`
@@ -24,9 +47,15 @@ Key fields:
 - `api_provider` (string, optional): Overrides provider selection. Server default used if omitted.
 - `prompt_template_name` (string, optional): Apply a named prompt template (alphanumeric, `_`, `-`).
 - Common sampling params (provider-dependent): `temperature`, `top_p`, `max_tokens`, `n`, `frequency_penalty`, `presence_penalty`, `logprobs`, `top_logprobs`, `logit_bias`.
-- Tools: `tools`, `tool_choice` (provider-dependent tool/function calling).
+- Tools: `tools`, `tool_choice` (provider-dependent tool/function calling). `tool_choice` requires `tools` or the request is rejected.
 - `response_format`: `{ "type": "text" | "json_object" }` (provider-dependent).
 - Chat extensions: `character_id`, `conversation_id` (context hooks), `save_to_db` (persistence toggle).
+
+Provider-specific extensions:
+- Bedrock guardrails:
+  - `extra_headers`: include Bedrock guardrail headers like `X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, optional `X-Amzn-Bedrock-Trace`.
+  - `extra_body`: include `amazon-bedrock-guardrailConfig` object when needed.
+  - Merge behavior: `extra_headers`/`extra_body` are additive; explicit headers/body keys in the request win on conflicts.
 
 Minimal example (non-streaming):
 ```bash

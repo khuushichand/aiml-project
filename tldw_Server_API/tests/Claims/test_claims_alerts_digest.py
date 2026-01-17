@@ -27,6 +27,8 @@ class _FakeEmailService:
 
 
 def _seed_digest_db() -> MediaDatabase:
+
+
     tmpdir = tempfile.mkdtemp(prefix="claims_alert_digest_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
@@ -35,6 +37,8 @@ def _seed_digest_db() -> MediaDatabase:
 
 
 def test_claims_alert_email_digest_marks_delivered(monkeypatch):
+
+
     monkeypatch.setitem(settings, "CLAIMS_ALERT_EMAIL_DIGEST_ENABLED", True)
     monkeypatch.setitem(settings, "CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC", 0)
     monkeypatch.setitem(settings, "CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS", 50)

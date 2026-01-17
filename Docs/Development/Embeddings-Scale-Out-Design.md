@@ -1,11 +1,11 @@
 # Embeddings Scale-Out Architecture Design
 
-Status: WIP (design aligned with implemented orchestrator/workers)
-Last Updated: 2025-10-14
+Status: Active (Redis Streams pipeline with Jobs root status)
+Last Updated: 2026-01-12
 
 ## Overview
 
-This document specifies the production-scale, queue-based embeddings pipeline used to process large and concurrent workloads. It evolves the single-request path into a horizontally scalable topology using Redis Streams, worker pools, and an orchestrator. The design preserves provider flexibility, per-user isolation, and batch efficiency while adding fairness, quotas, and observability.
+This document describes the Redis Streams-based embeddings pipeline. Stage execution runs on Redis Streams workers while root job status and billing remain in core Jobs. See `tldw_Server_API/app/core/Embeddings/services/redis_worker.py` and `tldw_Server_API/app/core/Jobs/` for the current architecture.
 
 Scope and audience
 - Scope: Embeddings pipeline (chunk → embed → store) and its orchestration.
@@ -13,31 +13,30 @@ Scope and audience
 
 ## Current System Snapshot
 
-Active components (implemented in code):
-- Orchestrator: `tldw_Server_API/app/core/Embeddings/worker_orchestrator.py`
-- Job Manager (Redis Streams): `tldw_Server_API/app/core/Embeddings/job_manager.py`
-- Workers: `tldw_Server_API/app/core/Embeddings/workers/{chunking_worker,embedding_worker,storage_worker}.py`
-- Queue Schemas: `tldw_Server_API/app/core/Embeddings/queue_schemas.py`
-- Config: `tldw_Server_API/app/core/Embeddings/worker_config.py`, `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml`
+Active components (current):
+- Core Jobs manager: `tldw_Server_API/app/core/Jobs/manager.py`
+- Embeddings jobs adapter (root Jobs status/billing): `tldw_Server_API/app/core/Embeddings/jobs_adapter.py`
+- Embeddings Redis worker (stage execution): `tldw_Server_API/app/core/Embeddings/services/redis_worker.py`
+- Redis Streams pipeline helpers: `tldw_Server_API/app/core/Embeddings/redis_pipeline.py`
 - Vector store helpers: `tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py`
 
 Notes:
-- Redis Streams with consumer groups is the standard queue backend. RabbitMQ is not required.
-- The public REST endpoint (`/api/v1/embeddings`) remains single-request; the orchestrator/queues are used for media batch embeddings and enterprise deployments.
+- Redis Streams provide the stage queues; core Jobs tables (SQLite/Postgres) store the root job status/billing record.
+- The public REST endpoint (`/api/v1/embeddings`) remains single-request; root Jobs are used for media batch embeddings and background processing.
 - Production API path and engine details: `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py` and `Embeddings_Server/Embeddings_Create.py`.
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌───────────────────┐
-│   API Layer │────▶│ Embedding Jobs   │────▶│ Redis Streams     │
-└─────────────┘     │  (Job Manager)   │     │  + Consumer Groups│
-                    └─────────┬────────┘     └──────────┬────────┘
-                              │                          │
-              ┌───────────────┼──────────────────────────┼─────────────────┐
-              │               │                          │                 │
-        ┌─────▼─────┐   ┌─────▼─────┐              ┌─────▼─────┐    ┌─────▼─────┐
-        │ Chunking   │   │ Embedding │              │  Storage  │    │ Monitoring│
+┌─────────────┐     ┌────────────────────┐     ┌─────────────────────┐
+│   API Layer │────▶│ Core Jobs (DB)     │────▶│ Embeddings Jobs      │
+└─────────────┘     └─────────┬──────────┘     │ Worker (chunk/embed) │
+                              │                └──────────┬──────────┘
+                              │                           │
+                              │                           ▼
+                              │                     ┌─────────────┐
+                              └────────────────────▶│  Storage    │
+                                                    └─────────────┘
         │  Queue     │   │  Queue    │              │  Queue    │    │  + Autoscale
         └─────┬──────┘   └─────┬─────┘              └─────┬─────┘    └───────────┘
               │                │                           │
@@ -51,16 +50,17 @@ Queue names and consumer groups (defaults)
 - Chunking: `embeddings:chunking` / group `chunking-workers`
 - Embedding: `embeddings:embedding` / group `embedding-workers`
 - Storage: `embeddings:storage` / group `storage-workers`
+- Content: `embeddings:content` / group `content-workers`
 
 ## Component Design
 
-### 1) Job Manager (Redis Streams)
+### 1) Redis Streams Pipeline (enqueue + routing)
 Responsibilities
-- Accept embedding jobs (per media, per user) and emit `ChunkingMessage` to `embeddings:chunking`.
-- Track job status in Redis Hash `job:{job_id}`; expose status/lookup and cancellation.
-- Enforce per-tier limits and quotas; compute effective priority with aging and usage penalties.
+- Accept embedding jobs (per media, per user) and emit payloads to `embeddings:chunking` or `embeddings:content`.
+- Keep job status in core Jobs (root job) rather than Redis-only hashes.
+- Enforce per-tier limits and quotas at the API layer (backpressure + tenant RPS).
 
-Implementation entry: `tldw_Server_API/app/core/Embeddings/job_manager.py`
+Implementation entry: `tldw_Server_API/app/core/Embeddings/redis_pipeline.py` and `tldw_Server_API/app/core/Embeddings/services/redis_worker.py`
 
 ### 2) Worker Types
 
@@ -69,59 +69,16 @@ Chunking Workers
 - Scaling: CPU-bound; horizontally scalable.
 - Config: `ChunkingWorkerPoolConfig` (default chunk size/overlap) in `worker_config.py`.
 
-Embedding Workers
-- Purpose: Generate embeddings from chunks; provider-aware and batch-optimized.
-- Scaling: CPU/GPU depending on provider/model; GPU assignment via `gpu_allocation`.
-- Features (implemented in `embedding_worker.py`):
-  - Model selection per chunk (category-based) with fallbacks.
-  - LRU+TTL embedding cache (optional) and batch-size adaptation on OOM.
-  - HF `trust_remote_code` allowlist; OpenAI and ONNX supported via `Embeddings_Create`.
+Embeddings Redis Worker (current)
+- Redis Streams worker handles chunking, embedding, storage, and content stages.
+- Entry point: `tldw_Server_API/app/core/Embeddings/services/redis_worker.py`.
+- Root Jobs are updated for status/billing; stage execution is Redis-only.
 
-Storage Workers
-- Purpose: Persist embeddings to ChromaDB and update SQL metadata/indices.
-- Scaling: I/O-bound; batching and transactional writes.
+Embeddings Jobs Worker (legacy)
+- Legacy Jobs worker handles Jobs-queued stage tasks for compatibility.
+- Entry point: `tldw_Server_API/app/core/Embeddings/services/jobs_worker.py`.
 
-### 3) Orchestrator
-- Starts/stops/scales worker pools; exposes Prometheus metrics and queue depth gauges.
-- Optional autoscaling loop driven by queue depths and configured thresholds.
-- File: `tldw_Server_API/app/core/Embeddings/worker_orchestrator.py`.
-
-## Message Schemas (authoritative)
-
-Defined in `tldw_Server_API/app/core/Embeddings/queue_schemas.py`.
-
-```python
-class EmbeddingJobMessage(BaseModel):
-    job_id: str
-    user_id: str
-    media_id: int
-    priority: int  # 0-100
-    user_tier: UserTier = UserTier.FREE
-    created_at: datetime
-    updated_at: datetime
-    retry_count: int = 0
-    max_retries: int = 3
-    trace_id: Optional[str] = None
-
-class ChunkingMessage(EmbeddingJobMessage):
-    content: str
-    content_type: str  # "text", "document", etc.
-    chunking_config: ChunkingConfig
-    source_metadata: Dict[str, Any] = {}
-
-class EmbeddingMessage(EmbeddingJobMessage):
-    chunks: List[ChunkData]
-    embedding_model_config: Dict[str, Any]
-    model_provider: str  # e.g., "huggingface", "openai"
-    batch_size: Optional[int] = None
-
-class StorageMessage(EmbeddingJobMessage):
-    embeddings: List[EmbeddingData]
-    collection_name: str
-    total_chunks: int
-    processing_time_ms: int
-    metadata: Dict[str, Any] = {}
-```
+Note: The remaining sections below describe the current Redis Streams pipeline.
 
 ## Scheduling & Priority
 

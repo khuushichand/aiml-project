@@ -510,10 +510,9 @@ for await (const chunk of rag.streamSearch('Explain quantum computing')) {
 ### Python
 
 ```python
-import requests
 import json
 from typing import List, Dict, Optional, Generator
-import sseclient
+from urllib.request import Request, urlopen
 
 class RAGClient:
     def __init__(self, base_url: str, api_key: str):
@@ -540,14 +539,14 @@ class RAGClient:
             'databases': databases or ['media_db'],
             'keywords': keywords
         }
-
-        response = requests.post(
+        req = Request(
             f'{self.base_url}/search',
+            data=json.dumps(data).encode('utf-8'),
             headers=self.headers,
-            json=data
+            method='POST',
         )
-        response.raise_for_status()
-        return response.json()
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode('utf-8'))
 
     def ask(
         self,
@@ -561,14 +560,14 @@ class RAGClient:
             'conversation_id': conversation_id,
             'search_databases': databases or ['media_db']
         }
-
-        response = requests.post(
+        req = Request(
             f'{self.base_url}/agent',
+            data=json.dumps(data).encode('utf-8'),
             headers=self.headers,
-            json=data
+            method='POST',
         )
-        response.raise_for_status()
-        return response.json()
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode('utf-8'))
 
     def research(
         self,
@@ -585,23 +584,36 @@ class RAGClient:
                 'stream': stream
             }
         }
-
-        response = requests.post(
-            f'{self.base_url}/agent/advanced',
-            headers=self.headers,
-            json=data,
-            stream=stream
-        )
-        response.raise_for_status()
-
         if stream:
-            client = sseclient.SSEClient(response)
-            for event in client.events():
-                if event.data:
-                    data = json.loads(event.data)
-                    yield data.get('content', '')
+            req = Request(
+                f'{self.base_url}/agent/advanced',
+                data=json.dumps(data).encode('utf-8'),
+                headers=self.headers,
+                method='POST',
+            )
+            with urlopen(req) as resp:
+                for raw in resp:
+                    line = raw.decode('utf-8', errors='replace').strip()
+                    if not line.startswith('data:'):
+                        continue
+                    payload = line[len('data:'):].strip()
+                    if payload == '[DONE]':
+                        break
+                    try:
+                        event = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    yield event.get('content', '')
         else:
-            yield response.json()['response']
+            req = Request(
+                f'{self.base_url}/agent/advanced',
+                data=json.dumps(data).encode('utf-8'),
+                headers=self.headers,
+                method='POST',
+            )
+            with urlopen(req) as resp:
+                payload = json.loads(resp.read().decode('utf-8'))
+                yield payload['response']
 
     def advanced_search(
         self,
@@ -625,14 +637,14 @@ class RAGClient:
 
         if weights:
             data['hybrid_config'] = weights
-
-        response = requests.post(
+        req = Request(
             f'{self.base_url}/search/advanced',
+            data=json.dumps(data).encode('utf-8'),
             headers=self.headers,
-            json=data
+            method='POST',
         )
-        response.raise_for_status()
-        return response.json()
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode('utf-8'))
 
 
 # Usage example

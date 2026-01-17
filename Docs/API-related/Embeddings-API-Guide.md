@@ -38,7 +38,8 @@ curl -X POST "http://localhost:8000/api/v1/embeddings" \
 ### Python Quick Start
 
 ```python
-import requests
+import json
+from urllib.request import Request, urlopen
 
 # Configuration
 API_URL = "http://localhost:8000/api/v1/embeddings"
@@ -53,12 +54,18 @@ headers = {
     "Content-Type": "application/json"
 }
 
-response = requests.post(API_URL, headers=headers, json={
+payload = {
     "input": "Transform this text into embeddings",
-    "model": "text-embedding-3-small"
-})
-
-embeddings = response.json()["data"][0]["embedding"]
+    "model": "text-embedding-3-small",
+}
+req = Request(
+    API_URL,
+    data=json.dumps(payload).encode("utf-8"),
+    headers=headers,
+    method="POST",
+)
+with urlopen(req) as resp:
+    embeddings = json.loads(resp.read().decode("utf-8"))["data"][0]["embedding"]
 print(f"Embedding dimensions: {len(embeddings)}")
 ```
 
@@ -239,6 +246,9 @@ Note: When the embeddings implementation is unavailable (e.g., optional dependen
 ### Media Embeddings API (Chunk and store document vectors)
 
 Use the media-specific endpoints to generate and persist embeddings for an ingested media item’s text content.
+If a media type can legitimately have no text (e.g., audio/video without transcripts), set
+`allow_zero_embeddings_media_types` in `Config_Files/config.txt` (or `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES`) so
+jobs complete successfully with `embedding_count=0` instead of failing.
 
 #### Start Embedding for a Media Item
 ```http
@@ -453,8 +463,28 @@ Note: Some errors use an OpenAI-style envelope, but most validation errors are r
 
 #### Python
 ```python
+import json
 import time
 from typing import Optional
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+def request_json(payload):
+    req = Request(
+        API_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
+        method="POST",
+    )
+    try:
+        with urlopen(req) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except HTTPError as err:
+        body = err.read().decode("utf-8")
+        try:
+            return err.code, json.loads(body)
+        except json.JSONDecodeError:
+            return err.code, body
 
 def create_embeddings_with_retry(
     text: str,
@@ -465,22 +495,18 @@ def create_embeddings_with_retry(
 
     for attempt in range(max_retries):
         try:
-            response = requests.post(
-                API_URL,
-                headers={"Authorization": f"Bearer {API_KEY}"},
-                json={"input": text, "model": "text-embedding-3-small"}
-            )
+            status, data = request_json({"input": text, "model": "text-embedding-3-small"})
 
-            if response.status_code == 200:
-                return response.json()["data"][0]["embedding"]
+            if status == 200:
+                return data["data"][0]["embedding"]
 
-            elif response.status_code == 429:
+            elif status == 429:
                 # Rate limited - wait and retry
                 wait_time = backoff_factor ** attempt
                 print(f"Rate limited. Waiting {wait_time}s...")
                 time.sleep(wait_time)
 
-            elif response.status_code >= 500:
+            elif status >= 500:
                 # Server error - retry
                 wait_time = backoff_factor ** attempt
                 print(f"Server error. Retrying in {wait_time}s...")
@@ -488,10 +514,10 @@ def create_embeddings_with_retry(
 
             else:
                 # Client error - don't retry
-                print(f"Error: {response.json()}")
+                print(f"Error: {data}")
                 return None
 
-        except requests.exceptions.RequestException as e:
+        except URLError as e:
             print(f"Network error: {e}")
             if attempt < max_retries - 1:
                 time.sleep(backoff_factor ** attempt)
@@ -580,17 +606,20 @@ class RateLimitHandler:
 ### Python SDK
 
 ```python
+import json
+from typing import List, Optional, Union
+from urllib.request import Request, urlopen
+
 class EmbeddingsClient:
     """Python client for Embeddings API"""
 
     def __init__(self, api_url: str, api_key: str):
-        self.api_url = api_url
+        self.api_url = api_url.rstrip("/")
         self.api_key = api_key
-        self.session = requests.Session()
-        self.session.headers.update({
+        self.headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        })
+            "Content-Type": "application/json",
+        }
 
     def create_embedding(
         self,
@@ -604,17 +633,18 @@ class EmbeddingsClient:
         if provider:
             headers["x-provider"] = provider
 
-        response = self.session.post(
+        payload = {
+            "input": text,
+            "model": model,
+        }
+        req = Request(
             f"{self.api_url}/embeddings",
-            headers=headers,
-            json={
-                "input": text,
-                "model": model
-            }
+            data=json.dumps(payload).encode("utf-8"),
+            headers={**self.headers, **headers},
+            method="POST",
         )
-
-        response.raise_for_status()
-        data = response.json()
+        with urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
 
         return [item["embedding"] for item in data["data"]]
 
@@ -989,9 +1019,10 @@ embedding = response.data[0].embedding
 ### LangChain Integration
 
 ```python
-import requests
+import json
 from langchain.embeddings.base import Embeddings
 from typing import List
+from urllib.request import Request, urlopen
 
 class TLDWEmbeddings(Embeddings):
     """Custom LangChain embeddings using TLDW API"""
@@ -1001,14 +1032,22 @@ class TLDWEmbeddings(Embeddings):
         self.api_key = api_key
         self.model = model
 
+    def _request_json(self, payload):
+        req = Request(
+            f"{self.api_url}/embeddings",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed documents"""
-        response = requests.post(
-            f"{self.api_url}/embeddings",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"input": texts, "model": self.model}
-        )
-        data = response.json()
+        data = self._request_json({"input": texts, "model": self.model})
         return [item["embedding"] for item in data["data"]]
 
     def embed_query(self, text: str) -> List[float]:
@@ -1033,8 +1072,10 @@ vectorstore = Chroma.from_documents(
 ### LlamaIndex Integration
 
 ```python
+import json
 from llama_index.embeddings.base import BaseEmbedding
 from typing import List
+from urllib.request import Request, urlopen
 
 class TLDWEmbedding(BaseEmbedding):
     """LlamaIndex embedding using TLDW API"""
@@ -1047,12 +1088,18 @@ class TLDWEmbedding(BaseEmbedding):
 
     def _get_embedding(self, text: str) -> List[float]:
         """Get embedding for text"""
-        response = requests.post(
+        req = Request(
             f"{self.api_url}/embeddings",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"input": text, "model": self.model}
+            data=json.dumps({"input": text, "model": self.model}).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
         )
-        return response.json()["data"][0]["embedding"]
+        with urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data["data"][0]["embedding"]
 
     def _get_text_embedding(self, text: str) -> List[float]:
         """Required by LlamaIndex"""
@@ -1108,10 +1155,14 @@ time.sleep(min(2 ** attempt, 60))
 ```python
 # Problem: Connection refused
 # Solution: Check service is running
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 try:
-    response = requests.get(f"{API_URL}/health")
-    assert response.status_code == 200
-except:
+    req = Request(f"{API_URL}/health", method="GET")
+    with urlopen(req) as resp:
+        assert resp.status == 200
+except (HTTPError, URLError):
     print("Service is not available")
 ```
 

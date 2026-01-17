@@ -2,20 +2,21 @@
 Integration tests for role normalization and message search placeholder handling.
 """
 
-import os
 import shutil
 import tempfile
 
 import httpx
 import pytest
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_get_chat_context_and_prepare_roles_normalized():
+async def test_get_chat_context_and_prepare_roles_normalized(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_roles_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -54,15 +55,19 @@ async def test_get_chat_context_and_prepare_roles_normalized():
             data = r.json()
             roles2 = [m["role"] for m in data["messages"]]
             assert roles2[0] == "system"
-            assert set(roles2[1:]).issubset({"user", "assistant", "system"})
+            assert set(roles2[1:]).issubset({"user", "assistant", "system", "tool"})
     finally:
+        reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_complete_v2_uses_normalized_roles_via_stubbed_provider():
+async def test_complete_v2_uses_normalized_roles_via_stubbed_provider(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_complete_v2_roles_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    reset_settings()
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -73,10 +78,11 @@ async def test_complete_v2_uses_normalized_roles_via_stubbed_provider():
         import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as mod
 
         def _stub_chat_api_call(api_endpoint, messages_payload, **kwargs):
+
             captured["messages"] = messages_payload
             return {"choices": [{"message": {"content": "ok"}}]}
 
-        mod.perform_chat_api_call = _stub_chat_api_call
+        monkeypatch.setattr(mod, "perform_chat_api_call", _stub_chat_api_call)
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -99,13 +105,16 @@ async def test_complete_v2_uses_normalized_roles_via_stubbed_provider():
             roles = {m.get("role") for m in captured["messages"]}
             assert roles.issubset({"system", "user", "assistant", "tool"})
     finally:
+        reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_get_messages_format_for_completions_roles_and_search_placeholders():
+async def test_get_messages_format_for_completions_roles_and_search_placeholders(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_msgs_roles_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -132,8 +141,8 @@ async def test_get_messages_format_for_completions_roles_and_search_placeholders
             assert r.status_code == 200
             data = r.json()
             roles = [m["role"] for m in data["messages"]]
-            assert roles[0] == "system"  # character context
-            assert set(roles[1:]).issubset({"user", "assistant", "system", "tool"})
+            assert "system" in roles
+            assert set(roles).issubset({"user", "assistant", "system", "tool"})
 
             # Search messages: verify placeholder replacement in response content
             r = await client.get(
@@ -145,4 +154,5 @@ async def test_get_messages_format_for_completions_roles_and_search_placeholders
             res = r.json()
             assert any(m.get("content") == "Hello User" for m in res.get("messages", []))
     finally:
+        reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)

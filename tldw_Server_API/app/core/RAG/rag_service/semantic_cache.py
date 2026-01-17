@@ -608,42 +608,92 @@ def _resolve_default_cache_dir() -> Optional[Path]:
         # Resolve to an absolute path so downstream checks can reliably enforce containment.
         _DEFAULT_CACHE_DIR = Path(base_dir).expanduser().resolve(strict=False)
         return _DEFAULT_CACHE_DIR
+    project_root = None
     try:
         from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
         cfg = load_and_log_configs() or {}
         project_root = cfg.get("PROJECT_ROOT")
-        if project_root:
+    except (ImportError, AttributeError, KeyError, TypeError) as exc:
+        logger.warning("Semantic cache: could not load config for PROJECT_ROOT: {}", exc)
+        return None
+    if project_root:
+        try:
             # Use a fixed subdirectory under the project root for cache storage.
             _DEFAULT_CACHE_DIR = (Path(project_root) / "Databases" / "cache").expanduser().resolve(strict=False)
             return _DEFAULT_CACHE_DIR
-    except Exception:
-        return None
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.error(
+                "Semantic cache: failed to resolve cache path from PROJECT_ROOT {}: {}",
+                project_root,
+                exc,
+            )
+            return None
+        except Exception:
+            logger.exception(
+                "Semantic cache: unexpected error resolving cache path from PROJECT_ROOT {}",
+                project_root,
+            )
+            raise
     return None
-    # Ensure we are working with a resolved base directory path.
-    try:
-        base_dir_resolved = base_dir.expanduser().resolve(strict=False)
-    except Exception:
-        return None
 
 
 def _default_persist_path(namespace_key: str) -> Optional[str]:
     base_dir = _resolve_default_cache_dir()
     if not base_dir:
         return None
+    try:
+        base_dir_resolved = base_dir.expanduser().resolve(strict=False)
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Semantic cache: failed to resolve base dir {} for default persist path: {}",
+            base_dir,
+            exc,
+        )
+        return None
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error resolving base dir {} for default persist path",
+            base_dir,
+        )
+        raise
     # Normalize and bound the namespace key before embedding it in the filename.
     safe_key = _normalize_namespace_key_for_filename(namespace_key)
     candidate = base_dir_resolved / f"semantic_cache_{safe_key}.json"
     try:
         full_path = candidate.resolve(strict=False)
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Semantic cache: failed to resolve default persist path {}: {}",
+            candidate,
+            exc,
+        )
         return None
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error resolving default persist path {}",
+            candidate,
+        )
+        raise
     # Verify that the final path is contained within the base cache directory.
     try:
         if not (full_path == base_dir_resolved or base_dir_resolved in full_path.parents):
             logger.warning(f"Refusing to use out-of-root cache path: {full_path}")
             return None
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Semantic cache: failed to validate cache path {} against base dir {}: {}",
+            full_path,
+            base_dir_resolved,
+            exc,
+        )
         return None
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error validating cache path {} against base dir {}",
+            full_path,
+            base_dir_resolved,
+        )
+        raise
     return str(full_path)
 
 
@@ -666,7 +716,12 @@ def _sanitize_persist_path(persist_path: Optional[str], namespace_key: str) -> O
         return None
     try:
         base_dir_resolved = base_dir.expanduser().resolve(strict=False)
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Semantic cache: failed to resolve base cache dir {} in sanitize: {}",
+            base_dir,
+            exc,
+        )
         # If we cannot resolve the base directory safely, use the default path or disable.
         fallback = _default_persist_path(namespace_key)
         if fallback:
@@ -674,15 +729,28 @@ def _sanitize_persist_path(persist_path: Optional[str], namespace_key: str) -> O
             return fallback
         logger.warning("Failed to resolve base cache dir; persistence disabled.")
         return None
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error resolving base cache dir {} in sanitize",
+            base_dir,
+        )
+        raise
     candidate_path = Path(persist_path).expanduser()
     try:
         if candidate_path.is_absolute():
             resolved_path = candidate_path.resolve(strict=False)
         else:
             resolved_path = (base_dir_resolved / candidate_path).resolve(strict=False)
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error("Semantic cache: failed to resolve persist_path {}: {}", persist_path, exc)
         logger.warning("Failed to resolve semantic cache persist_path; using default cache path.")
         return _default_persist_path(namespace_key)
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error resolving persist_path {}",
+            persist_path,
+        )
+        raise
     if not resolved_path.is_relative_to(base_dir_resolved):
         fallback = _default_persist_path(namespace_key)
         if fallback:
@@ -730,3 +798,19 @@ def get_shared_cache(
                 cache = cache_cls(similarity_threshold=similarity_threshold)  # type: ignore[call-arg]
             _SHARED_CACHES[cache_key] = cache
     return cache
+
+
+def clear_shared_caches(namespace: Optional[str] = None) -> int:
+    """Clear shared semantic caches, optionally scoped to a namespace."""
+    cleared = 0
+    namespace_key = _normalize_namespace(namespace)
+    with _SHARED_CACHE_LOCK:
+        for cache_key, cache in list(_SHARED_CACHES.items()):
+            _, key_namespace, *_ = cache_key
+            if namespace_key is None or key_namespace == namespace_key:
+                try:
+                    cache.clear()
+                except Exception:
+                    pass
+                cleared += 1
+    return cleared

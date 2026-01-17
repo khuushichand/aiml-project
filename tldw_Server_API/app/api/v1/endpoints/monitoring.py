@@ -71,6 +71,13 @@ def get_topic_monitoring_db() -> TopicMonitoringDB:
         msg = f"Invalid MONITORING_ALERTS_DB={raw_db_path!r}: {exc}"
         logger.error(msg)
         raise RuntimeError(msg) from exc
+    if not db_path.is_absolute() and db_path.parent == Path("."):
+        msg = (
+            "MONITORING_ALERTS_DB must include a directory when using a relative path "
+            f"(got {raw_db_path!r}). Use an absolute path or include a directory component."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     if db_path.is_absolute():
         db = TopicMonitoringDB(db_path=str(db_path.resolve()))
@@ -135,6 +142,11 @@ async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
             lambda: get_topic_monitoring_service().upsert_watchlist(payload)
         )
         return WatchlistUpsertResponse(watchlist=wl, status="ok")
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
     except HTTPException:
         # Propagate existing HTTP errors without masking them
         raise
@@ -168,9 +180,24 @@ async def delete_watchlist(watchlist_id: str) -> WatchlistDeleteResponse:
     tags=["monitoring"],
     summary="Reload watchlists from file",
 )
-async def reload_watchlists() -> WatchlistsReloadResponse:
+async def reload_watchlists(
+    delete_missing: bool = Query(False, description="Delete config-managed watchlists missing from file"),
+    disable_missing: bool = Query(False, description="Disable config-managed watchlists missing from file"),
+    include_unmanaged: bool = Query(False, description="Apply reload to non-config watchlists"),
+) -> WatchlistsReloadResponse:
     """Reload watchlist definitions from the backing configuration source."""
-    await asyncio.to_thread(lambda: get_topic_monitoring_service().reload())
+    if delete_missing and disable_missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="delete_missing and disable_missing are mutually exclusive",
+        )
+    await asyncio.to_thread(
+        lambda: get_topic_monitoring_service().reload(
+            delete_missing=delete_missing,
+            disable_missing=disable_missing,
+            include_unmanaged=include_unmanaged,
+        )
+    )
     return WatchlistsReloadResponse(status="ok")
 
 
@@ -182,6 +209,11 @@ async def reload_watchlists() -> WatchlistsReloadResponse:
 )
 async def list_alerts(
     user_id: str | None = Query(None, description="Filter by user id"),
+    source: str | None = Query(None, description="Filter by source"),
+    rule_category: str | None = Query(None, description="Filter by rule category"),
+    rule_severity: str | None = Query(None, description="Filter by rule severity"),
+    scope_type: str | None = Query(None, description="Filter by scope type"),
+    scope_id: str | None = Query(None, description="Filter by scope id"),
     since: str | None = Query(None, description="ISO 8601 timestamp inclusive lower bound"),
     unread_only: bool = Query(False, description="Only unread alerts"),
     limit: int = Query(100, ge=1, le=500),
@@ -193,6 +225,11 @@ async def list_alerts(
     rows = await asyncio.to_thread(
         db.list_alerts,
         user_id=user_id,
+        source=source,
+        rule_category=rule_category,
+        rule_severity=rule_severity,
+        scope_type=scope_type,
+        scope_id=scope_id,
         since_iso=since,
         unread_only=unread_only,
         limit=limit,

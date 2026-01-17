@@ -13,7 +13,7 @@ class RaisingState:
 
 class DummyRequest:
     def __init__(self):
-        # Headers mimic API key header presence
+             # Headers mimic API key header presence
         self.headers = {"X-API-KEY": "dummy-key"}
         # Simulate request path for logging context
         self.scope = {"path": "/unit/llm-guard"}
@@ -43,6 +43,7 @@ async def test_enforce_llm_budget_logs_and_raises_on_state_failure(monkeypatch):
     logs = []
 
     def sink(message):
+
         logs.append(message)
 
     sink_id = logger.add(sink, level="ERROR")

@@ -1,0 +1,118 @@
+# Topic Monitoring & Watchlists (Design)
+
+Goal: Provide a configurable, privacy-respecting content monitoring feature that detects when specified topics are mentioned in user activity (chat input/output, ingestion, notes, RAG queries) and emits non-blocking alerts for admins/owners to review.
+
+## Scope (Phase 1)
+- Rule-based “watchlists” (literals/regex) with optional categories and severities.
+- Scopes: global (all users), per-user; basic support for per-team and per-org when caller provides membership.
+- Integration points: chat input and output; ingestion; notes (create/update/bulk); RAG search (unified/simple/advanced). Hooks emit alerts but NEVER block content.
+- Alert storage and retrieval API with mark-as-read.
+- Admin endpoints to manage watchlists and list alerts.
+
+## Non-Goals (Phase 1)
+- Email/SMS/Slack/webhook delivery (planned in Phase 2).
+- Real-time WS push to WebUI (planned in Phase 2).
+- ML classifiers or external moderation APIs (local-first only for now).
+
+## Requirements
+- Opt-in and auditable: explicit configuration enabling; record the alert but do not alter the content flow.
+- Enablement gate: `MONITORING_ENABLED=true` (or `monitoring.enabled` in config) must be set to activate scanning.
+- Safe by default: local regex engine, bounded scan length, DoS-safe pattern validation (re-use checks from ModerationService).
+- Matching policy must be robust: define normalization, case folding, word-boundary behavior, and max scan length for literals and regex.
+- Transparent: Admins can inspect effective configuration and rules.
+- Source of truth: DB table; `monitoring_watchlists.json` is an optional seed/import. Reload is an idempotent upsert and does not delete existing watchlists without explicit flagging.
+- Evaluation order: apply `scope_type=global` watchlists before user-specific scopes (alerts can fire from both).
+
+## Matching Policy (Phase 1)
+- Preprocessing: none; use raw input text as-is to mirror ModerationService (no normalization or zero-width stripping).
+- Case handling: all rules are case-insensitive by default (always `re.IGNORECASE`). Regex flags are additive and cannot disable ignorecase.
+- Word boundaries (literals): none. Literal patterns are substring matches via `re.escape(...)`. Use regex rules for boundary-sensitive behavior.
+- Regex format: `/pattern/flags` where flags may include `i` (ignorecase), `m` (multiline), `s` (dotall), `x` (verbose). Unknown flags are ignored. If no trailing slash is present, treat as literal.
+- Regex safety: reuse ModerationService heuristics (reject if length > 2000, nested quantifiers, or >100 groups).
+- Max scan length: use ModerationService chunking with `MODERATION_MAX_SCAN_CHARS` / `moderation.max_scan_chars` (default 200000). Scans cover the full text in overlapping chunks (10% overlap, min 32, max 1024).
+- Future parity: any changes to normalization, boundary handling, or case rules must be implemented in both ModerationService and MonitoringService together to avoid mismatched behavior.
+
+## Data Model
+- WatchlistRule
+  - `rule_id` (optional stable id; used for updates and dedupe)
+  - `pattern` (literal or `/regex/`)
+  - `category` (e.g., `self_harm`, `adult`, `violence`, `custom`)
+  - `severity` (`info|warning|critical`)
+  - `note` (free-text)
+  - Optional per-rule `tags` set
+
+- Watchlist
+  - `id`, `name`, `description`
+  - `enabled`
+  - `scope_type` (`global|user|team|org`)
+  - `scope_id` (string; null for `global`)
+  - `managed_by` (`config|api`) to control reload behavior
+  - `rules: List[WatchlistRule]`
+
+- Alert (SQLite table `topic_alerts`)
+  - `id` (PK), `created_at`, `user_id`
+  - `scope_type`, `scope_id`
+  - `source` (`chat.input|chat.output|ingestion|notes|rag`)
+  - `watchlist_id`, `rule_id`, `rule_category`, `rule_severity`, `pattern`
+  - `source_id` (message/note/ingestion id), `chunk_id` (optional for streams)
+  - `text_snippet` (truncated), `metadata` (JSON; include similarity/dedupe hash)
+  - `is_read` (bool), `read_at`
+
+## Files & Placement
+- Core: `tldw_Server_API/app/core/Monitoring/topic_monitoring_service.py`
+- Schemas: `tldw_Server_API/app/api/v1/schemas/monitoring_schemas.py`
+- Endpoints: `tldw_Server_API/app/api/v1/endpoints/monitoring.py`
+- Config (optional): `tldw_Server_API/Config_Files/monitoring_watchlists.json`
+
+## API Endpoints (Phase 1)
+- `GET  /api/v1/monitoring/watchlists`        list watchlists (admin)
+- `POST /api/v1/monitoring/watchlists`        create/update watchlist (admin)
+- `DELETE /api/v1/monitoring/watchlists/{id}` delete watchlist (admin)
+- `GET  /api/v1/monitoring/alerts`            list alerts (admin; filters: user_id, since, unread)
+- `POST /api/v1/monitoring/alerts/{id}/read`  mark alert as read (admin)
+- `POST /api/v1/monitoring/reload`            reload config file (admin)
+
+## Reload Semantics (Phase 1)
+- Default mode is `upsert` only. No deletes or disables unless explicitly requested.
+- Watchlist identity: use `id` when provided; otherwise use the natural key `(name, scope_type, scope_id)`.
+- Rules: use `rule_id` when provided; otherwise compute a stable `rule_id` hash from `(pattern, category, severity, note, tags)` to prevent duplicates on reload.
+- Managed scope: reload only touches watchlists with `managed_by=config` unless a request flag opts in to unmanaged items.
+- Optional flags (request body or query): `delete_missing=true` (delete config-managed watchlists absent from config), `disable_missing=true` (set `enabled=false` instead of deleting). Flags are mutually exclusive.
+
+## Integration (Phase 1)
+At moderation/processing sites in endpoints, MonitoringService is called for:
+- chat input (pre-LLM) with `source=chat.input`
+- chat output (stream and non-stream) with `source=chat.output` (streaming: emit per chunk; similarity-based dedupe)
+- ingestion pipeline with `source=ingestion`
+- notes creation/update/bulk with `source=notes.*`
+- RAG queries with `source=rag.*`
+
+Monitoring emits alerts without changing moderation behavior or endpoint results.
+
+## Streaming Dedupe (Phase 1)
+- Dedupe is per stream (`source_id`) and per rule (`rule_id`) across a sliding window of recent chunks.
+- Similarity uses the same raw text passed to matching. Default algorithm: SimHash over word 3-grams; treat Hamming distance <= 3 as a duplicate.
+- Suggested metadata fields: `stream_id`, `chunk_id`, `chunk_seq`, `dedupe_hash`, `dedupe_algo=simhash`, `dedupe_similarity`, `dedupe_window_ms`, `scan_truncated`.
+- If a chunk is deduped, skip alert creation; otherwise store the similarity metrics in `metadata`.
+
+## Security & Privacy
+- Admin-only APIs. Extend to org/team leads later.
+- Opt-in via config or explicit creation of watchlists.
+- Store minimal snippets (e.g., first 200 chars around the match).
+- All local; no external calls.
+
+## Notifications (Phase 1 scaffolding)
+- Local JSONL file sink gated by severity threshold.
+- Configure via env or config:
+  - `MONITORING_NOTIFY_ENABLED`, `MONITORING_NOTIFY_MIN_SEVERITY`, `MONITORING_NOTIFY_FILE`
+  - Placeholder knobs: `MONITORING_NOTIFY_WEBHOOK_URL`, `MONITORING_NOTIFY_EMAIL_TO` (not delivered offline)
+
+## Phase 2 (planned)
+- Delivery channels: email, webhook, Slack.
+- WebSocket push to WebUI for admins.
+- ML topic classifiers & customizable taxonomies.
+- Org/team scoping UI in WebUI.
+
+## Tests
+- Unit tests for rule parsing, safe regex checks, and alert creation.
+- Endpoint tests for list/create/reload/alerts.

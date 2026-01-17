@@ -28,6 +28,7 @@ class _FakeResponse:
         return _U(self._url.path)
 
     def raise_for_status(self):
+
         return None
 
     async def aiter_bytes(self, chunk_size=8192):  # pragma: no cover - simple stream

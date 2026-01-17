@@ -118,6 +118,7 @@ class TestCircuitBreaker:
         breaker = CircuitBreaker("test", config)
 
         def sync_func(x, y):
+
             return x + y
 
         result = await breaker.call(sync_func, 2, 3)
@@ -125,6 +126,7 @@ class TestCircuitBreaker:
         assert breaker.stats.successful_calls == 1
 
     def test_circuit_breaker_state_reporting(self):
+
         """Test circuit breaker state reporting."""
         config = CircuitBreakerConfig(failure_threshold=5)
         breaker = CircuitBreaker("test", config)
@@ -136,6 +138,7 @@ class TestCircuitBreaker:
         assert state["config"]["failure_threshold"] == 5
 
     def test_circuit_breaker_reset(self):
+
         """Test circuit breaker reset."""
         breaker = CircuitBreaker("test")
         breaker.stats.total_calls = 100
@@ -151,6 +154,7 @@ class TestLLMCircuitBreaker:
     """Test LLM-specific circuit breaker."""
 
     def test_provider_specific_configs(self):
+
         """Test that different providers get different configs."""
         llm_breaker = LLMCircuitBreaker()
 
@@ -182,6 +186,7 @@ class TestLLMCircuitBreaker:
         assert states["openai"]["stats"]["successful_calls"] == 1
 
     def test_reset_all_breakers(self):
+
         """Test resetting all circuit breakers."""
         llm_breaker = LLMCircuitBreaker()
 

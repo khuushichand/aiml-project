@@ -7,6 +7,8 @@ from tldw_Server_API.app.services import document_processing_service as dps
 
 
 def _make_bad_zip_bytes() -> bytes:
+
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         # Add a traversal entry
@@ -15,6 +17,8 @@ def _make_bad_zip_bytes() -> bytes:
 
 
 def test_safe_zip_extraction_blocks_traversal(tmp_path):
+
+
     bad = tmp_path / "bad.zip"
     bad.write_bytes(_make_bad_zip_bytes())
     with pytest.raises(Exception):

@@ -20,6 +20,8 @@ import pytest
 
 from fixtures import APIClient, create_test_file, cleanup_test_file, AssertionHelpers
 
+TEST_PASSWORD = "Tlp9!ZxVq8@M"
+
 
 def _require_multi_user(api_client: APIClient):
     info = api_client.health_check()
@@ -33,29 +35,31 @@ class TestRBACAdminAccess:
 
     def test_01_non_admin_forbidden_admin_routes(self, api_client):
         _require_multi_user(api_client)
-        # Register and login a regular user
+        # Register and login a regular user with an isolated client
+        user_client = APIClient(api_client.base_url)
         creds = {
             "username": f"e2e_rbac_user_{int(time.time())}",
             "email": f"e2e_rbac_{uuid.uuid4().hex[:8]}@example.com",
-            "password": "Password123!",
+            "password": TEST_PASSWORD,
         }
         try:
-            api_client.register(**creds)
+            user_client.register(**creds)
         except httpx.HTTPStatusError:
             pass
-        api_client.login(creds["username"], creds["password"])  # sets Authorization header
+        user_client.login(creds["username"], creds["password"])  # sets Authorization header
 
         # Non-admin should get 403 on admin routes
-        r = api_client.client.get("/api/v1/admin/users")
+        r = user_client.client.get("/api/v1/admin/users")
         assert r.status_code == 403
 
-        rc = api_client.client.post(
+        rc = user_client.client.post(
             "/api/v1/admin/registration-codes",
             json={"max_uses": 1, "expiry_days": 7, "role_to_grant": "user"},
         )
         assert rc.status_code == 403
 
     def test_02_admin_bearer_can_access_admin_endpoints(self, api_client):
+
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
@@ -73,6 +77,7 @@ class TestRBACAdminAccess:
         assert r3.status_code == 200
 
     def test_03_admin_registration_codes_crud(self, api_client):
+
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
@@ -134,7 +139,7 @@ class TestMultiUserIsolation:
         ua = {
             "username": f"userA_{int(time.time())}",
             "email": f"userA_{uuid.uuid4().hex[:6]}@ex.com",
-            "password": "Password123!",
+            "password": TEST_PASSWORD,
         }
         try:
             client_a.register(**ua)
@@ -146,7 +151,7 @@ class TestMultiUserIsolation:
         ub = {
             "username": f"userB_{int(time.time())}",
             "email": f"userB_{uuid.uuid4().hex[:6]}@ex.com",
-            "password": "Password123!",
+            "password": TEST_PASSWORD,
         }
         try:
             client_b.register(**ub)
@@ -203,8 +208,8 @@ class TestMultiUserIsolation:
 
         # Login/register both users
         n = int(time.time())
-        ua = {"username": f"userA_jobs_{n}", "email": f"userA_jobs_{n}@ex.com", "password": "Password123!"}
-        ub = {"username": f"userB_jobs_{n}", "email": f"userB_jobs_{n}@ex.com", "password": "Password123!"}
+        ua = {"username": f"userA_jobs_{n}", "email": f"userA_jobs_{n}@ex.com", "password": TEST_PASSWORD}
+        ub = {"username": f"userB_jobs_{n}", "email": f"userB_jobs_{n}@ex.com", "password": TEST_PASSWORD}
         for c, creds in ((client_a, ua), (client_b, ub)):
             try:
                 c.register(**creds)
@@ -244,7 +249,7 @@ class TestMultiUserIsolation:
         c = APIClient(base)
         _require_multi_user(c)
 
-        creds = {"username": f"vk_{int(time.time())}", "email": f"vk_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_{int(time.time())}", "email": f"vk_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             c.register(**creds)
         except httpx.HTTPStatusError:
@@ -261,18 +266,22 @@ class TestMultiUserIsolation:
         assert key, vk.text
 
         # Use X-API-KEY only to access a protected route (media list)
-        with httpx.Client(base_url=base, timeout=30) as hc:
-            r = hc.get("/api/v1/media/", headers={"X-API-KEY": key})
+        vk_client = APIClient(base)
+        try:
+            r = vk_client.client.get("/api/v1/media/", headers={"X-API-KEY": key})
             assert r.status_code == 200
             data = r.json()
             assert isinstance(data, dict)
             # Structure may vary; just ensure we have a response payload without 401/403
+        finally:
+            vk_client.close()
 
 
 class TestAdminMintedVirtualKeyConstraints:
     """Admin mints constrained virtual key for another user and validates enforcement."""
 
     def test_20_admin_mints_key_with_allowed_paths_and_methods(self, api_client):
+
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
@@ -281,7 +290,7 @@ class TestAdminMintedVirtualKeyConstraints:
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         # Target user
         user = APIClient(base)
-        creds = {"username": f"vk_admin_{int(time.time())}", "email": f"vk_admin_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_admin_{int(time.time())}", "email": f"vk_admin_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             user.register(**creds)
         except httpx.HTTPStatusError:
@@ -298,6 +307,7 @@ class TestAdminMintedVirtualKeyConstraints:
             json={
                 "name": "vk-rag-only",
                 "expires_in_days": 1,
+                "allowed_endpoints": ["rag.search"],
                 "allowed_paths": ["/api/v1/rag"],
                 "allowed_methods": ["POST"],
             },
@@ -307,31 +317,36 @@ class TestAdminMintedVirtualKeyConstraints:
         key = mk.json().get("key")
         assert key, mk.text
 
-        # Allowed: POST unified RAG search
-        r_ok = user.client.post(
-            "/api/v1/rag/search",
-            json={"query": "test", "sources": ["media_db"], "top_k": 1},
-            headers={"X-API-KEY": key},
-        )
-        assert r_ok.status_code in (200, 404), r_ok.text  # Accept 404 if RAG not wired, but not 401/403
-        assert r_ok.status_code not in (401, 403)
+        vk_client = APIClient(base)
+        try:
+            # Allowed: POST unified RAG search
+            r_ok = vk_client.client.post(
+                "/api/v1/rag/search",
+                json={"query": "test", "sources": ["media_db"], "top_k": 1},
+                headers={"X-API-KEY": key},
+            )
+            assert r_ok.status_code in (200, 404), r_ok.text  # Accept 404 if RAG not wired, but not 401/403
+            assert r_ok.status_code not in (401, 403)
 
-        # Forbidden by path: chat not permitted
-        r_forbid_path = user.client.post(
-            "/api/v1/chat/completions",
-            json={"messages": [{"role": "user", "content": "hi"}], "model": "noop"},
-            headers={"X-API-KEY": key},
-        )
-        assert r_forbid_path.status_code in (401, 403)
+            # Forbidden by path: chat not permitted
+            r_forbid_path = vk_client.client.post(
+                "/api/v1/chat/completions",
+                json={"messages": [{"role": "user", "content": "hi"}], "model": "noop"},
+                headers={"X-API-KEY": key},
+            )
+            assert r_forbid_path.status_code in (401, 403)
 
-        # Forbidden by method: GET on rag path (unified is POST-only)
-        r_forbid_method = user.client.get(
-            "/api/v1/rag/search",
-            headers={"X-API-KEY": key},
-        )
-        assert r_forbid_method.status_code in (401, 403, 405)
+            # Forbidden by method: GET on rag path (unified is POST-only)
+            r_forbid_method = vk_client.client.get(
+                "/api/v1/rag/search",
+                headers={"X-API-KEY": key},
+            )
+            assert r_forbid_method.status_code in (401, 403, 405)
+        finally:
+            vk_client.close()
 
     def test_21_virtual_key_org_team_metadata_propagation(self, api_client):
+
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
@@ -340,7 +355,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_scope_{int(time.time())}", "email": f"vk_scope_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_scope_{int(time.time())}", "email": f"vk_scope_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -414,6 +429,7 @@ class TestAdminMintedVirtualKeyConstraints:
         # We cannot directly introspect metadata.allowed_paths here; enforcement is validated elsewhere
 
     def test_22_virtual_key_org_only_propagation(self, api_client):
+
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
@@ -422,7 +438,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_org_only_{int(time.time())}", "email": f"vk_org_only_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_org_only_{int(time.time())}", "email": f"vk_org_only_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -463,6 +479,7 @@ class TestAdminMintedVirtualKeyConstraints:
         assert ("team_id" not in details) or details.get("team_id") is None
 
     def test_23_virtual_key_team_only_propagation(self, api_client):
+
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
@@ -471,7 +488,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_team_only_{int(time.time())}", "email": f"vk_team_only_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_team_only_{int(time.time())}", "email": f"vk_team_only_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -518,6 +535,7 @@ class TestAdminMintedVirtualKeyConstraints:
         assert details.get("team_id") == team_id
 
     def test_24_virtual_key_path_mismatch_blocks_audio_and_chat(self, api_client):
+
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
@@ -526,7 +544,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_mismatch_{int(time.time())}", "email": f"vk_mismatch_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_mismatch_{int(time.time())}", "email": f"vk_mismatch_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -544,23 +562,28 @@ class TestAdminMintedVirtualKeyConstraints:
         key = mk.json().get("key")
         assert key
 
-        # Chat should be blocked (path not allowed)
-        r_chat = u.client.post(
-            "/api/v1/chat/completions",
-            json={"messages": [{"role": "user", "content": "hello"}], "model": "noop"},
-            headers={"X-API-KEY": key},
-        )
-        assert r_chat.status_code in (401, 403)
+        vk_client = APIClient(base)
+        try:
+            # Chat should be blocked (path not allowed)
+            r_chat = vk_client.client.post(
+                "/api/v1/chat/completions",
+                json={"messages": [{"role": "user", "content": "hello"}], "model": "noop"},
+                headers={"X-API-KEY": key},
+            )
+            assert r_chat.status_code in (401, 403)
 
-        # Audio TTS should be blocked (path not allowed)
-        r_tts = u.client.post(
-            "/api/v1/audio/speech",
-            json={"model": "tts-1", "input": "hello world", "voice": "alloy", "response_format": "mp3"},
-            headers={"X-API-KEY": key},
-        )
-        assert r_tts.status_code in (401, 403)
+            # Audio TTS should be blocked (path not allowed)
+            r_tts = vk_client.client.post(
+                "/api/v1/audio/speech",
+                json={"model": "tts-1", "input": "hello world", "voice": "alloy", "response_format": "mp3"},
+                headers={"X-API-KEY": key},
+            )
+            assert r_tts.status_code in (401, 403)
+        finally:
+            vk_client.close()
 
     def test_25_team_scoped_key_non_member_access_patterns(self, api_client):
+
         """Team-scoped API key for a user not in the team: endpoints that rely on team membership use JWT and deny accordingly.
 
         Note:
@@ -579,7 +602,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_team_nm_{int(time.time())}", "email": f"vk_team_nm_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_team_nm_{int(time.time())}", "email": f"vk_team_nm_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -628,6 +651,7 @@ class TestAdminMintedVirtualKeyConstraints:
         assert r_bearer2.status_code == 200
 
     def test_27_admin_promote_demote_team_role_toggles_access(self, api_client):
+
         """Admin removes and re-adds a user's team membership to change role; access toggles accordingly.
 
         Flow:
@@ -643,7 +667,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_team_role_{int(time.time())}", "email": f"vk_team_role_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_team_role_{int(time.time())}", "email": f"vk_team_role_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -698,6 +722,7 @@ class TestAdminMintedVirtualKeyConstraints:
         assert r3.status_code == 403
 
     def test_26_admin_list_api_keys_fields_no_org_team(self, api_client):
+
         """Explicitly confirm admin list API keys does not expose org_id/team_id; rely on audit log for those."""
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
@@ -707,7 +732,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_list_{int(time.time())}", "email": f"vk_list_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_list_{int(time.time())}", "email": f"vk_list_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -769,6 +794,7 @@ class TestOrgsTeamsRBAC:
     """Admin creates org/team and manages memberships; verifies listings reflect assignments."""
 
     def test_30_org_team_membership_crud(self, api_client):
+
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
@@ -781,7 +807,7 @@ class TestOrgsTeamsRBAC:
 
         # Create two users and obtain their IDs
         for cli, prefix in ((u1, "orgA"), (u2, "orgB")):
-            creds = {"username": f"{prefix}_{int(time.time())}", "email": f"{prefix}_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+            creds = {"username": f"{prefix}_{int(time.time())}", "email": f"{prefix}_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
             try:
                 cli.register(**creds)
             except httpx.HTTPStatusError:
@@ -862,6 +888,7 @@ class TestAdminRoleAssignment:
     """Admin elevates/demotes a user role and verifies admin route access toggles accordingly."""
 
     def test_40_admin_elevate_and_demote_role(self, api_client):
+
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
@@ -870,7 +897,7 @@ class TestAdminRoleAssignment:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         user = APIClient(base)
-        creds = {"username": f"role_toggle_{int(time.time())}", "email": f"role_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"role_toggle_{int(time.time())}", "email": f"role_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             user.register(**creds)
         except httpx.HTTPStatusError:

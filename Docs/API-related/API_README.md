@@ -32,6 +32,9 @@ See also:
   - Export chat history; fetch messages formatted for completions
   - Use Chat API for LLM replies with `conversation_id`/`character_id`
   - See: [API Design](API_Design.md) for character chat endpoints overview
+- Conversation metadata API: list/search, tree view, and analytics under `/api/v1/chat/conversations` and `/api/v1/chat/analytics` (alias: `/api/v1/chats/conversations`)
+  - Includes ranking modes (`bm25|recency|hybrid|topic`) and topic/state filters
+- Knowledge-save API: `POST /api/v1/chat/knowledge/save`
 
 #### RAG (Retrieval-Augmented Generation) - `/api/v1/rag`
 
@@ -52,3 +55,28 @@ Notes:
 For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
 - [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details
+
+#### Media Ingestion - `/api/v1/media`
+
+- `POST /api/v1/media/add` - ingest and persist media (synchronous)
+- `POST /api/v1/media/ingest/jobs` - async ingest (one job per item)
+- `GET /api/v1/media/ingest/jobs/{job_id}` - job status
+- `DELETE /api/v1/media/ingest/jobs/{job_id}` - cancel job
+
+See: [Media Ingest Jobs API](Media_Ingest_Jobs_API.md)
+
+#### Reading List - `/api/v1/reading`
+
+Reading List supports URL capture, clean text extraction, tagging, import/export, and actions (summarize/TTS).
+
+- `POST /api/v1/reading/save` - save a URL
+- `GET /api/v1/reading/items` - list/search items
+- `GET /api/v1/reading/items/{id}` - item detail
+- `PATCH /api/v1/reading/items/{id}` - update metadata
+- `DELETE /api/v1/reading/items/{id}` - delete (soft/hard)
+- `POST /api/v1/reading/items/{id}/summarize` - summarize
+- `POST /api/v1/reading/items/{id}/tts` - TTS audio
+- `POST /api/v1/reading/import` - Pocket/Instapaper import
+- `GET /api/v1/reading/export` - JSONL/ZIP export
+
+See: [Reading List API](Reading_List_API.md)

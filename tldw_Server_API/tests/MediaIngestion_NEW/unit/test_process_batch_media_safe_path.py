@@ -14,6 +14,7 @@ async def test_process_batch_media_warns_on_unsafe_path(monkeypatch, tmp_path):
     unsafe_path = "../escape.txt"
 
     def fake_process_audio_files(**kwargs):
+
         inputs = kwargs.get("inputs", [])
         return {
             "results": [

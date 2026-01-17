@@ -8,6 +8,7 @@ async def test_eval_summarization_parses_geval_dict(monkeypatch, tmp_path):
     runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
 
     def mock_run_geval(*args, **kwargs):
+
         assert kwargs.get("api_name") == "openai"
         assert kwargs.get("api_key") is None
         return {
@@ -62,6 +63,31 @@ async def test_eval_rag_parses_metric_dicts(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_eval_rag_accepts_string_expected(tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+
+    class _FakeRagEval:
+        async def evaluate(self, **kwargs):
+            assert kwargs.get("ground_truth") == "expected answer"
+            return {
+                "metrics": {
+                    "relevance": {"score": 0.7},
+                }
+            }
+
+    runner._rag_evaluator = _FakeRagEval()  # type: ignore
+
+    sample = {
+        "input": {"query": "q", "contexts": ["c"], "response": "r"},
+        "expected": "expected answer",
+    }
+    eval_spec = {"metrics": ["relevance"], "threshold": 0.7}
+
+    result = await runner._eval_rag(sample, eval_spec, {}, "sample_000004")
+    assert result["scores"]["relevance"] == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
 async def test_eval_response_quality_parses_metric_dicts(tmp_path):
     runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
 
@@ -85,3 +111,48 @@ async def test_eval_response_quality_parses_metric_dicts(tmp_path):
     assert result["scores"]["relevance"] == pytest.approx(0.9)
     assert result["scores"]["clarity"] == pytest.approx(0.8)
     assert result["scores"]["overall_quality"] == pytest.approx(0.85)
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_extracts_metric_scores(monkeypatch, tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+
+    async def fake_unified_rag_pipeline(*args, **kwargs):
+        return {
+            "documents": [{"content": "ctx", "id": "doc1"}],
+            "generated_answer": "answer",
+            "timings": {"total": 0.01},
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Evaluations.eval_runner.unified_rag_pipeline",
+        fake_unified_rag_pipeline,
+    )
+
+    class _FakeRagEval:
+        async def evaluate(self, **kwargs):
+            return {
+                "metrics": {
+                    "relevance": {"score": 0.9},
+                },
+                "overall_score": 0.9,
+            }
+
+    runner._rag_evaluator = _FakeRagEval()  # type: ignore
+
+    eval_spec = {
+        "metrics": ["relevance"],
+        "rag_pipeline": {"custom_metrics": False},
+    }
+    samples = [{"input": {"question": "q"}, "expected": {"answer": "a"}}]
+
+    results, usage = await runner._execute_rag_pipeline_run(
+        run_id="run_000001",
+        samples=samples,
+        eval_spec=eval_spec,
+        eval_config={},
+    )
+
+    assert usage == {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
+    per_sample = results["by_config"][0]["per_sample"][0]
+    assert per_sample["scores"]["relevance"] == pytest.approx(0.9)

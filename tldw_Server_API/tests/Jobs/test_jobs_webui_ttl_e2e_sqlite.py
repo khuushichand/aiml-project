@@ -7,6 +7,8 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _set_env(monkeypatch):
+
+
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -32,6 +34,8 @@ def _backdate_runtime(job_id: int, seconds: int):
 
 
 def _get_group(stats, domain, queue, job_type):
+
+
     for row in stats:
         if row["domain"] == domain and row["queue"] == queue and row["job_type"] == job_type:
             return row
@@ -39,6 +43,8 @@ def _get_group(stats, domain, queue, job_type):
 
 
 def test_webui_ttl_e2e_sqlite(monkeypatch, tmp_path):
+
+
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 

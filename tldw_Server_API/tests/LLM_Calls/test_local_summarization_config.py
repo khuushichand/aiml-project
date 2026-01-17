@@ -1,45 +1,33 @@
-from unittest.mock import MagicMock, patch
-
 import pytest
 
+from tldw_Server_API.app.core.LLM_Calls import Summarization_General_Lib as sgl
 from tldw_Server_API.app.core.LLM_Calls.Local_Summarization_Lib import (
-    _resolve_local_llm_url,
     summarize_with_local_llm,
 )
 
 
 @pytest.mark.unit
-def test_resolve_local_llm_url_handles_various_inputs():
-    assert _resolve_local_llm_url(None) == "http://127.0.0.1:8080/v1/chat/completions"
-    assert _resolve_local_llm_url("http://host:9000") == "http://host:9000/v1/chat/completions"
-    assert _resolve_local_llm_url("http://host:9000/v1") == "http://host:9000/v1/chat/completions"
-    assert _resolve_local_llm_url("http://host:9000/v1/chat/completions") == "http://host:9000/v1/chat/completions"
+def test_summarize_with_local_llm_routes_to_adapter(monkeypatch):
+    captured = {}
 
+    def fake_analyze(**kwargs):
+        captured.update(kwargs)
+        return "summary result"
 
-@pytest.mark.unit
-def test_summarize_with_local_llm_uses_configured_endpoint():
-    fake_response = MagicMock()
-    fake_response.raise_for_status.return_value = None
-    fake_response.json.return_value = {
-        "choices": [
-            {"message": {"content": "summary result"}}
-        ]
-    }
+    monkeypatch.setattr(sgl, "analyze", fake_analyze)
 
-    client_ctx = MagicMock()
-    client_ctx.post.return_value = fake_response
-    client_ctx.__enter__.return_value = client_ctx
-    client_ctx.__exit__.return_value = False
+    result = summarize_with_local_llm(
+        "text to summarize",
+        "instruction",
+        temp=0.5,
+        system_message="system",
+        streaming=True,
+    )
 
-    with patch(
-        "tldw_Server_API.app.core.LLM_Calls.Local_Summarization_Lib.httpx.Client",
-        return_value=client_ctx,
-    ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.Local_Summarization_Lib.load_settings",
-        return_value={"local_llm": {"api_ip": "http://configured-host:8888"}},
-    ):
-        summarize_with_local_llm("text to summarize", "instruction", temp=0.5)
-
-    assert client_ctx.post.call_count == 1
-    called_url = client_ctx.post.call_args.args[0]
-    assert called_url == "http://configured-host:8888/v1/chat/completions"
+    assert result == "summary result"
+    assert captured["api_name"] == "local-llm"
+    assert captured["input_data"] == "text to summarize"
+    assert captured["custom_prompt_arg"] == "instruction"
+    assert captured["temp"] == 0.5
+    assert captured["system_message"] == "system"
+    assert captured["streaming"] is True

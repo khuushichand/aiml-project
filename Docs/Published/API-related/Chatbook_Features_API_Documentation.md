@@ -7,7 +7,7 @@ Notes on conventions used here:
 - Base API prefix is `/api/v1`.
 - Authentication uses either `X-API-KEY` (single-user) or `Authorization: Bearer <JWT>` (multi-user).
 - Pagination uses `limit` and `offset` where applicable and responses include a `total` field in the body (no page/per_page headers).
-- Rate limits are applied per-endpoint via SlowAPI decorators and may differ by route.
+- Rate limits are applied via RG ingress policies and may differ by route.
 
 ## Table of Contents
 1. [Chat Dictionary API](#chat-dictionary-api)
@@ -838,7 +838,7 @@ Endpoints return standard FastAPI error responses with meaningful HTTP status co
 
 ## Rate Limiting
 
-Endpoint-specific limits are enforced with SlowAPI where applied:
+Endpoint-specific limits are enforced with RG policies where applied:
 - Chatbooks `POST /export`: 5/minute
 - Chatbooks `POST /import`: 5/minute
 - Chatbooks `POST /preview`: 10/minute
@@ -858,28 +858,35 @@ Webhook notifications for Chatbooks are planned but not yet implemented. See the
 
 ### Python
 ```python
-import requests
+import json
+from urllib.request import Request, urlopen
 
 class ChatbookAPI:
     def __init__(self, base_url, token):
-        self.base_url = base_url
+        self.base_url = base_url.rstrip("/")
         self.headers = {"Authorization": f"Bearer {token}"}
 
+    def _request_json(self, method, path, payload):
+        url = f"{self.base_url}{path}"
+        data = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json", **self.headers}
+        req = Request(url, data=data, headers=headers, method=method)
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     def create_dictionary(self, name, description):
-        response = requests.post(
-            f"{self.base_url}/api/v1/chat/dictionaries",
-            json={"name": name, "description": description},
-            headers=self.headers
+        return self._request_json(
+            "POST",
+            "/api/v1/chat/dictionaries",
+            {"name": name, "description": description},
         )
-        return response.json()
 
     def process_text(self, text, token_budget=1000, dictionary_id=None):
-        response = requests.post(
-            f"{self.base_url}/api/v1/chat/dictionaries/process",
-            json={"text": text, "token_budget": token_budget, "dictionary_id": dictionary_id},
-            headers=self.headers
+        return self._request_json(
+            "POST",
+            "/api/v1/chat/dictionaries/process",
+            {"text": text, "token_budget": token_budget, "dictionary_id": dictionary_id},
         )
-        return response.json()
 ```
 
 ### JavaScript

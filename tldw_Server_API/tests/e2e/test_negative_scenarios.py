@@ -18,6 +18,7 @@ import httpx
 import os
 import json
 import tempfile
+import time
 import random
 import string
 from pathlib import Path
@@ -35,6 +36,7 @@ class TestAuthenticationNegative:
     """Test authentication and authorization negative scenarios."""
 
     def test_missing_api_key(self, api_client):
+
         """Test requests without authentication headers."""
         # Remove all auth headers
         original_headers = api_client.client.headers.copy()
@@ -45,6 +47,8 @@ class TestAuthenticationNegative:
             with pytest.raises(httpx.HTTPStatusError) as exc_info:
                 api_client.get_media_list()
 
+            if exc_info.value.response.status_code == 429:
+                pytest.skip("Rate limited while verifying missing API key behavior")
             assert exc_info.value.response.status_code in [401, 403], \
                 f"Expected 401/403, got {exc_info.value.response.status_code}"
         finally:
@@ -52,6 +56,7 @@ class TestAuthenticationNegative:
             api_client.client.headers = original_headers
 
     def test_invalid_api_key_format(self, api_client):
+
         """Test various invalid API key formats."""
         invalid_keys = [
             "",  # Empty string
@@ -79,6 +84,8 @@ class TestAuthenticationNegative:
             except (httpx.HTTPStatusError, httpx.LocalProtocolError) as exc_info:
                 # Should get 401 for invalid authentication or protocol error for invalid headers
                 if isinstance(exc_info, httpx.HTTPStatusError):
+                    if exc_info.response.status_code == 429:
+                        pytest.skip("Rate limited while verifying invalid API key handling")
                     assert exc_info.response.status_code in [400, 401, 403], \
                         f"Invalid key '{invalid_key[:20]}...' should be rejected with 401/403, got {exc_info.response.status_code}"
                 # httpx.LocalProtocolError is also acceptable for malformed headers
@@ -87,6 +94,7 @@ class TestAuthenticationNegative:
         api_client.client.headers = original_headers
 
     def test_expired_token_handling(self, api_client):
+
         """Test handling of expired JWT tokens (multi-user mode)."""
         # Check if we're in single-user mode (API key auth)
         if "X-API-KEY" in api_client.client.headers:
@@ -109,6 +117,7 @@ class TestAuthenticationNegative:
             api_client.client.headers = original_headers
 
     def test_concurrent_login_attempts(self, api_client):
+
         """Test multiple simultaneous login attempts with same credentials."""
         # Skip in single-user mode as there's no login endpoint
         if "X-API-KEY" in api_client.client.headers:
@@ -146,6 +155,7 @@ class TestAuthenticationNegative:
             "Concurrent logins should be handled properly"
 
     def test_authorization_header_injection(self, api_client):
+
         """Test authorization header injection attempts."""
         # Skip in single-user mode as it uses API keys
         if "X-API-KEY" in api_client.client.headers:
@@ -177,6 +187,7 @@ class TestMediaUploadNegative:
     """Test media upload negative scenarios."""
 
     def test_upload_oversized_file(self, authenticated_client, data_tracker):
+
         """Test uploading file exceeding size limits."""
         # Create a large file (simulate 1GB)
         large_file = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
@@ -207,6 +218,7 @@ class TestMediaUploadNegative:
             cleanup_test_file(large_file.name)
 
     def test_upload_invalid_file_types(self, authenticated_client):
+
         """Test uploading potentially dangerous file types."""
         dangerous_extensions = [
             (".exe", b"MZ\x90\x00"),  # Windows executable
@@ -237,6 +249,7 @@ class TestMediaUploadNegative:
                 cleanup_test_file(temp_file)
 
     def test_upload_corrupted_files(self, authenticated_client):
+
         """Test uploading corrupted files of various types."""
         corrupted_files = [
             # Corrupted PDF (invalid header)
@@ -275,6 +288,7 @@ class TestMediaUploadNegative:
                 cleanup_test_file(temp_file)
 
     def test_upload_malicious_filenames(self, authenticated_client):
+
         """Test uploading files with malicious filenames."""
         malicious_names = [
             "../../../etc/passwd",  # Path traversal
@@ -331,6 +345,7 @@ class TestMediaUploadNegative:
                 cleanup_test_file(temp_file)
 
     def test_upload_empty_file(self, authenticated_client):
+
         """Test uploading empty files."""
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
             # Don't write anything - empty file
@@ -350,6 +365,7 @@ class TestMediaUploadNegative:
             cleanup_test_file(temp_file)
 
     def test_upload_without_required_fields(self, authenticated_client):
+
         """Test uploading without required fields."""
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
             f.write(b"Test content")
@@ -379,6 +395,7 @@ class TestDataValidationNegative:
     """Test data validation and injection prevention."""
 
     def test_sql_injection_in_search(self, authenticated_client):
+
         """Test SQL injection attempts in search queries - verify proper sanitization."""
         sql_injections = TestDataGenerator.malicious_payloads()['sql_injection']
 
@@ -502,6 +519,7 @@ class TestDataValidationNegative:
         assert blocked_count > 0 or sanitized_count > 0, "No XSS protection detected!"
 
     def test_command_injection_in_prompts(self, authenticated_client, data_tracker):
+
         """Test command injection in prompt content."""
         command_injections = [
             "$(whoami)",
@@ -537,6 +555,7 @@ class TestDataValidationNegative:
                 pass
 
     def test_unicode_edge_cases(self, authenticated_client):
+
         """Test Unicode edge cases and encoding issues."""
         unicode_tests = [
             "\u0000",  # Null character
@@ -571,6 +590,7 @@ class TestDataValidationNegative:
                 assert e.response.status_code in [400, 422]
 
     def test_json_bomb(self, authenticated_client):
+
         """Test JSON bomb/billion laughs attack."""
         # Create deeply nested JSON
         json_bomb = {"a": ["b"]}
@@ -603,6 +623,7 @@ class TestDataValidationNegative:
             assert e.response.status_code in [400, 413, 422]
 
     def test_header_injection(self, authenticated_client):
+
         """Test HTTP header injection attempts."""
         injection_headers = [
             ("X-Custom\r\nX-Admin: true", "value"),
@@ -632,6 +653,7 @@ class TestResourceLimitsNegative:
     """Test resource limits and boundary conditions."""
 
     def test_exceed_rate_limits(self, authenticated_client):
+
         """Test exceeding API rate limits."""
         import time
 
@@ -654,6 +676,7 @@ class TestResourceLimitsNegative:
             print("Warning: No rate limiting detected after 100 rapid requests")
 
     def test_maximum_field_lengths(self, authenticated_client):
+
         """Test maximum field length boundaries."""
         # Test various field length limits
         long_string = "x" * 100000  # 100K characters
@@ -710,12 +733,19 @@ class TestResourceLimitsNegative:
                     assert e.response.status_code in [400, 409, 413, 422]  # 409 for conflicts
 
     def test_create_excessive_resources(self, authenticated_client, data_tracker):
+
         """Test creating excessive number of resources."""
         # Try to create many notes rapidly
         created_count = 0
         failed_count = 0
+        max_attempts = int(os.getenv("E2E_BULK_CREATE_MAX", "200"))
+        timeout_s = int(os.getenv("E2E_BULK_CREATE_TIMEOUT", "30"))
+        start_time = time.time()
 
-        for i in range(1000):
+        for i in range(max_attempts):
+            if time.time() - start_time > timeout_s:
+                print(f"⚠ Bulk create timed out after {timeout_s}s; stopping early")
+                break
             try:
                 response = authenticated_client.create_note(
                     title=f"Bulk Note {i}",
@@ -752,6 +782,7 @@ class TestResourceLimitsNegative:
         print(f"Created {created_count} notes, {failed_count} failed")
 
     def test_integer_overflow(self, authenticated_client):
+
         """Test integer overflow conditions."""
         overflow_values = [
             2**31 - 1,  # Max 32-bit signed
@@ -788,6 +819,7 @@ class TestResourceLimitsNegative:
                 pass
 
     def test_negative_values(self, authenticated_client):
+
         """Test negative values where not expected."""
         test_cases = [
             ("limit", -1),

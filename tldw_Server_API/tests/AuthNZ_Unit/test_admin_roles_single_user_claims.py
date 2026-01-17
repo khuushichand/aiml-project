@@ -64,6 +64,7 @@ def _build_app_with_overrides(
             }
 
         def get_status(self) -> Dict[str, Any]:
+
             return self._status
 
     fake_dispatcher = _FakeDispatcher()

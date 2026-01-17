@@ -26,6 +26,7 @@ def client_with_quizzes_db(quizzes_db: CharactersRAGDB):
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
     def override_get_db():
+
         logger.info("[TEST] override get_chacha_db_for_user -> quizzes_db")
         try:
             yield quizzes_db

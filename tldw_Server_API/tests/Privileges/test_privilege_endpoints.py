@@ -1,16 +1,18 @@
 import asyncio
-import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
+from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 from tldw_Server_API.app.core.PrivilegeMaps.introspection import DependencyMetadata, RouteMetadata
 from tldw_Server_API.app.core.PrivilegeMaps.service import PrivilegeMapService
 from tldw_Server_API.app.core.PrivilegeMaps.snapshots import PrivilegeSnapshotStore, get_privilege_snapshot_store
 from tldw_Server_API.app.core.PrivilegeMaps.service import get_privilege_map_service
+
 
 class InMemoryTrendStore:
     def __init__(self) -> None:
@@ -153,11 +155,13 @@ class FakePrivilegeMapService(PrivilegeMapService):
 
 
 @pytest.fixture()
-def privilege_test_client():
+def privilege_test_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     fake_service = FakePrivilegeMapService()
+    db_path = tmp_path / "privilege_snapshots.db"
+    monkeypatch.setenv("DATABASE_URL", db_path.as_uri())
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
+    asyncio.run(reset_db_pool())
     snapshot_store = PrivilegeSnapshotStore()
-    previous_validate_env = os.environ.get("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP")
-    os.environ["PRIVILEGE_METADATA_VALIDATE_ON_STARTUP"] = "0"
 
     async def seed_snapshots():
         await snapshot_store.clear()
@@ -253,6 +257,7 @@ def privilege_test_client():
     asyncio.run(seed_snapshots())
 
     def override_current_user():
+
         return {"id": "admin-1", "username": "Admin User", "role": "admin", "is_admin": True}
 
     fastapi_app.dependency_overrides[get_current_active_user] = override_current_user
@@ -263,11 +268,8 @@ def privilege_test_client():
         yield client
 
     asyncio.run(snapshot_store.clear())
+    asyncio.run(reset_db_pool())
     fastapi_app.dependency_overrides.clear()
-    if previous_validate_env is None:
-        os.environ.pop("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", None)
-    else:
-        os.environ["PRIVILEGE_METADATA_VALIDATE_ON_STARTUP"] = previous_validate_env
 
 
 def test_get_org_summary_group_by_role(privilege_test_client: TestClient):
@@ -403,9 +405,7 @@ def test_get_snapshot_detail(privilege_test_client: TestClient):
 
 
 def test_export_snapshot_json(privilege_test_client: TestClient):
-    response = privilege_test_client.get(
-        "/api/v1/privileges/snapshots/snap-2025-01-15-001/export.json"
-    )
+    response = privilege_test_client.get("/api/v1/privileges/snapshots/snap-2025-01-15-001/export.json")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     assert "attachment; filename=" in response.headers.get("content-disposition", "")
@@ -416,9 +416,7 @@ def test_export_snapshot_json(privilege_test_client: TestClient):
 
 
 def test_export_snapshot_csv(privilege_test_client: TestClient):
-    response = privilege_test_client.get(
-        "/api/v1/privileges/snapshots/snap-2025-01-15-001/export.csv"
-    )
+    response = privilege_test_client.get("/api/v1/privileges/snapshots/snap-2025-01-15-001/export.csv")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
     assert "attachment; filename=" in response.headers.get("content-disposition", "")

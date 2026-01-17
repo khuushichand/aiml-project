@@ -123,12 +123,7 @@ class TestReDoSProtection:
 
         # This should either timeout or handle gracefully, not hang
         with pytest.raises((InvalidInputError, ChunkingError, re.error)) as exc_info:
-            chunker.chunk_text(
-                text,
-                method='ebook_chapters',
-                custom_chapter_pattern=evil_pattern,
-                max_size=100
-            )
+            chunker.chunk_text(text, method="ebook_chapters", custom_chapter_pattern=evil_pattern, max_size=100)
 
         elapsed_time = time.time() - start_time
 
@@ -142,7 +137,7 @@ class TestReDoSProtection:
         # Nested quantifiers that could cause issues
         complex_patterns = [
             r"((a*)*)*b",  # Nested quantifiers
-            r"(a+)+$",     # Possessive quantifiers
+            r"(a+)+$",  # Possessive quantifiers
             r"(.*){10,}",  # Large repetition range
         ]
 
@@ -151,12 +146,7 @@ class TestReDoSProtection:
         for pattern in complex_patterns:
             # Should either reject the pattern or handle it safely
             try:
-                result = chunker.chunk_text(
-                    text,
-                    method='ebook_chapters',
-                    custom_chapter_pattern=pattern,
-                    max_size=100
-                )
+                result = chunker.chunk_text(text, method="ebook_chapters", custom_chapter_pattern=pattern, max_size=100)
                 # If it doesn't raise an error, it should at least complete quickly
                 assert isinstance(result, list)
             except (InvalidInputError, ChunkingError):
@@ -175,11 +165,11 @@ class TestInputSanitization:
         malicious_text = "Normal text\x00<script>alert('xss')</script>"
 
         # Should handle null bytes safely
-        result = chunker.chunk_text(malicious_text, method='words', max_size=10)
+        result = chunker.chunk_text(malicious_text, method="words", max_size=10)
 
         # Null bytes should be handled (removed or escaped)
         for chunk in result:
-            assert '\x00' not in chunk or chunk.count('\x00') == malicious_text.count('\x00')
+            assert "\x00" not in chunk or chunk.count("\x00") == malicious_text.count("\x00")
 
     def test_unicode_normalization(self):
         """Test that unicode is properly normalized to prevent bypasses."""
@@ -193,7 +183,7 @@ class TestInputSanitization:
 
         results = []
         for text in text_variations:
-            result = chunker.chunk_text(text, method='words', max_size=10)
+            result = chunker.chunk_text(text, method="words", max_size=10)
             results.append(result)
 
         # Both should produce consistent results
@@ -212,13 +202,14 @@ class TestInputSanitization:
     def test_deeply_nested_json_limited(self):
         """Test that deeply nested JSON has depth limits."""
         from tldw_Server_API.app.core.Chunking.strategies.json_xml import JSONChunkingStrategy
+
         strategy = JSONChunkingStrategy()
 
         # Create deeply nested JSON string iteratively to avoid Python recursion limits
         def build_nested_json_string(depth: int) -> str:
             s = '{"value":"leaf"}'
             for _ in range(depth):
-                s = '{"nested":' + s + '}'
+                s = '{"nested":' + s + "}"
             return s
 
         # Very deep nesting could cause stack overflow or be rejected by strategy
@@ -240,7 +231,7 @@ class TestResourceLimits:
         large_text = "word " * 1_000_000  # ~5MB
 
         # Should process without issue
-        result = chunker.chunk_text(large_text, method='words', max_size=1000)
+        result = chunker.chunk_text(large_text, method="words", max_size=1000)
         assert len(result) > 0
 
     def test_concurrent_request_limits(self):
@@ -255,7 +246,7 @@ class TestResourceLimits:
             tasks = []
             for i in range(100):
                 text = f"Test text {i} " * 100
-                task = chunker.chunk_text(text, method='words', max_size=10)
+                task = chunker.chunk_text(text, method="words", max_size=10)
                 tasks.append(task)
 
             # Should handle all requests but with rate limiting

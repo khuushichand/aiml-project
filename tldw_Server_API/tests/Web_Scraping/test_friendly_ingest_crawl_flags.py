@@ -14,10 +14,12 @@ def client_with_token(client_user_only):
     class _Client:
         def __init__(self, c):
             self._c = c
+
         def post(self, *a, **k):
-            headers = k.pop('headers', {}) or {}
-            headers.setdefault('token', 'test-token')
+            headers = k.pop("headers", {}) or {}
+            headers.setdefault("token", "test-token")
             return self._c.post(*a, headers=headers, **k)
+
     return _Client(client_user_only)
 
 

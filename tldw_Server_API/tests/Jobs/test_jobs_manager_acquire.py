@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.mark.unit
 def test_acquire_order_priority_and_availability_sqlite(tmp_path, monkeypatch):
-    # Use dedicated SQLite DB
+     # Use dedicated SQLite DB
     db_path = tmp_path / "jobs_test.db"
     jm = JobManager(db_path=db_path)
 

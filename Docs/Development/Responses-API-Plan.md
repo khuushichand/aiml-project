@@ -217,7 +217,6 @@ class ResponseObject(OpenAIBaseModel):
 ```python
 import asyncio
 import time
-import httpx
 import hmac
 import hashlib
 from typing import Dict, List, Any, Optional
@@ -326,7 +325,9 @@ class ResponseRunner:
                         tool_results[tool] = {"error": str(e)}
 
             # 4. Generate response using existing chat infrastructure
-            from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+            from tldw_Server_API.app.core.Chat.chat_service import ChatService
+
+            chat_service = ChatService()
 
             # Prepare messages with tool results
             messages = request["messages"].copy()
@@ -336,8 +337,8 @@ class ResponseRunner:
                     "content": f"Tool results: {tool_results}"
                 })
 
-            # Call LLM
-            response = await chat_api_call(
+            # Call LLM via adapter
+            response = await chat_service.perform_chat_api_call(
                 provider=request.get("provider", "openai"),
                 model=request["model"],
                 messages=messages,
@@ -390,7 +391,7 @@ class ResponseRunner:
 ##### Tool Orchestrator (Complete Implementation)
 ```python
 from abc import ABC, abstractmethod
-import httpx
+import os
 from typing import Dict, Any, List, Optional
 from tldw_Server_API.app.core.RAG.RAG_Search.simplified.enhanced_rag_service_v2 import EnhancedRAGServiceV2
 
@@ -448,7 +449,7 @@ class WebSearchTool(BaseTool):
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("SEARCH_API_KEY")
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.timeout = 30.0
 
     def validate_parameters(self, parameters: Dict) -> bool:
         return "query" in parameters
@@ -722,7 +723,7 @@ app.include_router(responses_router, prefix=f"{API_V1_PREFIX}", tags=["responses
 - Use MediaDatabase for searching ingested content
 
 3. **LLM Integration**:
-- Reuse existing LLM_API_Calls infrastructure
+- Reuse existing chat_calls infrastructure
 - Support all configured providers
 
 ### Phase 6: Testing
@@ -764,7 +765,7 @@ app.include_router(responses_router, prefix=f"{API_V1_PREFIX}", tags=["responses
 ```python
 async def web_search(query: str, num_results: int = 5) -> Dict:
     # Reuse existing web search from research endpoints if available
-    # Or implement simple web search using httpx
+    # Or implement simple web search using http_client helpers
     # Return structured search results
 ```
 
@@ -841,7 +842,7 @@ async def file_search(query: str, filters: Dict = None) -> Dict:
 **Problem**: Building new tool orchestration from scratch ignores existing infrastructure
 **Solution**:
 - Leverage existing RAG_Search/simplified/enhanced_rag_service.py for file search
-- Use existing LLM_API_Calls infrastructure for model interactions
+- Use existing chat_calls infrastructure for model interactions
 - Extend existing tool patterns from chat endpoints
 
 ### CRITICAL ISSUE 4: Background Task Management
@@ -1111,7 +1112,7 @@ class TestResponsesIntegration:
 2. **SSE Streaming**: Use unified streaming approach in evaluations_unified.py
 3. **Authentication**: Use pattern from evaluations_unified.py
 4. **RAG Integration**: Direct integration with enhanced_rag_service.py
-5. **LLM Calls**: Use existing Chat_Functions.chat_api_call
+5. **LLM Calls**: Use `chat_service.perform_chat_api_call` (adapter-backed)
 
 ### Simplified Architecture
 ```python

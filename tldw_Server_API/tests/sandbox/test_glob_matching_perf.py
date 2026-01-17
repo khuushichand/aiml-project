@@ -8,7 +8,7 @@ import pytest
 
 @pytest.mark.unit
 def test_glob_matching_perf_on_large_set() -> None:
-    # Simulate docker_runner capture filtering logic with many files and a few patterns
+     # Simulate docker_runner capture filtering logic with many files and a few patterns
     files = []
     for i in range(500):
         files.append(f"logs/run_{i}.log")

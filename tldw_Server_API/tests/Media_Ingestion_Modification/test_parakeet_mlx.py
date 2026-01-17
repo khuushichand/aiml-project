@@ -61,6 +61,7 @@ class TestParakeetMLX:
             os.remove(tmp_file.name)
 
     def test_import_module(self):
+
         """Test that the MLX module can be imported."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
@@ -90,6 +91,7 @@ class TestParakeetMLX:
         assert check_mlx_available() == False
 
     def test_model_loading(self, monkeypatch):
+
         """Test Parakeet MLX model loading."""
         import sys, types
         # Create mock parakeet_mlx module and inject into sys.modules
@@ -121,6 +123,7 @@ class TestParakeetMLX:
         assert mock_parakeet_mlx.from_pretrained.call_count == 1  # Still only called once
 
     def test_model_loading_with_custom_path(self, monkeypatch):
+
         """Test loading model from custom path."""
         import sys, types
         mock_parakeet_mlx = types.ModuleType('parakeet_mlx')
@@ -278,6 +281,7 @@ class TestParakeetMLX:
         assert "Model error" in result
 
     def test_chunk_callback_functionality(self):
+
         """Test that chunk callbacks work correctly."""
         callbacks_received = []
 
@@ -401,6 +405,7 @@ class TestParakeetMLXPerformance:
         mock_model = MagicMock()
 
         def mock_transcribe(*args, **kwargs):
+
             # Simulate processing time proportional to audio length
             time.sleep(0.01)  # Small delay
             result = MagicMock()

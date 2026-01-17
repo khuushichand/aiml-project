@@ -7,18 +7,49 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Set
 
 import yaml
+from loguru import logger
 
 from tldw_Server_API.app.core.Resource_Governance.policy_admin import AuthNZPolicyAdmin
 
 
+def _resolve_policy_path(path: Path) -> Path:
+    try:
+        resolved = path.expanduser()
+    except Exception as exc:
+        logger.opt(exception=exc).debug("Failed to expand RG policy path: {}", path)
+        return path
+    if resolved.exists():
+        return resolved
+    base = Path(__file__).resolve().parents[4]
+    candidates: list[Path] = []
+    if not resolved.is_absolute():
+        try:
+            candidates.append((base / resolved).resolve())
+        except Exception as exc:
+            logger.opt(exception=exc).debug("Failed to resolve RG policy candidate from {}", resolved)
+    name = resolved.name or "resource_governor_policies.yaml"
+    candidates.append(base / "Config_Files" / name)
+    candidates.append(base / "tldw_Server_API" / "Config_Files" / name)
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                logger.info("RG policy file not found at {}; using {}", resolved, candidate)
+                return candidate
+        except Exception as exc:
+            logger.opt(exception=exc).debug("Failed to stat RG policy candidate {}", candidate)
+    return resolved
+
+
 def _default_policy_path() -> Path:
     base = Path(__file__).resolve().parents[4]
-    return Path(
-        os.getenv(
-            "RG_POLICY_PATH",
-            str(base / "Config_Files" / "resource_governor_policies.yaml"),
-        )
+    raw = os.getenv(
+        "RG_POLICY_PATH",
+        str(base / "Config_Files" / "resource_governor_policies.yaml"),
     )
+    return _resolve_policy_path(Path(raw))
+
+
+_DEFAULT_POLICY_PATH = _default_policy_path()
 
 
 def _iter_route_map_policy_ids(route_map: Dict[str, Any]) -> Iterable[str]:
@@ -79,10 +110,12 @@ async def seed_db_policies_from_yaml(
     created = 0
     skipped_existing = 0
     missing_in_yaml: list[str] = []
+    known_in_db: Set[str] = set()
 
     for policy_id in sorted(to_seed):
         rec = await admin.get_policy_record(policy_id)
         if rec:
+            known_in_db.add(policy_id)
             skipped_existing += 1
             continue
         payload = policies.get(policy_id)
@@ -93,6 +126,7 @@ async def seed_db_policies_from_yaml(
             raise ValueError(f"Policy payload for {policy_id!r} must be a mapping")
         await admin.upsert_policy(policy_id, payload, version=1)
         created += 1
+        known_in_db.add(policy_id)
 
     print(f"RG DB seed complete: created={created} skipped_existing={skipped_existing} yaml={yaml_path}")
     if missing_in_yaml:
@@ -102,7 +136,7 @@ async def seed_db_policies_from_yaml(
             f"{missing_sorted}"
         )
     if not seed_all and referenced:
-        missing_in_db = sorted(pid for pid in referenced if not await admin.get_policy_record(pid))
+        missing_in_db = [pid for pid in sorted(referenced) if pid not in known_in_db]
         if missing_in_db:
             missing_sorted = ", ".join(missing_in_db)
             print(
@@ -125,7 +159,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--yaml",
         dest="yaml_path",
         type=Path,
-        default=_default_policy_path(),
+        default=_DEFAULT_POLICY_PATH,
         help="Path to resource_governor_policies.yaml (defaults to RG_POLICY_PATH or repo default).",
     )
     p.add_argument(
@@ -140,9 +174,12 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
+        yaml_path = args.yaml_path
+        if yaml_path != _DEFAULT_POLICY_PATH:
+            yaml_path = _resolve_policy_path(yaml_path)
         return asyncio.run(
             seed_db_policies_from_yaml(
-                yaml_path=Path(args.yaml_path),
+                yaml_path=yaml_path,
                 seed_all=bool(args.seed_all),
             )
         )

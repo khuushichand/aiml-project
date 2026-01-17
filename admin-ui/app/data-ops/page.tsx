@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
@@ -13,7 +13,7 @@ export default function DataOpsPage() {
   const [refreshSignal, setRefreshSignal] = useState(0);
 
   return (
-    <ProtectedRoute requiredRoles={['admin', 'super_admin', 'owner']}>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="p-6 space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -32,6 +32,6 @@ export default function DataOpsPage() {
           <ExportsSection refreshSignal={refreshSignal} />
         </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

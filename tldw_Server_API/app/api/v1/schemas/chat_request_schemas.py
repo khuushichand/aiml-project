@@ -226,7 +226,7 @@ def _validate_json_schema_structure(schema: Dict[str, Any], path: str = "root") 
     Raises ValueError for invalid schema values and TypeError for type mismatches.
     """
     if not isinstance(schema, dict):
-        raise TypeError(f"JSON Schema at '{path}' must be an object, got {type(schema).__name__}")
+        raise ValueError(f"JSON Schema at '{path}' must be an object, got {type(schema).__name__}")
 
     # Validate type field if present
     schema_type = schema.get("type")
@@ -240,16 +240,16 @@ def _validate_json_schema_structure(schema: Dict[str, Any], path: str = "root") 
                 if t not in valid_types:
                     raise ValueError(f"Invalid JSON Schema type '{t}' in type array at '{path}'")
         else:
-            raise TypeError(f"JSON Schema 'type' must be string or array at '{path}'")
+            raise ValueError(f"JSON Schema 'type' must be string or array at '{path}'")
 
     # Validate properties if present
     properties = schema.get("properties")
     if properties is not None:
         if not isinstance(properties, dict):
-            raise TypeError(f"JSON Schema 'properties' must be an object at '{path}'")
+            raise ValueError(f"JSON Schema 'properties' must be an object at '{path}'")
         for prop_name, prop_schema in properties.items():
             if not isinstance(prop_name, str):
-                raise TypeError(f"Property name must be string at '{path}'")
+                raise ValueError(f"Property name must be string at '{path}'")
             if isinstance(prop_schema, dict):
                 _validate_json_schema_structure(prop_schema, f"{path}.properties.{prop_name}")
 
@@ -262,10 +262,10 @@ def _validate_json_schema_structure(schema: Dict[str, Any], path: str = "root") 
     required = schema.get("required")
     if required is not None:
         if not isinstance(required, list):
-            raise TypeError(f"JSON Schema 'required' must be an array at '{path}'")
+            raise ValueError(f"JSON Schema 'required' must be an array at '{path}'")
         for req in required:
             if not isinstance(req, str):
-                raise TypeError(f"JSON Schema 'required' items must be strings at '{path}'")
+                raise ValueError(f"JSON Schema 'required' items must be strings at '{path}'")
 
 
 class FunctionDefinition(BaseModel):
@@ -682,7 +682,11 @@ class ChatCompletionRequest(BaseModel):
         None, max_length=128, description="Tools the model may call (provider support varies)."
     )
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ToolChoiceOption]] = Field(
-        "auto", description="Controls tool usage (provider support varies)."
+        None,
+        description=(
+            "Controls tool usage (provider support varies). Only valid when `tools` are provided; "
+            "if omitted, providers default to their standard behavior (typically `auto`)."
+        ),
     )
     user: Optional[str] = Field(None, description="End-user identifier for monitoring.")
 

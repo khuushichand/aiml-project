@@ -24,6 +24,8 @@ from tldw_Server_API.tests.test_utils import create_test_media
 
 
 def _principal_override():
+
+
     """Create a test principal override for authentication."""
     async def _override(request=None) -> AuthPrincipal:
         principal = AuthPrincipal(

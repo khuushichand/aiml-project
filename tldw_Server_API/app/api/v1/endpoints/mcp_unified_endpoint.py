@@ -112,6 +112,27 @@ def _get_derived_user_id(user: Optional[TokenData]) -> Optional[str]:
     return user.sub if user else None
 
 
+def _extract_api_key_permissions(info: Optional[Dict[str, Any]]) -> List[str]:
+    """Normalize API key scopes into MCP permissions."""
+    if not info:
+        return []
+    try:
+        from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
+    except Exception:
+        return []
+
+    raw_scopes = info.get("scopes")
+    if raw_scopes is None:
+        raw_scopes = info.get("scope")
+
+    try:
+        scopes = normalize_scope(raw_scopes)
+    except Exception:
+        scopes = set()
+
+    return sorted(scopes) if scopes else []
+
+
 def _should_use_single_user_api_key_compat() -> bool:
     """
     Decide whether to use the single-user API key compatibility shim.
@@ -327,7 +348,7 @@ async def get_current_user(
                     sub=str(info["user_id"]),
                     username=None,
                     roles=["api_client"],
-                    permissions=[],
+                    permissions=_extract_api_key_permissions(info),
                     token_type="access",
                 )
     except Exception:
@@ -409,8 +430,37 @@ async def _attach_api_key_metadata(
             metadata["org_id"] = api_key_info.get("org_id")
         if api_key_info.get("team_id") is not None:
             metadata["team_id"] = api_key_info.get("team_id")
+        try:
+            from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
+            raw_scopes = api_key_info.get("scopes")
+            if raw_scopes is None:
+                raw_scopes = api_key_info.get("scope")
+            scopes = normalize_scope(raw_scopes)
+            if scopes:
+                metadata["api_key_scopes"] = sorted(scopes)
+                metadata["auth_via"] = "api_key"
+        except Exception:
+            pass
 
+    _attach_rg_ingress_metadata(metadata, http_request)
     return metadata
+
+
+def _attach_rg_ingress_metadata(metadata: Dict[str, Any], http_request: Optional[Request]) -> None:
+    """Attach RG ingress metadata when policy has been enforced upstream."""
+    if not http_request:
+        return
+    try:
+        policy_id = getattr(http_request.state, "rg_policy_id", None)
+        if policy_id:
+            metadata["rg_ingress_enforced"] = True
+            metadata["rg_policy_id"] = str(policy_id)
+    except Exception as exc:
+        logger.debug(
+            "Failed to read rg_policy_id from request state",
+            error=str(exc),
+            exc_info=True,
+        )
 
 
 async def require_user(
@@ -552,6 +602,8 @@ async def mcp_request(
         user_id=derived_user_id,
         metadata=metadata or None
     )
+    if resp_obj is None:
+        return Response(status_code=204)
     # Convert authorization errors to HTTP 403 with hint for HTTP clients
     if resp_obj.error and resp_obj.error.code == -32001:
         hint = None
@@ -634,6 +686,8 @@ async def mcp_request_batch(
     # If only notifications were sent, return empty list
     if resp is None:
         return []
+    if isinstance(resp, MCPResponse):
+        return [resp]
     return resp
 
 
@@ -726,6 +780,7 @@ async def list_tools(
     catalog_id: Optional[int] = Query(None, description="Filter by tool catalog id"),
     user: Optional[TokenData] = Depends(get_current_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     List available MCP tools.
@@ -755,6 +810,7 @@ async def list_tools(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,
@@ -778,6 +834,7 @@ async def execute_tool(
     request: ToolExecutionRequest,
     user: TokenData = Depends(require_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     Execute a specific tool (requires authentication).
@@ -805,6 +862,7 @@ async def execute_tool(
         metadata["roles"] = user.roles
     if user.permissions:
         metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     derived_user_id = _get_derived_user_id(user)
 
@@ -868,6 +926,7 @@ async def execute_tool(
 async def list_modules(
     user: Optional[TokenData] = Depends(get_current_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     List registered MCP modules.
@@ -889,6 +948,7 @@ async def list_modules(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,
@@ -911,6 +971,7 @@ async def list_modules(
 async def get_modules_health(
     principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     Get detailed health status of all modules; requires `system.logs` permission (or admin).
@@ -928,6 +989,7 @@ async def get_modules_health(
         meta["roles"] = principal.roles
     if principal.permissions:
         meta["permissions"] = principal.permissions
+    _attach_rg_ingress_metadata(meta, http_request)
 
     response = await server.handle_http_request(request, user_id=principal.principal_id, metadata=meta)
 
@@ -946,6 +1008,7 @@ async def get_modules_health(
 async def list_resources(
     user: Optional[TokenData] = Depends(get_current_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     List available MCP resources.
@@ -967,6 +1030,7 @@ async def list_resources(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,
@@ -989,6 +1053,7 @@ async def list_resources(
 async def list_prompts(
     user: Optional[TokenData] = Depends(get_current_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     List available MCP prompts.
@@ -1010,6 +1075,7 @@ async def list_prompts(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,

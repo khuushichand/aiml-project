@@ -14,7 +14,7 @@ from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
 
 def _small_wav_bytes(duration_sec: float = 0.25, sr: int = 16000) -> bytes:
     buf = io.BytesIO()
-    with wave.open(buf, 'wb') as wf:
+    with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(sr)
@@ -36,6 +36,7 @@ def _neutts_streaming_available(client: TestClient) -> bool:
             return False
     try:
         from tldw_Server_API.app.core.TTS.adapter_registry import get_tts_factory, TTSProvider
+
         factory = asyncio.run(get_tts_factory())
         adapter = asyncio.run(factory.registry.get_adapter(TTSProvider.NEUTTS))
         return bool(adapter) and bool(getattr(adapter, "_supports_streaming", False))
@@ -46,7 +47,8 @@ def _neutts_streaming_available(client: TestClient) -> bool:
 def _mp3_supported() -> bool:
     try:
         from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter
-        writer = StreamingAudioWriter(format='mp3', sample_rate=24000, channels=1)
+
+        writer = StreamingAudioWriter(format="mp3", sample_rate=24000, channels=1)
         # write a tiny chunk and finalize
         writer.write_chunk(np.zeros(2400, dtype=np.int16))
         data = writer.write_chunk(finalize=True)

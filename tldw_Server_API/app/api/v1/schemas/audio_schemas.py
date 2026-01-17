@@ -110,9 +110,12 @@ class OpenAITranscriptionRequest(BaseModel):
     """Request schema for OpenAI-compatible transcription endpoint"""
 
     file: bytes = Field(..., description="The audio file to transcribe")
-    model: str = Field(
-        default="whisper-1",
-        description="ID of the model to use. Options: whisper-1, parakeet, canary, qwen2audio"
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "ID of the model to use. Options: whisper-1, parakeet, canary, qwen2audio. "
+            "Defaults to the configured STT provider when omitted."
+        ),
     )
     language: Optional[str] = Field(
         default=None,
@@ -152,9 +155,12 @@ class OpenAITranslationRequest(BaseModel):
     """Request schema for OpenAI-compatible translation endpoint"""
 
     file: bytes = Field(..., description="The audio file to translate")
-    model: str = Field(
-        default="whisper-1",
-        description="ID of the model to use. Currently only whisper-1 is available"
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "ID of the model to use. Defaults to the configured STT provider when omitted "
+            "(whisper-1 recommended for translations)."
+        ),
     )
     prompt: Optional[str] = Field(
         default=None,

@@ -63,10 +63,7 @@ def test_distributed_privilege_cache_basic_roundtrip(monkeypatch, backend):
             ]
             return sum(samples)
 
-        backend_labels = {
-            sample.labels.get("backend")
-            for sample in registry.values["privilege_cache_hits_total"]
-        }
+        backend_labels = {sample.labels.get("backend") for sample in registry.values["privilege_cache_hits_total"]}
         backend_labels.discard(None)
         assert backend_labels
         backend_label = backend_labels.pop()
@@ -101,6 +98,7 @@ def test_distributed_privilege_cache_basic_roundtrip(monkeypatch, backend):
 
 
 def test_privilege_cache_ttl_none_does_not_inherit_previous(monkeypatch):
+
     monkeypatch.setenv("PRIVILEGE_CACHE_BACKEND", "redis")
     monkeypatch.setenv("PRIVILEGE_CACHE_REDIS_URL", "redis://127.0.0.1:6399/15")
 

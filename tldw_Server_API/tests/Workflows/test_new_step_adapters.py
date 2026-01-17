@@ -15,8 +15,9 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_wf(tmp_path, monkeypatch, auth_headers):
-    # Force test mode for adapters that check it
+     # Force test mode for adapters that check it
     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(tmp_path))
     # Provide a temporary USER_DB_BASE_DIR for embedding/chroma
     base = tmp_path / "user_databases"
     base.mkdir(parents=True, exist_ok=True)
@@ -31,6 +32,7 @@ def client_with_wf(tmp_path, monkeypatch, auth_headers):
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
 
     def override_db():
+
         return db
 
     app.dependency_overrides[get_request_user] = override_user
@@ -159,7 +161,7 @@ def test_stt_transcribe_with_mock(monkeypatch, tmp_path, client_with_wf: TestCli
     # Patch speech_to_text to avoid heavy deps
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as ATL
     def _fake_stt(path, whisper_model='large-v3', selected_source_lang=None, vad_filter=False, diarize=False, *, word_timestamps=False, return_language=False):
-        # Workflow adapter should pass None when language is omitted,
+             # Workflow adapter should pass None when language is omitted,
         # allowing the STT backend to auto-detect.
         assert selected_source_lang is None
         segments = [{"Text": "hello world", "start_seconds": 0.0, "end_seconds": 1.0}]

@@ -135,6 +135,16 @@ CREATE TABLE IF NOT EXISTS jobs_archive (
   archived_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Job dependencies (DAG edges)
+CREATE TABLE IF NOT EXISTS job_dependencies (
+  job_uuid TEXT NOT NULL,
+  depends_on_job_uuid TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (job_uuid, depends_on_job_uuid)
+);
+CREATE INDEX IF NOT EXISTS idx_job_dependencies_job ON job_dependencies(job_uuid);
+CREATE INDEX IF NOT EXISTS idx_job_dependencies_depends_on ON job_dependencies(depends_on_job_uuid);
+
 -- Status-focused partial indexes to speed common counts and lookups
 CREATE INDEX IF NOT EXISTS idx_jobs_status_queued ON jobs(domain, queue, job_type, priority, available_at, created_at) WHERE status='queued';
 CREATE INDEX IF NOT EXISTS idx_jobs_status_processing ON jobs(domain, queue, job_type, leased_until) WHERE status='processing';
@@ -256,6 +266,11 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
             ensure_job_events_pg(db_url)
         except Exception:
             pass
+        # Ensure job_counters exists for counters-enabled deployments
+        try:
+            ensure_job_counters_pg(db_url)
+        except Exception:
+            pass
         # Optional: enable RLS on core tables when requested via env.
         try:
             import psycopg  # noqa: F401
@@ -285,6 +300,10 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                             pass
                         try:
                             _p.execute("ALTER TABLE job_sla_policies ENABLE ROW LEVEL SECURITY")
+                        except Exception:
+                            pass
+                        try:
+                            _p.execute("ALTER TABLE job_dependencies ENABLE ROW LEVEL SECURITY")
                         except Exception:
                             pass
                         try:
@@ -334,8 +353,9 @@ def ensure_job_events_pg(db_url: str) -> None:
         import psycopg
     except Exception:
         return
-    from .pg_util import normalize_pg_dsn
-    _dsn = normalize_pg_dsn(db_url)
+    from .pg_util import negotiate_pg_dsn
+    _dsn = negotiate_pg_dsn(db_url)
+    debug = str(os.getenv("JOBS_PG_RLS_DEBUG", "")).lower() in {"1", "true", "yes", "on"}
     try:
         with psycopg.connect(_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
@@ -375,222 +395,310 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
         import psycopg  # type: ignore
     except Exception:
         return
-    from .pg_util import normalize_pg_dsn
-    _dsn = normalize_pg_dsn(db_url)
+    import os
+    import re as _re
+    from .pg_util import negotiate_pg_dsn
+    _dsn = negotiate_pg_dsn(db_url)
+    debug = str(os.getenv("JOBS_PG_RLS_DEBUG", "")).lower() in {"1", "true", "yes", "on"}
     try:
         with psycopg.connect(_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                # Enable RLS
-                try:
-                    cur.execute("ALTER TABLE jobs ENABLE ROW LEVEL SECURITY")
-                except Exception:
-                    pass
-                # Check existing policies
-                cur.execute("SELECT polname FROM pg_policies WHERE schemaname = current_schema() AND tablename = 'jobs'")
-                existing = {r[0] for r in cur.fetchall()}
-                if 'jobs_domain_select' not in existing:
-                    cur.execute(
-                        """
-                        CREATE POLICY jobs_domain_select ON jobs FOR SELECT
-                        USING (
-                          COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                            (current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ',')))
-                            AND (current_setting('app.owner_user_id', true) IS NULL OR owner_user_id = current_setting('app.owner_user_id', true))
-                          )
+                role = str(os.getenv("JOBS_PG_RLS_ROLE", "")).strip()
+                if role and _re.match(r"^[A-Za-z0-9_]+$", role):
+                    try:
+                        cur.execute("SELECT current_schema()")
+                        schema_row = cur.fetchone()
+                        schema_name = (schema_row[0] if schema_row else None) or "public"
+                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+                        if not cur.fetchone():
+                            cur.execute(f"CREATE ROLE {role} NOLOGIN")
+                        try:
+                            cur.execute("SELECT current_user")
+                            user_row = cur.fetchone()
+                            current_user = (user_row[0] if user_row else None) or None
+                            if current_user and _re.match(r"^[A-Za-z0-9_]+$", str(current_user)):
+                                cur.execute(f"GRANT {role} TO {current_user}")
+                        except Exception:
+                            pass
+                        cur.execute(f"GRANT USAGE ON SCHEMA {schema_name} TO {role}")
+                        cur.execute(
+                            f"GRANT SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema_name} TO {role}"
                         )
-                        """
+                    except Exception:
+                        pass
+                def _enable_rls(table: str) -> None:
+                    try:
+                        cur.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
+
+                # Enable and enforce RLS on all Jobs tables
+                for _table in (
+                    "jobs",
+                    "job_events",
+                    "job_counters",
+                    "job_queue_controls",
+                    "job_sla_policies",
+                    "job_attachments",
+                    "job_dependencies",
+                ):
+                    _enable_rls(_table)
+                admin_expr = "COALESCE(NULLIF(current_setting('app.is_admin', true), ''), '') = 'true'"
+                domain_expr = "NULLIF(current_setting('app.domain_allowlist', true), '')"
+                owner_expr = "NULLIF(current_setting('app.owner_user_id', true), '')"
+                domain_filter = f"({domain_expr} IS NULL OR domain = ANY(string_to_array({domain_expr}, ',')))"
+                owner_filter = f"({owner_expr} IS NULL OR owner_user_id = {owner_expr})"
+
+                cur.execute("DROP POLICY IF EXISTS jobs_domain_select ON jobs")
+                cur.execute(
+                    f"""
+                    CREATE POLICY jobs_domain_select ON jobs FOR SELECT
+                    USING (
+                      {admin_expr} OR (
+                        {domain_filter}
+                        AND {owner_filter}
+                      )
                     )
-                if 'jobs_domain_modify' not in existing:
-                    cur.execute(
-                        """
-                        CREATE POLICY jobs_domain_modify ON jobs FOR UPDATE, DELETE
-                        USING (
-                          COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                            (current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ',')))
-                            AND (current_setting('app.owner_user_id', true) IS NULL OR owner_user_id = current_setting('app.owner_user_id', true))
-                          )
-                        )
-                        """
+                    """
+                )
+                cur.execute("DROP POLICY IF EXISTS jobs_domain_modify ON jobs")
+                cur.execute(
+                    f"""
+                    CREATE POLICY jobs_domain_modify ON jobs FOR ALL
+                    USING (
+                      {admin_expr} OR (
+                        {domain_filter}
+                        AND {owner_filter}
+                      )
                     )
+                    """
+                )
                 # job_events policies (domain + owner, with admin bypass)
                 try:
-                    cur.execute("SELECT polname FROM pg_policies WHERE schemaname = current_schema() AND tablename = 'job_events'")
-                    ev_pols = {r[0] for r in cur.fetchall()}
-                    if 'job_events_select' not in ev_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_events_select ON job_events FOR SELECT
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                (current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ',')))
-                                AND (current_setting('app.owner_user_id', true) IS NULL OR owner_user_id = current_setting('app.owner_user_id', true))
-                              )
-                            )
-                            """
+                    cur.execute("DROP POLICY IF EXISTS job_events_select ON job_events")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_events_select ON job_events FOR SELECT
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                            AND {owner_filter}
+                          )
                         )
-                    if 'job_events_modify' not in ev_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_events_modify ON job_events FOR UPDATE, DELETE
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                (current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ',')))
-                                AND (current_setting('app.owner_user_id', true) IS NULL OR owner_user_id = current_setting('app.owner_user_id', true))
-                              )
-                            )
-                            """
+                        """
+                    )
+                    cur.execute("DROP POLICY IF EXISTS job_events_modify ON job_events")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_events_modify ON job_events FOR ALL
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                            AND {owner_filter}
+                          )
                         )
+                        """
+                    )
                 except Exception:
                     pass
                 # job_counters policies (domain only, with admin bypass)
                 try:
-                    cur.execute("SELECT polname FROM pg_policies WHERE schemaname = current_schema() AND tablename = 'job_counters'")
-                    cnt_pols = {r[0] for r in cur.fetchall()}
-                    if 'job_counters_select' not in cnt_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_counters_select ON job_counters FOR SELECT
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ','))
-                              )
-                            )
-                            """
+                    cur.execute("DROP POLICY IF EXISTS job_counters_select ON job_counters")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_counters_select ON job_counters FOR SELECT
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                          )
                         )
-                    if 'job_counters_modify' not in cnt_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_counters_modify ON job_counters FOR UPDATE, DELETE
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ','))
-                              )
-                            )
-                            """
+                        """
+                    )
+                    cur.execute("DROP POLICY IF EXISTS job_counters_modify ON job_counters")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_counters_modify ON job_counters FOR ALL
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                          )
                         )
+                        """
+                    )
                 except Exception:
                     pass
                 # job_queue_controls policies (domain only, with admin bypass)
                 try:
-                    cur.execute("SELECT polname FROM pg_policies WHERE schemaname = current_schema() AND tablename = 'job_queue_controls'")
-                    qpols = {r[0] for r in cur.fetchall()}
-                    if 'job_queue_controls_select' not in qpols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_queue_controls_select ON job_queue_controls FOR SELECT
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ','))
-                              )
-                            )
-                            """
+                    cur.execute("DROP POLICY IF EXISTS job_queue_controls_select ON job_queue_controls")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_queue_controls_select ON job_queue_controls FOR SELECT
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                          )
                         )
-                    if 'job_queue_controls_modify' not in qpols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_queue_controls_modify ON job_queue_controls FOR UPDATE, DELETE
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ','))
-                              )
-                            )
-                            """
+                        """
+                    )
+                    cur.execute("DROP POLICY IF EXISTS job_queue_controls_modify ON job_queue_controls")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_queue_controls_modify ON job_queue_controls FOR ALL
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                          )
                         )
+                        """
+                    )
                 except Exception:
                     pass
                 # job_attachments policies (join to jobs for domain/owner)
                 try:
-                    cur.execute("SELECT polname FROM pg_policies WHERE schemaname = current_schema() AND tablename = 'job_attachments'")
-                    att_pols = {r[0] for r in cur.fetchall()}
-                    if 'job_attachments_select' not in att_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_attachments_select ON job_attachments FOR SELECT
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR EXISTS (
-                                SELECT 1 FROM jobs j
-                                WHERE j.id = job_attachments.job_id
-                                  AND (current_setting('app.domain_allowlist', true) IS NULL OR j.domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ',')))
-                                  AND (current_setting('app.owner_user_id', true) IS NULL OR j.owner_user_id = current_setting('app.owner_user_id', true))
-                              )
-                            )
-                            """
+                    cur.execute("DROP POLICY IF EXISTS job_attachments_select ON job_attachments")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_attachments_select ON job_attachments FOR SELECT
+                        USING (
+                          {admin_expr} OR EXISTS (
+                            SELECT 1 FROM jobs j
+                            WHERE j.id = job_attachments.job_id
+                              AND ({domain_expr} IS NULL OR j.domain = ANY(string_to_array({domain_expr}, ',')))
+                              AND ({owner_expr} IS NULL OR j.owner_user_id = {owner_expr})
+                          )
                         )
-                    if 'job_attachments_modify' not in att_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_attachments_modify ON job_attachments FOR UPDATE, DELETE
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR EXISTS (
-                                SELECT 1 FROM jobs j
-                                WHERE j.id = job_attachments.job_id
-                                  AND (current_setting('app.domain_allowlist', true) IS NULL OR j.domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ',')))
-                                  AND (current_setting('app.owner_user_id', true) IS NULL OR j.owner_user_id = current_setting('app.owner_user_id', true))
-                              )
-                            )
-                            """
+                        """
+                    )
+                    cur.execute("DROP POLICY IF EXISTS job_attachments_modify ON job_attachments")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_attachments_modify ON job_attachments FOR ALL
+                        USING (
+                          {admin_expr} OR EXISTS (
+                            SELECT 1 FROM jobs j
+                            WHERE j.id = job_attachments.job_id
+                              AND ({domain_expr} IS NULL OR j.domain = ANY(string_to_array({domain_expr}, ',')))
+                              AND ({owner_expr} IS NULL OR j.owner_user_id = {owner_expr})
+                          )
                         )
+                        """
+                    )
+                except Exception:
+                    pass
+                # job_dependencies policies (join to jobs for domain/owner)
+                try:
+                    cur.execute("DROP POLICY IF EXISTS job_dependencies_select ON job_dependencies")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_dependencies_select ON job_dependencies FOR SELECT
+                        USING (
+                          {admin_expr} OR EXISTS (
+                            SELECT 1 FROM jobs j
+                            WHERE j.uuid = job_dependencies.job_uuid
+                              AND ({domain_expr} IS NULL OR j.domain = ANY(string_to_array({domain_expr}, ',')))
+                              AND ({owner_expr} IS NULL OR j.owner_user_id = {owner_expr})
+                          )
+                        )
+                        """
+                    )
+                    cur.execute("DROP POLICY IF EXISTS job_dependencies_modify ON job_dependencies")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_dependencies_modify ON job_dependencies FOR ALL
+                        USING (
+                          {admin_expr} OR EXISTS (
+                            SELECT 1 FROM jobs j
+                            WHERE j.uuid = job_dependencies.job_uuid
+                              AND ({domain_expr} IS NULL OR j.domain = ANY(string_to_array({domain_expr}, ',')))
+                              AND ({owner_expr} IS NULL OR j.owner_user_id = {owner_expr})
+                          )
+                        )
+                        """
+                    )
                 except Exception:
                     pass
                 # job_sla_policies policies (domain only)
                 try:
-                    cur.execute("SELECT polname FROM pg_policies WHERE schemaname = current_schema() AND tablename = 'job_sla_policies'")
-                    sla_pols = {r[0] for r in cur.fetchall()}
-                    if 'job_sla_policies_select' not in sla_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_sla_policies_select ON job_sla_policies FOR SELECT
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ','))
-                              )
-                            )
-                            """
+                    cur.execute("DROP POLICY IF EXISTS job_sla_policies_select ON job_sla_policies")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_sla_policies_select ON job_sla_policies FOR SELECT
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                          )
                         )
-                    if 'job_sla_policies_modify' not in sla_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY job_sla_policies_modify ON job_sla_policies FOR UPDATE, DELETE
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ','))
-                              )
-                            )
-                            """
+                        """
+                    )
+                    cur.execute("DROP POLICY IF EXISTS job_sla_policies_modify ON job_sla_policies")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY job_sla_policies_modify ON job_sla_policies FOR ALL
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                          )
                         )
+                        """
+                    )
                 except Exception:
                     pass
                 # jobs_archive policies (domain + owner, with admin bypass)
                 try:
-                    cur.execute("SELECT polname FROM pg_policies WHERE schemaname = current_schema() AND tablename = 'jobs_archive'")
-                    ar_pols = {r[0] for r in cur.fetchall()}
-                    if 'jobs_archive_select' not in ar_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY jobs_archive_select ON jobs_archive FOR SELECT
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                (current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ',')))
-                                AND (current_setting('app.owner_user_id', true) IS NULL OR owner_user_id = current_setting('app.owner_user_id', true))
-                              )
-                            )
-                            """
+                    cur.execute("DROP POLICY IF EXISTS jobs_archive_select ON jobs_archive")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY jobs_archive_select ON jobs_archive FOR SELECT
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                            AND {owner_filter}
+                          )
                         )
-                    if 'jobs_archive_modify' not in ar_pols:
-                        cur.execute(
-                            """
-                            CREATE POLICY jobs_archive_modify ON jobs_archive FOR UPDATE, DELETE
-                            USING (
-                              COALESCE(current_setting('app.is_admin', true), '') = 'true' OR (
-                                (current_setting('app.domain_allowlist', true) IS NULL OR domain = ANY(string_to_array(current_setting('app.domain_allowlist', true), ',')))
-                                AND (current_setting('app.owner_user_id', true) IS NULL OR owner_user_id = current_setting('app.owner_user_id', true))
-                              )
-                            )
-                            """
+                        """
+                    )
+                    cur.execute("DROP POLICY IF EXISTS jobs_archive_modify ON jobs_archive")
+                    cur.execute(
+                        f"""
+                        CREATE POLICY jobs_archive_modify ON jobs_archive FOR ALL
+                        USING (
+                          {admin_expr} OR (
+                            {domain_filter}
+                            AND {owner_filter}
+                          )
                         )
+                        """
+                    )
                 except Exception:
                     pass
+                if debug:
+                    try:
+                        cur.execute(
+                            """
+                            SELECT tablename, polname
+                            FROM pg_policies
+                            WHERE schemaname = current_schema()
+                              AND tablename IN (
+                                'jobs','job_events','job_counters','job_queue_controls',
+                                'job_attachments','job_sla_policies','job_dependencies','jobs_archive'
+                              )
+                            ORDER BY tablename, polname
+                            """
+                        )
+                        rows = cur.fetchall()
+                        print(f"[jobs-rls-debug] policies={rows}")
+                    except Exception:
+                        pass
     except Exception:
+        if debug:
+            try:
+                print("[jobs-rls-debug] failed to apply RLS policies")
+            except Exception:
+                pass
         return
 
 

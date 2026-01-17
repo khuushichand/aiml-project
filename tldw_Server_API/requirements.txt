@@ -4,6 +4,7 @@ regex==2025.11.3
 av  # For audio encoding/streaming
 faster_whisper
 kokoro_onnx
+kokoro-tts
 nemo_toolkit[asr]
 huggingface_hub
 pyannote.audio

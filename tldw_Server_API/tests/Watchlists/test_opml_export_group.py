@@ -49,6 +49,8 @@ def _extract_opml_urls(xml_text: str) -> list[str]:
 
 
 def test_opml_export_filters_by_group(client_with_user):
+
+
     c = client_with_user
 
     # Create two groups

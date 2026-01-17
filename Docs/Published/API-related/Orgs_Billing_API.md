@@ -886,36 +886,46 @@ echo "Share this invite code: $INVITE_CODE"
 ### Python Client Example
 
 ```python
-import httpx
+import json
 from typing import Optional
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 class TLDWClient:
     def __init__(self, base_url: str, token: str):
-        self.base_url = base_url
+        self.base_url = base_url.rstrip("/")
         self.headers = {"Authorization": f"Bearer {token}"}
 
-    async def preview_invite(self, code: str) -> dict:
+    def _request_json(self, method, path, payload=None, params=None, headers=None):
+        url = f"{self.base_url}{path}"
+        if params:
+            url = f"{url}?{urlencode(params)}"
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        hdrs = {"Content-Type": "application/json"}
+        if headers:
+            hdrs.update(headers)
+        req = Request(url, data=data, headers=hdrs, method=method)
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def preview_invite(self, code: str) -> dict:
         """Preview an invite without authentication."""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/api/v1/invites/preview",
-                params={"code": code}
-            )
-            response.raise_for_status()
-            return response.json()
+        return self._request_json(
+            "GET",
+            "/api/v1/invites/preview",
+            params={"code": code},
+        )
 
-    async def redeem_invite(self, code: str) -> dict:
+    def redeem_invite(self, code: str) -> dict:
         """Redeem an invite code."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.base_url}/api/v1/invites/redeem",
-                headers=self.headers,
-                json={"code": code}
-            )
-            response.raise_for_status()
-            return response.json()
+        return self._request_json(
+            "POST",
+            "/api/v1/invites/redeem",
+            payload={"code": code},
+            headers=self.headers,
+        )
 
-    async def create_invite(
+    def create_invite(
         self,
         org_id: int,
         max_uses: int = 1,
@@ -924,46 +934,41 @@ class TLDWClient:
         team_id: Optional[int] = None
     ) -> dict:
         """Create an organization invite."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.base_url}/api/v1/orgs/{org_id}/invites",
-                headers=self.headers,
-                json={
-                    "max_uses": max_uses,
-                    "expiry_days": expiry_days,
-                    "role_to_grant": role,
-                    "team_id": team_id
-                }
-            )
-            response.raise_for_status()
-            return response.json()
+        return self._request_json(
+            "POST",
+            f"/api/v1/orgs/{org_id}/invites",
+            payload={
+                "max_uses": max_uses,
+                "expiry_days": expiry_days,
+                "role_to_grant": role,
+                "team_id": team_id,
+            },
+            headers=self.headers,
+        )
 
-    async def get_usage(self, org_id: int) -> dict:
+    def get_usage(self, org_id: int) -> dict:
         """Get organization usage metrics."""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/api/v1/billing/usage",
-                headers=self.headers,
-                params={"org_id": org_id}
-            )
-            response.raise_for_status()
-            return response.json()
+        return self._request_json(
+            "GET",
+            "/api/v1/billing/usage",
+            params={"org_id": org_id},
+            headers=self.headers,
+        )
 
 # Usage
-async def main():
+def main():
     client = TLDWClient("http://localhost:8000", "your-token")
 
     # Preview before redeeming
-    preview = await client.preview_invite("ABC123XYZ")
+    preview = client.preview_invite("ABC123XYZ")
     print(f"Joining: {preview['org_name']} as {preview['role_to_grant']}")
 
-    if preview['is_valid']:
-        result = await client.redeem_invite("ABC123XYZ")
+    if preview["is_valid"]:
+        result = client.redeem_invite("ABC123XYZ")
         print(f"Joined org {result['org_name']}!")
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
 ```
 
 ---

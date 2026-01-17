@@ -5,7 +5,7 @@ Non-streaming Speech-to-Speech chat orchestration (STT → LLM → TTS).
 
 This module wires together:
   - STT: Audio_Transcription_Lib.transcribe_audio
-  - LLM: chat_orchestrator.chat_api_call_async
+  - LLM: adapter registry (async) with legacy fallback
   - TTS: TTSServiceV2.generate_speech
   - Session storage: ChaChaNotes conversations/messages
 
@@ -39,20 +39,34 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     get_api_keys,
     DEFAULT_LLM_PROVIDER,
 )
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
     transcribe_audio,
     is_transcription_error_message,
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call_async as chat_api_call_async,
+)
 from tldw_Server_API.app.core.Chat.chat_helpers import (
     get_or_create_character_context,
     get_or_create_conversation,
     load_conversation_history,
     extract_response_content,
 )
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
@@ -355,6 +369,7 @@ def _map_tts_exception(exc: Exception) -> HTTPException:
 async def run_speech_chat_turn(
     *,
     request_data: SpeechChatRequest,
+    request: Optional[Any] = None,
     current_user: User,
     chat_db: CharactersRAGDB,
     tts_service: TTSServiceV2,
@@ -366,7 +381,7 @@ async def run_speech_chat_turn(
       1. Decode and normalize input audio to mono.
       2. Run STT to obtain a user transcript.
       3. Resolve character + conversation and load recent history.
-      4. Call LLM via chat_api_call_async to get assistant text.
+      4. Call LLM via adapter registry (async) with legacy fallback.
       5. Persist user/assistant messages into ChaChaNotes.
       6. Run TTS to synthesize assistant reply and base64-encode it.
     """
@@ -511,28 +526,71 @@ async def run_speech_chat_turn(
     byok_resolution = await resolve_byok_credentials(
         llm_provider,
         user_id=user_id_int,
+        request=request,
         fallback_resolver=_fallback_resolver,
     )
     provider_api_key = byok_resolution.api_key
 
     llm_start = time.time()
     try:
-        llm_response: Any = await chat_api_call_async(
-            api_endpoint=llm_provider,
-            messages_payload=messages_payload,
-            api_key=provider_api_key,
-            temp=request_data.llm_config.temperature,
-            maxp=None,
-            model=llm_model,
-            topk=None,
-            topp=None,
-            max_tokens=request_data.llm_config.max_tokens,
-            response_format={"type": "text"},
-            streaming=False,
-            user_identifier=str(getattr(current_user, "id", client_id)),
-            system_message=(character_card or {}).get("system_prompt"),
-            app_config=byok_resolution.app_config,
-        )
+        adapter = get_registry().get_adapter(normalize_provider(llm_provider))
+        system_message = (character_card or {}).get("system_prompt")
+        request_messages = messages_payload
+        if system_message is None:
+            system_message, request_messages = split_system_message(messages_payload)
+
+        app_config = ensure_app_config(byok_resolution.app_config)
+        api_key = provider_api_key or resolve_provider_api_key_from_config(llm_provider, app_config)
+        provider_key = (llm_provider or "").strip().lower()
+        if provider_requires_api_key(provider_key) and not api_key:
+            record_byok_missing_credentials(provider_key, operation="speech_chat")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "missing_provider_credentials",
+                    "message": f"Provider '{llm_provider}' requires an API key.",
+                },
+            )
+
+        if adapter is not None:
+            resolved_model = llm_model or resolve_provider_model(llm_provider, app_config)
+            if not resolved_model:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="llm_config.model is required for speech chat v1",
+                )
+            request_payload = {
+                "messages": request_messages,
+                "system_message": system_message,
+                "model": resolved_model,
+                "api_key": api_key,
+                "temperature": request_data.llm_config.temperature,
+                "max_tokens": request_data.llm_config.max_tokens,
+                "response_format": {"type": "text"},
+                "user": str(getattr(current_user, "id", client_id)),
+                "app_config": app_config,
+            }
+            try:
+                llm_response = await adapter.achat(request_payload)
+            except NotImplementedError:
+                llm_response = await asyncio.to_thread(adapter.chat, request_payload)
+        else:
+            llm_response = await chat_api_call_async(
+                api_endpoint=llm_provider,
+                messages_payload=request_messages,
+                api_key=api_key,
+                temp=request_data.llm_config.temperature,
+                maxp=None,
+                model=llm_model,
+                topk=None,
+                topp=None,
+                max_tokens=request_data.llm_config.max_tokens,
+                response_format={"type": "text"},
+                streaming=False,
+                user_identifier=str(getattr(current_user, "id", client_id)),
+                system_message=system_message,
+                app_config=app_config,
+            )
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001

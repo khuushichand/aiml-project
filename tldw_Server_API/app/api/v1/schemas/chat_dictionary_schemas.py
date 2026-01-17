@@ -14,6 +14,8 @@ from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from loguru import logger
 
+from tldw_Server_API.app.core.Character_Chat.constants import MAX_CHAT_DICTIONARY_TEXT_LENGTH
+
 # Maximum length for regex patterns to prevent complexity attacks
 MAX_REGEX_PATTERN_LENGTH = 500
 
@@ -29,6 +31,59 @@ DANGEROUS_REGEX_PATTERNS = [
     r'(.?)*',      # Many optional matches
     r'([a-zA-Z]+)*',  # Character class with nested quantifier
 ]
+
+
+def _has_nested_quantifiers(pattern: str) -> bool:
+    """Heuristic check for nested quantifiers like '(a+)+'. """
+    escaped = False
+    in_class = False
+    group_stack: List[bool] = []
+    last_closed_group_had_quantifier = False
+    last_token_was_group_end = False
+
+    for char in pattern:
+        if escaped:
+            escaped = False
+            last_token_was_group_end = False
+            continue
+
+        if char == "\\":
+            escaped = True
+            last_token_was_group_end = False
+            continue
+
+        if in_class:
+            if char == "]":
+                in_class = False
+            last_token_was_group_end = False
+            continue
+
+        if char == "[":
+            in_class = True
+            last_token_was_group_end = False
+            continue
+
+        if char == "(":
+            group_stack.append(False)
+            last_token_was_group_end = False
+            continue
+
+        if char == ")":
+            last_closed_group_had_quantifier = group_stack.pop() if group_stack else False
+            last_token_was_group_end = True
+            continue
+
+        if char in "*+?":
+            if last_token_was_group_end and last_closed_group_had_quantifier:
+                return True
+            if group_stack:
+                group_stack[-1] = True
+            last_token_was_group_end = False
+            continue
+
+        last_token_was_group_end = False
+
+    return False
 
 
 def validate_regex_pattern_safety(pattern: str) -> str:
@@ -66,8 +121,7 @@ def validate_regex_pattern_safety(pattern: str) -> str:
 
     # Check for excessive quantifier nesting (heuristic)
     # Count nested groups with quantifiers
-    quantifier_pattern = re.compile(r'\([^()]*[+*?][^()]*\)[+*?]')
-    if quantifier_pattern.search(pattern):
+    if _has_nested_quantifiers(pattern):
         logger.warning(f"Regex pattern may have nested quantifiers: {pattern[:50]}...")
         # Don't fail, just warn - some nested quantifiers are safe
 
@@ -180,7 +234,7 @@ class ChatDictionaryWithEntries(ChatDictionaryResponse):
 
 class ProcessTextRequest(BaseModel):
     """Request schema for processing text through dictionaries."""
-    text: str = Field(..., description="Text to process")
+    text: str = Field(..., max_length=MAX_CHAT_DICTIONARY_TEXT_LENGTH, description="Text to process")
     dictionary_id: Optional[int] = Field(None, description="Specific dictionary to use")
     group: Optional[str] = Field(None, description="Specific group to filter entries")
     max_iterations: int = Field(5, ge=1, le=20, description="Maximum processing iterations")

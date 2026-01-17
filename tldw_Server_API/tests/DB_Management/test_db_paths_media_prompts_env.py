@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.unit
 def test_media_and_prompts_paths_follow_env_base(monkeypatch, tmp_path):
-    # Arrange
+     # Arrange
     base = tmp_path / "user_data_base"
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
 

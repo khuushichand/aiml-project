@@ -12,7 +12,7 @@ async def test_real_redis_multi_key_lua_path(real_redis, rg_unique_ns):
 
     class _Loader:
         def get_policy(self, pid):
-            # Modest limits to trigger multi-key reservation across requests+tokens
+                     # Modest limits to trigger multi-key reservation across requests+tokens
             return {"requests": {"rpm": 3}, "tokens": {"per_min": 3}, "scopes": ["global", "user"]}
 
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns=rg_unique_ns)
@@ -39,7 +39,7 @@ async def test_real_redis_multi_category_denial(real_redis, rg_unique_ns):
 
     class _Loader:
         def get_policy(self, pid):
-            # Very small limits to force denial on second combined reserve
+                     # Very small limits to force denial on second combined reserve
             return {"requests": {"rpm": 1}, "tokens": {"per_min": 1}, "scopes": ["global", "user"]}
 
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns=rg_unique_ns)
@@ -131,7 +131,7 @@ async def test_real_redis_denial_rollback_and_refunds(real_redis, rg_unique_ns):
 
     class _Loader:
         def get_policy(self, pid):
-            # Limits designed to allow initial reserve then deny on second; also test refunds
+                     # Limits designed to allow initial reserve then deny on second; also test refunds
             return {
                 "requests": {"rpm": 2},
                 "tokens": {"per_min": 3},

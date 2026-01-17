@@ -60,7 +60,7 @@
   - Request/trace propagation into jobs (audio): tldw_Server_API/tests/Logging/test_trace_context.py:39–76
   - SQLite/Postgres stats and RBAC coverage: tldw_Server_API/tests/Jobs/test_jobs_stats_sqlite.py:34, tldw_Server_API/tests/Jobs/test_jobs_stats_postgres.py:44, tldw_Server_API/tests/Jobs/test_jobs_rbac_sqlite.py:60
   - Quotas/enforcement: tldw_Server_API/tests/Jobs/test_jobs_quotas_sqlite.py:11
-  - Embeddings job path: tldw_Server_API/tests/Embeddings/test_reembed_jobs_worker.py:26
+  - Embeddings job path: tldw_Server_API/tests/e2e/test_embeddings_e2e.py:1
 - Local Dev Tips
   - Start a Postgres via docker-compose to exercise RLS; set `JOBS_DB_URL` accordingly.
   - Use admin endpoints to pause/resume queues and to retry/reschedule stuck jobs during testing.

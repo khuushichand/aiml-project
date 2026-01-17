@@ -15,13 +15,21 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Callable
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 
 
 LIVE_SYSTEM_PROMPT = (
@@ -154,11 +162,12 @@ class LiveMeetingInsights:
         websocket,
         settings: LiveInsightSettings,
         *,
-        chat_call=chat_api_call,
+        chat_call: Optional[Callable[..., Any]] = None,
     ):
         self.websocket = websocket
         self.settings = settings
-        self._chat_call = chat_call
+        self._chat_call = chat_call or self._adapter_chat_call
+        self._app_config = ensure_app_config()
         self._segments: List[Dict[str, Any]] = []
         self._loop = asyncio.get_running_loop()
         self._lock = asyncio.Lock()
@@ -172,6 +181,39 @@ class LiveMeetingInsights:
         self.provider = provider
         self.model = model
         self.api_endpoint = provider.lower()
+
+    @staticmethod
+    def _adapter_chat_call(
+        *,
+        api_endpoint: str,
+        messages_payload: List[Dict[str, Any]],
+        model: Optional[str],
+        temp: float,
+        max_tokens: int,
+        response_format: Optional[Dict[str, Any]] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+        **extra_kwargs: Any,
+    ) -> Any:
+        provider_name = normalize_provider(api_endpoint)
+        if not provider_name:
+            raise ChatConfigurationError(provider=api_endpoint, message="LLM provider is required.")
+        cfg = ensure_app_config(app_config)
+        resolved_model = model or resolve_provider_model(provider_name, cfg)
+        if not resolved_model:
+            raise ChatConfigurationError(provider=provider_name, message="Model is required for provider.")
+        system_message, cleaned_messages = split_system_message(messages_payload or [])
+        request: Dict[str, Any] = {
+            "messages": cleaned_messages,
+            "system_message": system_message,
+            "model": resolved_model,
+            "api_key": resolve_provider_api_key_from_config(provider_name, cfg),
+            "temperature": temp,
+            "max_tokens": max_tokens,
+            "response_format": response_format,
+            "app_config": cfg,
+        }
+        request.update(extra_kwargs)
+        return get_adapter_or_raise(provider_name).chat(request)
 
     # --------------------------------------------------------------------- #
     # Public API
@@ -399,6 +441,7 @@ class LiveMeetingInsights:
                 temp=self.settings.temperature,
                 max_tokens=max_tokens,
                 response_format=response_format,
+                app_config=self._app_config,
             )
 
         raw_response = await self._loop.run_in_executor(None, _invoke)

@@ -9,7 +9,7 @@ import os
 from typing import Dict, Optional, Type
 from loguru import logger
 
-from .base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError
+from .base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError, normalize_backend_name
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from .sqlite_backend import SQLiteBackend
 
@@ -76,7 +76,8 @@ class BackendFactory:
         # Coerce string backend types to enum, raising ValueError on invalid input
         if isinstance(bt, str):
             try:
-                config.backend_type = BackendType(bt)
+                normalized = normalize_backend_name(bt)
+                config.backend_type = BackendType(normalized)
             except ValueError as e:
                 # Match expected behavior in tests
                 raise ValueError(f"Invalid backend type: {bt}") from e
@@ -99,10 +100,11 @@ class BackendFactory:
         """
         # Determine backend type
         if backend_type is None:
-            backend_type = os.getenv("TLDW_DB_BACKEND", "sqlite").lower()
+            backend_type = os.getenv("TLDW_DB_BACKEND", "sqlite")
 
         try:
-            backend_enum = BackendType(backend_type)
+            normalized = normalize_backend_name(backend_type)
+            backend_enum = BackendType(normalized)
         except ValueError:
             raise DatabaseError(f"Invalid backend type: {backend_type}")
 
@@ -168,6 +170,7 @@ class BackendFactory:
 
         # Determine backend type
         backend_type_str = backend_override or db_config.get('backend', 'sqlite')
+        backend_type_str = normalize_backend_name(backend_type_str)
 
         try:
             backend_type = BackendType(backend_type_str)

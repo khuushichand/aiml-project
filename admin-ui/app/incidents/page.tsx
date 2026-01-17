@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -14,29 +14,22 @@ import { Pagination } from '@/components/ui/pagination';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
+import { formatDateTime } from '@/lib/format';
 import { useUrlPagination } from '@/lib/use-url-state';
+import { usePagedResource } from '@/lib/use-paged-resource';
 import type { IncidentItem } from '@/types/incidents';
 import { RefreshCw, Trash2 } from 'lucide-react';
 
 const STATUSES = ['open', 'investigating', 'mitigating', 'resolved'] as const;
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
 
-const formatDate = (value?: string | null) => {
-  if (!value) return '—';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString();
-};
+const formatIncidentDate = (value?: string | null) =>
+  formatDateTime(value, { fallback: '—' });
 
 export default function IncidentsPage() {
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
-
-  const [incidents, setIncidents] = useState<IncidentItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
   const [statusFilter, setStatusFilter] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
@@ -65,29 +58,19 @@ export default function IncidentsPage() {
     return payload;
   }, [deferredTagFilter, page, pageSize, severityFilter, statusFilter]);
 
-  const loadIncidents = useCallback(async (signal?: AbortSignal) => {
-    try {
-      setLoading(true);
-      setError('');
-      const data = await api.getIncidents(params, signal ? { signal } : undefined);
-      setIncidents(data.items);
-      setTotal(data.total);
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'AbortError') return;
-      const message = err instanceof Error && err.message ? err.message : 'Failed to load incidents';
-      setError(message);
-      setIncidents([]);
-      setTotal(0);
-    } finally {
-      setLoading(false);
-    }
-  }, [params]);
+  const loadIncidents = useCallback(({ signal }: { signal?: AbortSignal } = {}) =>
+    api.getIncidents(params, signal ? { signal } : undefined), [params]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void loadIncidents(controller.signal);
-    return () => controller.abort();
-  }, [loadIncidents]);
+  const {
+    items: incidents,
+    total,
+    loading,
+    error,
+    reload,
+  } = usePagedResource<IncidentItem>({
+    load: loadIncidents,
+    defaultError: 'Failed to load incidents',
+  });
 
   useEffect(() => {
     resetPagination();
@@ -124,7 +107,7 @@ export default function IncidentsPage() {
       setSummary('');
       setTags('');
       resetPagination();
-      await loadIncidents();
+      await reload();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to create incident';
       showError(message);
@@ -140,7 +123,7 @@ export default function IncidentsPage() {
         status: nextStatus,
         update_message: `Status changed to ${nextStatus}`,
       });
-      await loadIncidents();
+      await reload();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to update status';
       showError(message);
@@ -156,7 +139,7 @@ export default function IncidentsPage() {
         severity: nextSeverity,
         update_message: `Severity set to ${nextSeverity}`,
       });
-      await loadIncidents();
+      await reload();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to update severity';
       showError(message);
@@ -175,7 +158,7 @@ export default function IncidentsPage() {
       setIncidentUpdating(incidentId, true);
       await api.addIncidentEvent(incidentId, { message: note });
       setUpdateNotes((prev) => ({ ...prev, [incidentId]: '' }));
-      await loadIncidents();
+      await reload();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to add update';
       showError(message);
@@ -196,7 +179,7 @@ export default function IncidentsPage() {
       setIncidentUpdating(incidentId, true);
       await api.deleteIncident(incidentId);
       success('Incident deleted');
-      await loadIncidents();
+      await reload();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to delete incident';
       showError(message);
@@ -208,7 +191,7 @@ export default function IncidentsPage() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="flex flex-col gap-6 p-6">
           <div className="flex items-center justify-between">
@@ -219,7 +202,7 @@ export default function IncidentsPage() {
             <Button
               variant="outline"
               onClick={() => {
-                void loadIncidents();
+                void reload();
               }}
               disabled={loading}
             >
@@ -385,7 +368,7 @@ export default function IncidentsPage() {
                         </Badge>
                       </CardTitle>
                       <CardDescription>
-                        Updated {formatDate(incident.updated_at)} · Created {formatDate(incident.created_at)}
+                        Updated {formatIncidentDate(incident.updated_at)} · Created {formatIncidentDate(incident.created_at)}
                       </CardDescription>
                     </div>
                     <Button
@@ -450,7 +433,7 @@ export default function IncidentsPage() {
                       <div className="space-y-1">
                         <Label htmlFor={`resolved-${incident.id}`}>Resolved</Label>
                         <div id={`resolved-${incident.id}`} className="text-sm text-muted-foreground">
-                          {incident.resolved_at ? formatDate(incident.resolved_at) : 'Not resolved'}
+                          {incident.resolved_at ? formatIncidentDate(incident.resolved_at) : 'Not resolved'}
                         </div>
                       </div>
                     </div>
@@ -479,7 +462,7 @@ export default function IncidentsPage() {
                           <div key={event.id} className="rounded-md border p-2">
                             <div className="font-medium text-foreground">{event.message}</div>
                             <div className="text-xs text-muted-foreground">
-                              {formatDate(event.created_at)} {event.actor ? `· ${event.actor}` : ''}
+                              {formatIncidentDate(event.created_at)} {event.actor ? `· ${event.actor}` : ''}
                             </div>
                           </div>
                         ))}
@@ -502,6 +485,6 @@ export default function IncidentsPage() {
           />
         </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

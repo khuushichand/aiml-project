@@ -2,11 +2,16 @@
 # Description: Kokoro TTS adapter implementation
 #
 # Imports
+import builtins
 import os
 import sys
 import platform
+import time
+import asyncio
+import concurrent.futures
 from ctypes.util import find_library as _ctypes_find_library
 import re
+from contextlib import contextmanager
 from typing import Optional, Dict, Any, AsyncGenerator, Set, List, Tuple
 #
 # Third-party Imports
@@ -47,6 +52,37 @@ from ..phoneme_overrides import (
 #######################################################################################################################
 #
 # Kokoro TTS Adapter Implementation
+
+_KOKORO_REPO_WARNING_PREFIX = "WARNING: Defaulting repo_id to "
+
+
+@contextmanager
+def _capture_kokoro_repo_warning():
+    """Redirect Kokoro's repo_id print warning into Loguru output."""
+    original_print = builtins.print
+
+    def _print(*args, **kwargs):
+        try:
+            target = kwargs.get("file", None)
+            if target not in (None, sys.stdout):
+                return original_print(*args, **kwargs)
+            sep = kwargs.get("sep", " ")
+            if sep is None:
+                sep = " "
+            msg = sep.join(str(arg) for arg in args)
+        except Exception:
+            return original_print(*args, **kwargs)
+        if msg.startswith(_KOKORO_REPO_WARNING_PREFIX):
+            logger.warning(msg)
+            return
+        return original_print(*args, **kwargs)
+
+    builtins.print = _print
+    try:
+        yield
+    finally:
+        builtins.print = original_print
+
 
 class KokoroAdapter(TTSAdapter):
     """Adapter for Kokoro TTS (ONNX and PyTorch variants)"""
@@ -131,14 +167,42 @@ class KokoroAdapter(TTSAdapter):
         # Determine backend type (ONNX or PyTorch). Default to PyTorch; ONNX is opt-in.
         self.use_onnx = self.config.get("kokoro_use_onnx", False)
         # Device selection with fallback
-        preferred = self.config.get("kokoro_device")
+        preferred = self.config.get("kokoro_device") or os.getenv("KOKORO_DEVICE")
+        probe_timeout_raw = (
+            self.config.get("kokoro_device_probe_timeout_sec")
+            or os.getenv("KOKORO_DEVICE_PROBE_TIMEOUT_SEC")
+        )
         try:
-            import torch  # type: ignore
-            cuda_avail = torch.cuda.is_available()
-            mps_avail = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
+            self.device_probe_timeout_sec = float(probe_timeout_raw) if probe_timeout_raw is not None else 2.0
         except Exception:
+            self.device_probe_timeout_sec = 2.0
+        cuda_avail = False
+        mps_avail = False
+
+        def _probe_devices() -> tuple[bool, bool]:
+            try:
+                import torch  # type: ignore
+                cuda_ok = torch.cuda.is_available()
+                mps_ok = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
+                return cuda_ok, mps_ok
+            except Exception:
+                return False, False
+
+        if preferred and str(preferred).lower() == "cpu":
             cuda_avail = False
             mps_avail = False
+        else:
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_probe_devices)
+                    cuda_avail, mps_avail = future.result(timeout=self.device_probe_timeout_sec)
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"{self.provider_name}: Device probe timed out; defaulting to CPU")
+                cuda_avail = False
+                mps_avail = False
+            except Exception:
+                cuda_avail = False
+                mps_avail = False
         if preferred:
             pref = str(preferred).lower()
             if pref == "cuda":
@@ -171,6 +235,25 @@ class KokoroAdapter(TTSAdapter):
         # PyTorch voices directory (for KModel / KPipeline and dynamic voices)
         self.voice_dir = self.config.get("kokoro_voice_dir", "models/kokoro/voices")
 
+        # Optionally defer heavyweight model load (useful for tests)
+        self._lazy_init = parse_bool(
+            self.config.get("kokoro_lazy_init"),
+            default=parse_bool(os.getenv("KOKORO_LAZY_INIT"), default=False),
+        )
+        if not self._lazy_init:
+            test_mode = bool(os.getenv("PYTEST_CURRENT_TEST")) or parse_bool(
+                os.getenv("TESTING"), default=False
+            ) or parse_bool(os.getenv("TEST_MODE"), default=False) or parse_bool(
+                os.getenv("TLDW_TEST_MODE"), default=False
+            )
+            explicit_model = any(
+                key in self.config for key in ("kokoro_model_path", "kokoro_use_onnx", "kokoro_voices_json")
+            )
+            if test_mode and not parse_bool(os.getenv("RUN_TTS_LEGACY_INTEGRATION"), default=False) and not explicit_model:
+                self._lazy_init = True
+        self._deferred_model_load = self._lazy_init
+        self._model_lock = asyncio.Lock()
+
         # Auto-download toggle (Kokoro does not auto-download; provided for consistency)
         cfg_auto = self.config.get("kokoro_auto_download")
         env_auto = os.getenv("KOKORO_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
@@ -200,6 +283,14 @@ class KokoroAdapter(TTSAdapter):
 
         # Performance settings
         self.sample_rate = self.config.get("sample_rate", 24000)
+        init_timeout_raw = (
+            self.config.get("kokoro_init_timeout_sec")
+            or os.getenv("KOKORO_INIT_TIMEOUT_SEC")
+        )
+        try:
+            self.init_timeout_sec = float(init_timeout_raw) if init_timeout_raw is not None else None
+        except Exception:
+            self.init_timeout_sec = None
         # Pause insertion pacing (configurable)
         try:
             self.pause_interval_words = int(
@@ -227,17 +318,57 @@ class KokoroAdapter(TTSAdapter):
         self.audio_normalizer = None
         self._dynamic_voices: List[VoiceInfo] = []
 
+    def _ensure_audio_normalizer(self) -> None:
+        if self.audio_normalizer is not None:
+            return
+        from tldw_Server_API.app.core.TTS.streaming_audio_writer import AudioNormalizer
+
+        self.audio_normalizer = AudioNormalizer()
+
+    def _model_is_loaded(self) -> bool:
+        if self.use_onnx:
+            return self.kokoro_instance is not None
+        return self.kokoro_pt_model is not None or self.model_pt is not None
+
+    async def _ensure_model_loaded(self) -> bool:
+        if self._model_is_loaded():
+            return True
+        async with self._model_lock:
+            if self._model_is_loaded():
+                return True
+            if self.use_onnx:
+                return await self._load_onnx_model()
+            if self.init_timeout_sec:
+                try:
+                    return await asyncio.wait_for(self._load_pytorch_model(), timeout=self.init_timeout_sec)
+                except asyncio.TimeoutError:
+                    logger.error(f"{self.provider_name}: Lazy model load timed out after {self.init_timeout_sec}s")
+                    return False
+            return await self._load_pytorch_model()
+
     async def initialize(self) -> bool:
         """Initialize the Kokoro adapter"""
         try:
-            # Import audio normalizer
-            from tldw_Server_API.app.core.TTS.streaming_audio_writer import AudioNormalizer
-            self.audio_normalizer = AudioNormalizer()
+            if self._lazy_init:
+                try:
+                    self._load_dynamic_voices()
+                except Exception as ve:
+                    logger.warning(f"{self.provider_name}: Failed to load dynamic voices.json: {ve}")
+                logger.info(f"{self.provider_name}: Lazy init enabled; deferring model load")
+                self._status = ProviderStatus.AVAILABLE
+                return True
 
             if self.use_onnx:
                 success = await self._load_onnx_model()
             else:
-                success = await self._load_pytorch_model()
+                if self.init_timeout_sec:
+                    try:
+                        success = await asyncio.wait_for(self._load_pytorch_model(), timeout=self.init_timeout_sec)
+                    except asyncio.TimeoutError:
+                        logger.error(f"{self.provider_name}: Initialization timed out after {self.init_timeout_sec}s")
+                        success = False
+                else:
+                    success = await self._load_pytorch_model()
 
             # Load dynamic voices if available
             try:
@@ -473,7 +604,7 @@ class KokoroAdapter(TTSAdapter):
             )
         # Try native Kokoro PyTorch if available
         try:
-            from kokoro import KModel  # type: ignore
+            from kokoro.model import KModel  # type: ignore
             # config.json expected alongside model
             config_path = os.path.join(os.path.dirname(self.model_path), "config.json")
             if not os.path.exists(config_path):
@@ -482,7 +613,18 @@ class KokoroAdapter(TTSAdapter):
                     provider=self.provider_name,
                     details={"config_path": config_path}
                 )
-            self.kokoro_pt_model = KModel(config=config_path, model=self.model_path).eval()
+            repo_id = self.config.get("kokoro_repo_id") or os.getenv("KOKORO_REPO_ID") or "hexgrad/Kokoro-82M"
+            logger.info(f"{self.provider_name}: Loading Kokoro PyTorch model (repo_id={repo_id})")
+            start = time.time()
+            def _load_model():
+                return KModel(repo_id=repo_id, config=config_path, model=self.model_path).eval()
+            try:
+                with _capture_kokoro_repo_warning():
+                    self.kokoro_pt_model = await asyncio.to_thread(_load_model)
+            except Exception:
+                # Fallback to sync load if threading fails in constrained envs
+                with _capture_kokoro_repo_warning():
+                    self.kokoro_pt_model = _load_model()
             # Move to device
             dev = str(self.device).lower()
             if dev.startswith("cuda"):
@@ -498,7 +640,7 @@ class KokoroAdapter(TTSAdapter):
                     self.kokoro_pt_model = self.kokoro_pt_model.cpu()
             else:
                 self.kokoro_pt_model = self.kokoro_pt_model.cpu()
-            logger.info(f"{self.provider_name}: Kokoro PyTorch model loaded on {dev}")
+            logger.info(f"{self.provider_name}: Kokoro PyTorch model loaded on {dev} (t={time.time() - start:.2f}s)")
             return True
         except ImportError:
             # Fallback: generic torch.load
@@ -563,6 +705,14 @@ class KokoroAdapter(TTSAdapter):
                 f"{self.provider_name} not initialized",
                 provider=self.provider_name
             )
+        if self._deferred_model_load and not self._model_is_loaded():
+            loaded = await self._ensure_model_loaded()
+            if not loaded:
+                raise TTSProviderNotConfiguredError(
+                    f"{self.provider_name} model not initialized",
+                    provider=self.provider_name,
+                )
+            self._deferred_model_load = False
 
         # Validate request using new validation system
         try:
@@ -582,6 +732,8 @@ class KokoroAdapter(TTSAdapter):
 
         # Preprocess text
         text = self.preprocess_text(raw_text)
+
+        self._ensure_audio_normalizer()
 
         logger.info(
             f"{self.provider_name}: Generating speech with voice={voice}, "
@@ -693,7 +845,7 @@ class KokoroAdapter(TTSAdapter):
             else:
                 # Use Kokoro PyTorch pipeline if available
                 try:
-                    from kokoro import KPipeline  # type: ignore
+                    from kokoro.pipeline import KPipeline  # type: ignore
                 except ImportError:
                     # Cannot proceed without kokoro pipeline
                     raise TTSGenerationError(
@@ -718,11 +870,14 @@ class KokoroAdapter(TTSAdapter):
                 lang_code = self._get_kpipeline_lang_code(voice_id if isinstance(voice_id, str) else "", lang)
                 key = lang_code
                 if key not in self.kokoro_pt_pipelines:
-                    self.kokoro_pt_pipelines[key] = KPipeline(
-                        lang_code=key,
-                        model=self.kokoro_pt_model,
-                        device=str(self.device)
-                    )
+                    repo_id = self.config.get("kokoro_repo_id") or os.getenv("KOKORO_REPO_ID") or "hexgrad/Kokoro-82M"
+                    with _capture_kokoro_repo_warning():
+                        self.kokoro_pt_pipelines[key] = KPipeline(
+                            lang_code=key,
+                            repo_id=repo_id,
+                            model=self.kokoro_pt_model,
+                            device=str(self.device)
+                        )
                 pipeline = self.kokoro_pt_pipelines[key]
 
                 # Define a sync generator wrapper to async iterate

@@ -1,9 +1,10 @@
 import os
-import sqlite3
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+
+from tldw_Server_API.tests.helpers.audit_helpers import await_audit_action, flush_audit_events
 
 
 @pytest.mark.real_audit
@@ -60,16 +61,16 @@ async def test_admin_org_membership_audit_events_sqlite(tmp_path, real_audit_ser
         )
         assert r.status_code == 200, r.text
 
-    # After client exits, app shutdown flushes audit events
+        flush_audit_events(client, int(admin_id))
+
+    # Ensure audit services flush events before inspection.
+    from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services
+    await shutdown_all_audit_services()
+
     # Inspect user-specific audit DB
     from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     audit_db = DatabasePaths.get_audit_db_path(int(admin_id))
     assert audit_db.exists(), f"Audit DB not found: {audit_db}"
 
-    con = sqlite3.connect(str(audit_db))
-    try:
-        cur = con.execute("SELECT COUNT(*) FROM audit_events WHERE action = ?", ("org_member.add",))
-        cnt = cur.fetchone()[0]
-        assert cnt >= 1
-    finally:
-        con.close()
+    cnt = await await_audit_action(audit_db, "org_member.add")
+    assert cnt >= 1

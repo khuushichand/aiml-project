@@ -87,7 +87,7 @@ async def test_core_ws_with_diarization_and_insights(monkeypatch):
             Create a fake settings object indicating whether insights are enabled.
 
             Parameters:
-            	enabled (bool): Whether insights are enabled for this settings instance.
+                enabled (bool): Whether insights are enabled for this settings instance.
             """
             self.enabled = enabled
 
@@ -123,6 +123,7 @@ async def test_core_ws_with_diarization_and_insights(monkeypatch):
             self._seen = []
 
         def describe(self):
+
             """
             Report whether insights are enabled.
 

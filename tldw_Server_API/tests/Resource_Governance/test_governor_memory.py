@@ -13,6 +13,7 @@ class FakeTime:
         self._t = t0
 
     def __call__(self) -> float:
+
         return self._t
 
     def advance(self, seconds: float) -> None:

@@ -306,7 +306,7 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 
 - Performance: Board load (with all lists/cards) < 500ms for typical boards
 - Reliability: Soft delete for all entities; optimistic locking via version field
-- Storage: Per-user SQLite database at `Databases/user_databases/<user_id>/Kanban.db`
+- Storage: Per-user SQLite database at `<USER_DB_BASE_DIR>/<user_id>/Kanban.db`. `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root); override via environment variable or `Config_Files/config.txt` as needed.
 - Concurrency: Thread-safe database access with proper connection management
 - Limits: Configurable via environment variables (KANBAN_MAX_BOARDS, etc.)
 
@@ -314,7 +314,7 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 
 ## 10. Data Model
 
-### Database: `Databases/user_databases/<user_id>/Kanban.db`
+### Database: `<USER_DB_BASE_DIR>/<user_id>/Kanban.db`
 
 ```sql
 -- Boards
@@ -515,6 +515,11 @@ CREATE TRIGGER kanban_cards_au AFTER UPDATE ON kanban_cards BEGIN
 END;
 ```
 
+Notes on FTS sync behavior:
+- Restore/unarchive operations (transition to deleted=0 and archived=0) re-index via `kanban_cards_au`; tests should assert this path.
+- If a card is archived and later soft-deleted, restoring deleted=0 while archived=1 keeps it out of FTS until unarchived; only the (deleted=0, archived=0) state is searchable.
+- Edge case to test: archived=1 -> deleted=1 -> deleted=0 should still be excluded from FTS until archived=0.
+
 ### ChromaDB Collection
 - Collection name: `kanban_user_{user_id}` (underscore for compatibility)
 - Document: Card title + description + label names + checklist item names
@@ -538,11 +543,17 @@ END;
 - Enables safe retries and offline-first sync patterns
 
 ### Rate Limiting
-- `kanban.boards.create`: 10/minute
-- `kanban.cards.create`: 60/minute
-- `kanban.cards.bulk_*`: 20/minute (bulk move, archive, label operations)
-- `kanban.search`: 30/minute
+- `kanban.boards.create`: 10/minute (conservative; assumes 1-2 boards/day per user)
+- `kanban.cards.create`: 60/minute (~1/sec burst). Typical active work is ~3-5 cards/min; headroom allows quick-capture bursts and sync replays while staying low enough to protect DB/FTS load.
+- `kanban.cards.bulk_*`: 20/minute (bulk move, archive, label operations; supports batch workflows)
+- `kanban.search`: 30/minute (interactive search without heavy load)
 - Others: default limits
+
+Tuning guidance: start conservative.
+- Monitor 429 response rates and DB query latency (target P95 < 200ms for card creation).
+- If <1% of requests hit 429 and DB latency is healthy, increase limits by 50% increments via RG policy.
+- All limits are per-user (no cross-user quota sharing).
+- Expect short bursts from power users to hit limits briefly; keep as acceptable UX or raise after observing sustained 429s.
 
 ### Response Format
 All responses follow existing tldw_server patterns:
@@ -1183,10 +1194,44 @@ Error response format:
 
 - Unit: Board/list/card CRUD, position reordering, activity logging
 - Integration: Full API endpoint tests with auth
-- Property-based: Position ordering invariants, FTS sync
+- Property-based: Position ordering invariants; FTS sync invariants across archive/delete transitions (restore/unarchive re-indexing, archived-only restores stay excluded)
 - Mocks: ChromaDB for embedding tests
 - Markers: `unit`, `integration`
 - Coverage target: >= 80%
+
+Example property-based tests (Hypothesis; illustrative):
+
+Note: Fixtures and DB methods below are illustrative pseudo-code; see `conftest.py` for actual implementations.
+
+```python
+# tldw_Server_API/tests/kanban/property/test_kanban_properties.py
+import pytest
+from hypothesis import HealthCheck, given, settings, strategies as st
+
+
+@pytest.mark.unit
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture], max_examples=50)
+@given(st.lists(st.integers(min_value=1, max_value=10000), min_size=2, max_size=20, unique=True))
+def test_positions_monotonic_after_reorder(db, seeded_kanban_list, card_ids):
+    # seeded_kanban_list is a fixture that creates a list with the given card_ids
+    list_id = seeded_kanban_list(db, card_ids)
+    new_order = list(reversed(card_ids))
+    db.reorder_cards(list_id=list_id, card_ids=new_order)
+    positions = [c.position for c in db.list_cards(list_id=list_id)]
+    assert positions == sorted(positions)
+
+
+@pytest.mark.unit
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture], max_examples=50)
+@given(st.lists(st.tuples(st.booleans(), st.booleans()), min_size=1, max_size=6))
+def test_fts_visibility_matches_state(db, seeded_card, transitions):
+    # seeded_card is a fixture that inserts a searchable card in the test DB
+    card_id = seeded_card(db, title="needle", description="needle")
+    for archived, deleted in transitions:
+        db.update_card(card_id=card_id, archived=archived, deleted=deleted)
+        result_ids = db.search_card_ids(query="needle")
+        assert (card_id in result_ids) == (not archived and not deleted)
+```
 
 ---
 
@@ -1271,11 +1316,38 @@ KANBAN_DELETED_RETENTION_DAYS=30          # How long to keep soft-deleted items
 # Embeddings
 KANBAN_EMBEDDING_MODEL=default  # Uses system default
 KANBAN_EMBEDDING_QUEUE=redis    # redis or sync
+
+# Storage
+USER_DB_BASE_DIR=./data/users
 ```
+
+Storage configuration entry:
+- Name: USER_DB_BASE_DIR
+- Type: string
+- Default: ./data/users (example: /var/lib/myapp/users)
+- Required: No (set explicitly in production deployments)
+- Description: Base filesystem path for per-user databases; all user-specific DBs are stored under `<USER_DB_BASE_DIR>/<user_id>/`
+  - Implementation note: `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` and defaults to `Databases/user_databases/` under the project root; override via environment variable or `Config_Files/config.txt` as needed.
 
 ---
 
-## 18. Open Questions
+## 18. Deployment & Migration
+
+- **Base path configuration**: `USER_DB_BASE_DIR` controls the root directory for per-user databases (`<USER_DB_BASE_DIR>/<user_id>/`).
+  - Example override: `export USER_DB_BASE_DIR=/mnt/storage/users`
+  - Example systemd drop-in: `Environment=USER_DB_BASE_DIR=/mnt/storage/users` (or use `EnvironmentFile=/etc/tldw_server.env`)
+  - Validation: use the startup checks described below to confirm the path exists and is writable
+- **First-run initialization**:
+  - Timing: On app startup, validate `USER_DB_BASE_DIR` exists and is writable; on first user request, auto-create per-user directory and `Kanban.db`
+  - Error handling: Fail fast with a clear message if `USER_DB_BASE_DIR` is missing/unwritable or per-user directory creation fails (e.g., `KANBAN_DB_INIT_FAILED: insufficient permissions`)
+  - Idempotent: Subsequent accesses re-use existing DB without re-initialization
+- **Legacy path migration**: if an earlier Kanban path or shared DB existed, provide a one-time migration helper to move/merge into per-user databases.
+- **Schema versioning/migrations**: use `PRAGMA user_version` in each per-user `Kanban.db`; apply idempotent migrations at first access via `kanban_db.py` initialization (no external Alembic required for MVP; revisit if complexity grows).
+- **Upgrade/rollback**: take a backup before migrations; on failure, restore the backup and surface a clear operator message. Provide a CLI migration helper for controlled rollouts.
+
+---
+
+## 19. Design Decisions (FAQ)
 
 1. **Position strategy**: Use integer positions (0, 1, 2...) with gap rebalancing, or fractional positions (1.0, 1.5, 2.0) for fewer updates?
    - **Decision**: Integer with rebalancing on conflict; simpler to reason about
@@ -1298,7 +1370,7 @@ KANBAN_EMBEDDING_QUEUE=redis    # redis or sync
 
 ---
 
-## 19. Acceptance Criteria
+## 20. Acceptance Criteria
 
 ### Core CRUD
 - [ ] User can create, view, update, and archive/restore boards
@@ -1335,8 +1407,11 @@ KANBAN_EMBEDDING_QUEUE=redis    # redis or sync
 - [ ] All endpoints follow existing tldw_server patterns
 - [ ] Optimistic locking (version field) prevents conflicts
 - [ ] Rate limiting configured for all mutating endpoints
-- [ ] Test coverage >= 80%
+- [ ] Test coverage >= 80% (line + branch coverage via pytest-cov; enforced in CI)
+- [ ] Position and FTS visibility invariants verified via property-based tests (Hypothesis; see Section 15)
 - [ ] API documentation complete for frontend handoff
+- [ ] API spec auto-generated via OpenAPI/Swagger; human-reviewed for clarity
+- [ ] Deployment & migration tested (see Section 18): first-run init works; legacy path migration (if applicable) succeeds with no data loss
 
 ---
 

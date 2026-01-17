@@ -9,7 +9,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.mark.integration
 def test_reranker_toggle_controls_reranking(monkeypatch, auth_headers):
-    # Force admin-only off to avoid admin check failures in CI
+     # Force admin-only off to avoid admin check failures in CI
     monkeypatch.setenv('EVALS_HEAVY_ADMIN_ONLY', 'false')
     # Enable test-mode synthetic embeddings
     monkeypatch.setenv('TESTING', 'true')

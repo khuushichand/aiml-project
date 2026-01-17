@@ -68,7 +68,7 @@ def _enable(monkeypatch):
 def test_custom_openai_adapter_native_http_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter import CustomOpenAIAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter as co_mod
-    monkeypatch.setattr(co_mod, "_hc_create_client", lambda *a, **k: _FakeClient(*a, **k))
+    monkeypatch.setattr(co_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = CustomOpenAIAdapter()
     request = {
         "messages": [{"role": "user", "content": "hi"}],
@@ -83,7 +83,7 @@ def test_custom_openai_adapter_native_http_non_streaming(monkeypatch):
 def test_custom_openai_adapter_native_http_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter import CustomOpenAIAdapter2
     import tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter as co_mod
-    monkeypatch.setattr(co_mod, "_hc_create_client", lambda *a, **k: _FakeClient(*a, **k))
+    monkeypatch.setattr(co_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = CustomOpenAIAdapter2()
     request = {
         "messages": [{"role": "user", "content": "hi"}],

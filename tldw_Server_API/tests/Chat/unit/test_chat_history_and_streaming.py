@@ -31,15 +31,18 @@ class DummyChatDB:
         return ordered[:limit]
 
     def get_character_card_by_name(self, name):
+
         return {"id": 1, "name": name, "system_prompt": "Prompt"}
 
     def get_character_card_by_id(self, char_id):
+
         return {"id": char_id, "name": "Assistant", "system_prompt": "Prompt"}
 
     def get_message_metadata(self, message_id: str):
         return {}
 
     def get_connection(self):
+
         raise RuntimeError("not needed")
 
 
@@ -59,6 +62,7 @@ async def test_build_context_uses_history_knobs():
             pass
 
         def track_conversation(self, *args, **kwargs):
+
             pass
 
     result = await chat_service.build_context_and_messages(
@@ -111,6 +115,7 @@ async def test_build_context_skips_tool_placeholder_replacement():
             pass
 
         def track_conversation(self, *args, **kwargs):
+
             pass
 
     result = await chat_service.build_context_and_messages(
@@ -127,6 +132,52 @@ async def test_build_context_skips_tool_placeholder_replacement():
     tool_msgs = [msg for msg in history if msg.get("role") == "tool"]
     assert tool_msgs
     assert tool_msgs[0]["content"] == "{\"query\":\"{{char}}\"}"
+
+
+@pytest.mark.asyncio
+async def test_build_context_persists_full_transcript_when_enabled():
+    class DummyChatDBWithConversation(DummyChatDB):
+        def get_conversation_by_id(self, conversation_id: str):
+            return {"id": conversation_id, "character_id": 1, "client_id": self.client_id}
+
+    class DummyMessage:
+        def __init__(self, role: str, content: Any):
+            self.role = role
+            self.content = content
+
+        def model_dump(self, exclude_none: bool = True):
+            return {"role": self.role, "content": self.content}
+
+    db = DummyChatDBWithConversation([])
+    request_data = DummyRequestData(save_to_db=True)
+    request_data.messages = [
+        DummyMessage("user", "hi"),
+        DummyMessage("assistant", "hello"),
+        DummyMessage("tool", "{\"result\": 1}"),
+    ]
+    loop = asyncio.get_running_loop()
+
+    class DummyMetrics:
+        def track_character_access(self, *args, **kwargs):
+            pass
+
+        def track_conversation(self, *args, **kwargs):
+            pass
+
+    save_message_fn = AsyncMock()
+
+    await chat_service.build_context_and_messages(
+        chat_db=db,
+        request_data=request_data,
+        loop=loop,
+        metrics=DummyMetrics(),
+        default_save_to_db=False,
+        final_conversation_id="conv",
+        save_message_fn=save_message_fn,
+    )
+
+    roles = [call.args[2]["role"] for call in save_message_fn.call_args_list]
+    assert roles == ["user", "assistant", "tool"]
 
 
 @pytest.mark.asyncio
@@ -192,6 +243,7 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
             self.calls: List[Dict[str, Any]] = []
 
         def schedule_evaluate_and_alert(self, **kwargs):
+
             self.calls.append(kwargs)
 
     dummy_monitor = DummyMonitor()
@@ -203,6 +255,7 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
             pass
 
         def add_chunk(self):
+
             pass
 
     class DummyMetrics:
@@ -210,9 +263,11 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
             pass
 
         def track_provider_fallback_success(self, *args, **kwargs):
+
             pass
 
         def track_rate_limit(self, *args, **kwargs):
+
             pass
 
         @asynccontextmanager
@@ -220,6 +275,7 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
             yield DummyStreamTracker()
 
     def fake_llm_call():
+
         def _gen():
             yield "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
             yield "data: [DONE]\n\n"
@@ -258,6 +314,8 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
 
 
 def test_document_generator_accepts_string_ids(tmp_path):
+
+
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
     from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService, DocumentType
 

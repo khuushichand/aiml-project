@@ -11,6 +11,7 @@ class _StubDiarizationService:
         self.is_available = True
 
     def diarize(self, audio_path, transcription_segments=None, num_speakers=None):
+
         segments = []
         for idx, seg in enumerate(transcription_segments or []):
             segments.append({

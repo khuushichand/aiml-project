@@ -148,6 +148,20 @@ class SubscriptionService:
             }
         return None
 
+    async def get_plan_for_checkout(self, plan_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Resolve a plan for checkout by name.
+
+        Plans must exist in the subscription_plans table and be active.
+        """
+        repo = await self._get_billing_repo()
+        plan = await repo.get_plan_by_name(plan_name)
+        if not plan:
+            return None
+        if plan.get("is_active") is False:
+            return None
+        return plan
+
     # =========================================================================
     # Subscriptions
     # =========================================================================
@@ -161,19 +175,22 @@ class SubscriptionService:
         """
         repo = await self._get_billing_repo()
         sub = await repo.get_org_subscription(org_id)
+        limits = await self.get_org_limits(org_id)
 
         if not sub:
             # Return implicit free tier status
+            plan = await repo.get_plan_by_name("free")
+            plan_display_name = plan.get("display_name", "Free") if plan else "Free"
             return SubscriptionStatus(
                 org_id=org_id,
                 plan_name="free",
-                plan_display_name="Free",
+                plan_display_name=plan_display_name,
                 status="active",
                 billing_cycle=None,
                 current_period_end=None,
                 trial_end=None,
                 cancel_at_period_end=False,
-                limits=get_plan_limits("free"),
+                limits=limits,
             )
 
         return SubscriptionStatus(
@@ -185,7 +202,7 @@ class SubscriptionService:
             current_period_end=sub.get("current_period_end"),
             trial_end=sub.get("trial_end"),
             cancel_at_period_end=bool(sub.get("cancel_at_period_end")),
-            limits=sub.get("effective_limits", get_plan_limits("free")),
+            limits=limits,
         )
 
     async def create_subscription(

@@ -14,7 +14,7 @@ def test_router_precedence_exact_over_wildcard_and_patterns():
                 "backend": "httpx",
                 "handler": "tldw_Server_API.app.core.Web_Scraping.handlers:handle_generic_html",
                 "ua_profile": "firefox_120_win",
-                "url_patterns": [".*\\?output=1$"]
+                "url_patterns": [".*\\?output=1$"],
             },
         }
     }

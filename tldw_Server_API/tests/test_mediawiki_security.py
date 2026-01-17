@@ -24,48 +24,57 @@ class TestPathTraversalProtection:
     """Test path traversal attack prevention in MediaWiki module."""
 
     def test_null_byte_in_file_path(self):
+
         """Test that null bytes in file paths are rejected."""
         with pytest.raises(ValueError, match="Null byte"):
             validate_file_path("/etc/passwd\x00.txt")
 
     def test_path_traversal_dots(self):
+
         """Test that path traversal with .. is blocked."""
         with pytest.raises(ValueError, match="Path traversal"):
             validate_file_path("../../../etc/passwd")
 
     def test_path_traversal_absolute(self):
+
         """Test that absolute paths outside allowed dir are blocked."""
         # This should fail with access denied or file not exist
         with pytest.raises(ValueError):
             validate_file_path("/etc/passwd")
 
     def test_wiki_name_null_byte(self):
+
         """Test that null bytes in wiki names are rejected."""
         with pytest.raises(ValueError, match="null byte"):
             sanitize_wiki_name("test\x00wiki")
 
     def test_wiki_name_path_traversal(self):
+
         """Test that path traversal in wiki names is blocked."""
         with pytest.raises(ValueError, match="Only alphanumeric"):
             sanitize_wiki_name("../wiki")
 
     def test_wiki_name_forward_slash(self):
+
         """Test that forward slashes in wiki names are blocked."""
         with pytest.raises(ValueError, match="Only alphanumeric"):
             sanitize_wiki_name("test/wiki")
 
     def test_wiki_name_backslash(self):
+
         """Test that backslashes in wiki names are blocked."""
         with pytest.raises(ValueError, match="Only alphanumeric"):
             sanitize_wiki_name("test\\wiki")
 
     def test_wiki_name_too_long(self):
+
         """Test that overly long wiki names are rejected."""
         long_name = "a" * 101
         with pytest.raises(ValueError, match="too long"):
             sanitize_wiki_name(long_name)
 
     def test_safe_wiki_name(self):
+
         """Test that valid wiki names are accepted."""
         valid_names = [
             "TestWiki",
@@ -79,6 +88,7 @@ class TestPathTraversalProtection:
             assert result.replace(" ", "_") == result  # Spaces replaced with underscores
 
     def test_checkpoint_path_traversal(self):
+
         """Test that checkpoint paths are protected."""
         # Test path traversal in wiki name
         with pytest.raises(ValueError):
@@ -89,12 +99,14 @@ class TestPathTraversalProtection:
             get_safe_checkpoint_path("test\x00wiki")
 
     def test_checkpoint_path_valid(self):
+
         """Test that valid checkpoint paths work."""
         path = get_safe_checkpoint_path("TestWiki")
         assert path.name == "TestWiki_import_checkpoint.json"
         assert "checkpoints" in str(path)
 
     def test_log_path_traversal(self):
+
         """Test that log paths are protected against traversal."""
         # Test path traversal
         assert get_safe_log_path("../../../etc/passwd") is None
@@ -107,12 +119,14 @@ class TestPathTraversalProtection:
         assert get_safe_log_path("test\\test.log") is None
 
     def test_log_path_invalid_extension(self):
+
         """Test that only .log files are allowed."""
         assert get_safe_log_path("test.txt") is None
         assert get_safe_log_path("test") is None
         assert get_safe_log_path("test.log.txt") is None
 
     def test_log_path_valid(self):
+
         """Test that valid log filenames work."""
         path = get_safe_log_path("mediawiki_import.log")
         assert path is not None
@@ -120,6 +134,7 @@ class TestPathTraversalProtection:
         assert "Logs" in str(path)
 
     def test_symlink_attack_protection(self):
+
         """Test that symlink attacks are detected."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a file outside the allowed directory
@@ -139,6 +154,7 @@ class TestPathTraversalProtection:
                 validate_file_path(str(symlink), allowed_dir)
 
     def test_file_size_limit(self):
+
         """Test that file validation works for normal sized files."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a file in the temp directory
@@ -154,6 +170,7 @@ class TestPathTraversalProtection:
             # the check in place at line ~175 of Media_Wiki.py
 
     def test_error_messages_no_path_disclosure(self):
+
         """Test that error messages don't disclose sensitive paths."""
         try:
             validate_file_path("/etc/shadow/../passwd")

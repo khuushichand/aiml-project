@@ -1,5 +1,7 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 import { addRequestHistory } from '@/lib/history';
+import { getApiBearer, getApiKey } from '@/lib/authStorage';
+import { captureSessionIdFromHeaders, getOrCreateSessionId, SESSION_HEADER_NAME } from '@/lib/session';
 import type { AxiosConfigWithMetadata, ApiErrorResponse } from '@/types/common';
 
 // Custom error type that preserves HTTP status and retry hints while remaining compatible with Error
@@ -53,6 +55,11 @@ api.interceptors.request.use(
     // Attach metadata for timing
     (config as AxiosConfigWithMetadata).metadata = { start: Date.now() };
     if (typeof window !== 'undefined') {
+      const sessionId = getOrCreateSessionId();
+      if (sessionId && !config.headers.get(SESSION_HEADER_NAME)) {
+        config.headers.set(SESSION_HEADER_NAME, sessionId);
+      }
+
       // Bearer token (multi-user JWT auth)
       const token = localStorage.getItem('access_token');
       if (token) {
@@ -60,19 +67,14 @@ api.interceptors.request.use(
       }
 
       // Static API auth options via env or localStorage
-      const envApiKey = process.env.NEXT_PUBLIC_X_API_KEY;
-      const envApiBearer = process.env.NEXT_PUBLIC_API_BEARER;
-      const storedApiKey = localStorage.getItem('x_api_key');
-      const storedApiBearer = localStorage.getItem('tldw-api-bearer');
-
       // Prefer explicit API bearer if provided (for chat module API_BEARER)
-      const apiBearer = storedApiBearer || envApiBearer;
+      const apiBearer = getApiBearer();
       if (apiBearer && !config.headers.get('Authorization')) {
         config.headers.set('Authorization', `Bearer ${apiBearer}`);
       }
 
       // X-API-KEY (single-user mode convenience)
-      const xApiKey = storedApiKey || envApiKey;
+      const xApiKey = getApiKey();
       if (xApiKey) {
         config.headers.set('X-API-KEY', xApiKey);
       }
@@ -95,6 +97,7 @@ api.interceptors.request.use(
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => {
+    captureSessionIdFromHeaders(response.headers as Record<string, string>);
     try {
       const cfg = response.config as AxiosConfigWithMetadata;
       const start = cfg.metadata?.start || Date.now();
@@ -119,6 +122,7 @@ api.interceptors.response.use(
   },
   async (error: AxiosError<ApiErrorResponse>) => {
     try {
+      captureSessionIdFromHeaders(error.response?.headers as Record<string, string> | undefined);
       const cfg = (error.config || {}) as AxiosConfigWithMetadata;
       const start = cfg.metadata?.start || Date.now();
       const duration = Date.now() - start;
@@ -147,7 +151,7 @@ api.interceptors.response.use(
         localStorage.removeItem('user');
         // Redirect to login only if not using env-based API auth
         const hasEnvAuth = !!(process.env.NEXT_PUBLIC_X_API_KEY || process.env.NEXT_PUBLIC_API_BEARER);
-        const hasStoredAuth = !!(localStorage.getItem('x_api_key') || localStorage.getItem('tldw-api-bearer'));
+        const hasStoredAuth = !!(getApiKey() || getApiBearer());
         if (!hasEnvAuth && !hasStoredAuth) window.location.href = '/login';
       }
     }
@@ -207,19 +211,18 @@ export function buildAuthHeaders(method: string = 'GET', contentType?: string): 
   if (contentType) headers['Content-Type'] = contentType;
 
   if (typeof window !== 'undefined') {
+    const sessionId = getOrCreateSessionId();
+    if (sessionId) headers[SESSION_HEADER_NAME] = sessionId;
+
     const token = localStorage.getItem('access_token');
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    const storedApiBearer = localStorage.getItem('tldw-api-bearer');
-    const envApiBearer = process.env.NEXT_PUBLIC_API_BEARER;
-    const apiBearer = storedApiBearer || envApiBearer;
+    const apiBearer = getApiBearer();
     if (apiBearer && !headers['Authorization']) {
       headers['Authorization'] = `Bearer ${apiBearer}`;
     }
 
-    const storedApiKey = localStorage.getItem('x_api_key');
-    const envApiKey = process.env.NEXT_PUBLIC_X_API_KEY;
-    const xApiKey = storedApiKey || envApiKey;
+    const xApiKey = getApiKey();
     if (xApiKey) headers['X-API-KEY'] = xApiKey;
 
     // CSRF for modifying requests when not using X-API-KEY

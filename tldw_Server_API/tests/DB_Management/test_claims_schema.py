@@ -16,6 +16,7 @@ def temp_media_db_path():
         try:
             # best-effort cleanup
             import shutil
+
             shutil.rmtree(d, ignore_errors=True)
         except Exception:
             pass
@@ -28,6 +29,7 @@ def _mk_db(path: str) -> MediaDatabase:
 
 
 def test_claims_table_exists(temp_media_db_path):
+
     db = _mk_db(temp_media_db_path)
     conn = db.get_connection()
     cur = conn.execute("PRAGMA table_info(Claims)")
@@ -39,6 +41,7 @@ def test_claims_table_exists(temp_media_db_path):
 
 
 def test_insert_and_fetch_claims(temp_media_db_path):
+
     db = _mk_db(temp_media_db_path)
 
     # Create a minimal media record via helper
@@ -54,20 +57,22 @@ def test_insert_and_fetch_claims(temp_media_db_path):
 
     # Insert a claim
     chunk_hash = hashlib.sha256(content.encode()).hexdigest()
-    inserted = db.upsert_claims([
-        {
-            "media_id": media_id,
-            "chunk_index": 0,
-            "span_start": 0,
-            "span_end": 5,
-            "claim_text": "Hello world is present",
-            "confidence": 0.9,
-            "extractor": "heuristic",
-            "extractor_version": "v1",
-            "chunk_hash": chunk_hash,
-            "client_id": "test_client",
-        }
-    ])
+    inserted = db.upsert_claims(
+        [
+            {
+                "media_id": media_id,
+                "chunk_index": 0,
+                "span_start": 0,
+                "span_end": 5,
+                "claim_text": "Hello world is present",
+                "confidence": 0.9,
+                "extractor": "heuristic",
+                "extractor_version": "v1",
+                "chunk_hash": chunk_hash,
+                "client_id": "test_client",
+            }
+        ]
+    )
     assert inserted == 1
 
     claims = db.get_claims_by_media(media_id)

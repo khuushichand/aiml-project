@@ -21,6 +21,8 @@ def clear_tts_env(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     return None
+
+
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
@@ -30,6 +32,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import TTSAdapter, TTSCapabiliti
 from tldw_Server_API.app.core.TTS.adapters.openai_adapter import OpenAIAdapter
 from tldw_Server_API.app.core.TTS.adapters.kokoro_adapter import KokoroAdapter
 from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter, AudioNormalizer
+
 #
 #######################################################################################################################
 #
@@ -151,8 +154,8 @@ class TestAudioNormalizer:
         # Check that values are clipped
         assert int_data[0] == -32767  # Clipped from -2.0
         assert int_data[1] == -32767  # Clipped from -1.5
-        assert int_data[3] == 32767   # Clipped from 1.5
-        assert int_data[4] == 32767   # Clipped from 2.0
+        assert int_data[3] == 32767  # Clipped from 1.5
+        assert int_data[4] == 32767  # Clipped from 2.0
 
 
 @pytest.mark.asyncio
@@ -185,6 +188,7 @@ class TestOpenAIAdapter:
         # Mock initialization
         adapter._initialized = True
         from tldw_Server_API.app.core.TTS.adapters.base import VoiceInfo
+
         adapter._capabilities = TTSCapabilities(
             provider_name="openai",
             supports_streaming=True,
@@ -195,8 +199,8 @@ class TestOpenAIAdapter:
             supported_voices=[
                 VoiceInfo(id="alloy", name="Alloy", language="en"),
                 VoiceInfo(id="echo", name="Echo", language="en"),
-                VoiceInfo(id="fable", name="Fable", language="en")
-            ]
+                VoiceInfo(id="fable", name="Fable", language="en"),
+            ],
         )
 
         capabilities = await adapter.get_capabilities()
@@ -206,9 +210,6 @@ class TestOpenAIAdapter:
 
 
 # TestTTSService removed - replaced by tests in test_tts_service_v2.py
-
-
-
 
 
 @pytest.mark.asyncio

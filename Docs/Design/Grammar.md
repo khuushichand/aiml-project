@@ -1,1 +1,2 @@
-https://writewithharper.com/docs/integrations/language-server
+- Harper language server docs: [writewithharper.com/docs/integrations/language-server](https://writewithharper.com/docs/integrations/language-server)
+- Harper repository: [Automattic/harper](https://github.com/Automattic/harper/)

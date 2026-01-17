@@ -2,7 +2,7 @@
 Per-user lightweight personalization store for RAG.
 
 - Stores doc-level priors and implicit interactions (click/expand/copy)
-  under Databases/user_databases/<user_id>/rag_personalization.json
+  under <USER_DB_BASE_DIR>/<user_id>/rag_personalization.json (defaults to repo-root Databases/user_databases)
 - Provides a simple boosting function to adjust document scores.
 
 This avoids cross-tenant leakage by isolating data per user.
@@ -14,10 +14,11 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 @dataclass
@@ -27,24 +28,40 @@ class Prior:
     corpus: Optional[str] = None
 
 
+_MAX_EVENT_LOG = 200
+_MAX_LIST_ITEMS = 50
+
+
+def _empty_store() -> Dict[str, Any]:
+    return {"priors": {}, "events": {}, "pairs": {}, "event_log": []}
+
+
 class UserPersonalizationStore:
     def __init__(self, user_id: Optional[str]) -> None:
-        self.user_id = (user_id or "anon").strip()
-        base = Path("Databases/user_databases") / self.user_id
-        base.mkdir(parents=True, exist_ok=True)
-        self.path = base / "rag_personalization.json"
-        self._data: Dict[str, any] = {}
+        self.path = DatabasePaths.get_user_rag_personalization_path(user_id)
+        # Use the sanitized directory name as the canonical user id for storage/logging.
+        self.user_id = self.path.parent.name
+        self._data: Dict[str, Any] = {}
         self._load()
 
     def _load(self) -> None:
         try:
             if self.path.exists():
                 with self.path.open("r", encoding="utf-8") as f:
-                    self._data = json.load(f)
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._data = data
+                else:
+                    self._data = _empty_store()
             else:
-                self._data = {"priors": {}, "events": {}, "pairs": {}}
-        except Exception:
-            self._data = {"priors": {}, "events": {}, "pairs": {}}
+                self._data = _empty_store()
+            self._data.setdefault("priors", {})
+            self._data.setdefault("events", {})
+            self._data.setdefault("pairs", {})
+            self._data.setdefault("event_log", [])
+        except Exception as e:
+            logger.warning(f"Failed loading personalization data for user {self.user_id}: {e}")
+            self._data = _empty_store()
 
     def _save(self) -> None:
         try:
@@ -60,6 +77,13 @@ class UserPersonalizationStore:
         doc_id: Optional[str],
         corpus: Optional[str] = None,
         impression: Optional[List[str]] = None,
+        chunk_ids: Optional[List[str]] = None,
+        rank: Optional[int] = None,
+        session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
+        query: Optional[str] = None,
     ) -> None:
         now = time.time()
         # Count events
@@ -82,6 +106,33 @@ class UserPersonalizationStore:
                     break  # only compare with items above in the list
                 key = f"{doc_id}|{other}"
                 pairs[key] = int(pairs.get(key, 0)) + 1
+
+        impression_list = list(impression or [])
+        if len(impression_list) > _MAX_LIST_ITEMS:
+            impression_list = impression_list[:_MAX_LIST_ITEMS]
+        chunk_list = list(chunk_ids or [])
+        if len(chunk_list) > _MAX_LIST_ITEMS:
+            chunk_list = chunk_list[:_MAX_LIST_ITEMS]
+
+        event_log = self._data.setdefault("event_log", [])
+        event_log.append(
+            {
+                "ts": now,
+                "event_type": event_type,
+                "doc_id": doc_id,
+                "chunk_ids": chunk_list,
+                "rank": rank,
+                "dwell_ms": dwell_ms,
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "corpus": corpus,
+                "query": query,
+                "impression_list": impression_list,
+            }
+        )
+        if len(event_log) > _MAX_EVENT_LOG:
+            self._data["event_log"] = event_log[-_MAX_EVENT_LOG:]
         self._save()
 
     def get_prior(self, doc_id: str) -> float:
@@ -97,7 +148,7 @@ class UserPersonalizationStore:
         except Exception:
             return 0.0
 
-    def boost_documents(self, documents: List[any], *, corpus: Optional[str] = None) -> List[any]:
+    def boost_documents(self, documents: List[Any], *, corpus: Optional[str] = None) -> List[Any]:
         # Adjust scores by a bounded additive boost based on priors
         try:
             weight = float(os.getenv("RAG_PERSONALIZATION_WEIGHT", "0.1"))
@@ -106,9 +157,24 @@ class UserPersonalizationStore:
         boosted = []
         for d in documents:
             try:
-                did = getattr(d, "id", None) or (isinstance(d, dict) and d.get("id"))
-                base = float(getattr(d, "score", 0.0) if hasattr(d, "score") else (d.get("score", 0.0) if isinstance(d, dict) else 0.0))
-                prior = self.get_prior(str(did))
+                if hasattr(d, "id"):
+                    did = d.id
+                elif isinstance(d, dict):
+                    did = d.get("id")
+                else:
+                    did = None
+
+                if hasattr(d, "score"):
+                    base = float(d.score)
+                elif isinstance(d, dict):
+                    base = float(d.get("score", 0.0))
+                else:
+                    base = 0.0
+                prior_data = self._data.get("priors", {}).get(str(did)) if did is not None else None
+                if corpus and prior_data and prior_data.get("corpus") != corpus:
+                    prior = 0.0
+                else:
+                    prior = self.get_prior(str(did)) if did is not None else 0.0
                 new_score = base + (weight * prior)
                 if hasattr(d, "score"):
                     d.score = new_score

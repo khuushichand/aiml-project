@@ -9,11 +9,13 @@ pytestmark = [pytest.mark.integration, pytest.mark.external_api]
 
 
 def _require_external():
+
     if os.getenv("RUN_EXTERNAL_API_TESTS", "0") != "1":
         pytest.skip("External API tests disabled. Set RUN_EXTERNAL_API_TESTS=1 to enable.")
 
 
 def test_hal_search_basic(client_with_auth):
+
     _require_external()
     resp = client_with_auth.get(
         "/api/v1/paper-search/hal",
@@ -26,6 +28,7 @@ def test_hal_search_basic(client_with_auth):
 
 
 def test_hal_raw_xml(client_with_auth):
+
     _require_external()
     resp = client_with_auth.get(
         "/api/v1/paper-search/hal/raw",
@@ -37,6 +40,7 @@ def test_hal_raw_xml(client_with_auth):
 
 
 def test_hal_by_id_roundtrip(client_with_auth):
+
     _require_external()
     # First search to get at least one docid
     s = client_with_auth.get("/api/v1/paper-search/hal", params={"q": "*:*", "results_per_page": 1})
@@ -58,6 +62,7 @@ def test_hal_by_id_roundtrip(client_with_auth):
 
 
 def test_hal_ingest_lenient(client_with_auth):
+
     _require_external()
     # Attempt ingest from first item; allow lenient status codes
     s = client_with_auth.get("/api/v1/paper-search/hal", params={"q": "*:*", "results_per_page": 1})

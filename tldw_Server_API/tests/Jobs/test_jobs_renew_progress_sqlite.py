@@ -4,6 +4,8 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _set_env(monkeypatch, tmp_path):
+
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
@@ -12,6 +14,8 @@ def _set_env(monkeypatch, tmp_path):
 
 
 def test_renew_progress_persists_without_enforcement_sqlite(monkeypatch, tmp_path):
+
+
     _set_env(monkeypatch, tmp_path)
 
     jm = JobManager()
@@ -29,6 +33,8 @@ def test_renew_progress_persists_without_enforcement_sqlite(monkeypatch, tmp_pat
 
 
 def test_renew_progress_persists_with_enforcement_sqlite(monkeypatch, tmp_path):
+
+
     _set_env(monkeypatch, tmp_path)
     monkeypatch.setenv("JOBS_ENFORCE_LEASE_ACK", "true")
 

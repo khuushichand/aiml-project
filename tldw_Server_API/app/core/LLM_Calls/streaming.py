@@ -7,25 +7,25 @@ forwarding a provider's own [DONE] line; callers should append a single
 final sentinel using sse_done()/finalize_stream to avoid duplicates.
 """
 
-from typing import Iterator, AsyncIterator, Optional, Callable, Tuple
-
-import requests
-import httpx
+from typing import Iterator, AsyncIterator, Optional, Callable, Tuple, Any, Iterable
 
 import os
+import asyncio
+import threading
 from .sse import normalize_provider_line, is_done_line, sse_data
+from tldw_Server_API.app.core.LLM_Calls.error_utils import is_chunked_encoding_error
 from tldw_Server_API.app.core.http_client import astream_sse, RetryPolicy
 
 
 def iter_sse_lines_requests(
-    response: requests.Response,
+    response: Any,
     *,
     decode_unicode: bool = True,
     provider: str = "provider",
     provider_control_passthru: Optional[bool] = None,
     control_filter: Optional[Callable[[str, str], Optional[Tuple[str, str]]]] = None,
 ) -> Iterator[str]:
-    """Yield normalized SSE lines from a requests.Response stream.
+    """Yield normalized SSE lines from a Response-like stream.
 
     - Skips blank/control lines and suppresses provider [DONE] frames
       (caller should append a final sentinel once).
@@ -57,15 +57,17 @@ def iter_sse_lines_requests(
             if normalized is None:
                 continue
             yield normalized
-    except requests.exceptions.ChunkedEncodingError as e_chunk:
-        # Surface as an SSE error frame so the client can handle gracefully
-        yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": f"{provider}_stream_error"}})
     except Exception as e_stream:
-        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
+        # Surface as an SSE error frame so the client can handle gracefully
+        if is_chunked_encoding_error(e_stream):
+            message = f"Stream connection error: {str(e_stream)}"
+        else:
+            message = f"Stream iteration error: {str(e_stream)}"
+        yield sse_data({"error": {"message": message, "type": f"{provider}_stream_error"}})
 
 
 async def aiter_sse_lines_httpx(
-    resp: httpx.Response,
+    resp: Any,
     *,
     provider: str = "provider",
     provider_control_passthru: Optional[bool] = None,
@@ -96,10 +98,47 @@ async def aiter_sse_lines_httpx(
             if normalized is None:
                 continue
             yield normalized
-    except httpx.HTTPError as e_stream:
-        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
     except Exception as e_stream:
         yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
+
+
+async def wrap_sync_stream(sync_iter: Iterable[str]) -> AsyncIterator[str]:
+    """Bridge a sync generator into an async iterator without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    sentinel = object()
+    stop_event = threading.Event()
+
+    def _worker() -> None:
+        try:
+            for item in sync_iter:
+                if stop_event.is_set():
+                    break
+                loop.call_soon_threadsafe(queue.put_nowait, item)
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+        finally:
+            try:
+                close_fn = getattr(sync_iter, "close", None)
+                if callable(close_fn):
+                    close_fn()
+            except Exception:
+                pass
+            loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    try:
+        while True:
+            item = await queue.get()
+            if item is sentinel:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        stop_event.set()
 
 
 async def aiter_normalized_sse(

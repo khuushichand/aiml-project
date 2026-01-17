@@ -29,8 +29,7 @@ def test_search_web_searx_handles_json_payload(monkeypatch):
         lambda url: types.SimpleNamespace(allowed=True),
     )
 
-    from tldw_Server_API.app.core import http_client as http_client_module
-    monkeypatch.setattr(http_client_module, "fetch", lambda *_, **__: DummyResponse())
+    monkeypatch.setattr(ws, "fetch", lambda *_, **__: DummyResponse())
     monkeypatch.setattr(ws.time, "sleep", lambda *_: None)
     monkeypatch.setattr(ws.random, "uniform", lambda *_: 0.0)
 

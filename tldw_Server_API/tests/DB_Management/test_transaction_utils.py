@@ -23,6 +23,7 @@ class MockDatabase:
     """Mock database class for testing."""
 
     def __init__(self):
+
         self.in_transaction = False
         self.transaction_count = 0
         self.rollback_count = 0
@@ -51,14 +52,17 @@ class MockTransactionContext:
     """Mock transaction context manager."""
 
     def __init__(self, db):
+
         self.db = db
 
     def __enter__(self):
+
         self.db.in_transaction = True
         self.db.transaction_count += 1
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+
         self.db.in_transaction = False
         if exc_type:
             self.db.rollback_count += 1
@@ -108,6 +112,7 @@ class TestDbTransaction:
         original_transaction = db.transaction
 
         def failing_transaction():
+
             nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 3:
@@ -115,13 +120,15 @@ class TestDbTransaction:
                 class FailingContext:
                     def __enter__(self):
                         raise ConflictError("Concurrent modification")
+
                     def __exit__(self, *args):
                         return False
+
                 return FailingContext()
             return original_transaction()
 
-        with patch.object(db, 'transaction', side_effect=failing_transaction):
-            with patch('asyncio.sleep', return_value=None):  # Skip actual sleep
+        with patch.object(db, "transaction", side_effect=failing_transaction):
+            with patch("asyncio.sleep", return_value=None):  # Skip actual sleep
                 async with db_transaction(db, max_retries=3):
                     result = "success"
                     assert result == "success"
@@ -134,17 +141,21 @@ class TestDbTransaction:
         attempt_count = 0
 
         def always_failing_transaction():
+
             nonlocal attempt_count
             attempt_count += 1
+
             class FailingContext:
                 def __enter__(self):
                     raise ConflictError("Always fails")
+
                 def __exit__(self, *args):
                     return False
+
             return FailingContext()
 
-        with patch.object(db, 'transaction', side_effect=always_failing_transaction):
-            with patch('asyncio.sleep', return_value=None):
+        with patch.object(db, "transaction", side_effect=always_failing_transaction):
+            with patch("asyncio.sleep", return_value=None):
                 with pytest.raises(ConflictError):
                     async with db_transaction(db, max_retries=3):
                         pass
@@ -189,19 +200,23 @@ class TestDbTransaction:
         attempt_count = 0
 
         def failing_then_success_transaction():
+
             nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 3:
+
                 class FailingContext:
                     def __enter__(self):
                         raise ConflictError("Retry needed")
+
                     def __exit__(self, *args):
                         return False
+
                 return FailingContext()
             return MockTransactionContext(db)
 
-        with patch.object(db, 'transaction', side_effect=failing_then_success_transaction):
-            with patch('asyncio.sleep') as mock_sleep:
+        with patch.object(db, "transaction", side_effect=failing_then_success_transaction):
+            with patch("asyncio.sleep") as mock_sleep:
                 mock_sleep.return_value = None  # Don't actually sleep
 
                 async with db_transaction(db, max_retries=3):
@@ -249,6 +264,7 @@ class TestTransactionalDecorator:
 
     async def test_decorator_without_db(self):
         """Test decorator works without db parameter."""
+
         @transactional()
         async def my_function(value):
             return f"result_{value}"
@@ -266,17 +282,20 @@ class TestTransactionalDecorator:
             nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 2:
+
                 class FailingContext:
                     def __enter__(self):
                         raise ConflictError("Retry needed")
+
                     def __exit__(self, *args):
                         return False
+
                 return FailingContext()
             return MockTransactionContext(db)
 
         # Mock the transaction method to use our failing version
-        with patch.object(db, 'transaction', failing_transaction):
-            with patch('tldw_Server_API.app.core.DB_Management.transaction_utils.asyncio.sleep', return_value=None):
+        with patch.object(db, "transaction", failing_transaction):
+            with patch("tldw_Server_API.app.core.DB_Management.transaction_utils.asyncio.sleep", return_value=None):
                 # Call db_transaction directly to test retry logic
                 async with db_transaction(db, max_retries=3):
                     result = "success"
@@ -293,22 +312,13 @@ class TestSaveConversationWithMessages:
         """Test successful conversation and message save."""
         db = MockDatabase()
 
-        conversation_data = {
-            "character_id": 1,
-            "title": "Test Conversation",
-            "client_id": "test_client"
-        }
+        conversation_data = {"character_id": 1, "title": "Test Conversation", "client_id": "test_client"}
 
-        messages = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there"}
-        ]
+        messages = [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there"}]
 
-        with patch.object(db, 'add_conversation', return_value="conv_123"):
-            with patch.object(db, 'add_message', side_effect=["msg_1", "msg_2"]):
-                conv_id, msg_ids = await save_conversation_with_messages(
-                    db, conversation_data, messages
-                )
+        with patch.object(db, "add_conversation", return_value="conv_123"):
+            with patch.object(db, "add_message", side_effect=["msg_1", "msg_2"]):
+                conv_id, msg_ids = await save_conversation_with_messages(db, conversation_data, messages)
 
         assert conv_id == "conv_123"
         assert msg_ids == ["msg_1", "msg_2"]
@@ -317,37 +327,28 @@ class TestSaveConversationWithMessages:
         """Test handling of failed conversation creation."""
         db = MockDatabase()
 
-        with patch.object(db, 'add_conversation', return_value=None):
+        with patch.object(db, "add_conversation", return_value=None):
             with pytest.raises(CharactersRAGDBError, match="Failed to create conversation"):
-                await save_conversation_with_messages(
-                    db, {"title": "test"}, []
-                )
+                await save_conversation_with_messages(db, {"title": "test"}, [])
 
     async def test_failed_message_creation(self):
         """Test handling of failed message creation."""
         db = MockDatabase()
 
-        messages = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi"}
-        ]
+        messages = [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}]
 
-        with patch.object(db, 'add_conversation', return_value="conv_123"):
-            with patch.object(db, 'add_message', side_effect=["msg_1", None]):
+        with patch.object(db, "add_conversation", return_value="conv_123"):
+            with patch.object(db, "add_message", side_effect=["msg_1", None]):
                 with pytest.raises(CharactersRAGDBError, match="Failed to add message"):
-                    await save_conversation_with_messages(
-                        db, {"title": "test"}, messages
-                    )
+                    await save_conversation_with_messages(db, {"title": "test"}, messages)
 
     async def test_transaction_rollback_on_error(self):
         """Test transaction rollback on error."""
         db = MockDatabase()
 
-        with patch.object(db, 'add_conversation', side_effect=CharactersRAGDBError("DB error")):
+        with patch.object(db, "add_conversation", side_effect=CharactersRAGDBError("DB error")):
             with pytest.raises(CharactersRAGDBError):
-                await save_conversation_with_messages(
-                    db, {"title": "test"}, []
-                )
+                await save_conversation_with_messages(db, {"title": "test"}, [])
 
         assert db.rollback_count == 1
 
@@ -357,21 +358,25 @@ class TestSaveConversationWithMessages:
         attempt_count = 0
 
         def failing_then_success_transaction():
+
             nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 2:
+
                 class FailingContext:
                     def __enter__(self):
                         raise ConflictError("Concurrent modification")
+
                     def __exit__(self, *args):
                         return False
+
                 return FailingContext()
             return MockTransactionContext(db)
 
-        with patch.object(db, 'transaction', side_effect=failing_then_success_transaction):
-            with patch.object(db, 'add_conversation', return_value="conv_123"):
-                with patch.object(db, 'add_message', return_value="msg_1"):
-                    with patch('asyncio.sleep', return_value=None):
+        with patch.object(db, "transaction", side_effect=failing_then_success_transaction):
+            with patch.object(db, "add_conversation", return_value="conv_123"):
+                with patch.object(db, "add_message", return_value="msg_1"):
+                    with patch("asyncio.sleep", return_value=None):
                         conv_id, msg_ids = await save_conversation_with_messages(
                             db, {"title": "test"}, [{"content": "test"}], max_retries=3
                         )
@@ -389,15 +394,11 @@ class TestUpdateConversationWithRollback:
         db = MockDatabase()
 
         updates = {"title": "New Title", "updated_at": "2024-01-01"}
-        new_messages = [
-            {"role": "user", "content": "New message"}
-        ]
+        new_messages = [{"role": "user", "content": "New message"}]
 
-        with patch.object(db, 'update_conversation', return_value=True):
-            with patch.object(db, 'add_message', return_value="msg_1"):
-                result = await update_conversation_with_rollback(
-                    db, "conv_123", updates, new_messages
-                )
+        with patch.object(db, "update_conversation", return_value=True):
+            with patch.object(db, "add_message", return_value="msg_1"):
+                result = await update_conversation_with_rollback(db, "conv_123", updates, new_messages)
 
         assert result is True
 
@@ -407,10 +408,8 @@ class TestUpdateConversationWithRollback:
 
         updates = {"title": "New Title"}
 
-        with patch.object(db, 'update_conversation', return_value=True):
-            result = await update_conversation_with_rollback(
-                db, "conv_123", updates
-            )
+        with patch.object(db, "update_conversation", return_value=True):
+            result = await update_conversation_with_rollback(db, "conv_123", updates)
 
         assert result is True
 
@@ -418,10 +417,8 @@ class TestUpdateConversationWithRollback:
         """Test handling of failed conversation update."""
         db = MockDatabase()
 
-        with patch.object(db, 'update_conversation', return_value=False):
-            result = await update_conversation_with_rollback(
-                db, "conv_123", {"title": "test"}
-            )
+        with patch.object(db, "update_conversation", return_value=False):
+            result = await update_conversation_with_rollback(db, "conv_123", {"title": "test"})
 
         assert result is False
 
@@ -432,11 +429,9 @@ class TestUpdateConversationWithRollback:
         updates = {"title": "New Title"}
         new_messages = [{"role": "user", "content": "Test"}]
 
-        with patch.object(db, 'update_conversation', return_value=True):
-            with patch.object(db, 'add_message', return_value=None):
-                result = await update_conversation_with_rollback(
-                    db, "conv_123", updates, new_messages
-                )
+        with patch.object(db, "update_conversation", return_value=True):
+            with patch.object(db, "add_message", return_value=None):
+                result = await update_conversation_with_rollback(db, "conv_123", updates, new_messages)
 
         assert result is False
         assert db.rollback_count == 1
@@ -447,10 +442,8 @@ class TestUpdateConversationWithRollback:
 
         new_messages = [{"role": "user", "content": "Test"}]
 
-        with patch.object(db, 'add_message', return_value="msg_1"):
-            result = await update_conversation_with_rollback(
-                db, "conv_123", {}, new_messages
-            )
+        with patch.object(db, "add_message", return_value="msg_1"):
+            result = await update_conversation_with_rollback(db, "conv_123", {}, new_messages)
 
         assert result is True
 
@@ -458,11 +451,9 @@ class TestUpdateConversationWithRollback:
         """Test exception handling and logging."""
         db = MockDatabase()
 
-        with patch.object(db, 'update_conversation', side_effect=Exception("Unexpected error")):
-            with patch('tldw_Server_API.app.core.DB_Management.transaction_utils.logger') as mock_logger:
-                result = await update_conversation_with_rollback(
-                    db, "conv_123", {"title": "test"}
-                )
+        with patch.object(db, "update_conversation", side_effect=Exception("Unexpected error")):
+            with patch("tldw_Server_API.app.core.DB_Management.transaction_utils.logger") as mock_logger:
+                result = await update_conversation_with_rollback(db, "conv_123", {"title": "test"})
 
         assert result is False
         # The function logs twice: once in db_transaction and once in update_conversation_with_rollback

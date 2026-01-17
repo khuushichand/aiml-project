@@ -118,7 +118,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
    - `merge`: Applies per-type semantics as described in the identity/merge table above; where `merge` is unsupported or ambiguous for a type, it degrades to `rename`.
 
 3. **Storage & Security**
-   - Per-user directories under `TLDW_USER_DATA_PATH` (default `/var/lib/tldw/user_data/users/<id>/chatbooks/{exports,imports,temp}`) with sanitized names and 0700 permissions.
+   - Per-user directories under `USER_DB_BASE_DIR/<user_id>/chatbooks/{exports,imports,temp}` with sanitized names and 0700 permissions.
    - HMAC-signed download URLs (`CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`); in `AUTH_MODE=multi_user` or when org features are enabled, signed URLs are required and default to enabled with 1-hour expiry (`expires_at`), extendable by privileged roles up to a configured maximum.
    - Access control ensures users interact only with their own jobs/files by default; team leads can act on their team, org owners on their org, and admins across all users, with all cross-user operations emitting audit events including actor and target scopes. Imported entities are always materialized under the importing user’s account; at higher scopes, organizations are considered owners of all team and user artifacts within their hierarchy, and teams own artifacts created by their members.
    - Cleanup and cross-user job operations (`POST /api/v1/chatbooks/cleanup`, job deletion for other users, org- or team-wide listing) are always authenticated and subject to these role scopes to avoid unbounded cleanup scans or job enumeration.
@@ -127,7 +127,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 4. **Job Processing**
    - Export/import jobs persisted in each user’s ChaChaNotes DB with states `pending → in_progress → completed|failed|cancelled|expired|deleted`.
    - `expired` indicates archives removed by retention/cleanup while metadata remains for audit; `deleted` indicates job metadata removed by privileged cleanup operations.
-   - Async processing via core Jobs worker by default; optional Prompt Studio JobManager adapter when `CHATBOOKS_JOBS_BACKEND=prompt_studio`. Cross-scope listings (for example, org-wide views) are backed by an index over per-user job records or by fan-out queries with batching; for large orgs, operators should expect eventual consistency and slightly higher latencies for these aggregated views.
+   - Async processing via the core Jobs worker. Cross-scope listings (for example, org-wide views) are backed by an index over per-user job records or by fan-out queries with batching; for large orgs, operators should expect eventual consistency and slightly higher latencies for these aggregated views.
    - Lease renewal and retry semantics align with core Jobs standards.
    - Retention cleanup runs automatically on a schedule via the Chatbooks worker (configurable interval) and can also be triggered manually via `POST /api/v1/chatbooks/cleanup`.
 
@@ -138,7 +138,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
    - Per content-type binary size limits define what qualifies as a small/attached binary for bundling in v1; these limits are enforced during export and recorded in the manifest to make bundling decisions auditable.
    - Missing or inconsistent references (for example, manifests referring to media or embeddings that are not present in the archive) are treated as validation errors and surfaced as per-item failures in job results rather than being silently dropped.
    - Evaluation exports respect a configurable per-run row cap (`CHATBOOKS_EVAL_EXPORT_MAX_ROWS`, default 200). When truncation occurs, both manifest entries and API responses flag `truncated: true` and record the applied `max_rows`, and the export returns continuation data so clients can resume the same chatbook export rather than generating multiple chatbooks.
-   - Rate limiting (default 5 exports/minute and 5 imports/minute per user) via SlowAPI limiter; configurable overrides for privileged roles and service accounts.
+   - Rate limiting (default 5 exports/minute and 5 imports/minute per user) via RG ingress policies; configurable overrides for privileged roles and service accounts.
 
 ## 8. Non-Functional Requirements
 
@@ -151,11 +151,11 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 ## 9. Dependencies & Integrations
 
 - ChaChaNotes database for job tracking and content retrieval.
-- Core Jobs infrastructure and optional Prompt Studio JobManager adapter.
+- Core Jobs infrastructure.
 - Media/storage subsystems for referenced artifacts.
 - Authentication & authorization (user id, tier) for scoping quotas and access.
 - Unified audit service for compliance logging.
-- Environment configuration: `CHATBOOKS_*`, `TLDW_USER_DATA_PATH`, job tuning variables.
+- Environment configuration: `CHATBOOKS_*`, `USER_DB_BASE_DIR` (defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/` under the project root; override via environment variable or `Config_Files/config.txt`), job tuning variables.
 
 ## 10. Success Metrics
 
@@ -169,7 +169,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 
 1. **Alpha (internal):** Enable sync export/import, collect feedback on manifest completeness, instrument audit logging, manual worker startup.
 2. **Beta (selected users):** Async jobs via core worker, enforce quotas, optional signed URLs, WebUI tab gating, docs in `/Docs`.
-3. **General Availability:** Prompt Studio job adapter, automated cleanup, policy toggles, default worker enabled, CLI documentation, CI integration tests.
+3. **General Availability:** Automated cleanup, policy toggles, default worker enabled, CLI documentation, CI integration tests.
 4. **Post-GA Enhancements:** Collaborative chatbooks, delta exports, scheduled backups, analytics dashboards, packaging for third-party ingestion.
 
 ## 12. Risks & Mitigations

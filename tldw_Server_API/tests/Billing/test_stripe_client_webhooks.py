@@ -44,6 +44,8 @@ def test_construct_webhook_event_accepts_bytes_and_str(monkeypatch, payload: Any
 
 
 def test_construct_webhook_event_converts_signature_error_to_value_error(monkeypatch) -> None:
+
+
     """SignatureVerificationError from stripe should surface as ValueError."""
 
     class _FailingWebhook:

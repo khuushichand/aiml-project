@@ -25,7 +25,7 @@ class _FakeProviderManager:
 
 @pytest.mark.unit
 def test_llm_providers_includes_health(monkeypatch):
-    # Force TEST_MODE to ensure deterministic behavior
+     # Force TEST_MODE to ensure deterministic behavior
     monkeypatch.setenv("TEST_MODE", "true")
 
     with TestClient(app) as client:

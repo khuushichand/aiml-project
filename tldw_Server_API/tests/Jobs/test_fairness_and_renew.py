@@ -5,6 +5,8 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def test_priority_fairness_in_acquire(tmp_path):
+
+
     db_path = tmp_path / "jobs.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
@@ -22,7 +24,9 @@ def test_priority_fairness_in_acquire(tmp_path):
 
 
 def test_renew_prevents_reclaim(monkeypatch, tmp_path):
-    # Ensure renew can extend beyond 1s even if a global cap is present
+
+
+     # Ensure renew can extend beyond 1s even if a global cap is present
     monkeypatch.delenv("JOBS_LEASE_MAX_SECONDS", raising=False)
     monkeypatch.setenv("JOBS_LEASE_MAX_SECONDS", "10")
     db_path = tmp_path / "jobs.db"

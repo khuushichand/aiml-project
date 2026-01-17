@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture(autouse=True)
 def _test_env(monkeypatch, tmp_path):
-    # Offline behavior and isolated DBs
+     # Offline behavior and isolated DBs
     monkeypatch.setenv("TEST_MODE", "1")
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_include_org_default"
     base_dir.mkdir(parents=True, exist_ok=True)

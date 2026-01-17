@@ -3,6 +3,8 @@ from tldw_Server_API.app.core.RAG.rag_service.guardrails import build_hard_citat
 
 
 def test_build_hard_citations_offsets_golden():
+
+
     text = "We ran 42 experiments. The findings were consistent across trials."
     d = Document(id="gold1", content=text, metadata={"title": "Paper"}, source=DataSource.MEDIA_DB, score=0.9)
     answer = "We ran 42 experiments. The findings were consistent across trials."

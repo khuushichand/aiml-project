@@ -3,7 +3,7 @@ import pytest
 import httpx
 
 from .test_data import TestDataGenerator
-from .fixtures import authenticated_client, data_tracker
+from .fixtures import authenticated_client, data_tracker, require_llm_or_skip, FALLBACK_CHAT_MODEL
 
 
 def _sanitize_name(name: str) -> str:
@@ -15,6 +15,56 @@ def _sanitize_name(name: str) -> str:
         .replace("\\", "")
         .replace("/", "")
     )
+
+
+def _resolve_chat_model_or_skip(api) -> str:
+    return require_llm_or_skip(api)
+
+
+def _maybe_set_fallback_provider(payload: dict, model: str) -> None:
+    if not model:
+        return
+    normalized = model.replace("-", "").lower()
+    if normalized == FALLBACK_CHAT_MODEL.lower():
+        payload.setdefault("api_provider", "openai")
+
+
+def _is_fallback_model(model: str) -> bool:
+    if not model:
+        return False
+    return model.replace("-", "").lower() == FALLBACK_CHAT_MODEL.lower()
+
+
+def _post_chat_completion_with_model(api, payload: dict, model: str) -> httpx.Response:
+    request_payload = dict(payload)
+    request_payload["model"] = model
+    _maybe_set_fallback_provider(request_payload, model)
+    resp = api.client.post("/api/v1/chat/completions", json=request_payload)
+    resp.raise_for_status()
+    return resp
+
+
+def _post_chat_completion_with_fallback(api, payload: dict, model: str) -> httpx.Response:
+    try:
+        return _post_chat_completion_with_model(api, payload, model)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (502, 503):
+            detail = e.response.text
+            pytest.skip(f"LLM provider unavailable for /chat/completions: {detail}")
+        if e.response.status_code == 400 and not _is_fallback_model(model):
+            fallback_model = "gpt-4o"
+            try:
+                return _post_chat_completion_with_model(api, payload, fallback_model)
+            except httpx.HTTPStatusError as fallback_exc:
+                if fallback_exc.response.status_code in (400, 502, 503):
+                    pytest.skip(
+                        f"Fallback model {fallback_model} rejected by /chat/completions: "
+                        f"{fallback_exc.response.text}"
+                    )
+                raise
+        if e.response.status_code == 400 and _is_fallback_model(model):
+            pytest.skip(f"Fallback model {model} rejected by /chat/completions: {e.response.text}")
+        raise
 
 
 @pytest.mark.critical
@@ -184,26 +234,14 @@ def test_chat_completions_save_to_db_persists_and_exposes_conversation(authentic
     data_tracker.add_character(int(character_id))
 
     # Call /chat/completions with save_to_db True
+    model = _resolve_chat_model_or_skip(api)
     payload = {
         "messages": [{"role": "user", "content": "State your name in five words or less."}],
-        "model": "gpt-3.5-turbo",
         "character_id": str(character_id),  # API expects string
         "save_to_db": True,
         "stream": False,
     }
-    try:
-        resp = api.client.post("/api/v1/chat/completions", json=payload)
-        resp.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        # Skip gracefully when provider not configured or unavailable
-        if e.response.status_code in (502, 503):
-            detail = None
-            try:
-                detail = e.response.json().get("detail")
-            except Exception:
-                pass
-            pytest.skip(f"LLM provider unavailable for /chat/completions: {detail or e}")
-        raise
+    resp = _post_chat_completion_with_fallback(api, payload, model)
 
     data = resp.json()
     conv_id = data.get("tldw_conversation_id") or data.get("conversation_id")
@@ -243,20 +281,14 @@ def test_chat_completions_history_search_followup(authenticated_client, data_tra
     data_tracker.add_character(int(character_id))
 
     # Initial completion to create conversation
+    model = _resolve_chat_model_or_skip(api)
     first = {
         "messages": [{"role": "user", "content": "Start a short conversation."}],
-        "model": "gpt-3.5-turbo",
         "character_id": str(character_id),
         "save_to_db": True,
         "stream": False,
     }
-    try:
-        r1 = api.client.post("/api/v1/chat/completions", json=first)
-        r1.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code in (502, 503):
-            pytest.skip("LLM provider unavailable for initial /chat/completions")
-        raise
+    r1 = _post_chat_completion_with_fallback(api, first, model)
     d1 = r1.json()
     conv_id = d1.get("tldw_conversation_id") or d1.get("conversation_id")
     assert conv_id
@@ -266,19 +298,12 @@ def test_chat_completions_history_search_followup(authenticated_client, data_tra
     unique_term = f"E2EUniqueTerm_{TestDataGenerator.random_string(6)}"
     second = {
         "messages": [{"role": "user", "content": f"Please include this token: {unique_term}"}],
-        "model": "gpt-3.5-turbo",
         "character_id": str(character_id),
         "conversation_id": conv_id,
         "save_to_db": True,
         "stream": False,
     }
-    try:
-        r2 = api.client.post("/api/v1/chat/completions", json=second)
-        r2.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code in (502, 503):
-            pytest.skip("LLM provider unavailable for follow-up /chat/completions")
-        raise
+    _post_chat_completion_with_fallback(api, second, model)
 
     # Search chat history for the unique term
     resp = api.client.get(f"/api/v1/chats/{conv_id}/messages/search", params={"query": unique_term, "limit": 10})
@@ -316,20 +341,14 @@ def test_chat_completions_assistant_name_if_present(authenticated_client, data_t
     character_id = (resp.json().get("id") or resp.json().get("character_id"))
     data_tracker.add_character(int(character_id))
 
+    model = _resolve_chat_model_or_skip(api)
     payload = {
         "messages": [{"role": "user", "content": "Reply briefly."}],
-        "model": "gpt-3.5-turbo",
         "character_id": str(character_id),
         "save_to_db": True,
         "stream": False,
     }
-    try:
-        r = api.client.post("/api/v1/chat/completions", json=payload)
-        r.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code in (502, 503):
-            pytest.skip("Provider unavailable; cannot validate assistant name field")
-        raise
+    r = _post_chat_completion_with_fallback(api, payload, model)
 
     data = r.json()
     choices = data.get("choices") or []

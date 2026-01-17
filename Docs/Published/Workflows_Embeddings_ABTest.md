@@ -47,6 +47,7 @@ curl -N http://127.0.0.1:8000/api/v1/evaluations/embeddings/abtest/<TEST_ID>/eve
 curl -sS http://127.0.0.1:8000/api/v1/evaluations/embeddings/abtest/<TEST_ID>/results -H "X-API-KEY: $API_KEY" | jq
 ```
 Returns summary metrics per arm (e.g., nDCG, MRR, latency p50/p95) and detailed per-query scores.
+The payload includes a `results` array with ranked IDs, scores, metrics, latency, and optional rerank fields.
 
 ## Significance Check
 ```bash

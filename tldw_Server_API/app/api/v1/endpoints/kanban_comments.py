@@ -8,7 +8,7 @@ Provides CRUD operations for Kanban card comments including:
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
@@ -163,6 +163,7 @@ async def update_comment(
 @router.delete(
     "/comments/{comment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a comment",
     description="Soft delete a comment. The comment can be recovered within the retention period."
 )
@@ -170,7 +171,7 @@ async def delete_comment(
     comment_id: int,
     hard_delete: bool = Query(False, description="Permanently delete the comment"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
-) -> None:
+) -> Response:
     """
     Delete a comment.
 
@@ -184,6 +185,7 @@ async def delete_comment(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Comment {comment_id} not found"
             )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException:
         raise
     except Exception as e:

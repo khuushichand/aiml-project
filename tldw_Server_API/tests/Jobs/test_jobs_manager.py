@@ -18,6 +18,8 @@ def jobs_db(tmp_path):
 
 
 def test_create_and_acquire_and_complete(jobs_db):
+
+
     jm = JobManager(jobs_db)
     job = jm.create_job(
         domain="chatbooks",
@@ -39,7 +41,27 @@ def test_create_and_acquire_and_complete(jobs_db):
     assert got["status"] == "completed"
 
 
+def test_update_job_result_merges(jobs_db):
+    jm = JobManager(jobs_db)
+    job = jm.create_job(
+        domain="embeddings",
+        queue="default",
+        job_type="embeddings_pipeline",
+        payload={"media_id": 1},
+        owner_user_id="1",
+    )
+    ok1 = jm.update_job_result(int(job["id"]), result={"total_chunks": 12})
+    assert ok1
+    ok2 = jm.update_job_result(int(job["id"]), result={"embedding_count": 12})
+    assert ok2
+    updated = jm.get_job(int(job["id"]))
+    assert updated["result"]["total_chunks"] == 12
+    assert updated["result"]["embedding_count"] == 12
+
+
 def test_acquire_decrypts_payload(jobs_db, monkeypatch):
+
+
     from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
 
     monkeypatch.setenv("JOBS_ENCRYPT_SECURE", "true")
@@ -66,6 +88,8 @@ def test_acquire_decrypts_payload(jobs_db, monkeypatch):
 
 
 def test_rotate_encryption_keys_respects_filters_sqlite(jobs_db, monkeypatch):
+
+
     from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
 
     monkeypatch.setenv("JOBS_ENCRYPT", "true")
@@ -90,6 +114,8 @@ def test_rotate_encryption_keys_respects_filters_sqlite(jobs_db, monkeypatch):
 
 
 def test_retryable_fail_and_backoff(jobs_db):
+
+
     jm = JobManager(jobs_db)
     job = jm.create_job(
         domain="chatbooks",
@@ -111,6 +137,8 @@ def test_retryable_fail_and_backoff(jobs_db):
 
 
 def test_cancel_paths(jobs_db):
+
+
     jm = JobManager(jobs_db)
     j1 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     # cancel queued
@@ -133,6 +161,8 @@ def test_cancel_paths(jobs_db):
 
 
 def test_idempotency_key_returns_existing(jobs_db):
+
+
     jm = JobManager(jobs_db)
     idem_key = "cb-export-uniq-key"
     j1 = jm.create_job(
@@ -158,6 +188,8 @@ def test_idempotency_key_returns_existing(jobs_db):
 
 
 def test_available_at_scheduling_delays_acquire(jobs_db):
+
+
     jm = JobManager(jobs_db)
     future = datetime.utcnow() + timedelta(seconds=1)
     jm.create_job(
@@ -177,3 +209,111 @@ def test_available_at_scheduling_delays_acquire(jobs_db):
     j2 = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="w4")
     assert j2 is not None
     assert j2["status"] == "processing"
+
+
+def test_dependencies_gate_acquire_and_unblock(jobs_db):
+
+
+    jm = JobManager(jobs_db)
+    root = jm.create_job(
+        domain="embeddings",
+        queue="default",
+        job_type="stage_root",
+        payload={"step": "root"},
+        owner_user_id="1",
+        priority=5,
+    )
+    child = jm.create_job(
+        domain="embeddings",
+        queue="default",
+        job_type="stage_child",
+        payload={"step": "child"},
+        owner_user_id="1",
+        priority=1,
+    )
+    assert jm.add_job_dependency(child["uuid"], root["uuid"])
+
+    first = jm.acquire_next_job(domain="embeddings", queue="default", lease_seconds=5, worker_id="w1")
+    assert first is not None
+    assert first["uuid"] == root["uuid"]
+    assert jm.complete_job(int(first["id"]))
+
+    second = jm.acquire_next_job(domain="embeddings", queue="default", lease_seconds=5, worker_id="w1")
+    assert second is not None
+    assert second["uuid"] == child["uuid"]
+
+
+def test_dependency_failure_cancels_children(jobs_db):
+
+
+    jm = JobManager(jobs_db)
+    root = jm.create_job(
+        domain="embeddings",
+        queue="default",
+        job_type="stage_root",
+        payload={"step": "root"},
+        owner_user_id="1",
+    )
+    child = jm.create_job(
+        domain="embeddings",
+        queue="default",
+        job_type="stage_child",
+        payload={"step": "child"},
+        owner_user_id="1",
+    )
+    assert jm.add_job_dependency(child["uuid"], root["uuid"])
+
+    first = jm.acquire_next_job(domain="embeddings", queue="default", lease_seconds=5, worker_id="w2")
+    assert first is not None
+    assert jm.fail_job(int(first["id"]), error="boom", retryable=False)
+
+    child_row = jm.get_job(int(child["id"]))
+    assert child_row["status"] == "cancelled"
+
+
+def test_dependency_cancel_cascades(jobs_db):
+
+
+    jm = JobManager(jobs_db)
+    root = jm.create_job(
+        domain="embeddings",
+        queue="default",
+        job_type="stage_root",
+        payload={"step": "root"},
+        owner_user_id="1",
+    )
+    child = jm.create_job(
+        domain="embeddings",
+        queue="default",
+        job_type="stage_child",
+        payload={"step": "child"},
+        owner_user_id="1",
+    )
+    assert jm.add_job_dependency(child["uuid"], root["uuid"])
+
+    assert jm.cancel_job(int(root["id"]))
+    child_row = jm.get_job(int(child["id"]))
+    assert child_row["status"] == "cancelled"
+
+
+def test_dependency_cycle_rejected(jobs_db):
+
+
+    jm = JobManager(jobs_db)
+    a = jm.create_job(
+        domain="embeddings",
+        queue="default",
+        job_type="stage_a",
+        payload={"step": "a"},
+        owner_user_id="1",
+    )
+    b = jm.create_job(
+        domain="embeddings",
+        queue="default",
+        job_type="stage_b",
+        payload={"step": "b"},
+        owner_user_id="1",
+    )
+    assert jm.add_job_dependency(b["uuid"], a["uuid"])
+    with pytest.raises(ValueError):
+        jm.add_job_dependency(a["uuid"], b["uuid"])

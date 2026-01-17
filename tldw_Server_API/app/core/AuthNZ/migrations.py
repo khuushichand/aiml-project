@@ -117,6 +117,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             key_hash TEXT UNIQUE NOT NULL,
+            key_id TEXT,
             key_prefix TEXT,
             name TEXT,
             description TEXT,
@@ -149,6 +150,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE api_keys ADD COLUMN {decl}")
                 cols.add(name)
 
+        add_col('key_id', "key_id TEXT")
         add_col('key_prefix', "key_prefix TEXT")
         add_col('description', "description TEXT")
         add_col('scope', "scope TEXT DEFAULT 'read'")
@@ -170,6 +172,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
     # Create indexes (only if columns exist)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
     try:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
     except Exception:
@@ -1061,6 +1064,18 @@ def migration_021_usage_daily_add_bytes_in_total(conn: sqlite3.Connection) -> No
     logger.info("Migration 021: Added bytes_in_total column to usage_daily")
 
 
+def migration_049_add_llm_usage_log_key_ts_index(conn: sqlite3.Connection) -> None:
+    """Add composite index for llm_usage_log key_id + ts (SQLite)."""
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_llm_usage_log_key_ts ON llm_usage_log(key_id, ts)"
+        )
+    except Exception:
+        pass
+    conn.commit()
+    logger.info("Migration 049: Added llm_usage_log key_id + ts index")
+
+
 def migration_022_create_tool_catalogs(conn: sqlite3.Connection) -> None:
     """Create tables for MCP tool catalogs (SQLite)."""
     # tool_catalogs: scoped by (org_id, team_id) with name unique per scope
@@ -1286,6 +1301,7 @@ def migration_028_create_org_invites(conn: sqlite3.Connection) -> None:
             max_uses INTEGER DEFAULT 1,
             uses_count INTEGER DEFAULT 0,
             is_active INTEGER DEFAULT 1,
+            allowed_email_domain TEXT,
             description TEXT,
             metadata TEXT,
             FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
@@ -1668,6 +1684,10 @@ def migration_036_create_user_provider_secrets(conn: sqlite3.Connection) -> None
             encrypted_blob TEXT NOT NULL,
             key_hint TEXT,
             metadata TEXT,
+            created_by INTEGER,
+            updated_by INTEGER,
+            revoked_by INTEGER,
+            revoked_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_used_at TIMESTAMP,
@@ -1690,6 +1710,10 @@ def migration_036_create_user_provider_secrets(conn: sqlite3.Connection) -> None
         add_col("encrypted_blob", "encrypted_blob TEXT")
         add_col("key_hint", "key_hint TEXT")
         add_col("metadata", "metadata TEXT")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("revoked_by", "revoked_by INTEGER")
+        add_col("revoked_at", "revoked_at TIMESTAMP")
         add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("last_used_at", "last_used_at TIMESTAMP")
@@ -1726,6 +1750,10 @@ def migration_037_create_org_provider_secrets(conn: sqlite3.Connection) -> None:
             encrypted_blob TEXT NOT NULL,
             key_hint TEXT,
             metadata TEXT,
+            created_by INTEGER,
+            updated_by INTEGER,
+            revoked_by INTEGER,
+            revoked_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_used_at TIMESTAMP,
@@ -1747,6 +1775,10 @@ def migration_037_create_org_provider_secrets(conn: sqlite3.Connection) -> None:
         add_col("encrypted_blob", "encrypted_blob TEXT")
         add_col("key_hint", "key_hint TEXT")
         add_col("metadata", "metadata TEXT")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("revoked_by", "revoked_by INTEGER")
+        add_col("revoked_at", "revoked_at TIMESTAMP")
         add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("last_used_at", "last_used_at TIMESTAMP")
@@ -1866,6 +1898,170 @@ def migration_040_extend_registration_codes_for_org_invites(conn: sqlite3.Connec
     logger.info("Migration 040: Updated registration_codes for org invites")
 
 
+def migration_046_add_org_invite_allowlist_domain(conn: sqlite3.Connection) -> None:
+    """Add allowed_email_domain to org_invites if missing."""
+    logger.info("Migration 046: START org_invites allowlist domain")
+    try:
+        table_exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='org_invites'"
+        ).fetchone()
+        if not table_exists:
+            logger.info("Migration 046: org_invites table missing, skipping")
+            return
+        cur = conn.execute("PRAGMA table_info(org_invites)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "allowed_email_domain" not in columns:
+            conn.execute("ALTER TABLE org_invites ADD COLUMN allowed_email_domain TEXT")
+        conn.commit()
+        logger.info("Migration 046: org_invites allowlist domain ensured")
+    except Exception as exc:
+        logger.error("Migration 046: failed to add org_invites allowlist domain: %s", exc)
+        raise
+
+
+def migration_047_create_user_config_overrides_table(conn: sqlite3.Connection) -> None:
+    """Create the user_config_overrides table for profile preferences."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_config_overrides (
+            user_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by INTEGER,
+            updated_by INTEGER,
+            PRIMARY KEY (user_id, key),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cursor = conn.execute("PRAGMA table_info(user_config_overrides)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE user_config_overrides ADD COLUMN {decl}")
+                columns.add(name)
+
+        add_col("value_json", "value_json TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+    except Exception:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_config_overrides_user_id ON user_config_overrides(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_config_overrides_key ON user_config_overrides(key)"
+    )
+    conn.commit()
+    logger.info("Migration 047: Created user_config_overrides table")
+
+
+def rollback_047_drop_user_config_overrides(conn: sqlite3.Connection) -> None:
+    """Drop user_config_overrides table."""
+    conn.execute("DROP TABLE IF EXISTS user_config_overrides")
+    conn.commit()
+    logger.info("Rollback 047: Dropped user_config_overrides table")
+
+
+def migration_048_create_org_team_config_overrides_table(conn: sqlite3.Connection) -> None:
+    """Create org/team config overrides tables."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_config_overrides (
+            org_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by INTEGER,
+            updated_by INTEGER,
+            PRIMARY KEY (org_id, key),
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS team_config_overrides (
+            team_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by INTEGER,
+            updated_by INTEGER,
+            PRIMARY KEY (team_id, key),
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cursor = conn.execute("PRAGMA table_info(org_config_overrides)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE org_config_overrides ADD COLUMN {decl}")
+                columns.add(name)
+
+        add_col("value_json", "value_json TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+    except Exception:
+        pass
+
+    try:
+        cursor = conn.execute("PRAGMA table_info(team_config_overrides)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE team_config_overrides ADD COLUMN {decl}")
+                columns.add(name)
+
+        add_col("value_json", "value_json TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+    except Exception:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_org_config_overrides_org_id ON org_config_overrides(org_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_org_config_overrides_key ON org_config_overrides(key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_team_config_overrides_team_id ON team_config_overrides(team_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_team_config_overrides_key ON team_config_overrides(key)"
+    )
+    conn.commit()
+    logger.info("Migration 048: Created org/team config overrides tables")
+
+
+def rollback_048_drop_org_team_config_overrides(conn: sqlite3.Connection) -> None:
+    """Drop org/team config overrides tables."""
+    conn.execute("DROP TABLE IF EXISTS team_config_overrides")
+    conn.execute("DROP TABLE IF EXISTS org_config_overrides")
+    conn.commit()
+    logger.info("Rollback 048: Dropped org/team config overrides tables")
+
+
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     """Add llm_provider_overrides table for runtime provider overrides."""
     logger.info("Migration 041: START llm_provider_overrides table")
@@ -1942,10 +2138,10 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
         return None
 
     def _inflate_legacy_budgets(legacy: Dict[str, Any]) -> Dict[str, Any]:
-        budgets = {key: legacy[key] for key in ("budget_day_usd", "budget_month_usd", "budget_day_tokens", "budget_month_tokens") if key in legacy}
         payload: Dict[str, Any] = {}
-        if budgets:
-            payload["budgets"] = budgets
+        for key in ("budget_day_usd", "budget_month_usd", "budget_day_tokens", "budget_month_tokens"):
+            if key in legacy:
+                payload[key] = legacy[key]
         thresholds = _normalize_alert_thresholds(legacy.get("alert_thresholds"))
         if thresholds is not None:
             payload["alert_thresholds"] = thresholds
@@ -2017,6 +2213,40 @@ def rollback_043_drop_retention_policy_overrides(conn: sqlite3.Connection) -> No
     conn.execute("DROP TABLE IF EXISTS retention_policy_overrides")
     conn.commit()
     logger.info("Rollback 043: Dropped retention_policy_overrides table")
+
+
+def migration_044_add_api_keys_key_id(conn: sqlite3.Connection) -> None:
+    """Add key_id column + index for api_keys (SQLite)."""
+    try:
+        cur = conn.execute("PRAGMA table_info(api_keys)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "key_id" not in cols:
+            conn.execute("ALTER TABLE api_keys ADD COLUMN key_id TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
+        conn.commit()
+        logger.info("Migration 044: Added api_keys.key_id + index")
+    except sqlite3.OperationalError as error:
+        logger.warning(f"Migration 044 skipped or failed: {error}")
+
+
+def rollback_044_drop_api_keys_key_id(conn: sqlite3.Connection) -> None:
+    """Rollback migration 044 by dropping key_id index (column cannot be dropped in SQLite)."""
+    conn.execute("DROP INDEX IF EXISTS idx_api_keys_key_id")
+    conn.commit()
+    logger.info("Rollback 044: Dropped idx_api_keys_key_id index")
+
+
+def migration_045_add_users_created_by(conn: sqlite3.Connection) -> None:
+    """Add created_by column to users table for admin-created accounts."""
+    try:
+        cur = conn.execute("PRAGMA table_info(users)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "created_by" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN created_by INTEGER")
+            logger.info("Migration 045: Added users.created_by column")
+        conn.commit()
+    except sqlite3.OperationalError as error:
+        logger.warning(f"Migration 045 skipped or failed: {error}")
 
 
 #######################################################################################################################
@@ -2150,6 +2380,39 @@ def get_authnz_migrations() -> List[Migration]:
             "Create retention_policy_overrides table",
             migration_043_create_retention_policy_overrides,
             rollback_043_drop_retention_policy_overrides,
+        ),
+        Migration(
+            44,
+            "Add api_keys.key_id column",
+            migration_044_add_api_keys_key_id,
+            rollback_044_drop_api_keys_key_id,
+        ),
+        Migration(
+            45,
+            "Add users.created_by column",
+            migration_045_add_users_created_by,
+        ),
+        Migration(
+            46,
+            "Add org_invites allowed_email_domain",
+            migration_046_add_org_invite_allowlist_domain,
+        ),
+        Migration(
+            47,
+            "Create user_config_overrides table",
+            migration_047_create_user_config_overrides_table,
+            rollback_047_drop_user_config_overrides,
+        ),
+        Migration(
+            48,
+            "Create org/team config overrides tables",
+            migration_048_create_org_team_config_overrides_table,
+            rollback_048_drop_org_team_config_overrides,
+        ),
+        Migration(
+            49,
+            "Add llm_usage_log key_id + ts index",
+            migration_049_add_llm_usage_log_key_ts_index,
         ),
     ]
 

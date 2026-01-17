@@ -22,7 +22,21 @@ defaults:
     tokens: token_bucket     # preferred for model tokens
   scopes_order: [global, tenant, user, api_key, conversation, client, ip, service, entity]
 
+# Policy templates (anchors) for quick customization.
+templates:
+  core: &core_policy
+    requests: { rpm: 120, burst: 1.2 }
+    scopes: [global, user, api_key, ip]
+    fail_mode: fallback_memory
+  mcp_base: &mcp_base
+    requests: { rpm: 60, burst: 1.0 }
+    scopes: [global, user, client, api_key]
+    fail_mode: fallback_memory  # acceptable local over-admission during outages
+
 policies:
+  # Core defaults for endpoints without explicit module-level policies.
+  core.default: *core_policy
+
   # Chat API: per-user and per-conversation controls
   chat.default:
     requests: { rpm: 120, burst: 2.0 }
@@ -33,12 +47,17 @@ policies:
 
   # MCP ingestion/read paths
   mcp.ingestion:
-    requests: { rpm: 60, burst: 1.0 }
-    scopes: [global, client]
-    fail_mode: fallback_memory  # acceptable local over-admission during outages
+    <<: *mcp_base
+
+  mcp.default:
+    <<: *mcp_base
+
+  mcp.read:
+    <<: *mcp_base
+    requests: { rpm: 120, burst: 1.0 }  # Higher limit for read ops
 
   # AuthNZ guardrails (login, reset-password, etc.)
-  # NOTE: These policies are used by module-level RG integrations (not ingress route_map).
+  # Applied by RG ingress via /api/v1/auth* route_map entries.
   authnz.default:
     requests: { rpm: 60, burst: 1.0 }
     scopes: [global, entity]
@@ -65,11 +84,6 @@ policies:
     scopes: [user, api_key, ip]
     fail_mode: fail_closed
 
-  # SlowAPI façade defaults (ingress IP-based when auth scopes unavailable)
-  slowapi.default:
-    requests: { rpm: 300, burst: 2.0 }
-    scopes: [ip]
-
   # Character Chat / Characters module (legacy per-user limiter compat)
   character_chat.default:
     requests: { rpm: 60, burst: 1.0 }
@@ -83,6 +97,41 @@ policies:
     requests: { rpm: 30, burst: 1.0 }
     evaluations: { daily_cap: 500 }
     tokens: { per_min: 1000000, burst: 1.0, daily_cap: 500000 }
+    scopes: [user, api_key]
+
+  # Evaluations tier policies (used by the evaluations module)
+  evals.free:
+    evaluations: { per_min: 10, burst: 1.5, daily_cap: 100 }
+    tokens: { per_min: 0, burst: 1.0, daily_cap: 100000 }
+    scopes: [user, api_key]
+  evals.basic:
+    evaluations: { per_min: 30, burst: 1.33, daily_cap: 1000 }
+    tokens: { per_min: 0, burst: 1.0, daily_cap: 1000000 }
+    scopes: [user, api_key]
+  evals.premium:
+    evaluations: { per_min: 100, burst: 1.25, daily_cap: 10000 }
+    tokens: { per_min: 0, burst: 1.0, daily_cap: 10000000 }
+    scopes: [user, api_key]
+  evals.enterprise:
+    evaluations: { per_min: 500, burst: 1.2, daily_cap: 100000 }
+    tokens: { per_min: 0, burst: 1.0, daily_cap: 100000000 }
+    scopes: [user, api_key]
+
+  evals.free.batch:
+    evaluations: { per_min: 2, burst: 3.5, daily_cap: 100 }
+    tokens: { per_min: 0, burst: 1.0, daily_cap: 100000 }
+    scopes: [user, api_key]
+  evals.basic.batch:
+    evaluations: { per_min: 5, burst: 3.0, daily_cap: 1000 }
+    tokens: { per_min: 0, burst: 1.0, daily_cap: 1000000 }
+    scopes: [user, api_key]
+  evals.premium.batch:
+    evaluations: { per_min: 20, burst: 2.25, daily_cap: 10000 }
+    tokens: { per_min: 0, burst: 1.0, daily_cap: 10000000 }
+    scopes: [user, api_key]
+  evals.enterprise.batch:
+    evaluations: { per_min: 100, burst: 2.0, daily_cap: 100000 }
+    tokens: { per_min: 0, burst: 1.0, daily_cap: 100000000 }
     scopes: [user, api_key]
 
   # Web scraping service (internal service scope).
@@ -133,22 +182,29 @@ policies:
     scopes: [user, api_key]
 
   # Media ingestion/processing endpoints.
-  # Applies to `/api/v1/media/*` for uploads, conversions, and analysis.
+  # Applied to ingest/process routes under `/api/v1/media/*` (add, process-*, ingest-web-content, mediawiki).
   # Media processing is CPU/IO heavy, so limits are slightly conservative
-  # (60 rpm, modest burst) to prevent local saturation while still allowing
+  # (600 rpm, modest burst) to prevent local saturation while still allowing
   # concurrent ingestion workflows in development.
   media.default:
-    requests: { rpm: 60, burst: 1.2 }
+    requests: { rpm: 600, burst: 1.2 }
     scopes: [user, api_key]
 
-  # Chatbooks import/export endpoints (SlowAPI compat → RG).
+  # Media access endpoints (listing, item retrieval, file download).
+  # This is intentionally higher than ingestion limits so browsing doesn't
+  # contend with ingestion quotas.
+  media.access:
+    requests: { rpm: 6000, burst: 1.2 }
+    scopes: [user, api_key]
+
+  # Chatbooks import/export endpoints (legacy ingress compat → RG).
   # Covers `/api/v1/chatbooks/*` used for conversation backup/restore and bulk
   # user-data transfer (export/import). Limits are intentionally conservative
   # (5 rpm, no burst) to prevent accidental or abusive bulk operations that
   # can create heavy DB/file I/O and large payloads. Preview/download are
   # slightly higher to support iterative validation and retrieval of prepared
   # artifacts. Include `ip` in scope as an additional safety valve for shared
-  # API keys and to align with legacy SlowAPI behavior.
+  # API keys and to align with legacy ingress behavior.
   chatbooks.export:
     requests: { rpm: 5, burst: 1.0 }
     scopes: [user, api_key, ip]
@@ -177,42 +233,175 @@ policies:
 # Route/tag mapping helpers. Middleware may use these to resolve policy_id.
 route_map:
   by_tag:
-    chat: chat.default
-    mcp.ingestion: mcp.ingestion
-    embeddings: embeddings.default
-    embeddings_server: embeddings_server.default
+    health: core.default
+    authentication: authnz.default
+    auth: authnz.default
+    users: core.default
+    organizations: core.default
+    org-team-keys: core.default
+    invites: core.default
+    privileges: core.default
+    admin: core.default
+    jobs: core.default
+    audit: core.default
+    billing: core.default
+    outputs-templates: core.default
+    outputs: core.default
+    reading: core.default
+    reading-highlights: core.default
+    items: core.default
+    kanban: core.default
+    flashcards: core.default
+    quizzes: core.default
+    moderation: core.default
+    authnz-debug: core.default
+    sandbox: core.default
+    setup: core.default
+    subscriptions-deprecated: core.default
+    chunking: core.default
+    chunking-templates: core.default
+    connectors: core.default
+    ocr: core.default
+    vlm: core.default
+    media: media.access
+    media-embeddings: embeddings.default
     audio: audio.default
-    evals: evals.default
-    slowapi: slowapi.default
+    audio-websocket: audio.default
+    audio-ws: audio.default
+    audio-jobs: audio.default
+    web-scraping: web_scraping.default
+    research: research.default
+    paper-search: research.default
+    chat: chat.default
+    chat-dictionaries: chat.default
+    chat-documents: chat.default
+    characters: character_chat.default
+    character-chat-sessions: character_chat.default
+    character-messages: character_chat.default
+    persona: character_chat.default
+    rag-health: rag.default
+    rag-unified: rag.default
+    feedback: evals.default
+    evaluations: evals.default
+    benchmarks: evals.default
+    embeddings: embeddings.default
+    vector-stores: embeddings.default
+    claims: core.default
+    prompt-studio: prompt_studio.default
+    prompts: prompt_studio.default
+    notes: core.default
+    notes-graph: core.default
+    personalization: core.default
+    chatbooks: core.default
+    tools: core.default
+    metrics: core.default
+    monitoring: core.default
+    config: core.default
+    sync: core.default
+    llm: core.default
+    llamacpp: core.default
+    mcp-unified: mcp.default
+    mcp-catalogs: mcp.default
+    mcp-catalogs-scope: mcp.default
+    mcp.ingestion: mcp.ingestion
+    embeddings_server: embeddings_server.default
     character_chat: character_chat.default
     web_scraping: web_scraping.default
-    research: research.default
     workflows: workflows.default
-    prompt_studio: prompt_studio.default
     rag: rag.default
-    media: media.default
     watchlists: watchlists.default
-    authentication: authnz.default
-    "character-chat-sessions": character_chat.default
+    resource-governor: core.default
   by_path:
-    "/api/v1/chat/*": chat.default
-    "/api/v1/mcp/*": mcp.ingestion
-    "/api/v1/embeddings*": embeddings.default
-    "/api/v1/audio/*": audio.default
-    "/api/v1/evaluations/*": evals.default
-    "/api/v1/research/*": research.default
-    "/api/v1/workflows/*": workflows.default
-    "/api/v1/scheduler/workflows/*": workflows.default
-    "/api/v1/prompt-studio/*": prompt_studio.default
-    "/api/v1/rag/*": rag.default
-    "/api/v1/media/*": media.default
+    "/health": core.default
+    "/healthz": core.default
+    "/readyz": core.default
+    "/metrics": core.default
+    "/setup*": core.default
+    "/v1/rerank": core.default
+    "/v1/reranking": core.default
+    "/api/v1/health*": core.default
+    "/api/v1/readyz": core.default
+    "/api/v1/metrics*": core.default
+    "/api/v1/monitoring*": core.default
+    "/api/v1/setup*": core.default
+    "/api/v1/mcp/tools": mcp.read
+    "/api/v1/mcp/status": mcp.read
+    "/api/v1/mcp/health": mcp.read
+    "/api/v1/mcp/prompts": mcp.read
+    "/api/v1/mcp/resources": mcp.read
+    "/api/v1/mcp/modules*": mcp.read
+    "/api/v1/mcp/request": mcp.default
+    "/api/v1/mcp/request/*": mcp.default
+    "/api/v1/mcp/auth/*": mcp.default
+    "/api/v1/mcp/ws*": mcp.default
+    "/api/v1/mcp/*": mcp.default
     "/api/v1/chatbooks/export": chatbooks.export
     "/api/v1/chatbooks/import": chatbooks.import
     "/api/v1/chatbooks/preview": chatbooks.preview
     "/api/v1/chatbooks/download/*": chatbooks.download
+    "/api/v1/chatbooks*": core.default
+    "/api/v1/chats*": character_chat.default
+    "/api/v1/messages*": character_chat.default
+    "/api/v1/characters*": character_chat.default
+    "/api/v1/dictionaries*": chat.default
+    "/api/v1/documents*": chat.default
+    "/api/v1/chat/*": chat.default
+    "/api/v1/embeddings*": embeddings.default
+    "/api/v1/vector-stores*": embeddings.default
+    "/api/v1/audio*": audio.default
+    "/api/v1/evaluations*": evals.default
+    "/api/v1/feedback*": evals.default
+    "/api/v1/benchmarks*": evals.default
+    "/api/v1/research*": research.default
+    "/api/v1/paper-search*": research.default
+    "/api/v1/web-scraping*": web_scraping.default
+    "/api/v1/workflows*": workflows.default
+    "/api/v1/scheduler/workflows*": workflows.default
+    "/api/v1/prompt-studio*": prompt_studio.default
+    "/api/v1/prompts*": prompt_studio.default
+    "/api/v1/rag*": rag.default
+    "/api/v1/media/add": media.default
+    "/api/v1/media/ingest-web-content": media.default
+    "/api/v1/media/process-*": media.default
+    "/api/v1/media/mediawiki/*": media.default
+    "/api/v1/media/*/reprocess": media.default
+    "/api/v1/media*": media.access
     "/api/v1/watchlists/*": watchlists.default
-    "/api/v1/chats/*": character_chat.default
-    "/api/v1/auth/*": authnz.default
+    "/api/v1/watchlists*": watchlists.default
+    "/api/v1/subscriptions*": core.default
+    "/api/v1/billing*": core.default
+    "/api/v1/auth*": authnz.default
+    "/api/v1/authnz*": core.default
+    "/api/v1/users*": core.default
+    "/api/v1/orgs*": core.default
+    "/api/v1/invites*": core.default
+    "/api/v1/privileges*": core.default
+    "/api/v1/admin*": core.default
+    "/api/v1/jobs*": core.default
+    "/api/v1/audit*": core.default
+    "/api/v1/config*": core.default
+    "/api/v1/sync*": core.default
+    "/api/v1/tools*": core.default
+    "/api/v1/claims*": core.default
+    "/api/v1/notes*": core.default
+    "/api/v1/personalization*": core.default
+    "/api/v1/persona*": character_chat.default
+    "/api/v1/reading*": core.default
+    "/api/v1/items*": core.default
+    "/api/v1/kanban*": core.default
+    "/api/v1/outputs/templates*": core.default
+    "/api/v1/outputs*": core.default
+    "/api/v1/connectors*": core.default
+    "/api/v1/moderation*": core.default
+    "/api/v1/sandbox*": core.default
+    "/api/v1/ocr*": core.default
+    "/api/v1/vlm*": core.default
+    "/api/v1/llm*": core.default
+    "/api/v1/llamacpp*": core.default
+    "/api/v1/flashcards*": core.default
+    "/api/v1/quizzes*": core.default
+    "/api/v1/chunking*": core.default
+    "/api/v1/resource-governor*": core.default
 
 # Observability note: Do not include entity label in metrics by default.
 # Use RG_METRICS_ENTITY_LABEL=true to enable hashed entity label if necessary.

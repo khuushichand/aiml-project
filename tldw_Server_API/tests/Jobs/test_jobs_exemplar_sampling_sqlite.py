@@ -4,6 +4,8 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 
 
 def _env(monkeypatch, tmp_path):
+
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
@@ -13,6 +15,8 @@ def _env(monkeypatch, tmp_path):
 
 
 def test_exemplar_labels_propagate_sqlite(monkeypatch, tmp_path):
+
+
     _env(monkeypatch, tmp_path)
     # Force random path to always sample
     import random as _rnd

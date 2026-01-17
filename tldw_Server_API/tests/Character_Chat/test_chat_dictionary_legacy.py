@@ -13,6 +13,7 @@ import pytest
 import json
 import tempfile
 import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime
 
@@ -80,10 +81,7 @@ class TestChatDictionaryService:
         mock_db.get_connection.return_value.__enter__.return_value = mock_conn
         mock_db.get_connection.return_value.__exit__.return_value = None
 
-        dict_id = service.create_dictionary(
-            name="Test Dictionary",
-            description="A test dictionary"
-        )
+        dict_id = service.create_dictionary(name="Test Dictionary", description="A test dictionary")
 
         assert dict_id == 1
         mock_conn.execute.assert_called()
@@ -102,10 +100,25 @@ class TestChatDictionaryService:
 
         # Create a mock row that behaves like a dict
         mock_row = MagicMock()
-        mock_row.keys = lambda: ["id", "name", "description", "is_active", "created_at", "updated_at", "version", "deleted"]
+        mock_row.keys = lambda: [
+            "id",
+            "name",
+            "description",
+            "is_active",
+            "created_at",
+            "updated_at",
+            "version",
+            "deleted",
+        ]
         mock_row.__getitem__ = lambda self, key: {
-            "id": 1, "name": "Test Dict", "description": "Test", "is_active": 1,
-            "created_at": "2024-01-01", "updated_at": "2024-01-01", "version": 1, "deleted": 0
+            "id": 1,
+            "name": "Test Dict",
+            "description": "Test",
+            "is_active": 1,
+            "created_at": "2024-01-01",
+            "updated_at": "2024-01-01",
+            "version": 1,
+            "deleted": 0,
         }[key]
 
         mock_cursor.fetchone.return_value = mock_row
@@ -130,11 +143,7 @@ class TestChatDictionaryService:
         mock_db.get_connection.return_value.__exit__.return_value = None
 
         entry_id = service.add_entry(
-            dictionary_id=1,
-            key="test",
-            content="replaced",
-            probability=100,
-            max_replacements=1
+            dictionary_id=1, key="test", content="replaced", probability=100, max_replacements=1
         )
 
         assert entry_id == 1
@@ -162,14 +171,11 @@ class TestChatDictionaryService:
                 "probability": 100,
                 "max_replacements": 2,
                 "group": None,
-                "timed_effects": None
+                "timed_effects": None,
             }
         ]
 
-        result = service.process_text(
-            text="hello world, hello there",
-            token_budget=1000
-        )
+        result = service.process_text(text="hello world, hello there", token_budget=1000)
 
         assert "hi" in result["processed_text"]  # Should have replaced at least one "hello"
         assert result["replacements"] >= 1
@@ -180,15 +186,19 @@ class TestChatDictionaryService:
         # Mock active dictionaries with regex entries
         mock_db.execute_query.side_effect = [
             [{"id": 1, "name": "Regex Dict", "is_active": 1}],
-            [{"id": 1, "dictionary_id": 1, "key": r"\btest\w+",
-              "content": "TEST", "probability": 100,
-              "max_replacements": 2}]
+            [
+                {
+                    "id": 1,
+                    "dictionary_id": 1,
+                    "key": r"\btest\w+",
+                    "content": "TEST",
+                    "probability": 100,
+                    "max_replacements": 2,
+                }
+            ],
         ]
 
-        result = service.process_text(
-            text="testing tested tester",
-            token_budget=1000
-        )
+        result = service.process_text(text="testing tested tester", token_budget=1000)
 
         # Note: Actual regex processing depends on implementation
         assert result["processed_text"] is not None
@@ -199,9 +209,7 @@ class TestChatDictionaryService:
         # Mock entry with 0% probability
         mock_db.execute_query.side_effect = [
             [{"id": 1, "name": "Test", "is_active": 1}],
-            [{"id": 1, "dictionary_id": 1, "key": "hello",
-              "content": "hi", "probability": 0,
-              "max_replacements": 1}]
+            [{"id": 1, "dictionary_id": 1, "key": "hello", "content": "hi", "probability": 0, "max_replacements": 1}],
         ]
 
         result = service.process_text("hello world", token_budget=1000)
@@ -226,7 +234,7 @@ class TestChatDictionaryService:
                 "probability": 100,
                 "max_replacements": 1000,
                 "group": None,
-                "timed_effects": None
+                "timed_effects": None,
             }
         ]
 
@@ -252,10 +260,7 @@ class TestChatDictionaryService:
 
         # Check that UPDATE was called for soft delete
         calls = mock_conn.execute.call_args_list
-        assert any(
-            "update chat_dictionaries set deleted =" in call[0][0].lower()
-            for call in calls
-        )
+        assert any("update chat_dictionaries set deleted =" in call[0][0].lower() for call in calls)
 
     def test_import_from_markdown(self, service, mock_db):
         """Test importing dictionary from markdown format."""
@@ -275,11 +280,11 @@ Description: Test import
             [{"id": 3}],  # Entry 3
         ]
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(markdown_content)
             f.flush()
 
-            result = service.import_from_markdown(f.name, "Test Dictionary")
+            result = service.import_from_markdown(Path(f.name), "Test Dictionary")
 
         # The method returns the dictionary ID, not a dict
         assert result == 1
@@ -292,26 +297,42 @@ Description: Test import
 
         # Mock get_dictionary and get_entries calls
         mock_cursor.fetchone.side_effect = [
-            {"id": 1, "name": "Export Test", "description": "Test export",
-             "is_active": 1, "created_at": "2024-01-01", "updated_at": "2024-01-01"},
+            {
+                "id": 1,
+                "name": "Export Test",
+                "description": "Test export",
+                "is_active": 1,
+                "created_at": "2024-01-01",
+                "updated_at": "2024-01-01",
+            },
         ]
 
         mock_cursor.fetchall.side_effect = [
-            [{"id": 1, "key": "hello", "content": "hi", "group": None,
-              "is_regex": 0, "probability": 100, "max_replacements": 1}]
+            [
+                {
+                    "id": 1,
+                    "key": "hello",
+                    "content": "hi",
+                    "group": None,
+                    "is_regex": 0,
+                    "probability": 100,
+                    "max_replacements": 1,
+                }
+            ]
         ]
 
         # Create a temp file for export
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             temp_path = f.name
 
-        result = service.export_to_markdown(1, temp_path)
+        result = service.export_to_markdown(1, Path(temp_path))
 
         # The method returns a boolean
         assert result == True
 
         # Clean up
         import os
+
         os.unlink(temp_path)
 
     def test_update_entry(self, service, mock_db):
@@ -321,12 +342,7 @@ Description: Test import
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.rowcount = 1  # Indicate successful update
 
-        result = service.update_entry(
-            entry_id=1,
-            key="new_pattern",
-            content="new_replacement",
-            probability=50
-        )
+        result = service.update_entry(entry_id=1, key="new_pattern", content="new_replacement", probability=50)
 
         assert result == True
 
@@ -346,7 +362,7 @@ Description: Test import
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.fetchall.return_value = [
             {"id": 1, "name": "Dict1", "is_active": 1, "entry_count": 5},
-            {"id": 2, "name": "Dict2", "is_active": 0, "entry_count": 3}
+            {"id": 2, "name": "Dict2", "is_active": 0, "entry_count": 3},
         ]
 
         result = service.list_dictionaries(include_inactive=True)
@@ -408,7 +424,7 @@ Description: Test import
         entries = [
             {"key": "test1", "content": "repl1"},
             {"key": "test2", "content": "repl2"},
-            {"key": "test3", "content": "repl3"}
+            {"key": "test3", "content": "repl3"},
         ]
 
         # Mock the connection and cursor
@@ -431,7 +447,7 @@ Description: Test import
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.fetchall.return_value = [
             {"id": 1, "key": "hello", "content": "hi", "dictionary_name": "Dict1"},
-            {"id": 2, "key": "hello world", "content": "greetings", "dictionary_name": "Dict2"}
+            {"id": 2, "key": "hello world", "content": "greetings", "dictionary_name": "Dict2"},
         ]
 
         results = service.search_entries("hello")
@@ -448,13 +464,22 @@ Description: Test import
 
         # Mock fetchone for getting original dictionary
         mock_cursor.fetchone.return_value = {
-            "id": 1, "name": "Original", "description": "Original dict", "is_active": 1
+            "id": 1,
+            "name": "Original",
+            "description": "Original dict",
+            "is_active": 1,
         }
 
         # Mock fetchall for getting entries
         mock_cursor.fetchall.return_value = [
-            {"key": "test", "content": "repl", "probability": 100, "group": None,
-             "timed_effects": None, "max_replacements": 1}
+            {
+                "key": "test",
+                "content": "repl",
+                "probability": 100,
+                "group": None,
+                "timed_effects": None,
+                "max_replacements": 1,
+            }
         ]
 
         # Mock lastrowid for new dictionary creation

@@ -95,7 +95,7 @@ class TestOpenAIAdapterMock:
         # Test unknown voice defaults
         assert adapter.map_voice("unknown") == "alloy"
 
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_successful_generation(self, mock_post):
         """Test successful audio generation"""
         # Mock successful response
@@ -125,9 +125,10 @@ class TestOpenAIAdapterMock:
         # Verify API call
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert "speech" in call_args[0][0]  # URL contains 'speech'
+        called_url = call_args.kwargs.get("url") if call_args.kwargs else (call_args.args[0] if call_args.args else "")
+        assert "speech" in str(called_url)  # URL contains 'speech'
 
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_authentication_error(self, mock_post):
         """Test authentication error handling"""
         # Mock 401 response
@@ -156,7 +157,7 @@ class TestOpenAIAdapterMock:
         assert exc_info.value.provider == "OpenAI"
         assert "Invalid API key" in str(exc_info.value)
 
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_rate_limit_error(self, mock_post):
         """Test rate limit error handling"""
         # Mock 429 response
@@ -184,7 +185,7 @@ class TestOpenAIAdapterMock:
 
         assert exc_info.value.provider == "OpenAI"
 
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_streaming_generation(self, mock_post):
         """Test streaming audio generation"""
         # Mock streaming response

@@ -30,7 +30,7 @@ The Embeddings Module provides a unified interface for generating text embedding
 
 ### Current Version
 - Production System: `embeddings_v5_production_enhanced.py` (circuit breaker, caching, metrics)
-- Future System: Worker-based scale-out architecture (implemented under `/app/core/Embeddings/`, not yet exposed via API routes)
+- Future System: Worker-based scale-out architecture (implemented under `/app/core/Embeddings/` and exposed via `/api/v1/media` job endpoints like `POST /media/{media_id}/embeddings`, `POST /media/embeddings/batch`, `GET /media/embeddings/jobs`, `GET /media/embeddings/jobs/{job_id}`, `GET /media/{media_id}/embeddings/status`)
 
 ---
 
@@ -86,19 +86,13 @@ app/core/Embeddings/
 ├── (uses unified audit service)       # Security audit logging via DI
 ├── rate_limiter.py                    # Per-user rate limiting
 ├── embeddings_config.yaml             # Configuration file
-├── job_manager.py                     # Job lifecycle management
-├── queue_schemas.py                   # Message schemas
-├── worker_config.py                   # Worker configuration
-├── worker_orchestrator.py             # Worker pool management
-├── Embeddings_Server/
-│   ├── __init__.py
-│   └── Embeddings_Create.py          # Core embedding logic
-└── workers/
+├── jobs_adapter.py                    # Core Jobs adapter for embeddings jobs
+├── worker_config.py                   # Legacy config (unused; retained for reference)
+├── services/
+│   └── redis_worker.py                # Redis Streams worker for embeddings stages
+└── Embeddings_Server/
     ├── __init__.py
-    ├── base_worker.py                 # Abstract base class
-    ├── chunking_worker.py             # Text chunking
-    ├── embedding_worker.py            # Embedding generation
-    └── storage_worker.py              # Storage operations
+    └── Embeddings_Create.py          # Core embedding logic
 ```
 
 ---
@@ -363,7 +357,7 @@ Security events are logged to `logs/embeddings_audit.jsonl`:
 
 ### Rate Limiting
 
-Rate limiting is disabled by default. When enabled (`EMBEDDINGS_RATE_LIMIT=on`), the create-embeddings endpoint applies a limit of `5/second` using SlowAPI. Adjust the limit string in code if you need different rates.
+Rate limiting is disabled by default. When enabled via RG policies, the create-embeddings endpoint applies limits defined in `resource_governor_policies.yaml`.
 
 ---
 
@@ -656,18 +650,24 @@ def create_embedding(
 
 #### Python
 ```python
-import requests
+import json
+from urllib.request import Request, urlopen
 
-response = requests.post(
+payload = {
+    "input": "Hello world",
+    "model": "text-embedding-3-small",
+}
+req = Request(
     "http://localhost:8000/api/v1/embeddings",
-    json={
-        "input": "Hello world",
-        "model": "text-embedding-3-small"
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer YOUR_API_KEY",
     },
-    headers={"Authorization": "Bearer YOUR_API_KEY"}
+    method="POST",
 )
-
-embedding = response.json()["data"][0]["embedding"]
+with urlopen(req) as resp:
+    embedding = json.loads(resp.read().decode("utf-8"))["data"][0]["embedding"]
 ```
 
 #### JavaScript

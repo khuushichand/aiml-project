@@ -11,7 +11,7 @@ Notebook-style knowledge management for creating, searching, tagging, and organi
   - FTS5-based search with pagination; optional inline keyword expansion per note.
   - Keywords CRUD (create, get by id/text, list, search, soft-delete) and link/unlink notes ↔ keywords.
 - Per-user scoping
-  - Each user has an isolated ChaChaNotes DB: `Databases/user_databases/<user_id>/ChaChaNotes.db` (or configured base).
+- Each user has an isolated ChaChaNotes DB: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db` (defaults to `Databases/user_databases` under repo root).
 - Governance & safety
   - RBAC permission checks (`rbac_rate_limit`) and token-bucket rate limits per action.
   - Topic monitoring hooks evaluate note text (non-blocking alerts) on create/update/bulk create.
@@ -66,7 +66,7 @@ Related Schemas
 - Exports
   - JSON or CSV. CSV uses `StreamingResponse` to avoid large in-memory payloads. Optional `include_keywords` column lists comma-separated keywords.
 - Configuration
-  - `USER_DB_BASE_DIR` (env or config) controls per-user DB root (`Databases/user_databases/<user_id>` by default).
+- `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): per-user DB root directory (`<USER_DB_BASE_DIR>/<user_id>` by default); defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
   - `SERVER_CLIENT_ID` tags DB writes with the service client identity.
 - Error handling
   - `handle_db_errors()` maps `InputError`, `ConflictError`, and `CharactersRAGDBError` to appropriate HTTP status codes and messages.

@@ -4,6 +4,7 @@
 # Imports
 import pytest
 from typing import Dict, Any
+
 #
 # Local Imports
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
@@ -37,12 +38,14 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     network_error,
     timeout_error,
     validation_error,
-    resource_error
+    resource_error,
 )
+
 #
 #######################################################################################################################
 #
 # Test Exception Hierarchy
+
 
 class TestTTSExceptionHierarchy:
     """Test the TTS exception hierarchy structure"""
@@ -50,10 +53,7 @@ class TestTTSExceptionHierarchy:
     def test_base_exception_initialization(self):
         """Test base TTSError initialization"""
         error = TTSError(
-            message="Test error",
-            provider="test_provider",
-            error_code="TEST_001",
-            details={"key": "value"}
+            message="Test error", provider="test_provider", error_code="TEST_001", details={"key": "value"}
         )
 
         assert str(error) == "Test error"
@@ -73,7 +73,7 @@ class TestTTSExceptionHierarchy:
             TTSAuthenticationError("test"),
             TTSRateLimitError("test"),
             TTSNetworkError("test"),
-            TTSResourceError("test")
+            TTSResourceError("test"),
         ]
 
         for exc in exceptions:
@@ -82,17 +82,25 @@ class TestTTSExceptionHierarchy:
 
     def test_validation_exception_subtypes(self):
         """Test validation exception subtypes"""
-        text_error = TTSTextTooLongError("Text too long", provider="test", details={"max_length": 1000, "actual_length": 2000})
+        text_error = TTSTextTooLongError(
+            "Text too long", provider="test", details={"max_length": 1000, "actual_length": 2000}
+        )
         assert isinstance(text_error, TTSValidationError)
         assert text_error.details["max_length"] == 1000
         assert text_error.details["actual_length"] == 2000
 
-        voice_error = TTSVoiceNotFoundError("Voice not found", provider="test", details={"requested_voice": "test", "available_voices": ["v1", "v2"]})
+        voice_error = TTSVoiceNotFoundError(
+            "Voice not found", provider="test", details={"requested_voice": "test", "available_voices": ["v1", "v2"]}
+        )
         assert isinstance(voice_error, TTSValidationError)
         assert voice_error.details["requested_voice"] == "test"
         assert voice_error.details["available_voices"] == ["v1", "v2"]
 
-        format_error = TTSUnsupportedFormatError("Unsupported format", provider="test", details={"requested_format": "test", "supported_formats": ["mp3", "wav"]})
+        format_error = TTSUnsupportedFormatError(
+            "Unsupported format",
+            provider="test",
+            details={"requested_format": "test", "supported_formats": ["mp3", "wav"]},
+        )
         assert isinstance(format_error, TTSValidationError)
         assert format_error.details["requested_format"] == "test"
         assert format_error.details["supported_formats"] == ["mp3", "wav"]
@@ -100,19 +108,13 @@ class TestTTSExceptionHierarchy:
     def test_resource_exception_subtypes(self):
         """Test resource exception subtypes"""
         memory_error = TTSInsufficientMemoryError(
-            "Out of memory",
-            provider="test",
-            details={"required_mb": 4096, "available_mb": 2048}
+            "Out of memory", provider="test", details={"required_mb": 4096, "available_mb": 2048}
         )
         assert isinstance(memory_error, TTSResourceError)
         assert memory_error.details["required_mb"] == 4096
         assert memory_error.details["available_mb"] == 2048
 
-        gpu_error = TTSGPUError(
-            "GPU error",
-            provider="test",
-            details={"cuda_available": False, "gpu_memory_mb": 0}
-        )
+        gpu_error = TTSGPUError("GPU error", provider="test", details={"cuda_available": False, "gpu_memory_mb": 0})
         assert isinstance(gpu_error, TTSResourceError)
         assert gpu_error.details is not None
 
@@ -244,10 +246,7 @@ class TestConvenienceFunctions:
     def test_validation_error(self):
         """Test validation_error convenience function"""
         error = validation_error(
-            field="text",
-            value="test",
-            constraint="max_length",
-            details={"max": 100, "actual": 200}
+            field="text", value="test", constraint="max_length", details={"max": 100, "actual": 200}
         )
 
         assert isinstance(error, TTSValidationError)
@@ -257,12 +256,7 @@ class TestConvenienceFunctions:
 
     def test_resource_error(self):
         """Test resource_error convenience function"""
-        error = resource_error(
-            "test_provider",
-            resource_type="memory",
-            required=4096,
-            available=2048
-        )
+        error = resource_error("test_provider", resource_type="memory", required=4096, available=2048)
 
         assert isinstance(error, TTSResourceError)
         assert error.provider == "test_provider"
@@ -280,9 +274,7 @@ class TestErrorHandlingIntegration:
 
         try:
             raise TTSModelLoadError(
-                "Failed to load model",
-                provider="test",
-                details={"original_error": str(original)}
+                "Failed to load model", provider="test", details={"original_error": str(original)}
             ) from original
         except TTSModelLoadError as e:
             assert e.__cause__ == original
@@ -290,11 +282,7 @@ class TestErrorHandlingIntegration:
 
     def test_error_context_aggregation(self):
         """Test aggregating context across error handling"""
-        error = TTSGenerationError(
-            "Generation failed",
-            provider="test_provider",
-            details={"step": "synthesis"}
-        )
+        error = TTSGenerationError("Generation failed", provider="test_provider", details={"step": "synthesis"})
 
         # Add more context
         error.details["model"] = "test_model"
@@ -307,9 +295,7 @@ class TestErrorHandlingIntegration:
     def test_error_recovery_metadata(self):
         """Test that errors include recovery metadata"""
         error = TTSRateLimitError(
-            "Rate limit hit",
-            provider="test",
-            details={"retry_after": 60, "limit": 100, "window": "1m"}
+            "Rate limit hit", provider="test", details={"retry_after": 60, "limit": 100, "window": "1m"}
         )
 
         assert is_retryable_error(error)

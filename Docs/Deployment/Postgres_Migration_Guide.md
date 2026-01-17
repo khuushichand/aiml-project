@@ -9,13 +9,15 @@ workflow jobs.
 
 ## Prerequisites
 
-- Back up all SQLite databases (`Databases/user_databases/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `Databases/user_databases/*/ChaChaNotes.db`, `Analytics.db`).
+- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, `Databases/Analytics.db`). If you have multiple users, repeat for each `<user_id>`.
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
 - Configure the server once against PostgreSQL so the schema exists. The easiest option is to set
   `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API; it will create all tables and
   FTS artefacts, then shut the server down before migrating data.
+
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 ## Step 1 - Prepare connection details
 
@@ -38,17 +40,47 @@ for the main media database and optionally pass `--chacha-sqlite`, `--analytics-
 same pass.
 
 ```bash
-python -m tldw_Server_API.app.core.DB_Management.migration_tools \
-      --content-sqlite Databases/user_databases/<user_id>/Media_DB_v2.db \
-      --chacha-sqlite Databases/user_databases/default/ChaChaNotes.db \
-      --analytics-sqlite Analytics.db \
-      --workflows-sqlite Databases/workflows.db \
-      --pg-host "$PGHOST" \
-      --pg-port "$PGPORT" \
-      --pg-database "$PGDATABASE" \
-      --pg-user "$PGUSER" \
-      --pg-password "$PGPASSWORD" \
-      --batch-size 500
+# Repeat per user_id (single-user installs typically use the fixed default user_id).
+if [ -z "${USER_DB_BASE_DIR}" ]; then
+  echo "Error: USER_DB_BASE_DIR is not set." >&2
+  exit 1
+fi
+if [ ! -d "${USER_DB_BASE_DIR}" ]; then
+  echo "Error: USER_DB_BASE_DIR (${USER_DB_BASE_DIR}) is not a directory." >&2
+  exit 1
+fi
+
+for user_path in "${USER_DB_BASE_DIR}"/*; do
+  [ -d "${user_path}" ] || { echo "Skipping non-directory entry: ${user_path}" >&2; continue; }
+  user_id="$(basename "${user_path}")"
+  media_db="${user_path}/Media_DB_v2.db"
+  chacha_db="${user_path}/ChaChaNotes.db"
+
+  if [ ! -r "${media_db}" ]; then
+    echo "Warning: missing or unreadable Media_DB_v2.db for user ${user_id} (${media_db}). Skipping." >&2
+    continue
+  fi
+
+  migration_args=(
+    --content-sqlite "${media_db}"
+    --analytics-sqlite Databases/Analytics.db
+    --workflows-sqlite Databases/workflows.db
+    --pg-host "$PGHOST"
+    --pg-port "$PGPORT"
+    --pg-database "$PGDATABASE"
+    --pg-user "$PGUSER"
+    --pg-password "$PGPASSWORD"
+    --batch-size 500
+  )
+  if [ -r "${chacha_db}" ]; then
+    migration_args+=(--chacha-sqlite "${chacha_db}")
+  else
+    echo "Warning: missing or unreadable ChaChaNotes.db for user ${user_id} (${chacha_db}). Skipping." >&2
+    continue
+  fi
+
+  python -m tldw_Server_API.app.core.DB_Management.migration_tools "${migration_args[@]}"
+done
 ```
 
 The script performs the following actions for each supplied database:
@@ -75,7 +107,11 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
   ```
 
   ```bash
-  sqlite3 Databases/user_databases/<user_id>/Media_DB_v2.db 'SELECT COUNT(*) FROM Media;'
+  for user_id in $(ls -1 "$USER_DB_BASE_DIR"); do
+    [ -d "$USER_DB_BASE_DIR/$user_id" ] || continue
+    echo "User $user_id:"
+    sqlite3 "${USER_DB_BASE_DIR}/${user_id}/Media_DB_v2.db" 'SELECT COUNT(*) FROM media;'
+  done
   sqlite3 Databases/workflows.db 'SELECT COUNT(*) FROM workflow_runs;'
   ```
 

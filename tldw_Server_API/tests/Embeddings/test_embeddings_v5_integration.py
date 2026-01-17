@@ -23,6 +23,8 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 
 def _redis_available() -> bool:
+
+
     """Detect whether a Redis instance is reachable for cache tests."""
     if redis is None:
         return False
@@ -54,6 +56,8 @@ REDIS_AVAILABLE = _redis_available()
 
 
 def _huggingface_deps_available() -> bool:
+
+
     """Return True when optional HuggingFace dependencies are present."""
     try:
         import torch  # noqa: F401

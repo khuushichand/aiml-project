@@ -31,7 +31,7 @@ from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import (
     WorkflowSchedule,
 )
 from tldw_Server_API.app.core.config import settings as core_settings
-from pathlib import Path
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 
 
@@ -107,15 +107,17 @@ class _WFRecurringScheduler:
         """Scan all user directories and register their schedules."""
         loaded = 0
         try:
-            base: Path = core_settings.get("USER_DB_BASE_DIR")
             user_ids: Set[int] = set()
-            if base and isinstance(base, Path) and base.exists():
+            try:
+                base = DatabasePaths.get_user_db_base_dir()
                 for p in base.iterdir():
                     if p.is_dir():
                         try:
                             user_ids.add(int(p.name))
                         except Exception:
                             continue
+            except Exception as exc:
+                logger.debug(f"Workflows scheduler: failed to enumerate user dirs: {exc}")
             # Always include single-user fixed ID
             try:
                 user_ids.add(int(core_settings.get("SINGLE_USER_FIXED_ID", 1)))
@@ -147,15 +149,17 @@ class _WFRecurringScheduler:
             return
         # Collect desired enabled schedule IDs from all users
         desired: Set[str] = set()
-        base: Path = core_settings.get("USER_DB_BASE_DIR")
         user_ids: Set[int] = set()
-        if base and isinstance(base, Path) and base.exists():
+        try:
+            base = DatabasePaths.get_user_db_base_dir()
             for p in base.iterdir():
                 if p.is_dir():
                     try:
                         user_ids.add(int(p.name))
                     except Exception:
                         continue
+        except Exception as exc:
+            logger.debug(f"Workflows scheduler: failed to enumerate user dirs: {exc}")
         try:
             user_ids.add(int(core_settings.get("SINGLE_USER_FIXED_ID", 1)))
         except Exception:
@@ -430,19 +434,18 @@ class _WFRecurringScheduler:
             return found
         # Scan per-user DBs
         try:
-            base: Path = core_settings.get("USER_DB_BASE_DIR")
-            if base and isinstance(base, Path) and base.exists():
-                for p in base.iterdir():
-                    if not p.is_dir():
-                        continue
-                    try:
-                        uid = int(p.name)
-                    except Exception:
-                        continue
-                    db = self._get_db(uid)
-                    s = db.get_schedule(schedule_id)
-                    if s:
-                        return s
+            base = DatabasePaths.get_user_db_base_dir()
+            for p in base.iterdir():
+                if not p.is_dir():
+                    continue
+                try:
+                    uid = int(p.name)
+                except Exception:
+                    continue
+                db = self._get_db(uid)
+                s = db.get_schedule(schedule_id)
+                if s:
+                    return s
         except Exception:
             pass
         return None

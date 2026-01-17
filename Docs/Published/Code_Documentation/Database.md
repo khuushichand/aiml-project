@@ -5,7 +5,7 @@ This document describes the persistence layer used by tldw_server: relational da
 ## At a Glance
 - Default relational store: SQLite (production supports PostgreSQL for AuthNZ and is wired for content DB backends).
 - Vector store: ChromaDB per user, on disk.
-- Per-user data root: `USER_DB_BASE_DIR` (defaults to `Databases/user_databases`).
+- Per-user data root: `USER_DB_BASE_DIR` (defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/` under the project root; override via environment variable or `Config_Files/config.txt`; `USER_DB_BASE` is a deprecated alias for rewrite cache resolution only).
 - Soft deletes, versioning, and sync logging are first-class across content DBs.
 - FTS5 is used for full-text search in multiple databases (Media, Prompts, Prompt Studio).
 
@@ -18,11 +18,13 @@ Related docs:
 Environment and config determine paths. Defaults are created on startup if missing.
 
 - `USER_DB_BASE_DIR` (base for per-user data)
-  - Default: `Databases/user_databases`
-  - Source: tldw_Server_API/app/core/config.py:403
+  - Default: `Databases/user_databases` (resolved from repo root; `~` expands; normalized for Windows)
+  - Defined in `tldw_Server_API.app.core.config` (see `tldw_Server_API/app/core/config.py:403`)
+  - Override via environment variable or `Config_Files/config.txt` as needed.
+  - `USER_DB_BASE` is deprecated and treated as an alias for rewrite cache resolution.
 
 - AuthNZ main database (`DATABASE_URL`)
-  - Default (single-user): `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`
+  - Default (single-user): `sqlite:///<USER_DB_BASE_DIR>/<SINGLE_USER_FIXED_ID>/tldw.db`
   - Multi-user recommended: PostgreSQL `postgresql://...`
   - Code: tldw_Server_API/app/core/AuthNZ/database.py:1, tldw_Server_API/app/core/config.py:408
 
@@ -42,6 +44,7 @@ Environment and config determine paths. Defaults are created on startup if missi
   - Dependency: tldw_Server_API/app/api/v1/API_Deps/Prompts_DB_Deps.py:1
   - Library: tldw_Server_API/app/core/DB_Management/Prompts_DB.py:180
   - Prompt Studio extension: tldw_Server_API/app/core/DB_Management/PromptStudioDatabase.py:1
+  - Prompt Studio DB path: `<USER_DB_BASE_DIR>/<user_id>/prompt_studio_dbs/prompt_studio.db`
 
 - Evaluations (OpenAI-compatible + internal/unified)
   - Default DB: `Databases/evaluations.db`
@@ -54,6 +57,12 @@ Environment and config determine paths. Defaults are created on startup if missi
   - Meta/Jobs DBs: `<USER_DB_BASE_DIR>/<user_id>/vector_store/` with:
     - `vector_store_meta.db`, `vector_store_batches.db`, `media_embedding_jobs.db`
   - Code: tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py:130, vector_store_meta_db.py:1, vector_store_batches_db.py:1, media_embedding_jobs_db.py:1
+
+- Per-user storage (non-DB assets)
+  - Outputs: `<USER_DB_BASE_DIR>/<user_id>/outputs/`
+  - Voices: `<USER_DB_BASE_DIR>/<user_id>/voices/`
+  - Rewrite cache: `<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl`
+  - RAG personalization: `<USER_DB_BASE_DIR>/<user_id>/rag_personalization.json`
 
 - MCP Unified module
   - `MCP_DATABASE_URL` (default `sqlite+aiosqlite:///./Databases/mcp_unified.db`)

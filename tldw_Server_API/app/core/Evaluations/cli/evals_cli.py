@@ -29,12 +29,55 @@ from tldw_Server_API.app.core.Evaluations.cli.api_utils import (
     get_default_api,
     format_api_info
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 
 
 DEPRECATION_MSG = (
     "DEPRECATION: This CLI is deprecated. Use 'tldw-evals' or 'python -m tldw_Server_API.cli.evals_cli' instead.\n"
 )
+
+
+def _call_adapter_text(
+    *,
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **extra_kwargs: Any,
+) -> str:
+    provider = normalize_provider(api_endpoint)
+    if not provider:
+        raise ChatConfigurationError(provider=api_endpoint, message="LLM provider is required.")
+    cfg = ensure_app_config(app_config)
+    resolved_model = model or resolve_provider_model(provider, cfg)
+    if not resolved_model:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+    system_message, cleaned_messages = split_system_message(messages_payload or [])
+    request: Dict[str, Any] = {
+        "messages": cleaned_messages,
+        "system_message": system_message,
+        "model": resolved_model,
+        "api_key": api_key or resolve_provider_api_key_from_config(provider, cfg),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "app_config": cfg,
+    }
+    request.update(extra_kwargs)
+    response = get_adapter_or_raise(provider).chat(request, timeout=timeout)
+    return extract_response_content(response) or str(response)
 
 
 @click.group(context_settings={'help_option_names': ['-h', '--help']})
@@ -242,14 +285,13 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                 ]
 
                 # Call the chat API
-                response = chat_api_call(
+                response = _call_adapter_text(
                     api_endpoint=api,
                     messages_payload=messages_payload,
                     api_key=api_key,
                     model=model_to_use,
-                    temp=0.7,
-                    streaming=False,
-                    max_tokens=100  # We only need a short response with the score
+                    temperature=0.7,
+                    max_tokens=100,  # We only need a short response with the score
                 )
 
                 # Handle response (could be a generator even with streaming=False for some providers)
@@ -454,13 +496,12 @@ def test_api(api_name, test_prompt, model, system_prompt):
         ]
 
         # Send test request via chat API
-        response = chat_api_call(
+        response = _call_adapter_text(
             api_endpoint=api_name,
             messages_payload=messages_payload,
             api_key=api_key,
             model=model_to_use,
-            streaming=False,
-            max_tokens=200
+            max_tokens=200,
         )
 
         # Handle response

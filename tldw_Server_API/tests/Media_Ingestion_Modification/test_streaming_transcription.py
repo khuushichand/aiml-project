@@ -62,6 +62,7 @@ class TestStreamingTranscription:
         return audio.tobytes(), sample_rate
 
     def test_import_module(self):
+
         """Test that streaming module can be imported."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
@@ -76,6 +77,7 @@ class TestStreamingTranscription:
             pytest.skip(f"Streaming module not available: {e}")
 
     def test_streaming_config(self):
+
         """Test StreamingConfig creation."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             StreamingConfig
@@ -95,6 +97,7 @@ class TestStreamingTranscription:
         assert config.model_variant == 'mlx'
 
     def test_audio_buffer(self):
+
         """Test AudioBuffer functionality."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             AudioBuffer
@@ -123,6 +126,7 @@ class TestStreamingTranscription:
         assert buffer.get_duration() == 0
 
     def test_audio_buffer_overflow(self):
+
         """Test AudioBuffer with overflow."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             AudioBuffer
@@ -575,6 +579,7 @@ class TestStreamingIntegration:
                 self._transcripts = []
 
             def initialize(self):
+
                 return None
 
             async def process_audio_chunk(self, audio_bytes: bytes):
@@ -583,12 +588,15 @@ class TestStreamingIntegration:
                 return {"type": "transcription", "text": text, "is_final": True}
 
             def get_full_transcript(self):
+
                 return " ".join(self._transcripts)
 
             def reset(self):
+
                 self._transcripts.clear()
 
             def cleanup(self):
+
                 self._transcripts.clear()
 
         monkeypatch.setattr(unified, "_ParakeetCoreAdapter", None)
@@ -621,6 +629,7 @@ class TestStreamingIntegration:
                 self.cfg = cfg
 
             def initialize(self):
+
                 return None
 
             async def process_audio_chunk(self, audio_bytes: bytes):
@@ -632,12 +641,15 @@ class TestStreamingIntegration:
                 }
 
             def get_full_transcript(self):
+
                 return ""
 
             def reset(self):
+
                 return None
 
             def cleanup(self):
+
                 return None
 
         monkeypatch.setattr(unified, "_ParakeetCoreAdapter", None)
@@ -678,6 +690,7 @@ class TestStreamingPerformance:
             mock_model = MagicMock()
 
             def mock_transcribe(*args, **kwargs):
+
                 # Simulate processing time
                 time.sleep(0.01)
                 result = MagicMock()

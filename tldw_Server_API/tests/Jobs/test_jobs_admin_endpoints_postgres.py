@@ -12,12 +12,14 @@ pytestmark = [pytest.mark.pg_jobs]
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-    # jobs_pg_dsn ensures a fresh temp DB and schema per test and exports JOBS_DB_URL
+     # jobs_pg_dsn ensures a fresh temp DB and schema per test and exports JOBS_DB_URL
     return
 
 
 def _client_pg(monkeypatch):
-    # DSN already set via jobs_pg_dsn fixture
+
+
+     # DSN already set via jobs_pg_dsn fixture
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -36,6 +38,8 @@ def _client_pg(monkeypatch):
 
 
 def test_queue_control_and_status_postgres(monkeypatch):
+
+
     app, headers = _client_pg(monkeypatch)
     with TestClient(app, headers=headers) as client:
         r = client.post("/api/v1/jobs/queue/control", json={"domain": "ps", "queue": "default", "action": "pause"})
@@ -45,14 +49,20 @@ def test_queue_control_and_status_postgres(monkeypatch):
 
 
 def test_attachments_and_sla_postgres(monkeypatch, jobs_pg_dsn):
+
+
     app, headers = _client_pg(monkeypatch)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="ps", queue="default", job_type="exp", payload={}, owner_user_id="u")
     with TestClient(app, headers=headers) as client:
-        r = client.post(f"/api/v1/jobs/{int(j['id'])}/attachments", json={"kind": "log", "content_text": "hello"})
-        assert r.status_code == 200
-        r2 = client.get(f"/api/v1/jobs/{int(j['id'])}/attachments")
-        assert r2.status_code == 200
+        r = client.post(
+            f"/api/v1/jobs/{int(j['id'])}/attachments",
+            params={"domain": "ps"},
+            json={"kind": "log", "content_text": "hello", "url": "http://example.invalid/log"},
+        )
+        assert r.status_code == 200, r.text
+        r2 = client.get(f"/api/v1/jobs/{int(j['id'])}/attachments", params={"domain": "ps"})
+        assert r2.status_code == 200, r2.text
         r3 = client.post("/api/v1/jobs/sla/policy", json={"domain": "ps", "queue": "default", "job_type": "exp", "max_queue_latency_seconds": 0, "max_duration_seconds": 0, "enabled": True})
         assert r3.status_code == 200
         r4 = client.get("/api/v1/jobs/sla/policies", params={"domain": "ps", "queue": "default", "job_type": "exp"})
@@ -60,6 +70,8 @@ def test_attachments_and_sla_postgres(monkeypatch, jobs_pg_dsn):
 
 
 def test_reschedule_and_retry_now_postgres(monkeypatch, jobs_pg_dsn):
+
+
     app, headers = _client_pg(monkeypatch)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     # Seed a scheduled queued job
@@ -84,6 +96,8 @@ def test_reschedule_and_retry_now_postgres(monkeypatch, jobs_pg_dsn):
 
 
 def test_crypto_rotate_postgres(monkeypatch, jobs_pg_dsn):
+
+
     app, headers = _client_pg(monkeypatch)
     # Configure encryption for domain and set ENV key (old)
     monkeypatch.setenv("JOBS_ENCRYPT", "true")

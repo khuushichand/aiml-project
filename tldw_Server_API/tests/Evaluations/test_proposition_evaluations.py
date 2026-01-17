@@ -53,6 +53,7 @@ class TestPropositionEvaluationEndpoint:
         assert data["total_reference"] == 2
 
     def test_proposition_evaluation_headers_present(self, client, auth_headers):
+
         payload = {
             "extracted": [
                 "Alice founded Acme Corp in 2020",
@@ -82,7 +83,7 @@ class TestPropositionEvaluationEndpoint:
 
 class TestPropositionRunFlow:
     def test_create_and_run_proposition_evaluation(self, client, auth_headers):
-        # Create evaluation with inline dataset
+             # Create evaluation with inline dataset
         create_eval_req = {
             "name": "prop_eval_test",
             "description": "Proposition extraction evaluation",

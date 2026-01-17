@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 
 def _make_manager_with_mock(mock_client, tmp_path):
+
+
     user_cfg = {
         "USER_DB_BASE_DIR": str(tmp_path),
         "embedding_config": {"default_model_id": "text-embedding-3-large", "models": {}},
@@ -18,6 +20,8 @@ def _make_manager_with_mock(mock_client, tmp_path):
 
 
 def test_dimension_metadata_mismatch_recreates_collection(tmp_path):
+
+
     mock_client = MagicMock()
     mock_coll = MagicMock()
     mock_coll.name = "dim_meta"
@@ -48,6 +52,8 @@ def test_dimension_metadata_mismatch_recreates_collection(tmp_path):
 
 
 def test_dimension_sample_mismatch_recreates_collection(tmp_path):
+
+
     mock_client = MagicMock()
     mock_coll = MagicMock()
     mock_coll.name = "dim_sample"
@@ -79,7 +85,9 @@ def test_dimension_sample_mismatch_recreates_collection(tmp_path):
 
 
 def test_list_collections_propagates(mock_chroma_client, tmp_path):
-    # Reuse fixture mock client from conftest to ensure typical shape
+
+
+     # Reuse fixture mock client from conftest to ensure typical shape
     mgr = _make_manager_with_mock(mock_chroma_client, tmp_path)
     # Simulate two collections
     c1 = MagicMock(); c1.name = "c1"
@@ -91,6 +99,8 @@ def test_list_collections_propagates(mock_chroma_client, tmp_path):
 
 
 def test_delete_collection_calls_client(mock_chroma_client, tmp_path):
+
+
     mgr = _make_manager_with_mock(mock_chroma_client, tmp_path)
     mgr.delete_collection("to_delete")
     mock_chroma_client.delete_collection.assert_called_with(name="to_delete")

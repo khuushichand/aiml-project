@@ -1,4 +1,7 @@
+import hashlib
+import os
 import sys
+import tempfile
 import types
 
 import pytest
@@ -7,12 +10,29 @@ import pytest
 def _has_tiktoken():
     try:
         import tiktoken  # noqa: F401
-        return True
     except Exception:
         return False
 
+    network_enabled = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "on"}
+    if network_enabled:
+        return True
+
+    cache_dir = os.getenv("TIKTOKEN_CACHE_DIR")
+    if cache_dir is None:
+        cache_dir = os.getenv("DATA_GYM_CACHE_DIR")
+    if cache_dir is None:
+        cache_dir = os.path.join(tempfile.gettempdir(), "data-gym-cache")
+    if cache_dir == "":
+        return False
+
+    blob_url = "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
+    cache_key = hashlib.sha1(blob_url.encode()).hexdigest()
+    cache_path = os.path.join(cache_dir, cache_key)
+    return os.path.exists(cache_path)
+
 
 def test_tokens_offsets_tiktoken_monotonic_and_slice_match():
+
     if not _has_tiktoken():
         pytest.skip("tiktoken not available")
 
@@ -20,10 +40,7 @@ def test_tokens_offsets_tiktoken_monotonic_and_slice_match():
         TokenChunkingStrategy,
     )
 
-    text = (
-        "Hello,  world!\nHello world!  Goodbye.\n"
-        "Repeated phrase. Repeated phrase. Repeated phrase."
-    )
+    text = "Hello,  world!\nHello world!  Goodbye.\n" "Repeated phrase. Repeated phrase. Repeated phrase."
     strat = TokenChunkingStrategy(tokenizer_name="gpt-3.5-turbo")
     results = strat.chunk_with_metadata(text, max_size=12, overlap=4)
 
@@ -46,6 +63,7 @@ def test_tokens_offsets_tiktoken_monotonic_and_slice_match():
 
 
 def test_tokens_offsets_tiktoken_repeated_substrings_heavy_overlap():
+
     if not _has_tiktoken():
         pytest.skip("tiktoken not available")
 
@@ -54,11 +72,7 @@ def test_tokens_offsets_tiktoken_repeated_substrings_heavy_overlap():
     )
 
     # Repeated patterns can confuse naive substring matching; ensure offsets handle it
-    text = (
-        "foo bar foo bar foo bar foo bar\n"
-        "foo bar foo bar foo bar foo bar\n"
-        "foo bar foo bar foo bar"
-    )
+    text = "foo bar foo bar foo bar foo bar\n" "foo bar foo bar foo bar foo bar\n" "foo bar foo bar foo bar"
     strat = TokenChunkingStrategy(tokenizer_name="gpt-3.5-turbo")
     results = strat.chunk_with_metadata(text, max_size=8, overlap=7)
 
@@ -72,6 +86,7 @@ def test_tokens_offsets_tiktoken_repeated_substrings_heavy_overlap():
 
 
 def test_tokens_offsets_tiktoken_unicode_emojis_multibyte():
+
     if not _has_tiktoken():
         pytest.skip("tiktoken not available")
 
@@ -92,6 +107,7 @@ def test_tokens_offsets_tiktoken_unicode_emojis_multibyte():
     results = strat.chunk_with_metadata(text, max_size=20, overlap=10)
 
     import unicodedata as _ud
+
     assert results
     for r in results:
         s = r.metadata.start_char
@@ -123,6 +139,7 @@ def test_tokens_offsets_transformers_path_via_mock():
             return {"input_ids": input_ids, "offset_mapping": offsets}
 
         def decode(self, token_ids):
+
             # map -1/-2 to empty, others index into original text
             out = []
             for tid in token_ids:
@@ -138,9 +155,7 @@ def test_tokens_offsets_transformers_path_via_mock():
     # Force our mocked wrapper
     strat._tokenizer = wrapper  # type: ignore[attr-defined]
 
-    results = strat.chunk_with_metadata(
-        text, max_size=5, overlap=2, add_special_tokens=True
-    )
+    results = strat.chunk_with_metadata(text, max_size=5, overlap=2, add_special_tokens=True)
 
     assert results
     # Validate per-chunk spans map back to original text
@@ -153,6 +168,7 @@ def test_tokens_offsets_transformers_path_via_mock():
 
 
 def test_tokens_offsets_fallback_path():
+
     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
         TokenChunkingStrategy,
         FallbackTokenizer,
@@ -184,3 +200,62 @@ def test_tokens_offsets_fallback_path():
         assert r.metadata.token_count == expected
         assert r.metadata.options.get("approximate") is True
         prev_start, prev_end = s, e
+
+
+def test_tokenizer_override_resets_between_calls(monkeypatch):
+    """Switching tokenizer names should re-attempt tokenizer initialization."""
+    from tldw_Server_API.app.core.Chunking import Chunker
+    from tldw_Server_API.app.core.Chunking.strategies import tokens as tokens_mod
+
+    created = []
+
+    class StubTokenizer:
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+            self.available = True
+            self._last_text = ""
+            created.append(model_name)
+
+        def encode(self, text: str):
+            self._last_text = text
+            return list(range(len(text)))
+
+        def decode(self, token_ids, skip_special_tokens: bool = True):
+            return "".join(self._last_text[i] for i in token_ids if i < len(self._last_text))
+
+    monkeypatch.setattr(tokens_mod, "TiktokenTokenizer", StubTokenizer)
+
+    chunker = Chunker()
+    text = "abcde"
+    chunker.chunk_text(text, method="tokens", max_size=2, overlap=0, tokenizer_name="tok-a")
+    chunker.chunk_text(text, method="tokens", max_size=2, overlap=0, tokenizer_name="tok-b")
+
+    assert created == ["tok-a", "tok-b"]
+
+
+def test_tokens_chunk_preserves_trailing_newlines(monkeypatch):
+    """Token chunking should not drop trailing newlines from decoded output."""
+    from tldw_Server_API.app.core.Chunking.strategies import tokens as tokens_mod
+    from tldw_Server_API.app.core.Chunking.strategies.tokens import TokenChunkingStrategy
+
+    class StubTokenizer:
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+            self.available = True
+            self._last_text = ""
+
+        def encode(self, text: str):
+            self._last_text = text
+            return list(range(len(text)))
+
+        def decode(self, token_ids, skip_special_tokens: bool = True):
+            return "".join(self._last_text[i] for i in token_ids if i < len(self._last_text))
+
+    monkeypatch.setattr(tokens_mod, "TiktokenTokenizer", StubTokenizer)
+
+    text = "line1\nline2\n"
+    strat = TokenChunkingStrategy(tokenizer_name="tok-newline")
+    chunks = strat.chunk(text, max_size=5, overlap=0)
+
+    assert "".join(chunks) == text
+    assert chunks[-1].endswith("\n")

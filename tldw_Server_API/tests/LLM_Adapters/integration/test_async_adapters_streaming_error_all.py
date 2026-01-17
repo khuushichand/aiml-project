@@ -17,7 +17,6 @@ import pytest
 @pytest.fixture(autouse=True)
 def _enable_adapters(monkeypatch):
     # Route via adapters (async shims)
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.setenv("LOGURU_LEVEL", "ERROR")
     yield
 

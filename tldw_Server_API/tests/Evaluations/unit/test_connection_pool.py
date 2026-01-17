@@ -20,6 +20,7 @@ class TestConnectionPoolInit:
     """Test ConnectionPool initialization."""
 
     def test_init_with_defaults(self, temp_db_path):
+
         """Test initialization with default values."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -31,6 +32,7 @@ class TestConnectionPoolInit:
         assert len(pool._overflow_connections) == 0
 
     def test_init_with_custom_values(self, temp_db_path):
+
         """Test initialization with custom values."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -44,6 +46,7 @@ class TestConnectionPoolInit:
         assert pool.pool_timeout == 60.0
 
     def test_init_with_invalid_values(self, temp_db_path):
+
         """Test initialization with invalid values."""
         # The actual ConnectionPool implementation doesn't validate parameters
         # but negative values would likely cause issues in practice
@@ -61,6 +64,7 @@ class TestConnectionPoolInit:
         pool2.shutdown()
 
     def test_initialize_creates_pool_connections(self, temp_db_path):
+
         """Test that initialization creates pool connections."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -80,6 +84,7 @@ class TestConnectionAcquisition:
     """Test connection acquisition from pool."""
 
     def test_acquire_connection_from_available(self, temp_db_path):
+
         """Test acquiring connection from available pool."""
         pool = ConnectionPool(db_path=str(temp_db_path), pool_size=2)
 
@@ -95,6 +100,7 @@ class TestConnectionAcquisition:
         pool.shutdown()
 
     def test_acquire_creates_new_connection_when_empty(self, temp_db_path):
+
         """Test acquiring connection creates new one when pool is empty."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -112,6 +118,7 @@ class TestConnectionAcquisition:
         pool.shutdown()
 
     def test_acquire_blocks_when_max_reached(self, temp_db_path):
+
         """Test acquire blocks when max connections reached."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -148,6 +155,7 @@ class TestConnectionAcquisition:
             pool.shutdown()
 
     def test_acquire_with_timeout(self, temp_db_path):
+
         """Test acquire with custom timeout."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -175,6 +183,7 @@ class TestConnectionRelease:
     """Test connection release back to pool."""
 
     def test_release_connection_to_pool(self, temp_db_path):
+
         """Test releasing connection back to available pool."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -191,6 +200,7 @@ class TestConnectionRelease:
         pool.shutdown()
 
     def test_release_invalid_connection(self, temp_db_path):
+
         """Test releasing connection not from pool."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -208,6 +218,7 @@ class TestConnectionRelease:
         pool.shutdown()
 
     def test_release_already_released_connection(self, temp_db_path):
+
         """Test releasing already released connection."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -220,6 +231,7 @@ class TestConnectionRelease:
         pool.shutdown()
 
     def test_release_closed_connection(self, temp_db_path):
+
         """Test releasing a closed connection."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -242,6 +254,7 @@ class TestConnectionHealth:
     """Test connection health checking."""
 
     def test_health_check_valid_connection(self, temp_db_path):
+
         """Test health check on valid connection."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -254,6 +267,7 @@ class TestConnectionHealth:
         pool.shutdown()
 
     def test_health_check_closed_connection(self, temp_db_path):
+
         """Test health check on closed connection."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -268,6 +282,7 @@ class TestConnectionHealth:
         pool.shutdown()
 
     def test_health_check_with_query(self, temp_db_path):
+
         """Test health check with test query."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -280,6 +295,7 @@ class TestConnectionHealth:
         pool.shutdown()
 
     def test_automatic_reconnection_on_failed_health(self, temp_db_path):
+
         """Test automatic reconnection when health check fails."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -305,6 +321,7 @@ class TestConnectionPoolConcurrency:
     """Test connection pool with concurrent access."""
 
     def test_concurrent_acquire_release(self, temp_db_path):
+
         """Test concurrent connection acquisition and release."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -316,6 +333,7 @@ class TestConnectionPoolConcurrency:
         errors = []
 
         def worker(worker_id):
+
             try:
                 # Acquire connection
                 with pool.get_connection() as conn:
@@ -348,6 +366,7 @@ class TestConnectionPoolConcurrency:
         pool.shutdown()
 
     def test_connection_pool_under_load(self, temp_db_path):
+
         """Test connection pool under heavy load."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -358,6 +377,7 @@ class TestConnectionPoolConcurrency:
         completed_tasks = []
 
         def heavy_worker(task_id):
+
             with pool.get_connection() as conn:
                 # Perform database operations
                 conn.execute("CREATE TABLE IF NOT EXISTS test (id INTEGER)")
@@ -381,6 +401,7 @@ class TestConnectionPoolConcurrency:
         pool.shutdown()
 
     def test_deadlock_prevention(self, temp_db_path):
+
         """Test that pool prevents deadlocks."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -398,6 +419,7 @@ class TestConnectionPoolConcurrency:
         deadlock_detected = False
 
         def try_acquire():
+
             nonlocal deadlock_detected
             try:
                 with pool.get_connection():
@@ -426,6 +448,7 @@ class TestConnectionPoolManagement:
     """Test connection pool management features."""
 
     def test_pool_statistics(self, temp_db_path):
+
         """Test getting pool statistics."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -453,6 +476,7 @@ class TestConnectionPoolManagement:
         pool.shutdown()
 
     def test_pool_configuration(self, temp_db_path):
+
         """Test pool configuration."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -468,6 +492,7 @@ class TestConnectionPoolManagement:
         pool.shutdown()
 
     def test_pool_cleanup_idle_connections(self, temp_db_path):
+
         """Test cleanup of idle connections."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -501,6 +526,7 @@ class TestConnectionPoolManagement:
         pool.shutdown()
 
     def test_graceful_shutdown(self, temp_db_path):
+
         """Test graceful pool shutdown."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -524,6 +550,7 @@ class TestConnectionPoolErrorHandling:
     """Test error handling in connection pool."""
 
     def test_handle_database_connection_error(self):
+
         """Test handling database connection errors."""
         # Use a path that will definitely fail
         import tempfile
@@ -548,6 +575,7 @@ class TestConnectionPoolErrorHandling:
             pool.shutdown()
 
     def test_handle_corrupted_connection(self, temp_db_path):
+
         """Test handling corrupted connections."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -565,6 +593,7 @@ class TestConnectionPoolErrorHandling:
         pool.shutdown()
 
     def test_recovery_from_connection_loss(self, temp_db_path):
+
         """Test recovery from connection loss."""
         pool = ConnectionPool(
             db_path=str(temp_db_path),
@@ -587,6 +616,7 @@ class TestConnectionPoolErrorHandling:
         pool.shutdown()
 
     def test_handle_connection_creation_failure(self, temp_db_path):
+
         """Test handling when connection creation fails."""
         # Mock connection creation to fail during initialization
         with patch('sqlite3.connect', side_effect=sqlite3.Error("Connection failed")):
@@ -610,6 +640,7 @@ class TestConnectionPoolContextManager:
     """Test connection pool as context manager."""
 
     def test_pool_as_context_manager(self, temp_db_path):
+
         """Test using pool as context manager."""
         with ConnectionPool(db_path=str(temp_db_path)) as pool:
             with pool.get_connection() as conn:
@@ -619,6 +650,7 @@ class TestConnectionPoolContextManager:
         assert len(pool._pool) == 0
 
     def test_connection_context_manager(self, temp_db_path):
+
         """Test connection context manager from pool."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 
@@ -635,6 +667,7 @@ class TestConnectionPoolContextManager:
         pool.shutdown()
 
     def test_connection_context_manager_with_exception(self, temp_db_path):
+
         """Test connection context manager handles exceptions."""
         pool = ConnectionPool(db_path=str(temp_db_path))
 

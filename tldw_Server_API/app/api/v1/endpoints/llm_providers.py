@@ -5,17 +5,18 @@ from functools import partial
 from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import urlparse, urljoin
 import os
-import requests
 from fastapi import APIRouter, HTTPException, Depends
 from loguru import logger
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.http_client import fetch as _http_fetch, RetryPolicy as _RetryPolicy
 from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
     apply_llm_provider_overrides_to_listing,
 )
-from tldw_Server_API.app.core.Chat.provider_config import (
-    PROVIDER_REQUIRES_KEY,
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import (
     PROVIDER_CAPABILITIES,
+    provider_requires_api_key,
 )
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 import tldw_Server_API.app.core.LLM_Calls.adapter_registry as llm_adapter_registry
@@ -686,14 +687,25 @@ def discover_models_from_endpoint(
     discovered: List[str] = []
     for url in candidates:
         try:
-            resp = requests.get(url, headers=headers, timeout=LOCAL_MODEL_DISCOVERY_TIMEOUT)
-            if resp.status_code >= 400:
-                logger.debug(f"[Model discovery] {provider}: {url} responded with {resp.status_code}")
-                continue
-            discovered = _extract_models_from_response(resp.json())
-            if discovered:
-                logger.info(f"[Model discovery] {provider}: found {len(discovered)} models via {url}")
-                break
+            resp = _http_fetch(
+                method="GET",
+                url=url,
+                headers=headers,
+                timeout=LOCAL_MODEL_DISCOVERY_TIMEOUT,
+                retry=_RetryPolicy(attempts=1),
+            )
+            try:
+                if resp.status_code >= 400:
+                    logger.debug(f"[Model discovery] {provider}: {url} responded with {resp.status_code}")
+                    continue
+                discovered = _extract_models_from_response(resp.json())
+                if discovered:
+                    logger.info(f"[Model discovery] {provider}: found {len(discovered)} models via {url}")
+                    break
+            finally:
+                close = getattr(resp, "close", None)
+                if callable(close):
+                    close()
         except Exception as exc:
             logger.debug(f"[Model discovery] {provider}: error querying {url}: {exc}")
             continue
@@ -721,6 +733,21 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'total_configured': 0,
                 'message': 'No API configuration sections found in config.txt'
             }
+
+        try:
+            api_keys_by_provider = get_api_keys()
+        except Exception:
+            api_keys_by_provider = {}
+
+        def _valid_api_key(value: Optional[str]) -> Optional[str]:
+            if not isinstance(value, str):
+                return None
+            trimmed = value.strip()
+            if not trimmed:
+                return None
+            if trimmed.startswith("<") and trimmed.endswith(">"):
+                return None
+            return trimmed
 
         # Define provider mappings with their config keys
         provider_mappings = {
@@ -921,12 +948,13 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
             if provider_info['type'] == 'commercial':
                 # Check for API key
                 api_key_field = provider_info.get('api_key_field')
+                api_key = None
                 if api_key_field and config_section_exists and config_parser.has_option(section_name, api_key_field):
                     api_key = config_parser.get(section_name, api_key_field, fallback='')
-                    # Check if API key is valid (not empty and not placeholder)
-                    if api_key and not api_key.startswith('<') and not api_key.endswith('>'):
-                        is_configured = True
-                        api_key_value = api_key
+                api_key = _valid_api_key(api_key) or _valid_api_key(api_keys_by_provider.get(provider_name))
+                if api_key:
+                    is_configured = True
+                    api_key_value = api_key
             else:
                 # Check for endpoint URL for local providers
                 endpoint_field = provider_info.get('endpoint_field')
@@ -1031,7 +1059,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
 
             # Centralized capability diagnostics
             try:
-                provider_data['requires_api_key'] = bool(PROVIDER_REQUIRES_KEY.get(provider_name, provider_info['type'] == 'commercial'))
+                provider_data['requires_api_key'] = provider_requires_api_key(provider_name)
                 # Start with defaults from static map
                 capabilities = dict(PROVIDER_CAPABILITIES.get(provider_name, {}))
                 # Merge adapter-reported capabilities if available

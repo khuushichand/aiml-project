@@ -5,6 +5,8 @@ from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 
 
 def _doc() -> Document:
+
+
     return Document(
         id="m_fail_1",
         content=("# Intro\nTransformers rely on attention.\n\n# Details\nMulti-head attention improves capacity."),

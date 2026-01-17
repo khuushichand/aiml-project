@@ -24,6 +24,7 @@ def client_with_user(monkeypatch):
 
 
 def test_templates_crud_and_preview(client_with_user):
+
     client = client_with_user
 
     # Create

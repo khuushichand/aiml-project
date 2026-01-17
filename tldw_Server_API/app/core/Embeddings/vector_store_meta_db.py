@@ -1,14 +1,12 @@
 import sqlite3
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 import time
 
 
-def _db_path(user_id: str) -> Path:
-    base_dir: Path = settings.get("USER_DB_BASE_DIR")
-    user_dir = base_dir / str(user_id) / 'vector_store'
-    user_dir.mkdir(parents=True, exist_ok=True)
+def _db_path(user_id: Optional[str]) -> Path:
+    user_dir = DatabasePaths.get_user_vector_store_dir(user_id)
     return user_dir / 'vector_store_meta.db'
 
 
@@ -24,11 +22,11 @@ def _prime(conn: sqlite3.Connection) -> sqlite3.Connection:
     return conn
 
 
-def _connect(user_id: str) -> sqlite3.Connection:
+def _connect(user_id: Optional[str]) -> sqlite3.Connection:
     return _prime(sqlite3.connect(_db_path(user_id), check_same_thread=False))
 
 
-def init_meta_db(user_id: str) -> None:
+def init_meta_db(user_id: Optional[str]) -> None:
     with _connect(user_id) as conn:
         conn.execute(
             """
@@ -44,7 +42,7 @@ def init_meta_db(user_id: str) -> None:
         conn.commit()
 
 
-def register_store(user_id: str, store_id: str, name: str) -> None:
+def register_store(user_id: Optional[str], store_id: str, name: str) -> None:
     ts = int(time.time())
     with _connect(user_id) as conn:
         conn.execute(
@@ -54,7 +52,7 @@ def register_store(user_id: str, store_id: str, name: str) -> None:
         conn.commit()
 
 
-def rename_store(user_id: str, store_id: str, new_name: str) -> None:
+def rename_store(user_id: Optional[str], store_id: str, new_name: str) -> None:
     ts = int(time.time())
     with _connect(user_id) as conn:
         conn.execute(
@@ -64,13 +62,13 @@ def rename_store(user_id: str, store_id: str, new_name: str) -> None:
         conn.commit()
 
 
-def delete_store(user_id: str, store_id: str) -> None:
+def delete_store(user_id: Optional[str], store_id: str) -> None:
     with _connect(user_id) as conn:
         conn.execute("DELETE FROM vector_stores WHERE id = ?", (store_id,))
         conn.commit()
 
 
-def find_store_by_name(user_id: str, name: str) -> Optional[Dict[str, Any]]:
+def find_store_by_name(user_id: Optional[str], name: str) -> Optional[Dict[str, Any]]:
     with _connect(user_id) as conn:
         cur = conn.execute(
             "SELECT id, name, name_lower, created_at, updated_at FROM vector_stores WHERE name_lower = ?",
@@ -88,7 +86,7 @@ def find_store_by_name(user_id: str, name: str) -> Optional[Dict[str, Any]]:
         }
 
 
-def list_stores(user_id: str) -> List[Dict[str, Any]]:
+def list_stores(user_id: Optional[str]) -> List[Dict[str, Any]]:
     with _connect(user_id) as conn:
         cur = conn.execute(
             "SELECT id, name, name_lower, created_at, updated_at FROM vector_stores ORDER BY created_at DESC"

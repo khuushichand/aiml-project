@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 from .connector_base import BaseConnector
-import aiohttp
+from tldw_Server_API.app.core.http_client import afetch
 
 
 class NotionConnector(BaseConnector):
@@ -45,10 +45,14 @@ class NotionConnector(BaseConnector):
         if self.client_id and self.client_secret:
             basic = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
             headers["Authorization"] = f"Basic {basic}"
-        async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, json=body, headers=headers, timeout=30) as resp:
-                resp.raise_for_status()
-                tok = await resp.json()
+        resp = await afetch(method="POST", url=token_url, json=body, headers=headers, timeout=30)
+        try:
+            resp.raise_for_status()
+            tok = resp.json()
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
         return {
             "access_token": tok.get("access_token"),
             "refresh_token": tok.get("refresh_token"),
@@ -77,10 +81,14 @@ class NotionConnector(BaseConnector):
             payload = {"page_size": int(page_size)}
             if cursor:
                 payload["start_cursor"] = cursor
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload, timeout=30) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
+            resp = await afetch(method="POST", url=url, headers=headers, json=payload, timeout=30)
+            try:
+                resp.raise_for_status()
+                data = resp.json()
+            finally:
+                close = getattr(resp, "aclose", None)
+                if callable(close):
+                    await close()
             items = []
             for r in data.get("results", []):
                 pid = r.get("id")
@@ -105,10 +113,14 @@ class NotionConnector(BaseConnector):
             }
             if cursor:
                 payload["start_cursor"] = cursor
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload, timeout=30) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
+            resp = await afetch(method="POST", url=url, headers=headers, json=payload, timeout=30)
+            try:
+                resp.raise_for_status()
+                data = resp.json()
+            finally:
+                close = getattr(resp, "aclose", None)
+                if callable(close):
+                    await close()
         items = []
         for r in data.get("results", []):
             obj = r.get("object")
@@ -144,18 +156,28 @@ class NotionConnector(BaseConnector):
         async def _fetch_children(block_id: str) -> List[Dict[str, Any]]:
             out: List[Dict[str, Any]] = []
             cursor = None
-            async with aiohttp.ClientSession() as session:
-                while True:
-                    params = {"page_size": 50}
-                    if cursor:
-                        params["start_cursor"] = cursor
-                    async with session.get(f"https://api.notion.com/v1/blocks/{block_id}/children", headers=headers, params=params, timeout=30) as resp:
-                        resp.raise_for_status()
-                        data = await resp.json()
-                    out.extend(data.get("results", []))
-                    if not data.get("has_more"):
-                        break
-                    cursor = data.get("next_cursor")
+            while True:
+                params = {"page_size": 50}
+                if cursor:
+                    params["start_cursor"] = cursor
+                resp = await afetch(
+                    method="GET",
+                    url=f"https://api.notion.com/v1/blocks/{block_id}/children",
+                    headers=headers,
+                    params=params,
+                    timeout=30,
+                )
+                try:
+                    resp.raise_for_status()
+                    data = resp.json()
+                finally:
+                    close = getattr(resp, "aclose", None)
+                    if callable(close):
+                        await close()
+                out.extend(data.get("results", []))
+                if not data.get("has_more"):
+                    break
+                cursor = data.get("next_cursor")
             return out
 
         def _rich_text_to_md(rich: List[Dict[str, Any]]) -> str:
@@ -288,10 +310,14 @@ class NotionConnector(BaseConnector):
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, json=body, headers=headers, timeout=30) as resp:
-                resp.raise_for_status()
-                tok = await resp.json()
+        resp = await afetch(method="POST", url=token_url, json=body, headers=headers, timeout=30)
+        try:
+            resp.raise_for_status()
+            tok = resp.json()
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
         return {
             "access_token": tok.get("access_token"),
             "refresh_token": tok.get("refresh_token") or refresh_token,

@@ -4,7 +4,9 @@ from fastapi.testclient import TestClient
 
 
 def test_config_jobs_endpoint_shape(monkeypatch):
-    # Force test mode to avoid heavy startup
+
+
+     # Force test mode to avoid heavy startup
     monkeypatch.setenv("TEST_MODE", "true")
     # Reset settings and import app after env is set
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings

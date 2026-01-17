@@ -5,6 +5,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 def _has_postgres_dependencies() -> bool:
+
     """Return True only if both asyncpg and psycopg (v3) are importable.
 
     The AuthNZ backend uses psycopg (v3) for the PostgreSQL backend; the test

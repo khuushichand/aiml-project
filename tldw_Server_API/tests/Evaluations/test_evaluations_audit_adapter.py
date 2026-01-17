@@ -6,6 +6,8 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType,
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Evaluations.audit_adapter import (
     log_evaluation_created,
+    _in_test_mode,
+    _parse_cache_size,
     shutdown_evaluations_audit_services,
 )
 from tldw_Server_API.app.core.config import settings
@@ -44,3 +46,17 @@ async def test_evaluation_created_threadpool_fallback(tmp_path, monkeypatch):
     finally:
         await svc.stop()
         await shutdown_evaluations_audit_services()
+
+
+def test_evaluations_audit_cache_size_clamped(monkeypatch):
+    monkeypatch.setenv("EVALUATIONS_AUDIT_MAX_CACHED_SERVICES", "0")
+    assert _parse_cache_size("EVALUATIONS_AUDIT_MAX_CACHED_SERVICES", 20) == 1
+
+
+def test_evaluations_audit_test_mode_parsing(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "false")
+    assert _in_test_mode() is False
+    monkeypatch.setenv("TEST_MODE", "true")
+    assert _in_test_mode() is True

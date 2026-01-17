@@ -1,5 +1,6 @@
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from loguru import logger
 from typing import Optional
 
 
@@ -50,6 +51,81 @@ class SecurityAlertFileError(Exception):
     """Raised when writing a security alert to a file sink fails."""
 
 
+class StoragePathValidationError(Exception):
+    """Base exception for storage path validation failures."""
+
+
+class InvalidStoragePathError(StoragePathValidationError):
+    """Raised when a storage path is invalid or outside its allowed base."""
+
+
+class StorageUnavailableError(StoragePathValidationError):
+    """Raised when storage base directories cannot be resolved."""
+
+
+class InvalidStorageUserIdError(StoragePathValidationError):
+    """Raised when a storage path resolution is attempted with an invalid user id."""
+
+
+class UnsafeUserPathError(StoragePathValidationError):
+    """Raised when a user-derived path escapes an allowed base directory."""
+
+
+class AdminDataOpsError(ValueError):
+    """Base exception for admin data ops validation errors."""
+
+
+class UnknownBackupDatasetError(AdminDataOpsError):
+    """Raised when a backup request references an unknown dataset."""
+
+
+class InvalidBackupUserIdError(AdminDataOpsError):
+    """Raised when a backup request references an invalid user id."""
+
+
+class InvalidBackupPathError(AdminDataOpsError):
+    """Raised when a backup path is invalid or unsafe."""
+
+
+class InvalidBackupIdError(AdminDataOpsError):
+    """Raised when a backup id is malformed or unsafe."""
+
+
+class InvalidRetentionPolicyError(AdminDataOpsError):
+    """Raised when a retention policy key is unknown."""
+
+
+class InvalidRetentionRangeError(AdminDataOpsError):
+    """Raised when a retention policy update is out of range."""
+
+
+class TemplateStoreError(Exception):
+    """Base exception for watchlist template store errors."""
+
+
+class TemplateValidationError(TemplateStoreError, ValueError):
+    """Raised when a watchlist template validation check fails."""
+
+
+class InvalidTemplateNameError(TemplateValidationError):
+    """Raised when a template name fails validation."""
+
+
+class InvalidTemplateFormatError(TemplateValidationError):
+    """Raised when a template format is invalid."""
+
+
+class InvalidTemplatePathError(TemplateValidationError):
+    """Raised when a template path escapes the allowed base directory."""
+
+
+class InvalidSecretRedactionParametersError(ValueError):
+    """Raised when secret redaction parameters are invalid."""
+
+    def __init__(self, message: str = "head and tail must be non-negative"):
+        super().__init__(message)
+
+
 class ResourceNotFoundError(Exception):
     """Generic resource-not-found error for domain-level lookups."""
 
@@ -77,12 +153,24 @@ class ServiceInitializationTimeoutError(ServiceInitializationError):
     """Raised when a service initialization exceeds its timeout."""
 
 
-async def video_processing_exception_handler(request: Request, exc: VideoProcessingError):
+class WorkflowAdapterError(Exception):
+    """Base exception for workflow adapter errors."""
+
+
+class AdapterError(WorkflowAdapterError):
+    """Workflow adapter-specific error."""
+
+
+async def video_processing_exception_handler(
+    _request: Request,
+    exc: VideoProcessingError,
+) -> JSONResponse:
+    logger.error("Video processing failed: {}", exc)
     return JSONResponse(
         status_code=500,
-        content={"message": f"An error occurred during video processing: {str(exc)}"},
+        content={"message": f"An error occurred during video processing: {exc!s}"},
     )
 
 
-def setup_exception_handlers(app):
+def setup_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(VideoProcessingError, video_processing_exception_handler)

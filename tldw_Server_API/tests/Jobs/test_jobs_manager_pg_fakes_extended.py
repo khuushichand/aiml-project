@@ -7,19 +7,22 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 class FakePGCursor:
     def __init__(self, jobs):
-        # jobs: dict id -> dict(row)
+             # jobs: dict id -> dict(row)
         self.jobs = jobs
         self._last = None
         self.rowcount = 0
         self._fetch_buffer = None
 
     def __enter__(self):
+
         return self
 
     def __exit__(self, exc_type, exc, tb):
+
         return False
 
     def execute(self, sql, params=None):
+
         s = str(sql)
         self.rowcount = 0
         self._fetch_buffer = None
@@ -100,11 +103,13 @@ class FakePGCursor:
         self._fetch_buffer = None
 
     def fetchone(self):
+
         val = self._fetch_buffer
         self._fetch_buffer = None
         return val
 
     def fetchall(self):
+
         return []
 
 
@@ -113,12 +118,15 @@ class FakePGConn:
         pass
 
     def __enter__(self):
+
         return self
 
     def __exit__(self, exc_type, exc, tb):
+
         return False
 
     def close(self):
+
         pass
 
 
@@ -132,10 +140,11 @@ def _stub_pg_bootstrap(monkeypatch):
 
 @pytest.mark.unit
 def test_pg_create_job_idempotent_gates_created_metric(monkeypatch, tmp_path):
-    # Capture increment_created calls
+     # Capture increment_created calls
     calls = {"n": 0}
 
     def _inc(labels):
+
         calls["n"] += 1
 
     monkeypatch.setenv("JOBS_DB_URL", "postgresql://fake")
@@ -164,7 +173,7 @@ def test_pg_create_job_idempotent_gates_created_metric(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_pg_batch_complete_encrypts_results(monkeypatch, tmp_path):
-    # Enable encryption for domain SECURE and provide AES key
+     # Enable encryption for domain SECURE and provide AES key
     monkeypatch.setenv("JOBS_ENCRYPT_SECURE", "true")
     monkeypatch.setenv("WORKFLOWS_ARTIFACT_ENC_KEY", base64.b64encode(b"1" * 32).decode("ascii"))
 

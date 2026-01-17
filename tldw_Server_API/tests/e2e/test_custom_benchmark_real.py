@@ -59,6 +59,7 @@ class TestRealBenchmarkWorkflow:
         ]
 
     def test_user_creates_benchmark(self):
+
         """Test a user creating a custom benchmark through the UI/API."""
         # User fills out form to create a benchmark (unified Evaluations API shape)
         # Map legacy fields to CreateEvaluationRequest: name, eval_type, eval_spec, dataset
@@ -125,6 +126,7 @@ class TestRealBenchmarkWorkflow:
             SmartErrorHandler.handle_error(e, "benchmark creation")
 
     def test_user_runs_benchmark(self):
+
         """Test a user running their benchmark against a model."""
         if TestRealBenchmarkWorkflow.eval_id is None:
             pytest.skip("No benchmark available - user needs to create one first")
@@ -169,6 +171,7 @@ class TestRealBenchmarkWorkflow:
             SmartErrorHandler.handle_error(e, "benchmark execution")
 
     def test_user_checks_benchmark_results(self):
+
         """Test a user checking the results of their benchmark run."""
         if TestRealBenchmarkWorkflow.run_id is None:
             pytest.skip("No benchmark run available")
@@ -203,6 +206,7 @@ class TestRealBenchmarkWorkflow:
             SmartErrorHandler.handle_error(e, "checking benchmark results")
 
     def test_user_views_all_benchmarks(self):
+
         """Test a user viewing their list of benchmarks."""
         try:
             response = self.client.client.get("/api/v1/evaluations")
@@ -227,6 +231,7 @@ class TestRealBenchmarkWorkflow:
             SmartErrorHandler.handle_error(e, "listing benchmarks")
 
     def test_user_deletes_benchmark(self):
+
         """Test a user deleting their benchmark."""
         if TestRealBenchmarkWorkflow.eval_id is None:
             pytest.skip("No benchmark to delete")

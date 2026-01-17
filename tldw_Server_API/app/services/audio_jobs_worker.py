@@ -32,6 +32,7 @@ async def _handle_audio_transcribe_stage(payload: Dict[str, Any]) -> tuple[Dict[
     raw_model = payload.get("model")
     model = (raw_model.strip() if isinstance(raw_model, str) else raw_model) or None
     temp_dir = payload.get("temp_dir")
+    # Constrain adapter file access to the job's temp dir for path safety.
     base_dir = Path(temp_dir) if temp_dir else None
 
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
