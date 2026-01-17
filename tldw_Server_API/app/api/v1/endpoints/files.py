@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path as PathlibPath
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
+from loguru import logger
+from starlette.background import BackgroundTask
+from starlette.responses import FileResponse
+
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
+    FileArtifactResponse,
+    FileArtifactsPurgeRequest,
+    FileArtifactsPurgeResponse,
+    FileCreateRequest,
+    FileCreateResponse,
+    FileDeleteResponse,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
+
+
+router = APIRouter(prefix="/files", tags=["files"])
+
+_EXPORT_MIME_TYPES = {
+    "ics": "text/calendar",
+    "md": "text/markdown",
+    "html": "text/html",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "csv": "text/csv",
+    "json": "application/json",
+}
+
+
+def _resolve_export_path_for_user(user_id: int, path_value: str) -> PathlibPath:
+    base_dir = DatabasePaths.get_user_temp_outputs_dir(user_id)
+    try:
+        base_resolved = base_dir.resolve(strict=False)
+    except Exception as exc:
+        logger.error("files: failed to resolve temp outputs base dir for user %s: %s", user_id, exc)
+        raise HTTPException(status_code=500, detail="storage_unavailable") from exc
+
+    candidate = PathlibPath(path_value)
+    if candidate.is_absolute():
+        raise HTTPException(status_code=400, detail="invalid_path")
+    if len(candidate.parts) != 1:
+        raise HTTPException(status_code=400, detail="invalid_path")
+    candidate_name = candidate.name
+    if not candidate_name or candidate_name in (".", ".."):
+        raise HTTPException(status_code=400, detail="invalid_path")
+    if os.sep in candidate_name or (os.altsep and os.altsep in candidate_name):
+        raise HTTPException(status_code=400, detail="invalid_path")
+    if not re.match(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$", candidate_name):
+        raise HTTPException(status_code=400, detail="invalid_path")
+
+    resolved = (base_resolved / candidate_name).resolve(strict=False)
+    if not resolved.is_relative_to(base_resolved):
+        raise HTTPException(status_code=400, detail="invalid_path")
+    return resolved
+
+
+def _parse_iso_datetime(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _clear_export_state(
+    *,
+    user_id: int,
+    file_id: int,
+    row,
+    consumed_at: str | None,
+) -> None:
+    try:
+        cdb = CollectionsDatabase.for_user(user_id=user_id)
+        cdb.update_file_artifact_export(
+            file_id,
+            export_status="none",
+            export_format=row.export_format,
+            export_storage_path=None,
+            export_bytes=row.export_bytes,
+            export_content_type=row.export_content_type,
+            export_job_id=row.export_job_id,
+            export_expires_at=row.export_expires_at,
+            export_consumed_at=consumed_at,
+        )
+    except Exception as exc:
+        logger.warning("files.export: failed to clear export state for %s: %s", file_id, exc)
+
+
+@router.post(
+    "/create",
+    response_model=FileCreateResponse,
+    summary="Create a structured file artifact",
+)
+async def create_file_artifact(
+    request: FileCreateRequest,
+    response: Response,
+    http_request: Request,
+    cdb: CollectionsDatabase = Depends(get_collections_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> FileCreateResponse:
+    service = FileArtifactsService(cdb, user_id=current_user.id)
+    request_id = getattr(getattr(http_request, "state", None), "request_id", None) or http_request.headers.get("X-Request-ID")
+    artifact, status_code = await service.create_artifact(request, request_id=request_id)
+    response.status_code = status_code
+    return FileCreateResponse(artifact=artifact)
+
+
+@router.get(
+    "/{file_id}",
+    response_model=FileArtifactResponse,
+    summary="Get a structured file artifact",
+)
+async def get_file_artifact(
+    file_id: int,
+    cdb: CollectionsDatabase = Depends(get_collections_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> FileArtifactResponse:
+    service = FileArtifactsService(cdb, user_id=current_user.id)
+    try:
+        artifact = service.get_artifact(file_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="file_artifact_not_found")
+    return FileArtifactResponse(artifact=artifact)
+
+
+@router.get(
+    "/{file_id}/export",
+    summary="Download a file artifact export",
+)
+async def export_file_artifact(
+    file_id: int,
+    format: str = Query(..., description="Export format (ics|md|html|xlsx|csv|json)"),
+    cdb: CollectionsDatabase = Depends(get_collections_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> FileResponse:
+    if format not in _EXPORT_MIME_TYPES:
+        raise HTTPException(status_code=422, detail="unsupported_export_format")
+    try:
+        row = cdb.get_file_artifact(file_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="file_artifact_not_found")
+
+    consumed_at = _parse_iso_datetime(getattr(row, "export_consumed_at", None))
+    if consumed_at is not None:
+        raise HTTPException(status_code=409, detail="export_consumed")
+
+    if row.export_status != "ready" or not row.export_storage_path:
+        raise HTTPException(status_code=404, detail="export_not_ready")
+    if row.export_format and row.export_format != format:
+        raise HTTPException(status_code=404, detail="export_format_mismatch")
+
+    user_id = int(current_user.id)
+    expires_at = _parse_iso_datetime(getattr(row, "export_expires_at", None))
+    now = datetime.now(timezone.utc)
+    if expires_at is not None and expires_at <= now:
+        if row.export_storage_path:
+            try:
+                path = _resolve_export_path_for_user(user_id, row.export_storage_path)
+                if path.exists():
+                    path.unlink()
+            except Exception as exc:
+                logger.warning("files.export: failed to delete expired export file for %s: %s", file_id, exc)
+        _clear_export_state(
+            user_id=user_id,
+            file_id=file_id,
+            row=row,
+            consumed_at=None,
+        )
+        raise HTTPException(status_code=404, detail="export_expired")
+
+    path = _resolve_export_path_for_user(user_id, row.export_storage_path)
+    if not path.exists():
+        _clear_export_state(
+            user_id=user_id,
+            file_id=file_id,
+            row=row,
+            consumed_at=None,
+        )
+        raise HTTPException(status_code=404, detail="export_missing")
+
+    media_type = row.export_content_type or _EXPORT_MIME_TYPES.get(format, "application/octet-stream")
+    def _consume_export_file() -> None:
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception as exc:
+            logger.warning("files.export: failed to delete export file for %s: %s", file_id, exc)
+        consumed_at_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        _clear_export_state(
+            user_id=user_id,
+            file_id=file_id,
+            row=row,
+            consumed_at=consumed_at_iso,
+        )
+
+    return FileResponse(
+        path=path,
+        media_type=media_type,
+        filename=path.name,
+        background=BackgroundTask(_consume_export_file),
+    )
+
+
+@router.delete(
+    "/{file_id}",
+    response_model=FileDeleteResponse,
+    summary="Delete a file artifact (soft delete by default)",
+)
+async def delete_file_artifact(
+    file_id: int,
+    hard: bool = False,
+    delete_file: bool = False,
+    cdb: CollectionsDatabase = Depends(get_collections_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> FileDeleteResponse:
+    fs_deleted = False
+    user_id = int(current_user.id)
+    if hard and delete_file:
+        try:
+            row = cdb.get_file_artifact(file_id, include_deleted=True)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="file_artifact_not_found")
+        if row.export_storage_path:
+            try:
+                path = _resolve_export_path_for_user(user_id, row.export_storage_path)
+                if path.exists():
+                    path.unlink()
+                    fs_deleted = True
+            except HTTPException as exc:
+                logger.warning("files.delete: invalid export path for %s: %s", file_id, exc.detail)
+            except Exception as exc:
+                logger.warning("files.delete: failed to delete export file for %s: %s", file_id, exc)
+    ok = cdb.delete_file_artifact(file_id, hard=hard)
+    if not ok:
+        raise HTTPException(status_code=404, detail="file_artifact_not_found")
+    return FileDeleteResponse(success=True, file_deleted=fs_deleted)
+
+
+@router.post(
+    "/purge",
+    response_model=FileArtifactsPurgeResponse,
+    summary="Purge expired and aged soft-deleted file artifacts",
+)
+async def purge_file_artifacts(
+    payload: FileArtifactsPurgeRequest = Body(default=FileArtifactsPurgeRequest()),
+    cdb: CollectionsDatabase = Depends(get_collections_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> FileArtifactsPurgeResponse:
+    user_id = int(current_user.id)
+    now = datetime.utcnow().replace(tzinfo=timezone.utc, microsecond=0).isoformat()
+    candidates = cdb.list_file_artifacts_for_purge(
+        now_iso=now,
+        soft_deleted_grace_days=payload.soft_deleted_grace_days,
+        include_retention=payload.include_retention,
+    )
+    files_deleted = 0
+    if payload.delete_files:
+        for file_id, storage_path in list(candidates.items()):
+            if not storage_path:
+                continue
+            try:
+                path = _resolve_export_path_for_user(user_id, storage_path)
+                if path.exists():
+                    path.unlink()
+                    files_deleted += 1
+            except HTTPException as exc:
+                logger.warning("files.purge: invalid export path for %s: %s", file_id, exc.detail)
+            except Exception as exc:
+                logger.warning("files.purge: failed to delete export file for %s: %s", file_id, exc)
+
+    removed = 0
+    if candidates:
+        removed = cdb.delete_file_artifacts_by_ids(list(candidates.keys()))
+    return FileArtifactsPurgeResponse(removed=removed, files_deleted=files_deleted)

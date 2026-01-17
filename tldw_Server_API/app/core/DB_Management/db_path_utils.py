@@ -212,6 +212,7 @@ class DatabasePaths:
     WORKFLOWS_SUBDIR = "workflows"
     PROMPT_STUDIO_SUBDIR = "prompt_studio_dbs"
     OUTPUTS_SUBDIR = "outputs"
+    OUTPUTS_TEMP_SUBDIR = "outputs_tmp"
     CHROMA_SUBDIR = "chroma_storage"
     VECTOR_STORE_SUBDIR = "vector_store"
     VOICES_SUBDIR = "voices"
@@ -402,6 +403,14 @@ class DatabasePaths:
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         outputs_dir = user_dir / DatabasePaths.OUTPUTS_SUBDIR
         _ensure_dir(outputs_dir, label="outputs")
+        return outputs_dir
+
+    @staticmethod
+    def get_user_temp_outputs_dir(user_id: Optional[UserId]) -> Path:
+        """Get the path to the user's transient outputs directory."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        outputs_dir = user_dir / DatabasePaths.OUTPUTS_TEMP_SUBDIR
+        _ensure_dir(outputs_dir, label="temp outputs")
         return outputs_dir
 
     @staticmethod

@@ -50,6 +50,7 @@ from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 # exception handling is consistent across modules (enables pytest fallback).
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
     ConversionError as TranscriptionConversionError,
+    TranscriptionCancelled,
 )
 
 def speech_to_text(*args, **kwargs):
@@ -449,7 +450,8 @@ def process_audio_files(
     # Optional metadata overrides (less common here, usually handled by API layer)
     custom_title: Optional[str] = None,
     author: Optional[str] = None,
-    temp_dir: Optional[str] = None
+    temp_dir: Optional[str] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """
     Processes a list of audio inputs (URLs or local file paths).
@@ -508,6 +510,8 @@ def process_audio_files(
         author: Optional author override for the media. Used for context. Defaults to None.
         temp_dir: Optional path to a directory for temporary files. If None, a system-default
                   temporary directory is created and managed. Defaults to None.
+        cancel_check: Optional callable that returns True when processing should be
+            cancelled.
 
     Returns:
         A dictionary containing the batch processing results:
@@ -570,6 +574,32 @@ def process_audio_files(
         logging.info(message)
         progress_log.append(message)
 
+    def _is_cancelled() -> bool:
+        if cancel_check is None:
+            return False
+        try:
+            return bool(cancel_check())
+        except Exception:
+            return False
+
+    def _cancelled_result(input_ref: str, processing_source: str) -> Dict[str, Any]:
+        return {
+            "status": "Cancelled",
+            "input_ref": input_ref,
+            "processing_source": processing_source,
+            "media_type": "audio",
+            "metadata": {"title": custom_title, "author": author},
+            "content": None,
+            "segments": None,
+            "chunks": None,
+            "analysis": None,
+            "analysis_details": {},
+            "error": "Cancelled by user",
+            "warnings": [],
+            "db_id": None,
+            "db_message": None,
+        }
+
     # Define chunk options dictionary
     chunk_options = {
         'method': chunk_method or ('sentences' if (chunk_language or transcription_language or 'en') == 'en' else 'sentences'),
@@ -627,10 +657,19 @@ def process_audio_files(
                 if msg:
                     item_result.setdefault("warnings", []).append(msg)
 
+            if _is_cancelled():
+                update_progress(f"Cancellation detected before processing item {i}: {input_ref}")
+                batch_items_results.append(_cancelled_result(input_ref, input_item))
+                for remaining_input in inputs[i:]:
+                    remaining_ref = remaining_input if isinstance(remaining_input, str) else str(remaining_input)
+                    batch_items_results.append(_cancelled_result(remaining_ref, remaining_ref))
+                break
+
             current_audio_path = None
             downloaded_path = None
             wav_file_path = None
             item_temp_files = [] # Files specific to this item
+            cancel_remaining = False
 
             try:
                 # 1. Get Local Audio Path (Download if URL, Copy if local?)
@@ -746,11 +785,14 @@ def process_audio_files(
                 else:
                     update_progress(f"Converting '{Path(current_audio_path).name}' to WAV...")
                     try:
+                        if _is_cancelled():
+                            raise TranscriptionCancelled("Cancelled by user")
                         # Overwrite in temp dir context for non-WAV inputs
                         wav_file_path = convert_to_wav(
                             current_audio_path,
                             overwrite=True,
                             base_dir=processing_temp_dir_path,
+                            cancel_check=cancel_check,
                         )
                         # ... (path checking logic - ensure wav_file_path is valid) ...
                         if not wav_file_path or not Path(wav_file_path).exists():
@@ -758,6 +800,8 @@ def process_audio_files(
                         item_temp_files.append(wav_file_path) # Mark WAV for potential cleanup
                         item_result["processing_source"] = wav_file_path # Update source
                         update_progress(f"Conversion to WAV successful: {Path(wav_file_path).name}")
+                    except TranscriptionCancelled:
+                        raise
                     except (TranscriptionConversionError, FileNotFoundError, RuntimeError) as conv_err:
                         # If conversion fails, set error and status. In test environments, degrade gracefully.
                         err_msg = f"Audio conversion failed: {conv_err}"
@@ -786,6 +830,8 @@ def process_audio_files(
                     # Ensure wav_file_path is valid before calling speech_to_text
                     if not wav_file_path:
                         raise ValueError("Cannot transcribe, WAV file path is missing.")
+                    if _is_cancelled():
+                        raise TranscriptionCancelled("Cancelled by user")
 
                     transcription_output = speech_to_text(
                         audio_input=wav_file_path,
@@ -794,6 +840,7 @@ def process_audio_files(
                         vad_filter=vad_use,
                         diarize=diarize,
                         base_dir=processing_temp_dir_path,
+                        cancel_check=cancel_check,
                     )
                     raw_segments = transcription_output
 
@@ -852,6 +899,8 @@ def process_audio_files(
 
                     update_progress("Transcription completed.")
 
+                except TranscriptionCancelled:
+                    raise
                 except (RuntimeError, ValueError) as trans_err:
                      # If transcription fails, set error and status, then *re-raise*
                      err_msg = f"Transcription failed: {trans_err}"
@@ -966,6 +1015,11 @@ def process_audio_files(
                 item_processing_time = time.time() - item_start_time
                 update_progress(f"Item {i} ({input_ref}) finished processing. Status: {item_result['status']}. Time: {item_processing_time:.2f}s")
 
+            except TranscriptionCancelled:
+                update_progress(f"Cancellation detected while processing item {i}: {input_ref}")
+                item_result["status"] = "Cancelled"
+                item_result["error"] = "Cancelled by user"
+                cancel_remaining = True
             except Exception as item_processing_exc:
                 # Catch ANY exception raised during the item's processing steps
                 # (including re-raised conversion/transcription errors or others)
@@ -984,6 +1038,11 @@ def process_audio_files(
                 # Append the final state of item_result (Success, Warning, or Error)
                 logging.debug(f"Appending result for item {i}: Status='{item_result.get('status')}', Error='{item_result.get('error')}'")
                 batch_items_results.append(item_result) # Use the renamed list
+            if cancel_remaining:
+                for remaining_input in inputs[i:]:
+                    remaining_ref = remaining_input if isinstance(remaining_input, str) else str(remaining_input)
+                    batch_items_results.append(_cancelled_result(remaining_ref, remaining_ref))
+                break
 
         # --- End of Loop ---
 

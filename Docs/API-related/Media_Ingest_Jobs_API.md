@@ -11,6 +11,9 @@ Base path: `/api/v1/media`
   - Response: `{ batch_id, jobs: [{ id, uuid, source, source_kind, status }], errors: [] }`
   - Notes: `errors` contains per-item staging failures; if every item fails, response uses HTTP 207.
 
+- GET `/ingest/jobs?batch_id=...` - List jobs for a batch (owner or admin)
+  - Response: `{ batch_id, jobs: [MediaIngestJobStatus...] }`
+
 - GET `/ingest/jobs/{job_id}` - Get job status (owner or admin)
   - Response includes progress fields (`progress_percent`, `progress_message`), result summary,
     and payload metadata (`media_type`, `source`, `source_kind`, `batch_id`).
@@ -23,6 +26,7 @@ Base path: `/api/v1/media`
 - Cancellation is cooperative and best-effort.
 - Queued jobs are cancelled immediately.
 - In-flight jobs check cancellation before persistence and finalize as `cancelled` without DB writes.
+- Audio/video ingestion attempts to preempt long-running FFmpeg/STT work when cancellation is requested.
 
 ## Worker
 

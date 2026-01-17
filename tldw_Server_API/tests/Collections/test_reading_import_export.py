@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.Collections.reading_importers import (
     parse_instapaper_export,
     parse_pocket_export,
 )
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.config import settings
 
 
@@ -126,3 +127,51 @@ def test_reading_import_and_export(client_with_user):
     exported = json.loads(lines[0])
     assert exported["title"] == "Example Story"
     assert "notes" in exported
+
+
+def test_reading_import_preserves_existing_fields(client_with_user):
+    client = client_with_user
+    url = "https://example.com/preserve"
+    save_payload = {
+        "url": url,
+        "title": "Original Title",
+        "content": "Original content body",
+        "summary": "Original summary",
+        "notes": "Original notes",
+    }
+    r = client.post("/api/v1/reading/save", json=save_payload)
+    assert r.status_code == 200, r.text
+
+    db = CollectionsDatabase.for_user(user_id=222)
+    existing = db.get_content_item_by_url(url)
+    assert existing is not None
+    original_hash = existing.content_hash
+    original_word_count = existing.word_count
+    original_summary = existing.summary
+    original_notes = existing.notes
+    original_meta = json.loads(existing.metadata_json or "{}")
+
+    import_payload = {
+        "list": {
+            "1": {
+                "resolved_url": url,
+                "resolved_title": "Imported Title",
+                "status": "0",
+            }
+        }
+    }
+    files = {
+        "file": ("pocket.json", json.dumps(import_payload).encode("utf-8"), "application/json"),
+    }
+    data = {"source": "pocket", "merge_tags": "true"}
+    r = client.post("/api/v1/reading/import", files=files, data=data)
+    assert r.status_code == 200, r.text
+
+    updated = db.get_content_item_by_url(url)
+    assert updated is not None
+    assert updated.summary == original_summary
+    assert updated.notes == original_notes
+    assert updated.content_hash == original_hash
+    assert updated.word_count == original_word_count
+    updated_meta = json.loads(updated.metadata_json or "{}")
+    assert updated_meta.get("text") == original_meta.get("text")

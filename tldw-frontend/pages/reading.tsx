@@ -20,9 +20,18 @@ interface Highlight {
   state: 'active' | 'stale';
 }
 
+interface OutputTemplateOption {
+  id: number;
+  name: string;
+  format: string;
+  type?: string;
+  description?: string;
+  is_default?: boolean;
+}
+
 const STATUS_OPTIONS: ReadingStatus[] = ['saved', 'reading', 'read', 'archived'];
 const PAGE_SIZE = 10;
-type BulkAction = 'set_status' | 'set_favorite' | 'add_tags' | 'remove_tags' | 'replace_tags' | 'delete';
+type BulkAction = 'set_status' | 'set_favorite' | 'add_tags' | 'remove_tags' | 'replace_tags' | 'delete' | 'generate_output';
 
 export default function ReadingPage() {
   const { show } = useToast();
@@ -61,9 +70,22 @@ export default function ReadingPage() {
   const [bulkFavorite, setBulkFavorite] = useState(true);
   const [bulkHardDelete, setBulkHardDelete] = useState(false);
   const [bulkApplying, setBulkApplying] = useState(false);
+  const [outputTemplates, setOutputTemplates] = useState<OutputTemplateOption[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [bulkTemplateId, setBulkTemplateId] = useState<number | ''>('');
+  const [bulkOutputTitle, setBulkOutputTitle] = useState('');
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
   const allSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id));
+  const selectedItems = useMemo(
+    () => items.filter((item) => selectedIds.includes(item.id)),
+    [items, selectedIds]
+  );
+  const outputItemIds = useMemo(
+    () => selectedItems.map((item) => item.media_id).filter((id): id is number => typeof id === 'number'),
+    [selectedItems]
+  );
+  const outputSkippedCount = Math.max(0, selectedItems.length - outputItemIds.length);
 
   const parseTags = (value: string): string[] =>
     value
@@ -92,9 +114,36 @@ export default function ReadingPage() {
     }
   }, [favoriteOnly, page, search, show, statusFilter]);
 
+  const loadTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    try {
+      const data = await apiClient.get<{ items: OutputTemplateOption[] }>('/outputs/templates', {
+        params: { limit: 200, offset: 0 },
+      });
+      setOutputTemplates(data.items || []);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load templates', description: message, variant: 'warning' });
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }, [show]);
+
   useEffect(() => {
     loadItems();
   }, [loadItems]);
+
+  useEffect(() => {
+    loadTemplates();
+  }, [loadTemplates]);
+
+  useEffect(() => {
+    if (outputTemplates.length === 0 || bulkTemplateId) return;
+    const defaultTemplate = outputTemplates.find((tpl) => tpl.is_default) || outputTemplates[0];
+    if (defaultTemplate) {
+      setBulkTemplateId(defaultTemplate.id);
+    }
+  }, [bulkTemplateId, outputTemplates]);
 
   useEffect(() => {
     const drafts: Record<number, string> = {};
@@ -344,6 +393,43 @@ export default function ReadingPage() {
       show({ title: 'Select at least one item', variant: 'warning' });
       return;
     }
+    if (bulkAction === 'generate_output') {
+      if (!bulkTemplateId) {
+        show({ title: 'Select a template', variant: 'warning' });
+        return;
+      }
+      if (outputItemIds.length === 0) {
+        show({ title: 'No selected items are eligible for outputs', description: 'Items must have media IDs.', variant: 'warning' });
+        return;
+      }
+      setBulkApplying(true);
+      try {
+        const payload: Record<string, unknown> = {
+          template_id: bulkTemplateId,
+          item_ids: outputItemIds,
+        };
+        if (bulkOutputTitle.trim()) {
+          payload.title = bulkOutputTitle.trim();
+        }
+        const res = await apiClient.post<{ id: number; title: string; format: string }>('/outputs', payload);
+        const skipped = outputSkippedCount;
+        show({
+          title: 'Output generated',
+          description: skipped
+            ? `Created output "${res.title}". Skipped ${skipped} item(s) without media IDs.`
+            : `Created output "${res.title}".`,
+          variant: skipped ? 'warning' : 'success',
+        });
+        setSelectedIds([]);
+        setBulkOutputTitle('');
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        show({ title: 'Output generation failed', description: message, variant: 'danger' });
+      } finally {
+        setBulkApplying(false);
+      }
+      return;
+    }
     if (bulkAction === 'delete' && bulkHardDelete) {
       const ok = window.confirm('Hard delete permanently removes items. Continue?');
       if (!ok) return;
@@ -545,6 +631,7 @@ export default function ReadingPage() {
                 <option value="replace_tags">Replace tags</option>
                 <option value="set_status">Set status</option>
                 <option value="set_favorite">Set favorite</option>
+                <option value="generate_output">Generate output</option>
                 <option value="delete">Delete</option>
               </select>
             </label>
@@ -584,6 +671,43 @@ export default function ReadingPage() {
                   <option value="false">Unfavorite</option>
                 </select>
               </label>
+            )}
+            {bulkAction === 'generate_output' && (
+              <>
+                <label className="flex flex-col text-sm text-gray-700">
+                  Template
+                  <select
+                    value={bulkTemplateId}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setBulkTemplateId(Number.isFinite(next) && next > 0 ? next : '');
+                    }}
+                    className="mt-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                    disabled={templatesLoading || outputTemplates.length === 0}
+                  >
+                    {outputTemplates.length === 0 && (
+                      <option value="">
+                        {templatesLoading ? 'Loading templates…' : 'No templates available'}
+                      </option>
+                    )}
+                    {outputTemplates.map((tpl) => (
+                      <option key={tpl.id} value={tpl.id}>
+                        {tpl.name} ({tpl.format})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <Input
+                  label="Output title (optional)"
+                  value={bulkOutputTitle}
+                  onChange={(e) => setBulkOutputTitle(e.target.value)}
+                  placeholder="Weekly reading digest"
+                />
+                <div className="text-xs text-gray-500">
+                  Generates an output from {outputItemIds.length} item(s).
+                  {outputSkippedCount > 0 ? ` Skipping ${outputSkippedCount} item(s) without media IDs.` : ''}
+                </div>
+              </>
             )}
             {bulkAction === 'delete' && (
               <div className="flex items-center pt-5">

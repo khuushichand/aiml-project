@@ -658,10 +658,6 @@ class ReadingService:
                 skipped += 1
                 continue
             tags = item.tags or []
-            if merge_tags:
-                existing = self.collections.get_content_item_by_url(url)
-                if existing:
-                    tags = sorted(set(existing.tags + tags))
             metadata_payload = {"source": "reading_import"}
             metadata_payload.update(item.metadata or {})
             try:
@@ -672,7 +668,7 @@ class ReadingService:
                     url=url,
                     canonical_url=url,
                     domain=None,
-                    title=item.title or url,
+                    title=item.title or None,
                     summary=None,
                     notes=item.notes,
                     content_hash=None,
@@ -687,6 +683,8 @@ class ReadingService:
                     source_id=None,
                     read_at=item.read_at,
                     tags=tags,
+                    merge_tags=merge_tags,
+                    preserve_existing_on_null=True,
                 )
                 if row.is_new:
                     imported += 1

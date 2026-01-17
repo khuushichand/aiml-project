@@ -67,6 +67,9 @@ def test_collections_postgres_round_trip(request: pytest.FixtureRequest, monkeyp
     )
     assert tpl.id > 0
     assert tpl.is_default is True
+    items, total = db.list_output_templates(q="default summary", limit=10, offset=0)
+    assert total >= 1
+    assert any(item.name == "Default Summary" for item in items)
 
     expired_at = datetime(2000, 1, 1, tzinfo=timezone.utc).isoformat()
     output = db.create_output_artifact(

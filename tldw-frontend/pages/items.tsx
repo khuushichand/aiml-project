@@ -27,6 +27,15 @@ interface ItemsResponse {
   size: number;
 }
 
+interface OutputTemplateOption {
+  id: number;
+  name: string;
+  format: string;
+  type?: string;
+  description?: string;
+  is_default?: boolean;
+}
+
 const PAGE_SIZE = 10;
 
 const originOptions = [
@@ -44,7 +53,7 @@ const statusOptions = [
   { value: 'archived', label: 'Archived' },
 ];
 
-type BulkAction = 'set_status' | 'set_favorite' | 'add_tags' | 'remove_tags' | 'replace_tags' | 'delete';
+type BulkAction = 'set_status' | 'set_favorite' | 'add_tags' | 'remove_tags' | 'replace_tags' | 'delete' | 'generate_output';
 
 export default function ItemsPage() {
   const router = useRouter();
@@ -64,6 +73,10 @@ export default function ItemsPage() {
   const [bulkFavorite, setBulkFavorite] = useState(true);
   const [bulkHardDelete, setBulkHardDelete] = useState(false);
   const [bulkApplying, setBulkApplying] = useState(false);
+  const [outputTemplates, setOutputTemplates] = useState<OutputTemplateOption[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [bulkTemplateId, setBulkTemplateId] = useState<number | ''>('');
+  const [bulkOutputTitle, setBulkOutputTitle] = useState('');
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
   const selectableIds = useMemo(
@@ -71,6 +84,18 @@ export default function ItemsPage() {
     [items]
   );
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.includes(id));
+  const selectedItems = useMemo(
+    () => items.filter((item) => item.content_item_id && selectedIds.includes(item.content_item_id)),
+    [items, selectedIds]
+  );
+  const outputItemIds = useMemo(
+    () =>
+      selectedItems
+        .filter((item) => item.content_item_id && item.id !== item.content_item_id)
+        .map((item) => item.id),
+    [selectedItems]
+  );
+  const outputSkippedCount = Math.max(0, selectedItems.length - outputItemIds.length);
 
   const parseTags = (value: string): string[] =>
     value
@@ -132,6 +157,33 @@ export default function ItemsPage() {
     router.replace({ pathname: router.pathname, query: queryParams }, undefined, { shallow: true });
   }, [favoriteOnly, origin, page, query, router, status]);
 
+  const loadTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    try {
+      const data = await apiClient.get<{ items: OutputTemplateOption[] }>('/outputs/templates', {
+        params: { limit: 200, offset: 0 },
+      });
+      setOutputTemplates(data.items || []);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load templates', description: message, variant: 'warning' });
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }, [show]);
+
+  useEffect(() => {
+    loadTemplates();
+  }, [loadTemplates]);
+
+  useEffect(() => {
+    if (outputTemplates.length === 0 || bulkTemplateId) return;
+    const defaultTemplate = outputTemplates.find((tpl) => tpl.is_default) || outputTemplates[0];
+    if (defaultTemplate) {
+      setBulkTemplateId(defaultTemplate.id);
+    }
+  }, [bulkTemplateId, outputTemplates]);
+
   const handleSearchSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     setPage(1);
@@ -174,6 +226,43 @@ export default function ItemsPage() {
   const applyBulkAction = async () => {
     if (selectedIds.length === 0) {
       show({ title: 'Select at least one item', variant: 'warning' });
+      return;
+    }
+    if (bulkAction === 'generate_output') {
+      if (!bulkTemplateId) {
+        show({ title: 'Select a template', variant: 'warning' });
+        return;
+      }
+      if (outputItemIds.length === 0) {
+        show({ title: 'No selected items are eligible for outputs', description: 'Items must have media IDs.', variant: 'warning' });
+        return;
+      }
+      setBulkApplying(true);
+      try {
+        const payload: Record<string, unknown> = {
+          template_id: bulkTemplateId,
+          item_ids: outputItemIds,
+        };
+        if (bulkOutputTitle.trim()) {
+          payload.title = bulkOutputTitle.trim();
+        }
+        const res = await apiClient.post<{ id: number; title: string; format: string }>('/outputs', payload);
+        const skipped = outputSkippedCount;
+        show({
+          title: 'Output generated',
+          description: skipped
+            ? `Created output "${res.title}". Skipped ${skipped} item(s) without media IDs.`
+            : `Created output "${res.title}".`,
+          variant: skipped ? 'warning' : 'success',
+        });
+        setSelectedIds([]);
+        setBulkOutputTitle('');
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        show({ title: 'Output generation failed', description: message, variant: 'danger' });
+      } finally {
+        setBulkApplying(false);
+      }
       return;
     }
     if (bulkAction === 'delete' && bulkHardDelete) {
@@ -300,6 +389,7 @@ export default function ItemsPage() {
                 <option value="replace_tags">Replace tags</option>
                 <option value="set_status">Set status</option>
                 <option value="set_favorite">Set favorite</option>
+                <option value="generate_output">Generate output</option>
                 <option value="delete">Delete</option>
               </select>
             </label>
@@ -339,6 +429,43 @@ export default function ItemsPage() {
                   <option value="false">Unfavorite</option>
                 </select>
               </label>
+            )}
+            {bulkAction === 'generate_output' && (
+              <>
+                <label className="flex flex-col text-sm text-gray-700">
+                  Template
+                  <select
+                    value={bulkTemplateId}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setBulkTemplateId(Number.isFinite(next) && next > 0 ? next : '');
+                    }}
+                    className="mt-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                    disabled={templatesLoading || outputTemplates.length === 0}
+                  >
+                    {outputTemplates.length === 0 && (
+                      <option value="">
+                        {templatesLoading ? 'Loading templates…' : 'No templates available'}
+                      </option>
+                    )}
+                    {outputTemplates.map((tpl) => (
+                      <option key={tpl.id} value={tpl.id}>
+                        {tpl.name} ({tpl.format})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <Input
+                  label="Output title (optional)"
+                  value={bulkOutputTitle}
+                  onChange={(e) => setBulkOutputTitle(e.target.value)}
+                  placeholder="Weekly briefing"
+                />
+                <div className="text-xs text-gray-500">
+                  Generates an output from {outputItemIds.length} item(s).
+                  {outputSkippedCount > 0 ? ` Skipping ${outputSkippedCount} item(s) without media IDs.` : ''}
+                </div>
+              </>
             )}
             {bulkAction === 'delete' && (
               <div className="flex items-center pt-5">

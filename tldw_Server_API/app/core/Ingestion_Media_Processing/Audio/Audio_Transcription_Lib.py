@@ -29,7 +29,7 @@ import threading
 import time
 import queue
 from functools import lru_cache
-from typing import Optional, Union, List, Dict, Any, Tuple
+from typing import Optional, Union, List, Dict, Any, Tuple, Callable
 #
 # DEBUG Imports
 #from memory_profiler import profile
@@ -612,6 +612,7 @@ def perform_transcription(
     transcription_language: str = 'en',
     temp_dir: Optional[str] = None,
     end_seconds: Optional[int] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
     ):
     """
     Converts a video or audio file to WAV format, performs transcription,
@@ -642,6 +643,8 @@ def perform_transcription(
             the input and output paths must resolve under this directory.
         end_seconds: Optional absolute end time (in seconds) for transcription.
             When provided, audio is clipped to the interval [offset, end_seconds).
+        cancel_check: Optional callable that returns True when processing should
+            be cancelled.
 
     Returns:
         A tuple containing:
@@ -675,6 +678,7 @@ def perform_transcription(
             except ValueError as exc:
                 logging.error(f"Invalid temp_dir for transcription: {exc}")
                 return None, None
+        _check_cancel(cancel_check, label="transcription preflight")
         # 1. Convert to WAV - Catch ConversionError specifically
         try:
             if base_dir_path is not None:
@@ -694,6 +698,7 @@ def perform_transcription(
                 end_time=end_seconds,
                 overwrite=overwrite,
                 base_dir=base_dir_path,
+                cancel_check=cancel_check,
             )
             if not audio_file_path or not os.path.exists(audio_file_path):
                  # This case might occur if convert_to_wav returns None/empty path without raising error
@@ -771,6 +776,7 @@ def perform_transcription(
                     vad_filter=vad_use,
                     selected_source_lang=transcription_language,
                     base_dir=base_dir_path,
+                    cancel_check=cancel_check,
                 )
                 transcription_segments = artifact.get("segments") or []
 
@@ -857,6 +863,7 @@ def perform_transcription(
                 vad_filter=vad_use,
                 selected_source_lang=transcription_language,
                 base_dir=base_dir_path,
+                cancel_check=cancel_check,
             )
             segments = artifact.get("segments") or []
             if not segments:
@@ -872,6 +879,8 @@ def perform_transcription(
             logging.info(f"Successfully generated/loaded transcription for {audio_file_path}")
             return audio_file_path, segments
 
+    except TranscriptionCancelled:
+        raise
     except Exception as e:
         # Catch-all for unexpected errors during the process
         logging.error(f"Unexpected error in perform_transcription for {video_path}: {e}", exc_info=True)
@@ -885,6 +894,7 @@ def re_generate_transcription(
     vad_filter,
     selected_source_lang='en',
     base_dir: Optional[Path] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ):
     """
     Calls `speech_to_text` to perform transcription on an audio file and handles potential errors.
@@ -923,6 +933,7 @@ def re_generate_transcription(
             vad_filter=vad_filter,
             diarize=False,  # Explicitly false for non-diarized regeneration
             base_dir=base_dir,
+            cancel_check=cancel_check,
         )
         # speech_to_text returns the segments list directly on success (or raises).
         # Normalize a dict-with-'segments' defensively in case a future change or
@@ -938,6 +949,8 @@ def re_generate_transcription(
 
         logging.info(f"Successfully re-generated transcription for {audio_file_path}")
         return audio_file_path, actual_segments
+    except TranscriptionCancelled:
+        raise
     except RuntimeError as e:
         logging.error(f"RuntimeError during re_generate_transcription for {audio_file_path}: {e}")
         return audio_file_path, None  # Return path but None segments on error
@@ -1447,6 +1460,7 @@ def run_stt_batch_via_registry(
     selected_source_lang: str = "en",
     duration_seconds: Optional[float] = None,
     base_dir: Optional[Path] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """
     Run batch STT via the shared provider registry and return a normalized artifact.
@@ -1467,12 +1481,14 @@ def run_stt_batch_via_registry(
     # Whisper-family models: reuse the canonical regeneration helper so that
     # transcript cache files and error semantics remain unchanged.
     if provider == "faster-whisper":
+        _check_cancel(cancel_check, label="stt batch")
         _, segments = re_generate_transcription(
             audio_file_path,
             transcription_model,
             vad_filter,
             selected_source_lang=selected_source_lang,
             base_dir=base_dir,
+            cancel_check=cancel_check,
         )
         if segments is None:
             raise RuntimeError("STT transcription failed; no segments produced")
@@ -1492,6 +1508,7 @@ def run_stt_batch_via_registry(
         )
 
     # Non-Whisper providers: use adapter transcribe_batch directly.
+    _check_cancel(cancel_check, label="stt batch")
     artifact = adapter.transcribe_batch(
         audio_file_path,
         model=transcription_model or provider_model,
@@ -1500,6 +1517,7 @@ def run_stt_batch_via_registry(
         word_timestamps=False,
         prompt=None,
         base_dir=base_dir,
+        cancel_check=cancel_check,
     )
 
     # Ensure duration_ms is set when we know duration.
@@ -2491,6 +2509,7 @@ def speech_to_text(
     task: str = "transcribe",
     input_sample_rate: Optional[int] = None,
     base_dir: Optional[Path] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], Optional[str]]]:
     """
     Canonical file/segment-based speech-to-text helper.
@@ -2615,9 +2634,11 @@ def speech_to_text(
         audio_path_for_model = _resample_audio_if_needed(audio_np, sr, target_sr=16000)
 
     log_counter("speech_to_text_attempt", labels={"file_path": file_path_label, "model": whisper_model})
+    _check_cancel(cancel_check, label="speech-to-text")
 
     # Route to the appropriate transcription provider (only supports file paths today)
     if provider == "parakeet":
+        _check_cancel(cancel_check, label="speech-to-text")
         if file_path is None:
             raise ValueError("speech-to-text: Parakeet provider requires an audio file path")
         logging.info(f"Routing to Parakeet transcription with variant: {variant}")
@@ -2637,6 +2658,7 @@ def speech_to_text(
             model = "distil-whisper-large-v3"  # Default fallback model
 
     elif provider == "canary":
+        _check_cancel(cancel_check, label="speech-to-text")
         if file_path is None:
             raise ValueError("speech-to-text: Canary provider requires an audio file path")
         logging.info("Routing to Canary transcription")
@@ -2655,6 +2677,7 @@ def speech_to_text(
             model = "distil-whisper-large-v3"
 
     elif provider == "qwen2audio":
+        _check_cancel(cancel_check, label="speech-to-text")
         if file_path is None:
             raise ValueError("speech-to-text: Qwen2Audio provider requires an audio file path")
         logging.info("Routing to Qwen2Audio transcription")
@@ -2683,6 +2706,7 @@ def speech_to_text(
     logging.info(f"speech-to-text: Model={whisper_model}, Lang={selected_source_lang or 'auto'}, VAD={vad_filter}")
 
     try:
+        _check_cancel(cancel_check, label="speech-to-text")
         out_file = prettified_out_file = None
         cache_dir = None
         if file_path is not None:
@@ -2731,6 +2755,7 @@ def speech_to_text(
         )
 
         # Perform transcription (supports numpy arrays directly)
+        _check_cancel(cancel_check, label="whisper transcribe")
         segments_raw, info = whisper_model_instance.transcribe(audio_path_for_model, **transcribe_options)
 
         detected_lang = getattr(info, "language", None)
@@ -2740,6 +2765,7 @@ def speech_to_text(
 
         segments = []
         for segment_chunk in segments_raw:
+            _check_cancel(cancel_check, label="whisper segments")
             chunk = {
                 "start_seconds": segment_chunk.start,
                 "end_seconds": segment_chunk.end,
@@ -2819,6 +2845,8 @@ def speech_to_text(
             return segments, detected_lang
         return segments
 
+    except TranscriptionCancelled:
+        raise
     except Exception as e:
         logging.error(f"speech-to-text: Error transcribing audio {file_path_label}: {e}", exc_info=True)
         log_counter(
@@ -2840,6 +2868,23 @@ def speech_to_text(
 class ConversionError(Exception):
     """Custom exception for errors during audio/video conversion."""
     pass
+
+
+class TranscriptionCancelled(RuntimeError):
+    """Raised when transcription/conversion is cancelled."""
+    pass
+
+
+def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> None:
+    if cancel_check is None:
+        return
+    try:
+        if cancel_check():
+            raise TranscriptionCancelled(f"Cancelled during {label}")
+    except TranscriptionCancelled:
+        raise
+    except Exception:
+        return
 
 _FFMPEG_VERSION_CHECKED: bool = False
 _FFMPEG_CMD_FOR_VERSION: Optional[str] = None
@@ -2995,6 +3040,7 @@ def convert_to_wav(
     end_time: Optional[int] = None,
     overwrite: bool = False,
     base_dir: Optional[Path] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> str:
     """
     Converts a video or audio file to a standardized WAV format using ffmpeg.
@@ -3015,6 +3061,8 @@ def convert_to_wav(
             and the path to the existing file is returned.
         base_dir: Optional base directory used to validate local input/output
             paths. When provided, the input must resolve within this directory.
+        cancel_check: Optional callable that returns True when conversion should
+            be cancelled.
 
     Returns:
         The absolute path to the generated (or existing) WAV file as a string.
@@ -3044,6 +3092,7 @@ def convert_to_wav(
         _assert_no_symlink(input_path, label="Audio input path")
     except ValueError as exc:
         raise ConversionError(str(exc)) from exc
+    _check_cancel(cancel_check, label="conversion preflight")
 
     # Output path in the same directory as input
     out_path = input_path.with_suffix(".wav")
@@ -3121,6 +3170,7 @@ def convert_to_wav(
         logging.error(error_msg)
         raise RuntimeError(error_msg) from e
 
+    _check_cancel(cancel_check, label="conversion preflight")
 
     # Validate the audio file first (optional preflight). This can be disabled
     # via STT_SKIP_AUDIO_PREVALIDATION / [STT-Settings].skip_audio_prevalidation
@@ -3192,15 +3242,48 @@ def convert_to_wav(
         str(out_path)
     ])
 
-    try:
-        # Execute ffmpeg command with enhanced parameters
-        result = subprocess.run(
-            command,
-            stdin=subprocess.DEVNULL, # Prevent ffmpeg from waiting for stdin
-            capture_output=True,      # Capture stdout and stderr
-            text=True,                # Decode output as text
-            check=False               # Don't raise exception on non-zero exit code automatically
+    def _run_ffmpeg_command(cmd: List[str], *, label: str) -> subprocess.CompletedProcess:
+        if cancel_check is None:
+            return subprocess.run(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        try:
+            while True:
+                try:
+                    stdout, stderr = proc.communicate(timeout=0.5)
+                    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+                except subprocess.TimeoutExpired:
+                    try:
+                        _check_cancel(cancel_check, label=label)
+                    except TranscriptionCancelled:
+                        try:
+                            proc.terminate()
+                            stdout, stderr = proc.communicate(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            stdout, stderr = proc.communicate()
+                        raise
+        finally:
+            if proc.poll() is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+
+    try:
+        _check_cancel(cancel_check, label="ffmpeg conversion")
+        result = _run_ffmpeg_command(command, label="ffmpeg conversion")
 
         # Check result
         if result.returncode != 0:
@@ -3229,12 +3312,10 @@ def convert_to_wav(
             # Don't force format - let FFmpeg figure it out
             # The file extension might be wrong (e.g., m4a file with .mp3 extension)
 
-            fallback_result = subprocess.run(
+            _check_cancel(cancel_check, label="ffmpeg fallback conversion")
+            fallback_result = _run_ffmpeg_command(
                 fallback_command,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                check=False
+                label="ffmpeg fallback conversion",
             )
 
             if fallback_result.returncode == 0:
@@ -3257,6 +3338,13 @@ def convert_to_wav(
                 logging.warning(f"FFmpeg potential warnings for '{input_path.name}': {result.stderr.strip()}")
             log_counter("convert_to_wav_success", labels={"file_path": video_file_path})
 
+    except TranscriptionCancelled:
+         if out_path.exists():
+             try:
+                 out_path.unlink()
+             except OSError:
+                 pass
+         raise
     except ConversionError:
          # Re-raise ConversionError explicitly to ensure it's caught
          log_counter("convert_to_wav_error", labels={"file_path": video_file_path, "error": "ffmpeg_failed"})

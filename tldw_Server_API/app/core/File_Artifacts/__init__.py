@@ -1,0 +1,1 @@
+"""File artifacts core module."""

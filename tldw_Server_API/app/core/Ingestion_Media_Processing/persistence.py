@@ -1759,6 +1759,7 @@ async def process_batch_media(
                     False,
                 ),
                 "keep_original": getattr(form_data, "keep_original_file", False),
+                "cancel_check": cancel_check,
             }
             logging.debug(
                 "Calling external process_videos with args including temp_dir: %s",
@@ -1821,6 +1822,7 @@ async def process_batch_media(
                 "keep_original": getattr(form_data, "keep_original_file", False),
                 "custom_title": getattr(form_data, "title", None),
                 "author": getattr(form_data, "author", None),
+                "cancel_check": cancel_check,
             }
             logging.debug(
                 "Calling external process_audio_files with args including temp_dir: %s",

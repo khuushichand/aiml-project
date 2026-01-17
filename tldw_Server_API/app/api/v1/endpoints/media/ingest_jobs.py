@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+import json
 import os
 import shutil
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Request
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Request, Query
 from pydantic import BaseModel, Field
 from loguru import logger
 from starlette.responses import JSONResponse
@@ -85,11 +86,52 @@ class CancelMediaIngestJobResponse(BaseModel):
     message: Optional[str] = None
 
 
+class MediaIngestJobListResponse(BaseModel):
+    batch_id: str
+    jobs: List[MediaIngestJobStatus]
+
+
 def _cleanup_dir(path_str: str) -> None:
     try:
         shutil.rmtree(path_str, ignore_errors=True)
     except Exception:
         pass
+
+
+def _normalize_payload(payload: Any) -> Dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _job_to_status(job: Dict[str, Any]) -> MediaIngestJobStatus:
+    payload = _normalize_payload(job.get("payload"))
+    return MediaIngestJobStatus(
+        id=int(job.get("id")),
+        uuid=job.get("uuid"),
+        status=job.get("status"),
+        job_type=job.get("job_type"),
+        owner_user_id=job.get("owner_user_id"),
+        created_at=job.get("created_at"),
+        started_at=job.get("started_at"),
+        completed_at=job.get("completed_at"),
+        cancelled_at=job.get("cancelled_at"),
+        cancellation_reason=job.get("cancellation_reason"),
+        progress_percent=job.get("progress_percent"),
+        progress_message=job.get("progress_message"),
+        result=job.get("result"),
+        error_message=job.get("error_message"),
+        media_type=payload.get("media_type"),
+        source=payload.get("source"),
+        source_kind=payload.get("source_kind"),
+        batch_id=payload.get("batch_id"),
+    )
 
 
 @router.post(
@@ -264,27 +306,36 @@ async def get_media_ingest_job(
     if not (principal.is_admin or owner == str(current_user.id)):
         raise HTTPException(status_code=403, detail="Not authorized for this job")
 
-    payload = job.get("payload") or {}
-    return MediaIngestJobStatus(
-        id=int(job.get("id")),
-        uuid=job.get("uuid"),
-        status=job.get("status"),
-        job_type=job.get("job_type"),
-        owner_user_id=job.get("owner_user_id"),
-        created_at=job.get("created_at"),
-        started_at=job.get("started_at"),
-        completed_at=job.get("completed_at"),
-        cancelled_at=job.get("cancelled_at"),
-        cancellation_reason=job.get("cancellation_reason"),
-        progress_percent=job.get("progress_percent"),
-        progress_message=job.get("progress_message"),
-        result=job.get("result"),
-        error_message=job.get("error_message"),
-        media_type=payload.get("media_type"),
-        source=payload.get("source"),
-        source_kind=payload.get("source_kind"),
-        batch_id=payload.get("batch_id"),
+    return _job_to_status(job)
+
+
+@router.get(
+    "/ingest/jobs",
+    response_model=MediaIngestJobListResponse,
+    summary="List media ingest jobs for a batch",
+    tags=["Media Ingestion Jobs"],
+)
+async def list_media_ingest_jobs(
+    batch_id: str = Query(..., min_length=1, description="Batch identifier from submit response"),
+    limit: int = Query(100, ge=1, le=500),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
+) -> MediaIngestJobListResponse:
+    owner_filter = None if principal.is_admin else str(current_user.id)
+    jobs = jm.list_jobs(
+        domain="media_ingest",
+        owner_user_id=owner_filter,
+        limit=limit,
     )
+
+    matched: List[MediaIngestJobStatus] = []
+    for job in jobs:
+        payload = _normalize_payload(job.get("payload"))
+        if str(payload.get("batch_id") or "") == batch_id:
+            matched.append(_job_to_status(job))
+
+    return MediaIngestJobListResponse(batch_id=batch_id, jobs=matched)
 
 
 @router.delete(

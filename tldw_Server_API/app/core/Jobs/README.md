@@ -2,7 +2,7 @@
 
 ## 1. Descriptive of Current Feature Set
 
-- Purpose: Durable background work for audio processing, embeddings, prompt studio tasks, and admin workflows. Supports SQLite/Postgres backends with leasing, retries, quarantine, quotas, metrics, and admin controls.
+- Purpose: Durable background work for audio processing, embeddings, prompt studio tasks, file artifacts exports, and admin workflows. Supports SQLite/Postgres backends with leasing, retries, quarantine, quotas, metrics, and admin controls.
 - Capabilities:
   - Create/list/inspect jobs; queue controls (pause/resume/drain);
   - Reschedule and retry-now actions; prune jobs by status/age with optional confirmation header.
@@ -28,6 +28,9 @@
     - POST `/api/v1/jobs/retry-now` — tldw_Server_API/app/api/v1/endpoints/jobs_admin.py:337
   - Embeddings re-embed scheduling (creates jobs):
     - tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py:3391
+  - File artifacts async exports:
+    - POST `/api/v1/files/create` (async exports return `job_id`; status via GET `/api/v1/files/{file_id}`)
+    - Worker: `tldw_Server_API/app/core/File_Artifacts/jobs_worker.py`
 
 ## 2. Technical Details of Features
 
@@ -64,3 +67,4 @@
 - Local Dev Tips
   - Start a Postgres via docker-compose to exercise RLS; set `JOBS_DB_URL` accordingly.
   - Use admin endpoints to pause/resume queues and to retry/reschedule stuck jobs during testing.
+  - File artifacts exports: set `FILES_JOBS_WORKER_ENABLED=true` for in-process worker or run `python -m tldw_Server_API.app.core.File_Artifacts.jobs_worker` externally.

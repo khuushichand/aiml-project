@@ -53,3 +53,18 @@ def test_seed_watchlists_templates_into_outputs(seeded_db):
     items_again, total_again = cdb_again.list_output_templates(q=None, limit=50, offset=0)
     names = [tpl.name for tpl in items_again]
     assert names.count("seeded") == 1
+
+
+def test_output_templates_search_case_insensitive_sqlite(seeded_db):
+    cdb = CollectionsDatabase.for_user(user_id=902)
+    cdb.create_output_template(
+        name="CaseTemplate",
+        type_="summary",
+        format_="md",
+        body="Body",
+        description="Mixed Case Template",
+        is_default=False,
+    )
+    items, total = cdb.list_output_templates(q="casetemplate", limit=10, offset=0)
+    assert total >= 1
+    assert any(tpl.name == "CaseTemplate" for tpl in items)

@@ -60,6 +60,7 @@ For comprehensive documentation, see:
 
 - `POST /api/v1/media/add` - ingest and persist media (synchronous)
 - `POST /api/v1/media/ingest/jobs` - async ingest (one job per item)
+- `GET /api/v1/media/ingest/jobs?batch_id=...` - list jobs for a batch
 - `GET /api/v1/media/ingest/jobs/{job_id}` - job status
 - `DELETE /api/v1/media/ingest/jobs/{job_id}` - cancel job
 

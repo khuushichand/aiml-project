@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -259,6 +260,33 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = FALSE;
+
+            CREATE TABLE IF NOT EXISTS file_artifacts (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                structured_json TEXT NOT NULL,
+                validation_json TEXT NOT NULL,
+                export_status TEXT NOT NULL DEFAULT 'none',
+                export_format TEXT,
+                export_storage_path TEXT,
+                export_bytes BIGINT,
+                export_content_type TEXT,
+                export_job_id TEXT,
+                export_expires_at TEXT,
+                export_consumed_at TEXT,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                deleted_at TEXT,
+                retention_until TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_user ON file_artifacts(user_id);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_user_type ON file_artifacts(user_id, file_type);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_created ON file_artifacts(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_status ON file_artifacts(export_status);
             """
         else:
             ddl = """
@@ -316,6 +344,33 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_outputs_user ON outputs(user_id);
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0;
+
+            CREATE TABLE IF NOT EXISTS file_artifacts (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                structured_json TEXT NOT NULL,
+                validation_json TEXT NOT NULL,
+                export_status TEXT NOT NULL DEFAULT 'none',
+                export_format TEXT,
+                export_storage_path TEXT,
+                export_bytes INTEGER,
+                export_content_type TEXT,
+                export_job_id TEXT,
+                export_expires_at TEXT,
+                export_consumed_at TEXT,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                deleted_at TEXT,
+                retention_until TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_user ON file_artifacts(user_id);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_user_type ON file_artifacts(user_id, file_type);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_created ON file_artifacts(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_status ON file_artifacts(export_status);
             """
         try:
             self.backend.create_tables(ddl)
@@ -348,6 +403,57 @@ class CollectionsDatabase:
             pass
         try:
             self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
+        except Exception:
+            pass
+        # File artifacts backfills
+        try:
+            deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+            deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
+            self.backend.execute(
+                f"ALTER TABLE file_artifacts ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
+                tuple(),
+            )
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+            self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
+        except Exception:
+            pass
+        try:
+            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
         except Exception:
             pass
         # Collections layer tables
@@ -584,6 +690,40 @@ class CollectionsDatabase:
             return ""
         return " AND ".join(f"{token}*" for token in tokens)
 
+    @staticmethod
+    def _fts_query_candidates(query: str) -> List[str]:
+        raw = (query or "").strip()
+        if not raw:
+            return []
+        sanitized = CollectionsDatabase._fts_query_string(raw)
+        upper = raw.upper()
+        raw_ops = {"AND", "OR", "NOT", "NEAR"}
+        has_operator = any(op in upper.split() for op in raw_ops)
+        has_syntax = bool(re.search(r'[":*()]', raw))
+        prefer_raw = has_operator or has_syntax
+
+        candidates: List[str] = []
+        if prefer_raw:
+            candidates.append(raw)
+            if sanitized and sanitized != raw:
+                candidates.append(sanitized)
+        else:
+            if sanitized:
+                candidates.append(sanitized)
+            if raw and raw not in candidates:
+                candidates.append(raw)
+        return [cand for cand in candidates if cand]
+
+    @staticmethod
+    def _is_unique_violation(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return "unique constraint failed" in msg or "duplicate key value violates unique constraint" in msg
+
+    @staticmethod
+    def _is_fts_query_error(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return "fts" in msg or "match" in msg or "malformed" in msg or "syntax error" in msg
+
     def ensure_collection_tag_ids(self, names: Iterable[str]) -> List[int]:
         normed: List[str] = []
         seen: set[str] = set()
@@ -676,6 +816,10 @@ class CollectionsDatabase:
             metadata_text = metadata_json or ""
             if notes:
                 metadata_text = f"{metadata_text}\n{notes}" if metadata_text else notes
+            if tags:
+                tag_text = " ".join([str(tag).strip() for tag in tags if tag])
+                if tag_text:
+                    metadata_text = f"{metadata_text}\n{tag_text}" if metadata_text else tag_text
             self.backend.execute(
                 "DELETE FROM content_items_fts WHERE rowid = ?",
                 (item_id,),
@@ -814,18 +958,10 @@ class CollectionsDatabase:
         read_at: Optional[str] = None,
         tags: Optional[Iterable[str]] = None,
         merge_tags: bool = False,
+        preserve_existing_on_null: bool = False,
     ) -> ContentItemRow:
         """Insert or update a content item record and attach tags."""
         now = _utcnow_iso()
-        metadata_json = None
-        if metadata:
-            try:
-                metadata_json = json.dumps(metadata, ensure_ascii=False)
-            except Exception as exc:
-                logger.debug(f"Failed to encode collections metadata: {exc}")
-        domain_val = domain or self._domain_from_url(canonical_url or url)
-        favorite_int = 1 if favorite else 0
-        status_val = status or "new"
         canonical = canonical_url or url
 
         selectors: List[Tuple[str, Any]] = []
@@ -836,28 +972,157 @@ class CollectionsDatabase:
         if url:
             selectors.append(("url", url))
 
-        existing_row: Optional[Dict[str, Any]] = None
-        item_id: Optional[int] = None
-        for column, value in selectors:
-            existing_row = self.backend.execute(
-                f"""
-                SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
-                       title, summary, notes, content_hash, word_count, published_at, status, favorite,
-                       metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
-                FROM content_items
-                WHERE user_id = ? AND {column} = ?
-                """,
-                (self.user_id, value),
-            ).first
-            if existing_row:
-                item_id = int(existing_row.get("id"))
-                break
+        def _lookup_existing() -> tuple[Optional[Dict[str, Any]], Optional[int]]:
+            for column, value in selectors:
+                row = self.backend.execute(
+                    f"""
+                    SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
+                           title, summary, notes, content_hash, word_count, published_at, status, favorite,
+                           metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
+                    FROM content_items
+                    WHERE user_id = ? AND {column} = ?
+                    """,
+                    (self.user_id, value),
+                ).first
+                if row:
+                    return row, int(row.get("id"))
+            return None, None
+
+        def _apply_preserve(existing: Dict[str, Any]) -> None:
+            nonlocal origin_type, origin_id, url, canonical_url, domain, title, summary, notes
+            nonlocal content_hash, word_count, published_at, status, media_id, job_id, run_id, source_id, read_at
+            if origin_type is None:
+                origin_type = existing.get("origin_type")
+            if origin_id is None:
+                origin_id = existing.get("origin_id")
+            if url is None:
+                url = existing.get("url")
+            if canonical_url is None:
+                canonical_url = existing.get("canonical_url")
+            if domain is None:
+                domain = existing.get("domain")
+            if title is None:
+                title = existing.get("title")
+            if summary is None:
+                summary = existing.get("summary")
+            if notes is None:
+                notes = existing.get("notes")
+            if content_hash is None:
+                content_hash = existing.get("content_hash")
+            if word_count is None:
+                word_count = existing.get("word_count")
+            if published_at is None:
+                published_at = existing.get("published_at")
+            if status is None:
+                status = existing.get("status")
+            if media_id is None:
+                media_id = existing.get("media_id")
+            if job_id is None:
+                job_id = existing.get("job_id")
+            if run_id is None:
+                run_id = existing.get("run_id")
+            if source_id is None:
+                source_id = existing.get("source_id")
+            if read_at is None:
+                read_at = existing.get("read_at")
+
+        def _build_metadata_json(existing: Optional[Dict[str, Any]]) -> Optional[str]:
+            if not metadata:
+                if preserve_existing_on_null and existing is not None:
+                    return existing.get("metadata_json")
+                return None
+            if preserve_existing_on_null and existing is not None:
+                current_meta: Dict[str, Any] = {}
+                existing_json = existing.get("metadata_json")
+                if existing_json:
+                    try:
+                        current_meta = json.loads(existing_json)
+                    except Exception:
+                        current_meta = {}
+                current_meta.update(metadata)
+                try:
+                    return json.dumps(current_meta, ensure_ascii=False)
+                except Exception as exc:
+                    logger.debug(f"Failed to encode collections metadata: {exc}")
+                    return None
+            try:
+                return json.dumps(metadata, ensure_ascii=False)
+            except Exception as exc:
+                logger.debug(f"Failed to encode collections metadata: {exc}")
+                return None
+
+        def _refresh_derived() -> tuple[Optional[str], Optional[str], int, str]:
+            current_canonical = canonical_url or url
+            current_domain = domain or self._domain_from_url(current_canonical)
+            current_favorite = 1 if favorite else 0
+            current_status = status or "new"
+            return current_canonical, current_domain, current_favorite, current_status
+
+        existing_row, item_id = _lookup_existing()
+        if existing_row and preserve_existing_on_null:
+            _apply_preserve(existing_row)
+
+        canonical, domain_val, favorite_int, status_val = _refresh_derived()
+        metadata_json = _build_metadata_json(existing_row)
 
         prev_hash = existing_row.get("content_hash") if existing_row else None
-        created = item_id is None
-        content_changed = created
+        created = False
+        content_changed = False
 
-        if item_id is not None:
+        if item_id is None:
+            try:
+                res = self._execute_insert(
+                    """
+                    INSERT INTO content_items (
+                        user_id, origin, origin_type, origin_id, url, canonical_url, domain, title, summary,
+                        notes, content_hash, word_count, published_at, status, favorite, metadata_json, media_id,
+                        job_id, run_id, source_id, read_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self.user_id,
+                        origin,
+                        origin_type,
+                        origin_id,
+                        url,
+                        canonical,
+                        domain_val,
+                        title,
+                        summary,
+                        notes,
+                        content_hash,
+                        word_count,
+                        published_at,
+                        status_val,
+                        favorite_int,
+                        metadata_json,
+                        media_id,
+                        job_id,
+                        run_id,
+                        source_id,
+                        read_at,
+                        now,
+                        now,
+                    ),
+                )
+                item_id = self._extract_lastrowid(res)
+                if not item_id:
+                    raise DatabaseError("Failed to insert content item")
+                created = True
+                content_changed = True
+            except DatabaseError as exc:
+                if not self._is_unique_violation(exc):
+                    raise
+                existing_row, item_id = _lookup_existing()
+                if not existing_row or item_id is None:
+                    raise
+                if preserve_existing_on_null:
+                    _apply_preserve(existing_row)
+                canonical, domain_val, favorite_int, status_val = _refresh_derived()
+                metadata_json = _build_metadata_json(existing_row)
+                prev_hash = existing_row.get("content_hash")
+
+        if item_id is not None and not created:
             fields: List[str] = [
                 "origin = ?",
                 "origin_type = ?",
@@ -914,69 +1179,28 @@ class CollectionsDatabase:
                 content_changed = False
             else:
                 content_changed = True
-        else:
-            res = self._execute_insert(
-                """
-                INSERT INTO content_items (
-                    user_id, origin, origin_type, origin_id, url, canonical_url, domain, title, summary,
-                    notes, content_hash, word_count, published_at, status, favorite, metadata_json, media_id,
-                    job_id, run_id, source_id, read_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    self.user_id,
-                    origin,
-                    origin_type,
-                    origin_id,
-                    url,
-                    canonical,
-                    domain_val,
-                    title,
-                    summary,
-                    notes,
-                    content_hash,
-                    word_count,
-                    published_at,
-                    status_val,
-                    favorite_int,
-                    metadata_json,
-                    media_id,
-                    job_id,
-                    run_id,
-                    source_id,
-                    read_at,
-                    now,
-                    now,
-                ),
-            )
-            item_id = self._extract_lastrowid(res)
-            if not item_id:
-                raise DatabaseError("Failed to insert content item")
 
-        tags_for_fts = list(tags or [])
         if tags is not None:
             tag_list = list(tags)
             if merge_tags and not created:
                 existing_tags = self._fetch_tags_for_item_ids([int(item_id or 0)]).get(int(item_id or 0), [])
                 if existing_tags:
                     tag_list = list(dict.fromkeys([*existing_tags, *tag_list]))
-            tags_for_fts = tag_list
             tag_ids = self.ensure_collection_tag_ids(tag_list)
             self._replace_item_tags(item_id, tag_ids)
 
+        row = self.get_content_item(item_id)
         try:
             self._update_content_fts_entry(
                 item_id,
-                title=title,
-                summary=summary,
-                notes=notes,
-                tags=tags_for_fts,
-                metadata_json=metadata_json,
+                title=row.title,
+                summary=row.summary,
+                notes=row.notes,
+                tags=row.tags,
+                metadata_json=row.metadata_json,
             )
         except Exception:
             pass
-
-        row = self.get_content_item(item_id)
         row.is_new = created
         row.content_changed = content_changed
         return row
@@ -1005,8 +1229,6 @@ class CollectionsDatabase:
         params: List[Any] = [self.user_id]
         joins: List[str] = []
         having = ""
-        fts_query = ""
-        fts_joined = False
 
         if ids:
             id_list = [int(i) for i in ids]
@@ -1014,26 +1236,6 @@ class CollectionsDatabase:
                 placeholders = ",".join("?" for _ in id_list)
                 where.append(f"ci.id IN ({placeholders})")
                 params.extend(id_list)
-
-        if q and self._fts_available:
-            fts_query = self._fts_query_string(q)
-            if fts_query:
-                joins.append("INNER JOIN content_items_fts ON content_items_fts.rowid = ci.id")
-                where.append("content_items_fts MATCH ?")
-                params.append(fts_query)
-                fts_joined = True
-            else:
-                q_like = f"%{q.lower()}%"
-                where.append(
-                    "(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ? OR LOWER(COALESCE(ci.notes, '')) LIKE ?)"
-                )
-                params.extend([q_like, q_like, q_like])
-        elif q:
-            q_like = f"%{q.lower()}%"
-            where.append(
-                "(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ? OR LOWER(COALESCE(ci.notes, '')) LIKE ?)"
-            )
-            params.extend([q_like, q_like, q_like])
 
         if domain:
             where.append("ci.domain = ?")
@@ -1088,55 +1290,104 @@ class CollectionsDatabase:
             params.extend(tag_filters)
             having = f"HAVING COUNT(DISTINCT ct.name) >= {len(tag_filters)}"
 
-        where_clause = " AND ".join(where) if where else "1=1"
-        group_by = "GROUP BY ci.id" if tag_filters else ""
-        joins_sql = f" {' '.join(joins)}" if joins else ""
-        base_from = f"FROM content_items ci{joins_sql}"
-        subquery = f"SELECT ci.id {base_from} WHERE {where_clause} {group_by} {having}"
-        count_sql = f"SELECT COUNT(*) AS cnt FROM ({subquery}) AS subq"
-        total = int(self.backend.execute(count_sql, tuple(params)).scalar or 0)
+        def _apply_like_search(where_clause: List[str], clause_params: List[Any]) -> None:
+            q_like = f"%{q.lower()}%"
+            where_clause.append(
+                "("
+                "LOWER(COALESCE(ci.title, '')) LIKE ? OR "
+                "LOWER(COALESCE(ci.summary, '')) LIKE ? OR "
+                "LOWER(COALESCE(ci.notes, '')) LIKE ? OR "
+                "EXISTS ("
+                "SELECT 1 FROM content_item_tags cit_q "
+                "JOIN collection_tags ct_q ON ct_q.id = cit_q.tag_id "
+                "WHERE cit_q.item_id = ci.id AND ct_q.user_id = ? AND LOWER(ct_q.name) LIKE ?"
+                ")"
+                ")"
+            )
+            clause_params.extend([q_like, q_like, q_like, self.user_id, q_like])
 
-        resolved_limit = limit if isinstance(limit, int) and limit > 0 else size
-        if isinstance(offset, int) and offset >= 0:
-            resolved_offset = offset
-        else:
-            resolved_offset = max(0, (page - 1) * size)
+        def _execute_query(
+            where_clause: List[str],
+            clause_params: List[Any],
+            query_joins: List[str],
+            fts_joined: bool,
+        ) -> Tuple[List[ContentItemRow], int]:
+            where_sql = " AND ".join(where_clause) if where_clause else "1=1"
+            group_by = "GROUP BY ci.id" if tag_filters else ""
+            joins_sql = f" {' '.join(query_joins)}" if query_joins else ""
+            base_from = f"FROM content_items ci{joins_sql}"
+            subquery = f"SELECT ci.id {base_from} WHERE {where_sql} {group_by} {having}"
+            count_sql = f"SELECT COUNT(*) AS cnt FROM ({subquery}) AS subq"
+            total = int(self.backend.execute(count_sql, tuple(clause_params)).scalar or 0)
 
-        sort_key = (sort or "").strip().lower()
-        order_by = "ci.updated_at DESC, ci.id DESC"
-        if sort_key == "updated_asc":
-            order_by = "ci.updated_at ASC, ci.id ASC"
-        elif sort_key == "created_desc":
-            order_by = "ci.created_at DESC, ci.id DESC"
-        elif sort_key == "created_asc":
-            order_by = "ci.created_at ASC, ci.id ASC"
-        elif sort_key == "title_asc":
-            order_by = "ci.title ASC, ci.id ASC"
-        elif sort_key == "title_desc":
-            order_by = "ci.title DESC, ci.id DESC"
-        elif sort_key == "relevance" and fts_joined and not tag_filters:
-            order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
-        elif not sort_key and fts_joined and not tag_filters:
-            order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
-        rows_sql = f"""
-            SELECT
-                ci.id, ci.user_id, ci.origin, ci.origin_type, ci.origin_id, ci.url, ci.canonical_url,
-                ci.domain, ci.title, ci.summary, ci.notes, ci.content_hash, ci.word_count, ci.published_at,
-                ci.status, ci.favorite, ci.metadata_json, ci.media_id, ci.job_id, ci.run_id,
-                ci.source_id, ci.read_at, ci.created_at, ci.updated_at
-            {base_from}
-            WHERE {where_clause}
-            {group_by}
-            {having}
-            ORDER BY {order_by}
-            LIMIT ? OFFSET ?
-        """
-        row_params = tuple(params + [resolved_limit, resolved_offset])
-        rows = self.backend.execute(rows_sql, row_params).rows
-        item_ids = [int(r.get("id")) for r in rows]
-        tags_map = self._fetch_tags_for_item_ids(item_ids)
-        content_rows = [self._row_to_content_item(r, tags_map.get(int(r.get("id")), [])) for r in rows]
-        return content_rows, total
+            resolved_limit = limit if isinstance(limit, int) and limit > 0 else size
+            if isinstance(offset, int) and offset >= 0:
+                resolved_offset = offset
+            else:
+                resolved_offset = max(0, (page - 1) * size)
+
+            sort_key = (sort or "").strip().lower()
+            order_by = "ci.updated_at DESC, ci.id DESC"
+            if sort_key == "updated_asc":
+                order_by = "ci.updated_at ASC, ci.id ASC"
+            elif sort_key == "created_desc":
+                order_by = "ci.created_at DESC, ci.id DESC"
+            elif sort_key == "created_asc":
+                order_by = "ci.created_at ASC, ci.id ASC"
+            elif sort_key == "title_asc":
+                order_by = "ci.title ASC, ci.id ASC"
+            elif sort_key == "title_desc":
+                order_by = "ci.title DESC, ci.id DESC"
+            elif sort_key == "relevance" and fts_joined and not tag_filters:
+                order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
+            elif not sort_key and fts_joined and not tag_filters:
+                order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
+            rows_sql = f"""
+                SELECT
+                    ci.id, ci.user_id, ci.origin, ci.origin_type, ci.origin_id, ci.url, ci.canonical_url,
+                    ci.domain, ci.title, ci.summary, ci.notes, ci.content_hash, ci.word_count, ci.published_at,
+                    ci.status, ci.favorite, ci.metadata_json, ci.media_id, ci.job_id, ci.run_id,
+                    ci.source_id, ci.read_at, ci.created_at, ci.updated_at
+                {base_from}
+                WHERE {where_sql}
+                {group_by}
+                {having}
+                ORDER BY {order_by}
+                LIMIT ? OFFSET ?
+            """
+            row_params = tuple(clause_params + [resolved_limit, resolved_offset])
+            rows = self.backend.execute(rows_sql, row_params).rows
+            item_ids = [int(r.get("id")) for r in rows]
+            tags_map = self._fetch_tags_for_item_ids(item_ids)
+            content_rows = [self._row_to_content_item(r, tags_map.get(int(r.get("id")), [])) for r in rows]
+            return content_rows, total
+
+        if q:
+            q = q.strip()
+        if q and self._fts_available:
+            for fts_query in self._fts_query_candidates(q):
+                if not fts_query:
+                    continue
+                fts_where = list(where)
+                fts_params = list(params)
+                fts_joins = list(joins)
+                fts_joins.append("INNER JOIN content_items_fts ON content_items_fts.rowid = ci.id")
+                fts_where.append("content_items_fts MATCH ?")
+                fts_params.append(fts_query)
+                try:
+                    return _execute_query(fts_where, fts_params, fts_joins, True)
+                except DatabaseError as exc:
+                    if not self._is_fts_query_error(exc):
+                        raise
+
+        if q:
+            like_where = list(where)
+            like_params = list(params)
+            like_joins = list(joins)
+            _apply_like_search(like_where, like_params)
+            return _execute_query(like_where, like_params, like_joins, False)
+
+        return _execute_query(where, params, joins, False)
 
     def update_content_item(
         self,
@@ -1248,8 +1499,8 @@ class CollectionsDatabase:
         where = ["user_id = ?"]
         params: List[Any] = [self.user_id]
         if q:
-            where.append("(name LIKE ? OR description LIKE ?)")
-            like = f"%{q}%"
+            where.append("(LOWER(name) LIKE ? OR LOWER(COALESCE(description, '')) LIKE ?)")
+            like = f"%{q.lower()}%"
             params.extend([like, like])
         where_sql = " AND ".join(where)
 
@@ -1530,6 +1781,29 @@ class CollectionsDatabase:
             log_prefix="outputs",
         )
 
+    def resolve_temp_output_storage_path(self, path_value: str | Path) -> str:
+        """Resolve and validate transient output storage paths as relative filenames."""
+        try:
+            user_id = int(self.user_id)
+        except (TypeError, ValueError) as exc:
+            logger.error(f"temp outputs: invalid user id for storage path resolution: {self.user_id}")
+            raise InvalidStorageUserIdError("invalid_user_id") from exc
+        base_dir = DatabasePaths.get_user_temp_outputs_dir(user_id)
+        try:
+            base_resolved = base_dir.resolve(strict=False)
+        except Exception as exc:
+            logger.error(f"temp outputs: failed to resolve outputs base dir for user {self.user_id}: {exc}")
+            raise StorageUnavailableError("storage_unavailable") from exc
+        return normalize_output_storage_filename(
+            storage_path=path_value,
+            allow_absolute=False,
+            reject_relative_with_separators=True,
+            base_resolved=base_resolved,
+            check_relative_containment=True,
+            log_message=logger.warning,
+            log_prefix="temp outputs",
+        )
+
     @dataclass
     class OutputArtifactRow:
         id: int
@@ -1710,3 +1984,212 @@ class CollectionsDatabase:
             return int((r1.rowcount or 0) + (r2.rowcount or 0))
         except Exception:
             return int(r1.rowcount or 0)
+
+    # ------------------------
+    # File artifacts API
+    # ------------------------
+    @dataclass
+    class FileArtifactRow:
+        id: int
+        user_id: str
+        file_type: str
+        title: str
+        structured_json: str
+        validation_json: str
+        export_status: str
+        export_format: Optional[str]
+        export_storage_path: Optional[str]
+        export_bytes: Optional[int]
+        export_content_type: Optional[str]
+        export_job_id: Optional[str]
+        export_expires_at: Optional[str]
+        export_consumed_at: Optional[str]
+        metadata_json: Optional[str]
+        created_at: str
+        updated_at: str
+        retention_until: Optional[str] = None
+
+    def create_file_artifact(
+        self,
+        *,
+        file_type: str,
+        title: str,
+        structured_json: str,
+        validation_json: str,
+        export_status: str = "none",
+        export_format: Optional[str] = None,
+        export_storage_path: Optional[str] = None,
+        export_bytes: Optional[int] = None,
+        export_content_type: Optional[str] = None,
+        export_job_id: Optional[str] = None,
+        export_expires_at: Optional[str] = None,
+        export_consumed_at: Optional[str] = None,
+        metadata_json: Optional[str] = None,
+        retention_until: Optional[str] = None,
+    ) -> "CollectionsDatabase.FileArtifactRow":
+        now = _utcnow_iso()
+        resolved_storage_path = None
+        if export_storage_path is not None:
+            resolved_storage_path = self.resolve_temp_output_storage_path(export_storage_path)
+        q = (
+            "INSERT INTO file_artifacts (user_id, file_type, title, structured_json, validation_json, export_status, export_format, "
+            "export_storage_path, export_bytes, export_content_type, export_job_id, export_expires_at, export_consumed_at, metadata_json, created_at, updated_at, "
+            "deleted, deleted_at, retention_until) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)"
+        )
+        params = (
+            self.user_id,
+            file_type,
+            title,
+            structured_json,
+            validation_json,
+            export_status,
+            export_format,
+            resolved_storage_path,
+            export_bytes,
+            export_content_type,
+            export_job_id,
+            export_expires_at,
+            export_consumed_at,
+            metadata_json,
+            now,
+            now,
+            retention_until,
+        )
+        res = self._execute_insert(q, params)
+        new_id = self._extract_lastrowid(res)
+        if not new_id:
+            raise DatabaseError("Failed to create file artifact")
+        return self.get_file_artifact(new_id)
+
+    def get_file_artifact(self, file_id: int, include_deleted: bool = False) -> "CollectionsDatabase.FileArtifactRow":
+        cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
+        q = (
+            "SELECT id, user_id, file_type, title, structured_json, validation_json, export_status, export_format, "
+            "export_storage_path, export_bytes, export_content_type, export_job_id, export_expires_at, export_consumed_at, metadata_json, created_at, updated_at, retention_until "
+            f"FROM file_artifacts WHERE {cond}"
+        )
+        row = self.backend.execute(q, (file_id, self.user_id)).first
+        if not row:
+            raise KeyError("file_artifact_not_found")
+        return CollectionsDatabase.FileArtifactRow(**row)
+
+    def update_file_artifact_export(
+        self,
+        file_id: int,
+        *,
+        export_status: str,
+        export_format: Optional[str] = None,
+        export_storage_path: Optional[str] = None,
+        export_bytes: Optional[int] = None,
+        export_content_type: Optional[str] = None,
+        export_job_id: Optional[str] = None,
+        export_expires_at: Optional[str] = None,
+        export_consumed_at: Optional[str] = None,
+    ) -> "CollectionsDatabase.FileArtifactRow":
+        updated_at = _utcnow_iso()
+        resolved_storage_path = None
+        if export_storage_path is not None:
+            resolved_storage_path = self.resolve_temp_output_storage_path(export_storage_path)
+        q = (
+            "UPDATE file_artifacts SET export_status = ?, export_format = ?, export_storage_path = ?, export_bytes = ?, "
+            "export_content_type = ?, export_job_id = ?, export_expires_at = ?, export_consumed_at = ?, updated_at = ? "
+            "WHERE id = ? AND user_id = ? AND deleted = 0"
+        )
+        params = (
+            export_status,
+            export_format,
+            resolved_storage_path,
+            export_bytes,
+            export_content_type,
+            export_job_id,
+            export_expires_at,
+            export_consumed_at,
+            updated_at,
+            file_id,
+            self.user_id,
+        )
+        res = self.backend.execute(q, params)
+        if res.rowcount <= 0:
+            raise KeyError("file_artifact_not_found")
+        return self.get_file_artifact(file_id)
+
+    def delete_file_artifact(self, file_id: int, *, hard: bool = False) -> bool:
+        if hard:
+            q = "DELETE FROM file_artifacts WHERE id = ? AND user_id = ?"
+            res = self.backend.execute(q, (file_id, self.user_id))
+            return res.rowcount > 0
+        q = "UPDATE file_artifacts SET deleted = 1, deleted_at = ? WHERE id = ? AND user_id = ? AND deleted = 0"
+        res = self.backend.execute(q, (_utcnow_iso(), file_id, self.user_id))
+        return res.rowcount > 0
+
+    def list_file_artifacts_for_purge(
+        self,
+        *,
+        now_iso: str,
+        soft_deleted_grace_days: int,
+        include_retention: bool,
+    ) -> Dict[int, Optional[str]]:
+        paths: Dict[int, Optional[str]] = {}
+        if include_retention:
+            q = (
+                "SELECT id, export_storage_path FROM file_artifacts "
+                "WHERE user_id = ? AND retention_until IS NOT NULL AND retention_until <= ?"
+            )
+            try:
+                cur = self.backend.execute(q, (self.user_id, now_iso))
+                for row in cur.rows:
+                    rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
+                    paths[rid] = row["export_storage_path"] if isinstance(row, dict) else row[1]
+            except Exception as exc:
+                logger.warning(f"file_artifacts.purge: retention scan failed: {exc}")
+        cutoff = (datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(days=soft_deleted_grace_days)).isoformat()
+        q2 = (
+            "SELECT id, export_storage_path FROM file_artifacts "
+            "WHERE user_id = ? AND deleted = 1 AND deleted_at IS NOT NULL AND deleted_at <= ?"
+        )
+        try:
+            cur2 = self.backend.execute(q2, (self.user_id, cutoff))
+            for row in cur2.rows:
+                rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
+                paths[rid] = row["export_storage_path"] if isinstance(row, dict) else row[1]
+        except Exception as exc:
+            logger.warning(f"file_artifacts.purge: soft-deleted scan failed: {exc}")
+        return paths
+
+    def list_file_artifacts_expired_exports(self, *, now_iso: str) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        q = (
+            "SELECT id, export_storage_path, export_format, export_bytes, export_content_type, export_job_id, export_expires_at "
+            "FROM file_artifacts WHERE user_id = ? AND export_status = 'ready' AND export_storage_path IS NOT NULL "
+            "AND export_expires_at IS NOT NULL AND export_expires_at <= ?"
+        )
+        try:
+            cur = self.backend.execute(q, (self.user_id, now_iso))
+        except Exception as exc:
+            logger.warning(f"file_artifacts.export_gc: expired export scan failed: {exc}")
+            return rows
+        for row in cur.rows:
+            if isinstance(row, dict):
+                rows.append(row)
+                continue
+            rows.append(
+                {
+                    "id": row[0],
+                    "export_storage_path": row[1],
+                    "export_format": row[2],
+                    "export_bytes": row[3],
+                    "export_content_type": row[4],
+                    "export_job_id": row[5],
+                    "export_expires_at": row[6],
+                }
+            )
+        return rows
+
+    def delete_file_artifacts_by_ids(self, ids: List[int]) -> int:
+        if not ids:
+            return 0
+        placeholders = ",".join(["?"] * len(ids))
+        q = f"DELETE FROM file_artifacts WHERE user_id = ? AND id IN ({placeholders})"
+        res = self.backend.execute(q, tuple([self.user_id] + list(ids)))
+        return int(res.rowcount or 0)

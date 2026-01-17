@@ -11,6 +11,10 @@ allow_remote_webui_access = false
 # Provide CIDR ranges or individual IPs, comma-separated
 webui_ip_allowlist =
 
+[Files]
+# Max inline export size (bytes) for file artifacts. Default: 262144 (256KB).
+inline_max_bytes = 262144
+
 [ACP]
 # Command used to launch the ACP runner (tldw-agent-acp).
 runner_command = go

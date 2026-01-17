@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{title}}</title>
+  <link rel="stylesheet" href="assets/reveal/reveal.css">
+  <link rel="stylesheet" href="assets/reveal/theme/{{theme}}.css">
+  {{custom_css_link}}
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <!-- SLIDES_START -->
+      <section>
+        <h2>Slide Title</h2>
+        <ul>
+          <li>Point one</li>
+          <li class="fragment">Point two (fragment)</li>
+          <li class="fragment" data-fragment-index="2">Point three (fragment)</li>
+        </ul>
+        <aside class="notes">Speaker notes go here.</aside>
+      </section>
+      <!-- SLIDES_END -->
+    </div>
+  </div>
+  <script src="assets/reveal/reveal.js"></script>
+  <script src="assets/reveal/plugin/notes/notes.js"></script>
+  <script>
+    const settings = {{settings_json}};
+    settings.plugins = [ RevealNotes ];
+    Reveal.initialize(settings);
+  </script>
+</body>
+</html>

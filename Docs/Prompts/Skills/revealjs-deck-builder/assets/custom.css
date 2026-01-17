@@ -1,0 +1,67 @@
+:root {
+  --space-1: 0.5rem;
+  --space-2: 1rem;
+  --space-3: 1.5rem;
+  --space-4: 2rem;
+  --radius-1: 6px;
+  --bg: #ffffff;
+  --fg: #0f172a;
+  --surface: #f8fafc;
+  --border: rgba(15, 23, 42, 0.12);
+  --accent: #1f6feb;
+  --accent-2: #f97316;
+  --muted: rgba(0, 0, 0, 0.6);
+}
+
+.reveal .slides section {
+  line-height: 1.35;
+}
+
+.text-left { text-align: left; }
+.text-right { text-align: right; }
+.text-center { text-align: center; }
+
+.kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.6em;
+  opacity: 0.7;
+  margin-bottom: var(--space-1);
+}
+
+.lead {
+  font-size: 1.1em;
+  opacity: 0.9;
+}
+
+.muted { color: var(--muted); }
+.accent { color: var(--accent); }
+
+.stack {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.two-column {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+.two-column .col { flex: 1; }
+
+.card {
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+}
+
+.tight ul,
+.tight ol { margin-top: 0.25em; }
+
+.agenda ol {
+  padding-left: 1.2em;
+}
+.agenda li {
+  margin-bottom: 0.35em;
+}

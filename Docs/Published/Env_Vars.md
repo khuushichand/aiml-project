@@ -73,10 +73,23 @@ Egress & Outbound Policy (global + Workflows)
 - `JOBS_DB_URL`: Postgres DSN for Jobs backend; falls back to SQLite when unset.
 - `JOBS_*`: Lease/renew/metrics settings (see repo `Env_Vars.md`).
   - Common toggles include `JOBS_WEBHOOKS_*`, `JOBS_INTEGRITY_SWEEP_*`, `JOBS_METRICS_*`.
+- `MEDIA_INGEST_JOBS_WORKER_ENABLED`: Start the in-process media ingest jobs worker on app startup (`true|false`).
 - `EMBEDDINGS_JOBS_QUEUE`: Queue for embeddings stage jobs (default `default`).
 - `EMBEDDINGS_ROOT_JOBS_QUEUE`: Queue for embeddings root jobs (default `low` when stage queue is not `low`).
 - `EMBEDDINGS_JOBS_WORKER_ID`: Worker identifier for embeddings jobs (default `embeddings-jobs-<pid>`).
 - `EMBEDDINGS_JOBS_EXPOSE_PROGRESS`: Include progress fields in public embeddings jobs responses (`true|false`, default `false`).
+
+## Data Tables
+- `DATA_TABLES_JOBS_QUEUE`: Queue for data table generation jobs (default `default`).
+- `DATA_TABLES_JOBS_WORKER_ID`: Worker identifier for data tables jobs (default `data-tables-jobs-<pid>`).
+- `DATA_TABLES_JOBS_LEASE_SECONDS`: Lease duration for data tables jobs (default `60`).
+- `DATA_TABLES_DEFAULT_MAX_ROWS`: Default max rows per table when request omits `max_rows` (default `200`).
+- `DATA_TABLES_MAX_ROWS`: Hard cap on generated rows per table (default `2000`).
+- `DATA_TABLES_MAX_SOURCE_CHARS`: Per-source character cap used when building prompts (default `12000`).
+- `DATA_TABLES_MAX_TOTAL_SOURCE_CHARS`: Aggregate character cap across all sources (default `60000`).
+- `DATA_TABLES_MAX_PROMPT_CHARS`: Total prompt size cap (default `24000`).
+- `DATA_TABLES_LLM_MAX_TOKENS`: LLM response token budget for table generation (default `2000`).
+- `DATA_TABLES_LLM_TEMPERATURE`: LLM temperature for table generation (default `0.2`).
 
 ## Chatbooks
 - `CHATBOOKS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).

@@ -5,7 +5,7 @@ Owner: Core Maintainers (Server/API + WebUI)
 Status: In Progress
 Updated: 2026-01-12
 
-Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py, Docs/Product/Watchlists-UX-PRD.md
+Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py, Docs/Product/Content_Collections_UX_Backlog_PRD.md, Docs/Product/Watchlists-UX-PRD.md
 
 ---
 
@@ -13,7 +13,7 @@ Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py, Docs/Pro
 
 Content Collections unify two complementary workflows:
 - **Watchlists**: Source-centric scheduled collection from websites/news sites/RSS with jobs, runs, aggregated outputs, template-driven rendering, versioning, retention/TTL, and delivery (email + Chatbook). *Status: implemented; WebUI admin flows now consume the new APIs; run WebSocket streaming and forum gating shipped.*
-- **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, notes, highlights, import/export. *Status: capture/status/favorite/notes flows and basic WebUI shipped; Pocket/Instapaper import/export API shipped; highlights + import/export UX tracked in Watchlists-UX-PRD.*
+- **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, notes, highlights, import/export. *Status: capture/status/favorite/notes flows and basic WebUI shipped; Pocket/Instapaper import/export API shipped; highlights + import/export UX tracked in Content_Collections_UX_Backlog_PRD.*
 
 Both flows will share a normalized collections layer stored inside the per-user Media DB (`Media_DB_v2.db`). Media DB remains the canonical artifact store and the central DB for `content_items`, templates, and highlights, while the collections layer (via `CollectionsDatabase`) provides dedupe, metadata, and search connectivity across Watchlists and Reading. Outputs can be generated from scheduled runs or filtered item sets, exported as Chatbooks, delivered via email, or linked back into Media DB.
 
@@ -21,7 +21,7 @@ Both flows will share a normalized collections layer stored inside the per-user 
 
 ### Goals (MVP → v1)
 - [x] Unified content item model and shared ingestion/dedupe/search/embeddings.
-- [x] Reading capture: save URL → readable text; statuses/tags/favorites/notes; search; basic WebUI. *(Highlights UI and import/export UX tracked in Watchlists-UX-PRD.)*
+- [x] Reading capture: save URL → readable text; statuses/tags/favorites/notes; search; basic WebUI. *(Highlights UI and import/export UX tracked in Content_Collections_UX_Backlog_PRD.)*
 - [x] Watchlists: manage sources, groups/tags; jobs with schedule; runs with logs/stats; RSS + simple sites (front page + top-N).
 - [x] Outputs: Markdown briefing/newsletter; MECE and TTS audio variants; export/ingest.
 - [x] APIs and WebUI slices for items, reading, watchlists, and outputs.
@@ -51,7 +51,7 @@ Primary value: one local-first place to capture → read → organize → search
 ### In-Scope
 - Watchlists sources/groups/tags/jobs/runs with ingestion pipeline, template store, retention/versioning, and delivery (implemented).
 - File-based template management and API-driven template CRUD (implemented).
-- Ad-hoc link capture and reader UI with statuses/favorites/notes (implemented; highlights UI pending; import/export API shipped; UX tracked in Watchlists-UX-PRD).
+- Ad-hoc link capture and reader UI with statuses/favorites/notes (implemented; highlights UI pending; import/export API shipped; UX tracked in Content_Collections_UX_Backlog_PRD).
 - Unified collections data layer that references Media DB while enabling dedupe and metadata across origins (implemented).
 - RSS polling; simple site extraction (front page + top-N). Forums are feature-flagged with throttling (implemented; disabled by default).
 - Canonical URL/content-hash dedupe and change detection (implemented).
@@ -77,10 +77,10 @@ v1
 
 ## 7. UX Flows (High-Level)
 
-- Items: Unified list with filters (origin, tags, status, domain, date); search; bulk select for outputs.
+- Items: Unified list with filters (origin, tags, status, domain, date); search; bulk select for outputs via `/api/v1/outputs` using selected `item_ids`.
 - Reader: Distraction-free item detail with actions (Tag, Favorite, Mark Read, Summarize, Listen). Highlights/notes (v1).
 - Watchlists: Sources (CRUD, tags/groups); Jobs (scope, schedule, options); Runs (logs/stats); Outputs.
-- Reading: Quick save; tags/status/favorites; import/export UX tracked in Watchlists-UX-PRD.
+- Reading: Quick save; tags/status/favorites; import/export UX tracked in Content_Collections_UX_Backlog_PRD.
 
 ## 8. Functional Requirements
 
@@ -89,7 +89,7 @@ v1
 - Fields: url, canonical_url, domain, title, summary, notes, content_hash, word_count, published_at, status, favorite, read_at, metadata_json.
 - Metadata: author, clean_html, text, reading_time_seconds, language, embedding_* fields, media_uuid, and other ingestion context are stored in `metadata_json`.
 - Relations: source_id?, job_id?, run_id?, media_id?; tags many-to-many; highlights (v1).
-- Dedupe: canonical URL and/or content_hash on stripped main content; merge tags on duplicate saves when tags are provided (otherwise preserve existing tags).
+- Dedupe: canonical URL and/or content_hash on stripped main content; tag behavior depends on `merge_tags` (reading save/import uses `merge_tags=true`). When tags are omitted, existing tags are preserved; with `merge_tags=true` tags are unioned; otherwise provided tags replace the prior set.
 - Status: **Complete** - `CollectionsDatabase` provides `content_items`, tag joins, FTS hooks, and watchlists dual-write; `/api/v1/items` now queries this layer before falling back to legacy Media DB search.
 
 ### 8.2 Ingestion & Parsing
@@ -120,16 +120,16 @@ v1
 
 ### 8.6 Outputs & Delivery
 - Output types: newsletter_markdown, briefing_markdown, mece_markdown, newsletter_html (v1), tts_audio (v1).
-- Inputs: item IDs, saved filter query, or run_id; templating with variables (job, date, items, tags).
+- Inputs: item_ids, run_id, or inline data payload; templating with variables (job, date, items, tags).
 - Templates: managed via API (CRUD) with DB-backed storage and preview via `/api/v1/outputs/templates`. Watchlists outputs resolve DB templates by name; legacy file-based watchlists templates live under `tldw_Server_API/Config_Files/templates/watchlists` (override via `WATCHLIST_TEMPLATE_DIR`) and are supported as fallback.
 - Delivery: download file; optional Media DB ingest, email (SMTP provider via `NotificationsService`), Chatbook document generation.
 - Retention: global defaults via `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS` / `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`, per-job overrides under `output_prefs.retention`, per-output overrides during generation.
 - Status: **Complete** - API + retention/versioning + email/Chatbook delivery and WebUI controls shipped; MECE/TTS automation and Media DB ingest toggles included.
 
 ### 8.7 Reading Features
-- Status transitions (saved → reading → read/archived); favorites; per-item notes (basic); highlights (v1). *(Notes shipped; highlights UI pending; import/export API shipped; UX tracked in Watchlists-UX-PRD.)*
+- Status transitions (saved → reading → read/archived); favorites; per-item notes (basic); highlights (v1). *(Notes shipped; highlights UI pending; import/export API shipped; UX tracked in Content_Collections_UX_Backlog_PRD.)*
 - Highlights anchoring: store `quote` and anchor via fuzzy text matching with `content_hash_ref`; offsets are advisory. On text change, attempt re-anchor; if failing, mark highlight `stale` while preserving original context.
-- Import: Pocket/Instapaper (JSON/CSV) to items with tag merging; Export: JSONL or zip bundle. Status: **Complete (API)**; UX tracked in Watchlists-UX-PRD.
+- Import: Pocket/Instapaper (JSON/CSV) to items with tag merging; Export: JSONL or zip bundle. Status: **Complete (API)**; UX tracked in Content_Collections_UX_Backlog_PRD.
 
 ### 8.8 Observability & Limits
 - Structured logs (run/job/source/item); per-run metrics; error categories.
@@ -230,20 +230,21 @@ Watchlists
 - `WS /watchlists/runs/{run_id}/stream` (v1)
 
 Shared Items
-- `GET /items` → unified list (origin, tags, status, domain, date, job_id, run_id)
+- `GET /items` → unified list (origin, tags, status, domain, date_from/date_to, job_id, run_id)
 - `GET /items/{id}` → item regardless of origin
 - `POST /items/bulk` → bulk update items (status, favorite, tags, delete)
 
 Tags Semantics (API)
 - Endpoints that accept `tags` expect a list of tag names (strings).
 - Server normalizes names (lowercase, trimmed), ensures existence in the per-user `collection_tags` table (creating missing tags), and resolves to `tag_id`s for joins.
-- Responses include tag names by default. For clients that need IDs, add `?include_tag_ids=true` to include `{name, id}` pairs in responses where applicable.
+- Responses include tag names only; tag IDs are not exposed by current APIs.
 - Watchlists tag assignment endpoints accept names and follow the same normalization and resolution behavior.
 
 Bulk Items (API)
 - Actions: `set_status`, `set_favorite`, `add_tags`, `remove_tags`, `replace_tags`, `delete`.
 - Soft delete sets `status=archived`; hard delete removes the row.
 - Returns per-item success/error with aggregate counts.
+- Output generation is not a bulk action; UI should call `POST /api/v1/outputs` with `template_id` + `item_ids`.
 
 Example: add tags
 ```json
@@ -295,7 +296,7 @@ Example response
 ```
 
 Outputs
-- `POST /outputs` → from item ids, saved filter, or run_id; body includes template id/options and TTS toggle
+- `POST /outputs` → from item_ids or run_id (inline data optional); body includes template_id/options and optional MECE/TTS toggles
 - `GET /outputs/{id}` | `GET /outputs/{id}/download`
 
 Templates (Outputs)
@@ -371,7 +372,7 @@ Scheduling
 
 2. **Reading Workflow** - *MVP shipped; highlights UI pending; import/export API shipped*
    - URL capture (save), status/favorite/tags/notes, reader endpoints, and WebUI page delivered.
-   - Highlights UI and import/export UX remain TODO; tracked in Watchlists-UX-PRD.
+   - Highlights UI and import/export UX remain TODO; tracked in Content_Collections_UX_Backlog_PRD.
 
 3. **Search & Retrieval Enhancements** - *shipped*
    - FTS5 online updates for collections; embeddings queueing via Redis job manager; provenance filters exposed on `/items`.
@@ -382,7 +383,7 @@ Scheduling
 
 5. **WebUI & Admin UX** - *shipped (core)*
    - Next.js pages for Items, Reading, and Watchlists consume the new APIs; job output preferences editable (template, retention, email/chatbook deliveries).
-   - Remaining UX work tracked in Watchlists-UX-PRD: reader highlights UI, template editor, bulk item actions, Pocket/Instapaper import/export UX.
+   - Remaining UX work tracked in Content_Collections_UX_Backlog_PRD: reader highlights UI, template editor, bulk output generation (via `/api/v1/outputs`), Pocket/Instapaper import/export UX.
 
 6. **Stage 2 - Postgres Enablement** - *complete*
    - Collections/Watchlists schema creation and inserts validated against Postgres; integration smoke tests added.
@@ -391,7 +392,7 @@ Scheduling
 
 - **Phase 1 (complete):** Unified collections schema, ingestion bridge, reading capture/search UI, WebUI wiring for items/reading/watchlists.
 - **Phase 2 (complete):** Advanced outputs (MECE/TTS automation + ingest toggles), delivery UX refinements, embeddings worker hardening, forum gating.
-- **Phase 3 (planned):** Reader highlights/notes UX, template editor, bulk item actions, Pocket/Instapaper import/export UX (see Watchlists-UX-PRD).
+- **Phase 3 (planned):** Reader highlights/notes UX, template editor, bulk output generation, Pocket/Instapaper import/export UX (see Content_Collections_UX_Backlog_PRD).
 
 ## 20. Risks & Mitigations
 
@@ -403,7 +404,7 @@ Scheduling
 ## 21. Open Questions
 
 - Email delivery: integrate SMTP now or defer to exports/webhooks? **Answer:** Implemented now via NotificationsService; document SMTP env vars (`EMAIL_PROVIDER`, host/port credentials) and add integration tests for real providers when available.
-- Template editor: file-based to start vs in-UI editor. **Answer:** File-based (`WATCHLIST_TEMPLATE_DIR`) for now; plan UI-driven editor post-MECE/TTS.
+- Template editor: file-based to start vs in-UI editor. **Answer:** DB-backed outputs templates are primary; legacy watchlists templates remain file-based fallback. UI editor work is tracked in Content_Collections_UX_Backlog_PRD.
 - Provenance in RAG: how to present origin (reading vs watchlist) in citations by default? **Answer:** `/items` exposes `type` and tags; downstream RAG callers should include origin metadata in citation payloads. Future work: helper that maps origin to default citation format.
 
 ---

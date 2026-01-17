@@ -1,0 +1,723 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import time
+from typing import Any, Dict, List, Optional, Union
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from loguru import logger
+
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    rbac_rate_limit,
+    require_permissions,
+)
+from tldw_Server_API.app.api.v1.schemas.data_tables_schemas import (
+    DataTableColumn,
+    DataTableContentUpdateRequest,
+    DataTableDeleteResponse,
+    DataTableDetailResponse,
+    DataTableExportFormat,
+    DataTableExportResponse,
+    DataTableGenerateRequest,
+    DataTableGenerateResponse,
+    DataTableJobCancelResponse,
+    DataTableJobStatus,
+    DataTableRegenerateRequest,
+    DataTableRow,
+    DataTableSource,
+    DataTableSummary,
+    DataTablesListResponse,
+    DataTableUpdateRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
+    AsyncMode,
+    ExportMode,
+    FileCreateOptions,
+    FileCreateRequest,
+    FileExportRequest,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.permissions import (
+    MEDIA_CREATE,
+    MEDIA_DELETE,
+    MEDIA_READ,
+    MEDIA_UPDATE,
+)
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, InputError
+from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent
+
+
+router = APIRouter(prefix="/data-tables", tags=["data-tables"])
+
+
+def get_job_manager() -> JobManager:
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    if not db_url:
+        return JobManager()
+    backend = "postgres" if db_url.startswith("postgres") else None
+    return JobManager(backend=backend, db_url=db_url)
+
+
+def _parse_json_value(raw: Optional[str]) -> Any:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return raw
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def _model_dump(obj: Any) -> Dict[str, Any]:
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        return dump()
+    dump = getattr(obj, "dict", None)
+    if callable(dump):
+        return dump()
+    return dict(obj)
+
+
+def _resolve_owner_id(principal: AuthPrincipal, current_user: User) -> Optional[int]:
+    if principal.is_admin:
+        return None
+    try:
+        return int(current_user.id)
+    except Exception:
+        return None
+
+
+def _table_summary_from_row(
+    row: Dict[str, Any],
+    *,
+    column_count: Optional[int] = None,
+    source_count: Optional[int] = None,
+) -> DataTableSummary:
+    return DataTableSummary(
+        uuid=str(row.get("uuid") or ""),
+        name=str(row.get("name") or ""),
+        description=row.get("description"),
+        prompt=str(row.get("prompt") or ""),
+        column_hints=_parse_json_value(row.get("column_hints_json")),
+        status=str(row.get("status") or ""),
+        row_count=int(row.get("row_count") or 0),
+        column_count=column_count
+        if column_count is not None
+        else row.get("column_count"),
+        generation_model=row.get("generation_model"),
+        last_error=row.get("last_error"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+        last_modified=row.get("last_modified"),
+        version=int(row.get("version")) if row.get("version") is not None else None,
+        source_count=source_count
+        if source_count is not None
+        else row.get("source_count"),
+    )
+
+
+def _column_from_row(row: Dict[str, Any]) -> DataTableColumn:
+    return DataTableColumn(
+        column_id=str(row.get("column_id") or ""),
+        name=str(row.get("name") or ""),
+        type=str(row.get("type") or ""),
+        description=row.get("description"),
+        format=row.get("format"),
+        position=int(row.get("position") or 0),
+    )
+
+
+def _row_from_row(row: Dict[str, Any]) -> DataTableRow:
+    return DataTableRow(
+        row_id=str(row.get("row_id") or ""),
+        row_index=int(row.get("row_index") or 0),
+        data=_parse_json_value(row.get("row_json")),
+        row_hash=row.get("row_hash"),
+    )
+
+
+def _source_from_row(row: Dict[str, Any]) -> DataTableSource:
+    return DataTableSource(
+        source_type=str(row.get("source_type") or ""),
+        source_id=str(row.get("source_id") or ""),
+        title=row.get("title"),
+        snapshot=_parse_json_value(row.get("snapshot_json")),
+        retrieval_params=_parse_json_value(row.get("retrieval_params_json")),
+    )
+
+
+def _row_values_from_json(
+    row_json: Any,
+    *,
+    column_ids: List[str],
+    column_names: List[str],
+) -> List[Any]:
+    if row_json is None:
+        return [None] * len(column_ids)
+    if isinstance(row_json, dict):
+        values = []
+        for col_id, col_name in zip(column_ids, column_names):
+            if col_id in row_json:
+                values.append(row_json.get(col_id))
+            elif col_name in row_json:
+                values.append(row_json.get(col_name))
+            else:
+                values.append(None)
+        return values
+    if isinstance(row_json, (list, tuple)):
+        row_values = list(row_json)
+        if len(row_values) < len(column_ids):
+            row_values.extend([None] * (len(column_ids) - len(row_values)))
+        elif len(row_values) > len(column_ids):
+            row_values = row_values[: len(column_ids)]
+        return row_values
+    return [row_json] + [None] * max(0, len(column_ids) - 1)
+
+
+def _collect_export_rows(
+    db: MediaDatabase,
+    table_id: int,
+    *,
+    column_ids: List[str],
+    column_names: List[str],
+) -> List[List[Any]]:
+    rows: List[List[Any]] = []
+    offset = 0
+    batch_size = 2000
+    while True:
+        batch = db.list_data_table_rows(table_id, limit=batch_size, offset=offset)
+        if not batch:
+            break
+        for row in batch:
+            row_json = _parse_json_value(row.get("row_json"))
+            rows.append(
+                _row_values_from_json(
+                    row_json,
+                    column_ids=column_ids,
+                    column_names=column_names,
+                )
+            )
+        offset += len(batch)
+        if len(batch) < batch_size:
+            break
+    return rows
+
+
+def _build_table_detail_response(
+    table_row: Dict[str, Any],
+    db: MediaDatabase,
+    *,
+    rows_limit: int = 200,
+    rows_offset: int = 0,
+    include_rows: bool = True,
+    include_sources: bool = True,
+) -> DataTableDetailResponse:
+    table_id = int(table_row.get("id"))
+    columns = [_column_from_row(row) for row in db.list_data_table_columns(table_id)]
+    rows: List[DataTableRow] = []
+    if include_rows:
+        rows = [
+            _row_from_row(row)
+            for row in db.list_data_table_rows(table_id, limit=rows_limit, offset=rows_offset)
+        ]
+    sources: List[DataTableSource] = []
+    source_count: Optional[int] = table_row.get("source_count")
+    if include_sources:
+        sources = [_source_from_row(row) for row in db.list_data_table_sources(table_id)]
+        source_count = len(sources)
+    return DataTableDetailResponse(
+        table=_table_summary_from_row(
+            table_row,
+            column_count=len(columns),
+            source_count=source_count,
+        ),
+        columns=columns,
+        rows=rows,
+        sources=sources,
+        rows_limit=rows_limit,
+        rows_offset=rows_offset,
+    )
+
+
+@router.post(
+    "/generate",
+    response_model=DataTableGenerateResponse,
+    summary="Submit a data table generation job",
+    dependencies=[
+        Depends(require_permissions(MEDIA_CREATE)),
+        Depends(rbac_rate_limit("data_tables.generate")),
+    ],
+)
+async def generate_data_table(
+    req: DataTableGenerateRequest,
+    response: Response,
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    jm: JobManager = Depends(get_job_manager),
+    request: Request = None,
+) -> DataTableGenerateResponse:
+    rid = ensure_request_id(request) if request is not None else None
+    tp = ensure_traceparent(request) if request is not None else ""
+    table_id = None
+    table_uuid = None
+
+    try:
+        column_hints = None
+        if req.column_hints:
+            column_hints = [_model_dump(hint) for hint in req.column_hints]
+
+        table_row = db.create_data_table(
+            name=req.name.strip(),
+            prompt=req.prompt.strip(),
+            description=req.description,
+            column_hints=column_hints,
+            status="queued",
+            row_count=0,
+            generation_model=req.model,
+        )
+        table_id = int(table_row.get("id"))
+        table_uuid = str(table_row.get("uuid"))
+
+        sources_db_payload: List[Dict[str, Any]] = []
+        job_sources: List[Dict[str, Any]] = []
+        for source in req.sources:
+            src = _model_dump(source)
+            job_sources.append(
+                {
+                    "source_type": src.get("source_type"),
+                    "source_id": src.get("source_id"),
+                    "title": src.get("title"),
+                    "snapshot": src.get("snapshot"),
+                    "retrieval_params": src.get("retrieval_params"),
+                }
+            )
+            sources_db_payload.append(
+                {
+                    "source_type": src.get("source_type"),
+                    "source_id": src.get("source_id"),
+                    "title": src.get("title"),
+                    "snapshot_json": src.get("snapshot"),
+                    "retrieval_params_json": src.get("retrieval_params"),
+                }
+            )
+        if sources_db_payload:
+            db.insert_data_table_sources(table_id, sources_db_payload)
+
+        payload: Dict[str, Any] = {
+            "table_id": table_id,
+            "table_uuid": table_uuid,
+            "prompt": req.prompt,
+            "sources": job_sources,
+            "column_hints": column_hints,
+            "model": req.model,
+            "max_rows": req.max_rows,
+        }
+
+        job = jm.create_job(
+            domain="data_tables",
+            queue="default",
+            job_type="data_table_generate",
+            payload=payload,
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=3,
+            request_id=rid,
+            trace_id=tp or None,
+        )
+
+        response.status_code = status.HTTP_202_ACCEPTED
+        return DataTableGenerateResponse(
+            job_id=int(job.get("id")),
+            job_uuid=job.get("uuid"),
+            status=str(job.get("status") or "queued"),
+            table=_table_summary_from_row(table_row),
+        )
+    except InputError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("data_tables.generate failed")
+        if table_id is not None:
+            try:
+                db.update_data_table(
+                    table_id,
+                    status="failed",
+                    last_error=str(exc),
+                )
+            except Exception:
+                logger.debug("data_tables.generate: failed to mark table as failed")
+        raise HTTPException(status_code=500, detail="Failed to submit data table job") from exc
+
+
+@router.get(
+    "",
+    response_model=DataTablesListResponse,
+    summary="List data tables",
+    dependencies=[Depends(require_permissions(MEDIA_READ))],
+)
+async def list_data_tables(
+    status_filter: Optional[str] = Query(None, description="Filter by status"),
+    search: Optional[str] = Query(None, description="Search by name/description"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> DataTablesListResponse:
+    owner_user_id = _resolve_owner_id(principal, current_user)
+    rows = db.list_data_tables(
+        status=status_filter,
+        search=search,
+        limit=limit,
+        offset=offset,
+        owner_user_id=owner_user_id,
+    )
+    tables = [_table_summary_from_row(row) for row in rows]
+    return DataTablesListResponse(
+        tables=tables,
+        items=tables,
+        results=tables,
+        count=len(tables),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/{table_uuid}",
+    response_model=DataTableDetailResponse,
+    summary="Get a data table by UUID",
+    dependencies=[Depends(require_permissions(MEDIA_READ))],
+)
+async def get_data_table(
+    table_uuid: str,
+    rows_limit: int = Query(200, ge=1, le=2000),
+    rows_offset: int = Query(0, ge=0),
+    include_rows: bool = Query(True),
+    include_sources: bool = Query(True),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> DataTableDetailResponse:
+    owner_user_id = _resolve_owner_id(principal, current_user)
+    table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
+    if not table_row:
+        raise HTTPException(status_code=404, detail="data_table_not_found")
+
+    table_id = int(table_row.get("id"))
+    columns = [_column_from_row(row) for row in db.list_data_table_columns(table_id)]
+    rows = []
+    if include_rows:
+        rows = [
+            _row_from_row(row)
+            for row in db.list_data_table_rows(table_id, limit=rows_limit, offset=rows_offset)
+        ]
+    sources = []
+    if include_sources:
+        sources = [_source_from_row(row) for row in db.list_data_table_sources(table_id)]
+
+    return DataTableDetailResponse(
+        table=_table_summary_from_row(table_row),
+        columns=columns,
+        rows=rows,
+        sources=sources,
+        rows_limit=rows_limit,
+        rows_offset=rows_offset,
+    )
+
+
+@router.get(
+    "/{table_uuid}/export",
+    response_model=DataTableExportResponse,
+    summary="Export a data table",
+    dependencies=[
+        Depends(require_permissions(MEDIA_READ)),
+        Depends(rbac_rate_limit("data_tables.export")),
+    ],
+)
+async def export_data_table(
+    table_uuid: str,
+    response: Response,
+    request: Request = None,
+    format: DataTableExportFormat = Query(..., description="Export format (csv|json|xlsx)"),
+    async_mode: AsyncMode = Query("auto", description="auto defers large exports; async forces 202"),
+    mode: ExportMode = Query("url", description="url returns a download link; inline returns base64 content"),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    cdb: CollectionsDatabase = Depends(get_collections_db_for_user),
+) -> DataTableExportResponse:
+    owner_user_id = _resolve_owner_id(principal, current_user)
+    table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
+    if not table_row:
+        raise HTTPException(status_code=404, detail="data_table_not_found")
+    if str(table_row.get("status") or "") != "ready":
+        raise HTTPException(status_code=409, detail="data_table_not_ready")
+
+    table_id = int(table_row.get("id"))
+    column_rows = db.list_data_table_columns(table_id)
+    if not column_rows:
+        raise HTTPException(status_code=409, detail="data_table_missing_columns")
+
+    column_rows = sorted(
+        column_rows,
+        key=lambda row: (int(row.get("position") or 0), int(row.get("id") or 0)),
+    )
+    column_ids = [str(row.get("column_id") or "") for row in column_rows]
+    column_names = [str(row.get("name") or "") for row in column_rows]
+    rows = _collect_export_rows(
+        db,
+        table_id,
+        column_ids=column_ids,
+        column_names=column_names,
+    )
+    structured = {"columns": column_names, "rows": rows}
+
+    options_payload: Dict[str, Any] = {"persist": True}
+    if rows:
+        options_payload["max_rows"] = len(rows)
+        options_payload["max_cells"] = len(rows) * len(column_names)
+    options = FileCreateOptions(**options_payload)
+    export_req = FileExportRequest(format=format, mode=mode, async_mode=async_mode)
+    file_req = FileCreateRequest(
+        file_type="data_table",
+        title=str(table_row.get("name") or "data_table"),
+        payload=structured,
+        export=export_req,
+        options=options,
+    )
+    request_id = ensure_request_id(request) if request is not None else None
+    service = FileArtifactsService(cdb, user_id=current_user.id)
+    artifact, status_code = await service.create_artifact(file_req, request_id=request_id)
+    response.status_code = status_code
+    return DataTableExportResponse(
+        table_uuid=table_uuid,
+        file_id=artifact.file_id,
+        export=artifact.export,
+    )
+
+
+@router.patch(
+    "/{table_uuid}",
+    response_model=DataTableSummary,
+    summary="Update data table metadata",
+    dependencies=[Depends(require_permissions(MEDIA_UPDATE))],
+)
+async def update_data_table(
+    table_uuid: str,
+    req: DataTableUpdateRequest,
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> DataTableSummary:
+    owner_user_id = _resolve_owner_id(principal, current_user)
+    table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
+    if not table_row:
+        raise HTTPException(status_code=404, detail="data_table_not_found")
+    updated = db.update_data_table(
+        int(table_row.get("id")),
+        name=req.name.strip() if req.name is not None else None,
+        description=req.description,
+    )
+    if not updated:
+        raise HTTPException(status_code=500, detail="data_table_update_failed")
+    return _table_summary_from_row(updated)
+
+
+@router.delete(
+    "/{table_uuid}",
+    response_model=DataTableDeleteResponse,
+    summary="Delete a data table",
+    dependencies=[
+        Depends(require_permissions(MEDIA_DELETE)),
+        Depends(rbac_rate_limit("data_tables.delete")),
+    ],
+)
+async def delete_data_table(
+    table_uuid: str,
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> DataTableDeleteResponse:
+    owner_user_id = _resolve_owner_id(principal, current_user)
+    table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
+    if not table_row:
+        raise HTTPException(status_code=404, detail="data_table_not_found")
+    deleted = db.soft_delete_data_table(int(table_row.get("id")))
+    if not deleted:
+        raise HTTPException(status_code=500, detail="data_table_delete_failed")
+    return DataTableDeleteResponse(success=True)
+
+
+@router.post(
+    "/{table_uuid}/regenerate",
+    response_model=DataTableGenerateResponse,
+    summary="Regenerate a data table from stored sources",
+    dependencies=[
+        Depends(require_permissions(MEDIA_UPDATE)),
+        Depends(rbac_rate_limit("data_tables.regenerate")),
+    ],
+)
+async def regenerate_data_table(
+    table_uuid: str,
+    req: DataTableRegenerateRequest,
+    response: Response,
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    jm: JobManager = Depends(get_job_manager),
+    request: Request = None,
+) -> DataTableGenerateResponse:
+    rid = ensure_request_id(request) if request is not None else None
+    tp = ensure_traceparent(request) if request is not None else ""
+
+    owner_user_id = _resolve_owner_id(principal, current_user)
+    table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
+    if not table_row:
+        raise HTTPException(status_code=404, detail="data_table_not_found")
+
+    table_id = int(table_row.get("id"))
+    sources_rows = db.list_data_table_sources(table_id)
+    job_sources = [
+        {
+            "source_type": row.get("source_type"),
+            "source_id": row.get("source_id"),
+            "title": row.get("title"),
+            "snapshot": _parse_json_value(row.get("snapshot_json")),
+            "retrieval_params": _parse_json_value(row.get("retrieval_params_json")),
+        }
+        for row in sources_rows
+    ]
+    if not job_sources:
+        raise HTTPException(status_code=400, detail="data_table_missing_sources")
+
+    prompt_override = req.prompt.strip() if req.prompt is not None else None
+    if prompt_override == "":
+        prompt_override = None
+
+    payload: Dict[str, Any] = {
+        "table_id": table_id,
+        "table_uuid": table_uuid,
+        "prompt": prompt_override or table_row.get("prompt"),
+        "sources": job_sources,
+        "column_hints": _parse_json_value(table_row.get("column_hints_json")),
+        "model": req.model or table_row.get("generation_model"),
+        "max_rows": req.max_rows,
+        "regenerate": True,
+    }
+
+    job = jm.create_job(
+        domain="data_tables",
+        queue="default",
+        job_type="data_table_generate",
+        payload=payload,
+        owner_user_id=str(current_user.id),
+        priority=5,
+        max_retries=3,
+        request_id=rid,
+        trace_id=tp or None,
+    )
+    db.update_data_table(
+        table_id,
+        status="queued",
+        generation_model=req.model or table_row.get("generation_model"),
+        prompt=prompt_override,
+    )
+
+    response.status_code = status.HTTP_202_ACCEPTED
+    return DataTableGenerateResponse(
+        job_id=int(job.get("id")),
+        job_uuid=job.get("uuid"),
+        status=str(job.get("status") or "queued"),
+        table=_table_summary_from_row(db.get_data_table(table_id) or table_row),
+    )
+
+
+@router.get(
+    "/jobs/{job_id}",
+    response_model=DataTableJobStatus,
+    summary="Get data table job status",
+    dependencies=[Depends(require_permissions(MEDIA_READ))],
+)
+async def get_data_table_job(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
+) -> DataTableJobStatus:
+    job = jm.get_job(int(job_id))
+    if not job or str(job.get("domain") or "") != "data_tables":
+        raise HTTPException(status_code=404, detail="job_not_found")
+    owner = str(job.get("owner_user_id") or "")
+    if not (principal.is_admin or owner == str(current_user.id)):
+        raise HTTPException(status_code=403, detail="not_authorized")
+    payload = job.get("payload") or {}
+    return DataTableJobStatus(
+        id=int(job.get("id")),
+        uuid=job.get("uuid"),
+        status=job.get("status"),
+        job_type=job.get("job_type"),
+        owner_user_id=job.get("owner_user_id"),
+        created_at=job.get("created_at"),
+        started_at=job.get("started_at"),
+        completed_at=job.get("completed_at"),
+        cancelled_at=job.get("cancelled_at"),
+        cancellation_reason=job.get("cancellation_reason"),
+        progress_percent=job.get("progress_percent"),
+        progress_message=job.get("progress_message"),
+        result=job.get("result"),
+        error_message=job.get("error_message"),
+        table_uuid=payload.get("table_uuid"),
+    )
+
+
+@router.delete(
+    "/jobs/{job_id}",
+    response_model=DataTableJobCancelResponse,
+    summary="Cancel a data table job",
+    dependencies=[
+        Depends(require_permissions(MEDIA_UPDATE)),
+        Depends(rbac_rate_limit("data_tables.jobs.cancel")),
+    ],
+)
+async def cancel_data_table_job(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    jm: JobManager = Depends(get_job_manager),
+    reason: Optional[str] = None,
+) -> DataTableJobCancelResponse:
+    job = jm.get_job(int(job_id))
+    if not job or str(job.get("domain") or "") != "data_tables":
+        raise HTTPException(status_code=404, detail="job_not_found")
+    owner = str(job.get("owner_user_id") or "")
+    if not (principal.is_admin or owner == str(current_user.id)):
+        raise HTTPException(status_code=403, detail="not_authorized")
+    status_val = str(job.get("status") or "").lower()
+    if status_val in {"completed", "failed", "cancelled", "quarantined"}:
+        raise HTTPException(status_code=400, detail="cannot_cancel_terminal_job")
+    ok = jm.cancel_job(int(job_id), reason=reason)
+    if not ok:
+        raise HTTPException(status_code=400, detail="cancellation_failed")
+    return DataTableJobCancelResponse(
+        success=True,
+        job_id=int(job_id),
+        status="cancelled",
+        message="Job cancellation requested",
+    )
+
+
+__all__ = ["router"]

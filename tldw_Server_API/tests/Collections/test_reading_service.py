@@ -306,6 +306,24 @@ async def test_reading_save_sanitizes_html_content(reading_env, monkeypatch):
     assert "Hello" in captured["content"]
 
 
+@pytest.mark.asyncio
+async def test_reading_search_handles_punctuation(reading_env):
+    service = ReadingService(TEST_USER_ID + 7)
+    saved = await service.save_url(
+        url="https://example.org/punct",
+        tags=["c++", "rust"],
+        status="saved",
+        favorite=False,
+        title_override="C++/Rust: Intro? [Guide]",
+        content_override="Content about C++ and Rust.",
+    )
+
+    coll_db = CollectionsDatabase.for_user(TEST_USER_ID + 7)
+    items, total = coll_db.list_content_items(origin="reading", q="C++/Rust: Intro? [Guide]")
+    assert total >= 1
+    assert any(item.id == saved.item.id for item in items)
+
+
 @hyp_settings(max_examples=50)
 @given(
     path=st.from_regex(r"[a-zA-Z0-9/_-]{1,30}", fullmatch=True),

@@ -367,6 +367,10 @@ Total detected variables: 1016
 - `TTS_VOICE_STRICT_DURATION`
 - `VIBEVOICE_AUTO_DOWNLOAD`
 
+## Media Ingestion
+
+- `MEDIA_INGEST_JOBS_WORKER_ENABLED`
+
 ## OCR / VLM
 
 - `DOTS_OCR_CMD`

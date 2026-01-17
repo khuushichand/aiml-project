@@ -32,6 +32,9 @@ hypothesis
 loguru
 lxml
 numpy
+icalendar
+python-dateutil
+openpyxl
 pandas
 passlib
 psutil

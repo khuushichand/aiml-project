@@ -759,6 +759,7 @@ _HAS_CHUNKING = False
 _HAS_NOTES_GRAPH = False
 _HAS_READING_HIGHLIGHTS = False
 _HAS_KANBAN = False
+_HAS_DATA_TABLES = False
 
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 
@@ -861,6 +862,20 @@ else:
     except Exception as _o_err:
         logger.warning(f"Outputs endpoints unavailable; skipping import: {_o_err}")
         _HAS_OUTPUTS = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
+
+        _HAS_FILES = True
+    except Exception as _files_err:
+        logger.warning(f"Files endpoints unavailable; skipping import: {_files_err}")
+        _HAS_FILES = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
+
+        _HAS_DATA_TABLES = True
+    except Exception as _dt_err:
+        logger.warning(f"Data tables endpoints unavailable; skipping import: {_dt_err}")
+        _HAS_DATA_TABLES = False
     try:
         from tldw_Server_API.app.api.v1.endpoints.reading_highlights import router as reading_highlights_router
 
@@ -1984,6 +1999,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start core Jobs worker (Chatbooks): {e}")
 
+    # File Artifacts Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.File_Artifacts.jobs_worker import run_file_artifacts_jobs_worker as _run_files_jobs
+
+        _enabled = _os.getenv("FILES_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if _enabled:
+            files_jobs_stop_event = _asyncio.Event()
+            files_jobs_task = _asyncio.create_task(_run_files_jobs(files_jobs_stop_event))
+            logger.info("File Artifacts Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("File Artifacts Jobs worker disabled by flag (FILES_JOBS_WORKER_ENABLED)")
+    except Exception as e:
+        logger.warning(f"Failed to start File Artifacts Jobs worker: {e}")
+
     # Embeddings Vector Compactor (soft-delete propagation)
     try:
         import os as _os
@@ -2405,6 +2436,22 @@ async def lifespan(app: FastAPI):
                 logger.info("Outputs purge scheduler started")
     except Exception as e:
         logger.warning(f"Failed to start Outputs purge scheduler: {e}")
+
+    # Start File artifacts export GC scheduler (expired export cleanup)
+    try:
+        _enable_files_export_gc = _env_os.getenv("FILES_EXPORT_GC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        if not _enable_files_export_gc:
+            logger.info("File artifacts export GC scheduler disabled (FILES_EXPORT_GC_ENABLED != true)")
+        else:
+            from tldw_Server_API.app.services.file_artifacts_export_gc_service import (
+                start_file_artifacts_export_gc_scheduler,
+            )
+
+            _files_gc_task = await start_file_artifacts_export_gc_scheduler()
+            if _files_gc_task:
+                logger.info("File artifacts export GC scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start File artifacts export GC scheduler: {e}")
 
     # Start Jobs prune scheduler (daily maintenance)
     try:
@@ -3281,6 +3328,10 @@ OPENAPI_TAGS = [
         },
     },
     {"name": "notes", "description": "Notes and knowledge management."},
+    {
+        "name": "data-tables",
+        "description": "Data table generation jobs and CRUD.",
+    },
     {
         "name": "notes-graph",
         "description": "Graph of notes, tags, and sources.",
@@ -4516,6 +4567,18 @@ elif _MINIMAL_TEST_APP:
     except Exception as _outputs_min_err:
         logger.debug(f"Skipping outputs router in minimal test app: {_outputs_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
+
+        app.include_router(files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
+    except Exception as _files_min_err:
+        logger.debug(f"Skipping files router in minimal test app: {_files_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
+
+        app.include_router(data_tables_router, prefix=f"{API_V1_PREFIX}", tags=["data-tables"])
+    except Exception as _dt_min_err:
+        logger.debug(f"Skipping data_tables router in minimal test app: {_dt_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.reading_highlights import router as reading_highlights_router
 
         app.include_router(reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])
@@ -4915,6 +4978,20 @@ else:
         _include_if_enabled("outputs", _outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
     except Exception as _e:
         logger.warning(f"Outputs endpoint not available: {_e}")
+    try:
+        # Optional files artifacts endpoint
+        from tldw_Server_API.app.api.v1.endpoints.files import router as _files_router
+
+        _include_if_enabled("files", _files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
+    except Exception as _e:
+        logger.warning(f"Files endpoint not available: {_e}")
+    try:
+        # Optional data tables endpoint
+        from tldw_Server_API.app.api.v1.endpoints.data_tables import router as _data_tables_router
+
+        _include_if_enabled("data-tables", _data_tables_router, prefix=f"{API_V1_PREFIX}", tags=["data-tables"])
+    except Exception as _e:
+        logger.warning(f"Data tables endpoint not available: {_e}")
     if "embeddings_router" in locals():
         _include_if_enabled("embeddings", embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
     if "vector_stores_router" in locals():
