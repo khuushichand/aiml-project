@@ -24,7 +24,12 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_MAINTENANCE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS, get_user_tier, set_user_tier
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    TIER_LIMITS,
+    get_limits_for_user,
+    get_user_tier,
+    set_user_tier,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
     resolve_default_transcription_model,
 )
@@ -50,13 +55,13 @@ def get_job_manager() -> JobManager:
     DSN, use the Postgres backend; otherwise fall back to JobManager's default
     backend resolution (typically SQLite).
     """
-    cache_key = (os.getenv("JOBS_DB_URL") or "").strip() or "default"
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    cache_key = db_url or "default"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        db_url = (os.getenv("JOBS_DB_URL") or "").strip()
         if not db_url:
             # Backwards-compatible default: rely on JobManager's internal selection
             # (typically a local SQLite database) when JOBS_DB_URL is not provided.
@@ -358,7 +363,7 @@ async def owner_processing_summary(
     owner_user_id: int,
     jm: Annotated[JobManager, Depends(get_job_manager)],
     request: Request = None,
-    ):
+):
     try:
         logger.info(
             "Admin owner processing summary: owner_user_id=%s",
@@ -373,12 +378,17 @@ async def owner_processing_summary(
         # Limit
         # Correlate logs with request_id if available
         rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request) if request is not None else ""
 
         try:
-            from tldw_Server_API.app.core.Usage.audio_quota import get_limits_for_user
             limits = await get_limits_for_user(owner_user_id)
-        except (ImportError, ValueError, KeyError, RuntimeError) as e:
-            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+        except (ValueError, KeyError, RuntimeError) as e:
+            get_ps_logger(
+                request_id=rid,
+                ps_component="endpoint",
+                ps_job_kind="audio",
+                traceparent=tp,
+            ).warning(
                 "Failed to get limits for owner %s; returning limit=None: %s", owner_user_id, e
             )
             limits = None
@@ -388,7 +398,12 @@ async def owner_processing_summary(
             try:
                 limit = int(limits.get("concurrent_jobs") or 0)
             except (ValueError, TypeError) as e:
-                get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+                get_ps_logger(
+                    request_id=rid,
+                    ps_component="endpoint",
+                    ps_job_kind="audio",
+                    traceparent=tp,
+                ).warning(
                     "Could not parse concurrent_jobs limit for owner %s; returning limit=None: %s", owner_user_id, e
                 )
                 limit = None

@@ -84,7 +84,7 @@ def _get_allowed_db_roots() -> list[str]:
             try:
                 expanded = os.path.expanduser(candidate)
             except Exception as exc:
-                logger.debug("Failed to expand DB base dir %r: {}", candidate, exc)
+                logger.debug("Failed to expand DB base dir {!r}: {}", candidate, exc)
                 expanded = candidate
             if os.path.isabs(expanded):
                 roots.append(os.path.abspath(expanded))

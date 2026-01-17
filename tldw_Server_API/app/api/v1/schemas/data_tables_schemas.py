@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - fallback for older environments
 ColumnType = Literal["text", "number", "date", "url", "boolean", "currency"]
 SourceType = Literal["chat", "document", "rag_query"]
 DataTableExportFormat = Literal["csv", "json", "xlsx"]
+DataTableRowData = Dict[str, Any] | List[Any]
 
 
 class DataTableColumnHint(BaseModel):
@@ -50,10 +51,6 @@ class DataTableGenerateRequest(BaseModel):
     if model_validator is not None:
         @model_validator(mode="after")
         def _validate_payload(self) -> "DataTableGenerateRequest":
-            if not self.name or not self.name.strip():
-                raise ValueError("name is required")
-            if not self.prompt or not self.prompt.strip():
-                raise ValueError("prompt is required")
             if not self.sources:
                 raise ValueError("sources are required")
             return self
@@ -62,13 +59,7 @@ class DataTableGenerateRequest(BaseModel):
 
         @_rv
         def _validate_payload(cls, values: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[no-redef]
-            name = (values.get("name") or "").strip()
-            prompt = (values.get("prompt") or "").strip()
             sources = values.get("sources") or []
-            if not name:
-                raise ValueError("name is required")
-            if not prompt:
-                raise ValueError("prompt is required")
             if not sources:
                 raise ValueError("sources are required")
             return values
@@ -114,7 +105,7 @@ class DataTableColumn(BaseModel):
 
     column_id: str
     name: str
-    type: str
+    type: ColumnType
     description: Optional[str] = None
     format: Optional[str] = None
     position: int
@@ -136,7 +127,7 @@ class DataTableRow(BaseModel):
 
     row_id: str
     row_index: int
-    data: Any
+    data: DataTableRowData
     row_hash: Optional[str] = None
 
 

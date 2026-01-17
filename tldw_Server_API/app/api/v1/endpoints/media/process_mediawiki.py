@@ -110,6 +110,12 @@ async def _process_mediawiki_dump(
     filter_item_results: bool,
 ) -> StreamingResponse:
     """Shared ingestion/processing helper."""
+    def _raise_file_too_large() -> None:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large",
+        )
+
     if core_import_mediawiki_dump is None:  # pragma: no cover - defensive
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -125,10 +131,7 @@ async def _process_mediawiki_dump(
     _validate_dump_content_type(dump_file.content_type)
     dump_file_size = getattr(dump_file, "size", None)
     if isinstance(dump_file_size, int) and dump_file_size > MAX_MEDIAWIKI_FILE_SIZE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File too large",
-        )
+        _raise_file_too_large()
 
     prefix = "mediawiki_ingest_" if store_to_db or store_to_vector_db else "mediawiki_process_"
     with TempDirManager(prefix=prefix, cleanup=False) as temp_dir:
@@ -146,18 +149,12 @@ async def _process_mediawiki_dump(
                 _validate_dump_magic_bytes(first_chunk, dump_file.filename)
                 bytes_written += len(first_chunk)
                 if bytes_written > MAX_MEDIAWIKI_FILE_SIZE_BYTES:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail="File too large",
-                    )
+                    _raise_file_too_large()
                 await f.write(first_chunk)
                 while chunk := await dump_file.read(8192):
                     bytes_written += len(chunk)
                     if bytes_written > MAX_MEDIAWIKI_FILE_SIZE_BYTES:
-                        raise HTTPException(
-                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                            detail="File too large",
-                        )
+                        _raise_file_too_large()
                     await f.write(chunk)
         except HTTPException:
             shutil.rmtree(temp_dir_path, ignore_errors=True)

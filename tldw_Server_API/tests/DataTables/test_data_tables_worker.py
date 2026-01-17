@@ -4,6 +4,7 @@ import pytest
 
 from tldw_Server_API.app.core.Data_Tables import jobs_worker
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 pytestmark = pytest.mark.unit
@@ -85,7 +86,8 @@ async def test_data_tables_worker_generates_rows(monkeypatch, tmp_path):
         },
     }
 
-    result = await jobs_worker._handle_job(job)
+    jm = JobManager()
+    result = await jobs_worker._handle_job(job, jm)
     assert result["row_count"] == 2
 
     refreshed = db.get_data_table(table_id, include_deleted=True)

@@ -1,3 +1,5 @@
+"""Service layer for file artifacts validation, persistence, and exports."""
+
 from __future__ import annotations
 
 import asyncio
@@ -5,7 +7,6 @@ import base64
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from functools import lru_cache
 from http import HTTPStatus
 from typing import Any, Dict, Tuple
 
@@ -26,6 +27,7 @@ from tldw_Server_API.app.core.File_Artifacts.adapter_registry import get_registr
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, FileAdapter, ValidationIssue
 from tldw_Server_API.app.core.File_Artifacts.metrics import register_file_artifacts_metrics
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
@@ -50,17 +52,14 @@ EXPORT_MIME_TYPES = {
 }
 
 
-@lru_cache(maxsize=1)
-def _jobs_manager() -> JobManager:
-    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    if not db_url:
-        return JobManager()
-    backend = "postgres" if db_url.startswith("postgres") else None
-    return JobManager(backend=backend, db_url=db_url)
-
-
 class FileArtifactsService:
-    def __init__(self, cdb: CollectionsDatabase, *, user_id: int | str) -> None:
+    def __init__(
+        self,
+        cdb: CollectionsDatabase,
+        *,
+        user_id: int | str,
+        job_manager: JobManager | None = None,
+    ) -> None:
         self._cdb = cdb
         try:
             uid_int = int(user_id)
@@ -69,6 +68,7 @@ class FileArtifactsService:
         self._user_id_int = uid_int
         self._user_id = str(uid_int)
         self._registry = get_registry()
+        self._jobs_manager: JobManager | None = job_manager
         register_file_artifacts_metrics()
 
     def get_adapter(self, file_type: str) -> FileAdapter | None:
@@ -234,7 +234,7 @@ class FileArtifactsService:
             }
             queue = (os.getenv("FILES_JOBS_QUEUE") or "default").strip() or "default"
             try:
-                job_row = _jobs_manager().create_job(
+                job_row = self._get_jobs_manager().create_job(
                     domain="files",
                     queue=queue,
                     job_type="file_artifact_export",
@@ -276,6 +276,11 @@ class FileArtifactsService:
         if export_format == "xlsx":
             return await asyncio.to_thread(adapter.export, structured, format=export_format)
         return adapter.export(structured, format=export_format)
+
+    def _get_jobs_manager(self) -> JobManager:
+        if self._jobs_manager is None:
+            self._jobs_manager = jobs_manager_from_env()
+        return self._jobs_manager
 
     async def _finalize_export(
         self,
@@ -446,11 +451,20 @@ class FileArtifactsService:
             value = int(str(raw).strip())
         except (TypeError, ValueError):
             return INLINE_MAX_BYTES
-        if value <= 0 or value > INLINE_MAX_BYTES_UPPER_BOUND:
-            raise ValueError(
-                "Invalid inline_max_bytes: must be between 1 and "
-                f"{INLINE_MAX_BYTES_UPPER_BOUND} bytes."
+        if value <= 0:
+            logger.warning(
+                "Invalid inline_max_bytes: {}. Using default {} bytes.",
+                value,
+                INLINE_MAX_BYTES,
             )
+            return INLINE_MAX_BYTES
+        if value > INLINE_MAX_BYTES_UPPER_BOUND:
+            logger.warning(
+                "inline_max_bytes capped at {} bytes (configured {}).",
+                INLINE_MAX_BYTES_UPPER_BOUND,
+                value,
+            )
+            return INLINE_MAX_BYTES_UPPER_BOUND
         return value
 
     @staticmethod

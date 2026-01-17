@@ -6988,7 +6988,8 @@ class MediaDatabase:
             return str(owner_user_id)
         try:
             scope = get_scope()
-        except Exception:
+        except Exception as exc:
+            logging.debug("Failed to resolve scope for data tables owner: %s", exc)
             return None
         if scope and not scope.is_admin and scope.user_id is not None:
             return str(scope.user_id)
@@ -7194,9 +7195,9 @@ class MediaDatabase:
         row = self.execute_query(sql, tuple(params)).fetchone()
         if not row:
             return 0
-        try:
-            total = row.get("total") if isinstance(row, dict) else row[0]
-        except Exception:
+        if isinstance(row, dict):
+            total = row.get("total", 0)
+        else:
             total = row[0] if row else 0
         return int(total or 0)
 

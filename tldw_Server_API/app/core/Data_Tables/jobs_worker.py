@@ -39,6 +39,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.exceptions import DataTablesJobError
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
@@ -127,15 +128,6 @@ Rules:
 - Do not exceed {max_rows} rows.
 - Output JSON only, no markdown or commentary.
 """
-
-
-class DataTablesJobError(RuntimeError):
-    """Error raised for data table job processing failures."""
-    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
-        super().__init__(message)
-        self.retryable = retryable
-        if backoff_seconds is not None:
-            self.backoff_seconds = backoff_seconds
 
 
 _MAX_DB_CACHE_SIZE = max(1, int(os.getenv("DATA_TABLES_DB_CACHE_SIZE", "32") or "32"))
@@ -1005,8 +997,13 @@ async def _handle_job(job: Dict[str, Any], jm: JobManager) -> Dict[str, Any]:
             llm_future.cancel()
             try:
                 await llm_future
-            except Exception:
+            except asyncio.CancelledError:
                 pass
+            except Exception as cleanup_exc:
+                logger.debug(
+                    "data_tables worker: error awaiting cancelled LLM future: {}",
+                    cleanup_exc,
+                )
             jm.update_job_progress(job_id, progress_percent=55.0, progress_message="llm_timeout")
             raise DataTablesJobError("llm_timeout", retryable=True) from exc
         logger.info("data_tables worker: LLM call completed in %.1fms", (time.time() - start) * 1000.0)

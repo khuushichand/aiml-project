@@ -91,8 +91,8 @@ export default function ItemsPage() {
   const outputItemIds = useMemo(
     () =>
       selectedItems
-        .map((item) => item.content_item_id)
-        .filter((id): id is number => typeof id === 'number'),
+        .filter((item) => typeof item.content_item_id === 'number' && item.id !== item.content_item_id)
+        .map((item) => item.id),
     [selectedItems]
   );
   const outputSkippedCount = Math.max(0, selectedItems.length - outputItemIds.length);
@@ -186,7 +186,10 @@ export default function ItemsPage() {
 
   const handleSearchSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    setPage(1);
+    if (page !== 1) {
+      setPage(1);
+      return;
+    }
     loadItems();
   };
 

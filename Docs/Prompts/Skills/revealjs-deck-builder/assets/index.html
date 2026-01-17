@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <title>{{title}}</title>
@@ -29,9 +29,14 @@
     {{settings_json}}
   </script>
   <script>
-    const settings = JSON.parse(
-      document.getElementById("reveal-settings").textContent
-    );
+    let settings = {};
+    try {
+      settings = JSON.parse(
+        document.getElementById("reveal-settings").textContent.trim() || "{}"
+      );
+    } catch (e) {
+      console.warn("Failed to parse Reveal.js settings, using defaults:", e);
+    }
     const existingPlugins = Array.isArray(settings.plugins) ? settings.plugins : [];
     settings.plugins = [...existingPlugins, RevealNotes];
     Reveal.initialize(settings);

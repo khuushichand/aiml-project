@@ -187,8 +187,29 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
         if '../' in file_path or '..' + os.sep in file_path:
             raise InvalidStoragePathError("Path traversal attempt detected")
 
-        # Convert to Path and resolve to absolute path
-        path = Path(file_path).resolve()
+        # Convert to Path for symlink inspection before resolution
+        orig_path = Path(file_path)
+
+        # Default to current working directory if no allowed_dir specified
+        if allowed_dir is None:
+            # For MediaWiki dumps, we expect them to be in a reasonable location
+            # Default to allowing files in current directory and subdirectories
+            allowed_dir = Path.cwd()
+
+        # Check for symlink attacks
+        if orig_path.is_symlink():
+            # Resolve the symlink and check if it's within allowed directory
+            real_path = orig_path.resolve()
+            allowed_resolved = Path(allowed_dir).resolve()
+            try:
+                common_path = os.path.commonpath([str(real_path), str(allowed_resolved)])
+                if common_path != str(allowed_resolved):
+                    raise InvalidStoragePathError("Symlink points outside allowed directory")
+            except ValueError as exc:
+                raise InvalidStoragePathError("Symlink points outside allowed directory") from exc
+
+        # Resolve to absolute path for subsequent checks
+        path = orig_path.resolve()
 
         # Check if path exists
         if not path.exists():
@@ -197,19 +218,6 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
         # Check if it's a file (not a directory or symlink to directory)
         if not path.is_file():
             raise InvalidStoragePathError("Path is not a regular file")
-
-        # Check for symlink attacks
-        if path.is_symlink():
-            # Resolve the symlink and check if it's within allowed directory
-            real_path = path.resolve()
-            if allowed_dir and not str(real_path).startswith(str(allowed_dir)):
-                raise InvalidStoragePathError("Symlink points outside allowed directory")
-
-        # Default to current working directory if no allowed_dir specified
-        if allowed_dir is None:
-            # For MediaWiki dumps, we expect them to be in a reasonable location
-            # Default to allowing files in current directory and subdirectories
-            allowed_dir = Path.cwd()
 
         allowed = Path(allowed_dir).resolve()
         # Use os.path.commonpath for secure path containment check
@@ -220,6 +228,10 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
         except ValueError as exc:
             # Paths are on different drives (Windows) or otherwise incomparable
             raise InvalidStoragePathError("Access denied: Path is outside allowed directory") from exc
+
+        lower_path = str(path).lower()
+        if not any(lower_path.endswith(ext.lower()) for ext in ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS):
+            raise InvalidStoragePathError("File extension is not allowed")
 
         # Check file size to prevent processing huge files
         max_file_size = MAX_MEDIAWIKI_FILE_SIZE_BYTES

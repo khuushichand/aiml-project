@@ -65,7 +65,7 @@ from tldw_Server_API.app.core.config import (
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
+from tldw_Server_API.app.core.exceptions import TranscriptionCancelled, CancelCheckError
 
 
 #
@@ -335,6 +335,19 @@ def _resolve_audio_input_path_for_provider(
     base_dir: Optional[Path],
     label: str = "Audio input path",
 ) -> Path:
+    """
+    Resolve and validate an audio input path for a provider.
+
+    Delegates to _resolve_safe_input_path for resolution and validation.
+
+    Args:
+        audio_file_path: Union[str, Path] audio input path to resolve.
+        base_dir: Optional[Path] base directory constraint for validation.
+        label: str label used for validation messages.
+
+    Returns:
+        Path: Resolved, validated audio input path.
+    """
     return _resolve_safe_input_path(Path(audio_file_path), base_dir=base_dir, label=label)
 
 
@@ -2924,7 +2937,11 @@ def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> 
             except RuntimeError:
                 loop = None
             if loop is not None and loop.is_running():
-                raise RuntimeError(
+                try:
+                    should_cancel.close()
+                except Exception:
+                    pass
+                raise CancelCheckError(
                     "_check_cancel received an awaitable cancel_check in the cancel_check handling branch "
                     "while an event loop is running; provide a synchronous cancel_check or update the API "
                     "to handle async cancel checks."
@@ -2934,9 +2951,11 @@ def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> 
             raise TranscriptionCancelled(f"Cancelled during {label}")
     except TranscriptionCancelled:
         raise
+    except CancelCheckError:
+        raise
     except Exception as exc:
         logging.error(f"cancel_check failed during {label}: {exc}", exc_info=True)
-        raise
+        raise CancelCheckError(f"cancel_check failed during {label}: {exc}") from exc
 
 _FFMPEG_VERSION_CHECKED: bool = False
 _FFMPEG_CMD_FOR_VERSION: Optional[str] = None

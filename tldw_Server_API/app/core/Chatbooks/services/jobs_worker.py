@@ -197,9 +197,16 @@ async def _handle_import(service: ChatbookService, payload: Dict[str, Any], job_
     file_ref = payload.get("file_token") or payload.get("file_path")
     if not file_ref or not str(file_ref).strip():
         raise ChatbooksJobError("Missing file reference for import job", retryable=False)
+    try:
+        resolved_path = service._resolve_import_archive_path(file_ref)
+    except Exception as exc:
+        raise ChatbooksJobError("Invalid or potentially malicious archive file", retryable=False) from exc
+    resolved_file_path = str(resolved_path or "").strip()
+    if not resolved_file_path:
+        raise ChatbooksJobError("Invalid or potentially malicious archive file", retryable=False)
     ok, msg, warnings = await asyncio.to_thread(
         service._import_chatbook_sync,
-        str(file_ref),
+        resolved_file_path,
         selections,
         conflict_resolution,
         bool(payload.get("prefix_imported", False)),

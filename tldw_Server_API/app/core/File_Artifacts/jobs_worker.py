@@ -33,18 +33,11 @@ from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileA
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
 from tldw_Server_API.app.core.Jobs.worker_utils import coerce_int as _coerce_int
 from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env as _jobs_manager
+from tldw_Server_API.app.core.exceptions import FileArtifactsJobError
 
 
 FILES_DOMAIN = "files"
 FILES_JOB_TYPE = "file_artifact_export"
-
-
-class FileArtifactsJobError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
-        super().__init__(message)
-        self.retryable = retryable
-        if backoff_seconds is not None:
-            self.backoff_seconds = backoff_seconds
 
 
 def _resolve_user_id(job: Dict[str, Any], payload: Dict[str, Any]) -> str:
@@ -112,7 +105,7 @@ async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
             "expires_at": export_info.expires_at.isoformat() if export_info.expires_at else None,
         }
     except Exception as exc:
-        logger.error("file_artifacts worker: export failed file_id=%s error=%s", file_id, exc)
+        logger.error("file_artifacts worker: export failed file_id={} error={}", file_id, exc)
         try:
             cdb.update_file_artifact_export(
                 file_id,
@@ -126,11 +119,12 @@ async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
                 export_consumed_at=None,
             )
         except Exception as reset_exc:
-            logger.warning("file_artifacts worker: failed to reset export status for %s: %s", file_id, reset_exc)
+            logger.warning("file_artifacts worker: failed to reset export status for {}: {}", file_id, reset_exc)
         raise FileArtifactsJobError(str(exc), retryable=False) from exc
 
 
 async def run_file_artifacts_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+    """Run the file artifacts jobs worker until stopped."""
     worker_id = (os.getenv("FILES_JOBS_WORKER_ID") or f"files-jobs-{os.getpid()}").strip()
     queue = (os.getenv("FILES_JOBS_QUEUE") or "default").strip() or "default"
     lease_seconds = _coerce_int(os.getenv("FILES_JOBS_LEASE_SECONDS") or os.getenv("JOBS_LEASE_SECONDS"), 60)
@@ -154,7 +148,7 @@ async def run_file_artifacts_jobs_worker(stop_event: Optional[asyncio.Event] = N
 
         _stop_watcher_task = asyncio.create_task(_watch_stop())
 
-    logger.info("File Artifacts Jobs worker starting (queue=%s, worker_id=%s)", queue, worker_id)
+    logger.info("File Artifacts Jobs worker starting (queue={}, worker_id={})", queue, worker_id)
     try:
         await sdk.run(handler=_handle_export_job)
     finally:

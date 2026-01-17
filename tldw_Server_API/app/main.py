@@ -1897,10 +1897,12 @@ async def lifespan(app: FastAPI):
     chatbooks_cleanup_task = None
     core_jobs_task = None
     files_jobs_task = None
+    data_tables_jobs_task = None
     audio_jobs_task = None
     media_ingest_jobs_task = None
     chatbooks_cleanup_stop_event = None
     files_jobs_stop_event = None
+    data_tables_jobs_stop_event = None
     media_ingest_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
@@ -2016,6 +2018,22 @@ async def lifespan(app: FastAPI):
             logger.info("File Artifacts Jobs worker disabled by flag (FILES_JOBS_WORKER_ENABLED)")
     except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
         logger.warning(f"Failed to start File Artifacts Jobs worker: {e}")
+
+    # Data Tables Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Data_Tables.jobs_worker import run_data_tables_jobs_worker as _run_data_tables_jobs
+
+        _enabled = _os.getenv("DATA_TABLES_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if _enabled:
+            data_tables_jobs_stop_event = _asyncio.Event()
+            data_tables_jobs_task = _asyncio.create_task(_run_data_tables_jobs(data_tables_jobs_stop_event))
+            logger.info("Data Tables Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Data Tables Jobs worker disabled by flag (DATA_TABLES_JOBS_WORKER_ENABLED)")
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
+        logger.warning(f"Failed to start Data Tables Jobs worker: {e}")
 
     # Embeddings Vector Compactor (soft-delete propagation)
     try:
@@ -2703,6 +2721,17 @@ async def lifespan(app: FastAPI):
                     files_jobs_task.cancel()
             else:
                 files_jobs_task.cancel()
+        if "data_tables_jobs_task" in locals() and data_tables_jobs_task:
+            # Prefer graceful stop via explicit stop_event
+            if "data_tables_jobs_stop_event" in locals() and data_tables_jobs_stop_event:
+                try:
+                    data_tables_jobs_stop_event.set()
+                    await _asyncio.wait_for(data_tables_jobs_task, timeout=5.0)
+                    logger.info("Data Tables Jobs worker stopped via stop_event")
+                except Exception:
+                    data_tables_jobs_task.cancel()
+            else:
+                data_tables_jobs_task.cancel()
         if "audio_jobs_task" in locals() and audio_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "audio_jobs_stop_event" in locals() and audio_jobs_stop_event:

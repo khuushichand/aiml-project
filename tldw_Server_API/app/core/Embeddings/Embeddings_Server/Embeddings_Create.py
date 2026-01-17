@@ -147,6 +147,7 @@ def _log_rejected_path(
     resolved: Optional[str] = None,
     base: Optional[str] = None,
 ) -> None:
+    """Log and count a rejected storage path value with optional context."""
     trimmed = (value or "").strip()
     if len(trimmed) > 200:
         trimmed = trimmed[:200] + "..."
@@ -245,7 +246,8 @@ def resolve_model_storage_base_dir(
 
     try:
         configured_dir = settings.get("EMBEDDINGS_MODEL_STORAGE_DIR")
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to read EMBEDDINGS_MODEL_STORAGE_DIR from settings: {}", exc)
         configured_dir = None
     if configured_dir:
         return str(configured_dir)

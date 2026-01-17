@@ -126,10 +126,12 @@ CHAT_HISTORY_MAX_MESSAGES: int = _get_chat_history_max_messages()
 
 
 def _debug_error_details_enabled() -> bool:
+    """Return True when DEBUG_ERROR_DETAILS enables verbose error payloads."""
     return str(os.getenv("DEBUG_ERROR_DETAILS", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _maybe_debug_details(exc: Optional[Exception]) -> Optional[str]:
+    """Return exception details when DEBUG_ERROR_DETAILS is enabled, else None."""
     if exc is None or not _debug_error_details_enabled():
         return None
     try:
@@ -139,6 +141,7 @@ def _maybe_debug_details(exc: Optional[Exception]) -> Optional[str]:
 
 
 def _http_error_detail(message: str, request_id: Optional[str], exc: Optional[Exception] = None) -> Dict[str, Any]:
+    """Build an HTTP error payload with optional request_id and debug details."""
     payload: Dict[str, Any] = {"message": message}
     if request_id:
         payload["request_id"] = request_id
@@ -156,6 +159,7 @@ def _ws_error_payload(
     error_type: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    """Build a WebSocket error payload with optional debug details and extra fields."""
     payload: Dict[str, Any] = {"type": "error", "message": message}
     if error_type:
         payload["error_type"] = error_type

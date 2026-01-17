@@ -235,9 +235,12 @@ async def submit_media_ingest_jobs(
             request_id=rid,
             trace_id=tp or None,
         )
+        row_id = row.get("id")
+        if row_id is None:
+            raise ValueError(f"Job creation returned no id: {row!r}")
         jobs.append(
             MediaIngestJobItem(
-                id=int(row.get("id")),
+                id=int(row_id),
                 uuid=row.get("uuid"),
                 source=payload["source"],
                 source_kind="url",
@@ -297,9 +300,12 @@ async def submit_media_ingest_jobs(
                     request_id=rid,
                     trace_id=tp or None,
                 )
+                row_id = row.get("id")
+                if row_id is None:
+                    raise ValueError(f"Job creation returned no id: {row!r}")
                 jobs.append(
                     MediaIngestJobItem(
-                        id=int(row.get("id")),
+                        id=int(row_id),
                         uuid=row.get("uuid"),
                         source=source_path,
                         source_kind="file",
@@ -367,6 +373,8 @@ async def list_media_ingest_jobs(
     jm: JobManager = Depends(get_job_manager),
 ) -> MediaIngestJobListResponse:
     owner_filter = None if principal.is_admin else str(current_user.id)
+    # Fetch in larger batches internally (100-500) to reduce DB round-trips
+    # while still respecting the user limit for the final result set.
     page_limit = min(500, max(limit, 100))
     matched: List[MediaIngestJobStatus] = []
     cursor_created_at: Optional[datetime] = None
@@ -417,7 +425,7 @@ async def cancel_media_ingest_job(
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     jm: JobManager = Depends(get_job_manager),
-    reason: Optional[str] = None,
+    reason: Optional[str] = Query(None, description="Reason for cancellation"),
 ) -> CancelMediaIngestJobResponse:
     job = jm.get_job(int(job_id))
     if not job or str(job.get("domain") or "") != "media_ingest":

@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.endpoints.outputs_templates import _build_items_context_from_media_ids, _select_media_ids_for_run
+from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseError
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 from starlette.responses import FileResponse
 from tldw_Server_API.app.services.outputs_service import (
@@ -196,7 +197,7 @@ async def create_output(
             try:
                 rows, _ = cdb.list_content_items(run_id=payload.run_id, page=1, size=1000)
                 items = build_items_context_from_content_items(rows)
-            except Exception as e:
+            except DatabaseError as e:
                 logger.opt(exception=True).warning(
                     "outputs: cdb.list_content_items/build_items_context_from_content_items failed for run_id={} ({})",
                     payload.run_id,

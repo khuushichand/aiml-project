@@ -123,7 +123,9 @@ def test_export_data_table_csv(tmp_path, monkeypatch):
 
         with TestClient(app) as client:
             table_uuid = table.get("uuid")
-            resp = client.get(f"/api/v1/data-tables/{table_uuid}/export?format=csv&async_mode=sync")
+            resp = client.get(
+                f"/api/v1/data-tables/{table_uuid}/export?format=csv&async_mode=sync&download=true"
+            )
             assert resp.status_code == 200, resp.text
             assert resp.headers.get("content-type", "").startswith("text/csv")
             assert resp.headers.get("content-disposition")

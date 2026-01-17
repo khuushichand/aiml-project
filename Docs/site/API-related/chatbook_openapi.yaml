@@ -91,10 +91,15 @@ paths:
                   format: binary
                   description: Chatbook file to import
                 options:
-                  type: string
-                  contentMediaType: application/json
-                  description: JSON string with import options
-                  example: '{"conflict_resolution": "skip", "prefix_imported": true}'
+                  allOf:
+                    - $ref: '#/components/schemas/ImportChatbookRequest'
+                  description: Import options payload
+                  example:
+                    conflict_resolution: skip
+                    prefix_imported: true
+            encoding:
+              options:
+                contentType: application/json
       responses:
         '200':
           description: Chatbook imported successfully
@@ -505,11 +510,13 @@ components:
           default: true
         tags:
           type: array
+          maxItems: 50
           items:
             type: string
           example: ["backup", "weekly"]
         categories:
           type: array
+          maxItems: 20
           items:
             type: string
           example: ["work", "research"]

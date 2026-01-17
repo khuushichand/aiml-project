@@ -53,7 +53,7 @@ async def _run_worker_once(jm: JobManager):
     sdk = WorkerSDK(jm, cfg)
 
     async def handler(job_row):
-        result = await jobs_worker._handle_job(job_row)
+        result = await jobs_worker._handle_job(job_row, jm)
         sdk.stop()
         return result
 

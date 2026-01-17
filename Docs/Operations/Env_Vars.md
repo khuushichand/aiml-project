@@ -47,7 +47,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `RAG_LLM_RERANK_TIMEOUT_SEC`: Per-document LLM rerank timeout (seconds). Default `10`.
 - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`: Total time budget for LLM reranking per query (seconds). Default `20`.
 - `RAG_LLM_RERANK_MAX_DOCS`: Cap on number of documents scored by LLM reranker per query. Default `20`.
- - `RAG_TRANSFORMERS_RERANKER_MODEL`: Cross-encoder model id for fast reranking (stage 1). Default `BAAI/bge-reranker-v2-m3`.
+- `RAG_TRANSFORMERS_RERANKER_MODEL`: Cross-encoder model id for fast reranking (stage 1). Default `BAAI/bge-reranker-v2-m3`.
 - `RAG_REWRITE_CACHE_PATH`: Optional override for query→rewrite cache JSONL. When unset, cache is per-user under `<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl` (deprecated alias: `USER_DB_BASE`).
 - `RAG_PRECOMPUTED_SPANS_MAX_VECTORS_PER_CORPUS`: Cap on stored span vectors per corpus (default `200000`). Config key: `[RAG] precomputed_spans_max_vectors_per_corpus`.
 - `RAG_PRECOMPUTED_SPANS_MAX_MB_PER_CORPUS`: Cap on precomputed span storage per corpus in MB (default `512`). Config key: `[RAG] precomputed_spans_max_mb_per_corpus`.
@@ -58,9 +58,9 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `RAG_ENABLE_NUMERIC_FIDELITY`: Force-enable numeric fidelity verification of answers (overrides request default). Optional; typically implied by `RAG_GUARDRAILS_STRICT`.
 - `RAG_REQUIRE_HARD_CITATIONS`: Force-enable per-sentence hard citations mapping (overrides request default). Optional; typically implied by `RAG_GUARDRAILS_STRICT`.
 - `RAG_NUMERIC_FIDELITY_BEHAVIOR`: Default behavior when numeric values are not verified in sources: `continue` | `ask` | `decline` | `retry`. Default `ask` when strict mode is active.
- - `RAG_PAYLOAD_EXEMPLAR_SAMPLING`: Sampling rate (0..1) to record redacted payload exemplars when adaptive check fails (default `0.05`).
- - `RAG_PAYLOAD_EXEMPLAR_PATH`: Optional path for payload exemplars JSONL sink (default `Databases/observability/rag_payload_exemplars.jsonl`).
- - `RAG_PERSONALIZATION_HALF_LIFE_DAYS`: Half-life for decay of per-user priors (default `7`).
+- `RAG_PAYLOAD_EXEMPLAR_SAMPLING`: Sampling rate (0..1) to record redacted payload exemplars when adaptive check fails (default `0.05`).
+- `RAG_PAYLOAD_EXEMPLAR_PATH`: Optional path for payload exemplars JSONL sink (default `Databases/observability/rag_payload_exemplars.jsonl`).
+- `RAG_PERSONALIZATION_HALF_LIFE_DAYS`: Half-life for decay of per-user priors (default `7`).
 - `RAG_PERSONALIZATION_WEIGHT`: Additive weight applied to prior during boosting (default `0.1`).
 
 ### RAG Quality Evaluations (Nightly)
@@ -148,6 +148,7 @@ Notes:
 - `EMBEDDINGS_JOBS_EXPOSE_PROGRESS`: Include `progress_percent`/`total_chunks` in public jobs responses (`true|false`, default `false`).
 
 ## Data Tables Jobs
+- `DATA_TABLES_JOBS_WORKER_ENABLED`: Enable the in-process data tables jobs worker (`true|false`, default `false`). When false, run `python -m tldw_Server_API.app.core.Data_Tables.jobs_worker`.
 - `DATA_TABLES_JOBS_QUEUE`: Queue for data table generation jobs (default `default`).
 - `DATA_TABLES_JOBS_WORKER_ID`: Worker identifier for data tables jobs (default `data-tables-jobs-<pid>`).
 - `DATA_TABLES_JOBS_LEASE_SECONDS`: Lease duration for data tables jobs (default `60`).

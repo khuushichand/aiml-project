@@ -133,6 +133,7 @@ class CollectionsDatabase:
         self.backend = backend
         self._fts_available = True
         self.ensure_schema()
+        self._seed_watchlists_output_templates()
 
     @classmethod
     def for_user(cls, user_id: int | str) -> "CollectionsDatabase":
@@ -619,6 +620,49 @@ class CollectionsDatabase:
             except Exception:
                 pass
         self._fts_available = fts_available
+
+    def _seed_watchlists_output_templates(self) -> None:
+        try:
+            from tldw_Server_API.app.core.Watchlists import template_store
+        except Exception as exc:
+            logger.debug("collections: watchlists template store unavailable: %s", exc)
+            return
+
+        try:
+            summaries = template_store.list_templates()
+        except Exception as exc:
+            logger.debug("collections: failed to list watchlists templates: %s", exc)
+            return
+
+        if not summaries:
+            return
+
+        existing = self._list_output_template_names()
+        for summary in summaries:
+            name = summary.name
+            if name in existing:
+                continue
+            try:
+                record = template_store.load_template(name)
+            except Exception as exc:
+                logger.debug("collections: failed to load watchlists template %s: %s", name, exc)
+                continue
+            fmt = record.format.lower()
+            type_ = self._infer_output_template_type(record.name, fmt)
+            metadata_json = json.dumps({"seeded_from": "watchlists_templates"}, ensure_ascii=False)
+            try:
+                self.create_output_template(
+                    name=record.name,
+                    type_=type_,
+                    format_=fmt,
+                    body=record.content,
+                    description=record.description,
+                    is_default=False,
+                    metadata_json=metadata_json,
+                )
+                existing.add(record.name)
+            except Exception as exc:
+                logger.debug("collections: failed to seed watchlists template %s: %s", record.name, exc)
 
     # ------------------------
     # Collections Tags helpers
@@ -2194,7 +2238,14 @@ class CollectionsDatabase:
                     paths[rid] = row["export_storage_path"] if isinstance(row, dict) else row[1]
             except Exception as exc:
                 logger.warning(f"file_artifacts.purge: retention scan failed: {exc}")
-        cutoff = (datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(days=soft_deleted_grace_days)).isoformat()
+        try:
+            now_dt = datetime.fromisoformat(str(now_iso).replace("Z", "+00:00"))
+        except (TypeError, ValueError) as exc:
+            logger.warning("file_artifacts.purge: invalid now_iso '{}': {}", now_iso, exc)
+            now_dt = datetime.utcnow().replace(tzinfo=timezone.utc)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=timezone.utc)
+        cutoff = (now_dt - timedelta(days=soft_deleted_grace_days)).isoformat()
         q2 = (
             "SELECT id, export_storage_path FROM file_artifacts "
             "WHERE user_id = ? AND deleted = 1 AND deleted_at IS NOT NULL AND deleted_at <= ?"

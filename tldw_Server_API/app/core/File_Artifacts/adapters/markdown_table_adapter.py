@@ -33,6 +33,7 @@ class MarkdownTableAdapter(TableAdapterBase):
 
     @staticmethod
     def _escape_cell(value: Any) -> str:
+        """Escape a value for safe Markdown table rendering."""
         if value is None:
             return ""
         text = str(value)

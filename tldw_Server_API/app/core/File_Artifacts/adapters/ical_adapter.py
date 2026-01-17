@@ -1,3 +1,5 @@
+"""iCalendar adapter for file artifact normalization, validation, and export."""
+
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
@@ -6,27 +8,30 @@ from zoneinfo import ZoneInfo
 import re
 
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, ValidationIssue
+from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
 
 
 class IcalAdapter:
+    """Normalize, validate, and export iCalendar payloads as ICS."""
     file_type: ClassVar[str] = "ical"
     export_formats: ClassVar[set[str]] = {"ics"}
     _UTC_EQUIVALENTS: ClassVar[set[str]] = {"UTC", "ETC/UTC", "ETC/GMT", "GMT", "Z"}
 
     def normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize calendar payload shape and apply default values."""
         calendar = payload.get("calendar")
         if not isinstance(calendar, dict):
-            raise ValueError("calendar_required")
+            raise FileArtifactsValidationError("calendar_required")
         prodid = calendar.get("prodid") or "-//tldw//files//EN"
         version = calendar.get("version") or "2.0"
         calendar_timezone = calendar.get("timezone")
         if calendar_timezone is not None and not isinstance(calendar_timezone, str):
-            raise ValueError("calendar_timezone_invalid")
+            raise FileArtifactsValidationError("calendar_timezone_invalid")
         events = calendar.get("events")
         if events is None:
             events = []
         if not isinstance(events, list):
-            raise ValueError("events_must_be_list")
+            raise FileArtifactsValidationError("events_must_be_list")
         return {
             "calendar": {
                 "prodid": str(prodid),
@@ -37,6 +42,7 @@ class IcalAdapter:
         }
 
     def validate(self, structured: Dict[str, Any]) -> List[ValidationIssue]:
+        """Validate a structured calendar payload and return issues."""
         issues: List[ValidationIssue] = []
         calendar = structured.get("calendar")
         if not isinstance(calendar, dict):
@@ -114,14 +120,16 @@ class IcalAdapter:
         return issues
 
     def export(self, structured: Dict[str, Any], *, format: str) -> ExportResult:
+        """Export the structured payload as an ICS file."""
         if format != "ics":
-            raise ValueError("unsupported_format")
+            raise FileArtifactsValidationError("unsupported_format")
         cal = self._build_calendar(structured)
         data = cal.to_ical()
         return ExportResult(status="ready", content_type="text/calendar", bytes_len=len(data), content=data)
 
     @staticmethod
     def _timezone_valid(tzid: str) -> bool:
+        """Return True when tzid is a valid IANA timezone identifier."""
         try:
             ZoneInfo(tzid)
             return True
@@ -130,6 +138,7 @@ class IcalAdapter:
 
     @staticmethod
     def _is_date_only(raw: str) -> bool:
+        """Return True if the string is in YYYY-MM-DD format."""
         return bool(re.match(r"^\d{4}-\d{2}-\d{2}$", raw))
 
     def _parse_event_datetime(
@@ -139,6 +148,7 @@ class IcalAdapter:
         *,
         path: str,
     ) -> Tuple[datetime | date | None, List[ValidationIssue]]:
+        """Parse event date/datetime values and collect validation issues."""
         issues: List[ValidationIssue] = []
         if raw is None:
             return None, issues
@@ -201,6 +211,7 @@ class IcalAdapter:
         return dt, issues
 
     def _tz_matches(self, dt: datetime, tzid: str) -> bool:
+        """Return True when the datetime timezone matches the requested tzid."""
         tzinfo = dt.tzinfo
         if tzinfo is None:
             return False
@@ -224,6 +235,7 @@ class IcalAdapter:
 
     @classmethod
     def _parse_offset_tzid(cls, tzid: str) -> timedelta | None:
+        """Parse a timezone id into a fixed offset when possible."""
         tzid = tzid.strip()
         tz_upper = tzid.upper()
         if tz_upper in cls._UTC_EQUIVALENTS:
@@ -236,6 +248,7 @@ class IcalAdapter:
 
     @staticmethod
     def _parse_utc_offset(raw: str) -> timedelta | None:
+        """Parse a UTC offset string like +HHMM or +HH:MM."""
         match = re.match(r"^(?P<sign>[+-])(?P<hours>\d{2})(?::?(?P<minutes>\d{2}))?$", raw)
         if not match:
             return None
@@ -247,10 +260,11 @@ class IcalAdapter:
         return timedelta(hours=sign * hours, minutes=sign * minutes)
 
     def _build_calendar(self, structured: Dict[str, Any]):
+        """Build an icalendar.Calendar from a structured payload."""
         try:
             from icalendar import Calendar, Event
         except Exception as exc:
-            raise ValueError("icalendar_library_unavailable") from exc
+            raise FileArtifactsError("icalendar_library_unavailable", detail=str(exc)) from exc
 
         calendar = structured.get("calendar") or {}
         cal = Calendar()
@@ -271,14 +285,14 @@ class IcalAdapter:
                 path=f"calendar.events[{idx}].start",
             )
             if start_issues or not start_dt:
-                raise ValueError(f"event_start_invalid ({event_ref})")
+                raise FileArtifactsValidationError(f"event_start_invalid ({event_ref})")
             end_dt, end_issues = self._parse_event_datetime(
                 event.get("end"),
                 event_tz,
                 path=f"calendar.events[{idx}].end",
             )
             if end_issues:
-                raise ValueError(f"event_end_invalid ({event_ref})")
+                raise FileArtifactsValidationError(f"event_end_invalid ({event_ref})")
 
             ical_event = Event()
             ical_event.add("uid", event.get("uid"))

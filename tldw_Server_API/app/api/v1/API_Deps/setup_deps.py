@@ -1,9 +1,10 @@
 """Dependencies for protecting setup endpoints.
 
 By default we restrict mutating setup actions to local requests only (loopback).
-Set the environment variable ``TLDW_SETUP_ALLOW_REMOTE=1`` to disable this guard
-for special scenarios (e.g., when accessing the setup UI through a reverse proxy
-on a trusted network). In tests, Starlette's TestClient reports host as
+Set the environment variable ``TLDW_SETUP_ALLOW_REMOTE=1`` (or config
+``allow_remote_setup_access=true``) to permit remote access. Remote callers must
+authenticate as admin; loopback requests remain allowed without admin checks.
+In tests, Starlette's TestClient reports host as
 ``testclient``; this value is treated as local unless an ``X-Forwarded-For``
 header is provided.
 """
@@ -167,10 +168,36 @@ def _host_header_is_local(request: Request) -> bool:
     return hostname in LOCAL_HOST_HEADERS
 
 
+def _is_local_setup_request(
+    *,
+    method: str,
+    path: str,
+    has_proxy_headers: bool,
+    client_is_local: bool,
+    forwarded_is_local: bool,
+    host_header_is_local: bool,
+) -> bool:
+    """Return True when a setup request should be treated as local-only."""
+    if method == "GET" and path.endswith("/api/v1/setup/config"):
+        if not host_header_is_local:
+            return False
+        if not has_proxy_headers and client_is_local:
+            return True
+        if has_proxy_headers and client_is_local and forwarded_is_local:
+            return True
+        return False
+
+    if has_proxy_headers:
+        return client_is_local and forwarded_is_local and host_header_is_local
+
+    return client_is_local and host_header_is_local
+
+
 async def require_local_setup_access(request: Request) -> None:
     """Guard mutating setup operations so they can only be called locally.
 
-    Bypass when ``TLDW_SETUP_ALLOW_REMOTE`` is set to a truthy value.
+    When remote access is enabled, local requests are still allowed while
+    remote requests require admin authorization.
 
     Special-case: Allow GET /api/v1/setup/config when the request targets
     localhost (by Host header or client IP), even if proxy headers are present.
@@ -179,11 +206,6 @@ async def require_local_setup_access(request: Request) -> None:
     """
     allow_remote_env = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
     allow_remote_config = _config_allows_remote()
-    if allow_remote_env or allow_remote_config:
-        if allow_remote_config and not allow_remote_env:
-            logger.info("Remote setup access permitted via config.txt (allow_remote_setup_access=true)")
-        await _require_admin_for_remote(request)
-        return
 
     path = (request.url.path or "").lower()
     method = (request.method or "").upper()
@@ -194,6 +216,22 @@ async def require_local_setup_access(request: Request) -> None:
     client_is_local = _is_loopback_host(client_host)
     forwarded_is_local = _is_loopback_host(forwarded_ip)
     host_header_is_local = _host_header_is_local(request)
+    is_local_request = _is_local_setup_request(
+        method=method,
+        path=path,
+        has_proxy_headers=has_proxy_headers,
+        client_is_local=client_is_local,
+        forwarded_is_local=forwarded_is_local,
+        host_header_is_local=host_header_is_local,
+    )
+
+    if allow_remote_env or allow_remote_config:
+        if allow_remote_config and not allow_remote_env:
+            logger.info("Remote setup access permitted via config.txt (allow_remote_setup_access=true)")
+        if is_local_request:
+            return
+        await _require_admin_for_remote(request)
+        return
 
     # Permit GET to setup config snapshot only if effectively local.
     # If proxy headers are present, require both the proxy connection and forwarded IP to be loopback.

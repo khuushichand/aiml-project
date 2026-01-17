@@ -494,20 +494,28 @@ def _render_template_with_context(template_str: str, context: Dict[str, Any]) ->
 
 def _next_output_version_for_run(collections_db, run_id: int) -> int:
     try:
-        rows, total = collections_db.list_output_artifacts(run_id=run_id, limit=1, offset=0)
+        max_version = 0
+        limit = 200
+        offset = 0
+        while True:
+            rows, _ = collections_db.list_output_artifacts(run_id=run_id, limit=limit, offset=offset)
+            if not rows:
+                break
+            for row in rows:
+                metadata = _parse_output_metadata(row)
+                version = metadata.get("version")
+                try:
+                    version_val = int(version)
+                except Exception:
+                    continue
+                if version_val > max_version:
+                    max_version = version_val
+            if len(rows) < limit:
+                break
+            offset += limit
     except Exception:
         return 1
-    if not rows:
-        return 1
-    metadata = _parse_output_metadata(rows[0])
-    version = metadata.get("version")
-    try:
-        return int(version or 0) + 1
-    except Exception:
-        try:
-            return int(total or 0) + 1
-        except Exception:
-            return 1
+    return max_version + 1 if max_version > 0 else 1
 
 
 # --------------------
@@ -3048,7 +3056,7 @@ async def list_outputs(
     limit = size
     offset = (page - 1) * limit
     collections_db.purge_expired_outputs()
-    rows, total = collections_db.list_output_artifacts(run_id=run_id, job_id=job_id, limit=limit, offset=offset)
+    rows, _total = collections_db.list_output_artifacts(run_id=run_id, job_id=job_id, limit=limit, offset=offset)
     user_id = resolve_user_id_for_request(
         current_user,
         as_int=True,

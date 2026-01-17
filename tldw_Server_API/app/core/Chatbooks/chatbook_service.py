@@ -154,6 +154,7 @@ class ChatbookService:
 
     @classmethod
     def _get_export_retention_seconds(cls) -> int:
+        """Return export retention duration in seconds (defaults to 24 hours)."""
         raw_hours = os.getenv("CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS", "24")
         try:
             hours = int(raw_hours)
@@ -165,6 +166,7 @@ class ChatbookService:
 
     @classmethod
     def _get_download_ttl_seconds(cls) -> int:
+        """Return download link TTL in seconds, bounded by export retention."""
         ttl = cls._get_env_int("CHATBOOKS_URL_TTL_SECONDS", 0)
         if ttl <= 0:
             ttl = cls._get_export_retention_seconds()
@@ -172,10 +174,21 @@ class ChatbookService:
 
     @classmethod
     def _get_export_expiry(cls, now: datetime) -> datetime:
+        """Compute export expiry timestamp from a reference time."""
         return now + timedelta(seconds=cls._get_export_retention_seconds())
 
     @classmethod
     def _get_download_expiry(cls, now: datetime, export_expires_at: datetime) -> datetime:
+        """
+        Compute download link expiry, capped by export expiry.
+
+        Args:
+            now: Current time used as the TTL anchor.
+            export_expires_at: Timestamp when the export itself expires.
+
+        Returns:
+            Expiration timestamp for the download link.
+        """
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         if export_expires_at.tzinfo is None:
@@ -186,6 +199,7 @@ class ChatbookService:
 
     @classmethod
     def _get_binary_limits_bytes(cls) -> Dict[str, int]:
+        """Parse per-type binary size limits from env JSON (MB -> bytes)."""
         raw = os.getenv("CHATBOOKS_BINARY_LIMITS_MB", "").strip()
         if not raw:
             return {}
@@ -210,6 +224,7 @@ class ChatbookService:
 
     @staticmethod
     def _resolve_binary_limit(limits: Dict[str, int], *keys: str) -> Optional[int]:
+        """Return the first matching size limit for the provided keys."""
         for key in keys:
             limit = limits.get(key)
             if limit is not None:
@@ -218,6 +233,7 @@ class ChatbookService:
 
     @staticmethod
     def _build_export_filename(name: str, timestamp: str) -> str:
+        """Build a safe, length-limited export filename."""
         safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in name)
         if not safe_name:
             safe_name = "chatbook"
@@ -346,25 +362,28 @@ class ChatbookService:
             exists = False
             try:
                 exists = candidate.exists()
-            except Exception:
+            except OSError as exc:
+                logger.debug("Chatbooks import: exists check failed for base {}: {}", _base_name, exc)
                 exists = False
             if exists:
                 try:
                     resolved = candidate.resolve(strict=True)
-                except Exception:
+                except OSError as exc:
+                    logger.debug("Chatbooks import: resolve(strict=True) failed for base {}: {}", _base_name, exc)
                     continue
                 try:
                     resolved.relative_to(base)
-                except Exception:
+                except ValueError:
                     continue
                 return resolved
             try:
                 resolved = candidate.resolve(strict=False)
-            except Exception:
+            except OSError as exc:
+                logger.debug("Chatbooks import: resolve(strict=False) failed for base {}: {}", _base_name, exc)
                 continue
             try:
                 resolved.relative_to(base)
-            except Exception:
+            except ValueError:
                 continue
 
         raise SecurityError("Chatbook file path is outside allowed import directories")
@@ -1253,6 +1272,7 @@ class ChatbookService:
             # Write manifest asynchronously
             manifest_path = work_dir / "manifest.json"
             async def _write_manifest() -> None:
+                """Write the current manifest to disk as formatted JSON."""
                 async with aiofiles.open(manifest_path, 'w', encoding='utf-8') as f:
                     await f.write(json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False))
             await _write_manifest()
@@ -1502,7 +1522,7 @@ class ChatbookService:
                 job_id=job_id,
                 user_id=self.user_id,
                 status=ImportStatus.PENDING,
-                chatbook_path=str(resolved_path)
+                chatbook_path=file_token
             )
 
             # Store job in database
@@ -2952,6 +2972,7 @@ class ChatbookService:
 
                 # Convert datetime objects to strings for JSON serialization
                 def convert_datetimes(obj):
+                    """Recursively convert datetime values to ISO 8601 strings."""
                     if isinstance(obj, dict):
                         return {k: convert_datetimes(v) for k, v in obj.items()}
                     elif isinstance(obj, list):
@@ -3006,6 +3027,7 @@ class ChatbookService:
 
                 # Convert datetime objects to strings for JSON serialization
                 def convert_datetimes(obj):
+                    """Recursively convert datetime values to ISO 8601 strings."""
                     if isinstance(obj, dict):
                         return {k: convert_datetimes(v) for k, v in obj.items()}
                     elif isinstance(obj, list):
@@ -4463,6 +4485,7 @@ class ChatbookService:
     async def _create_zip_archive_async(self, work_dir: Path, output_path: Path):
         """Create ZIP archive of the chatbook asynchronously with compression limits."""
         def _create_archive():
+            """Write the ZIP archive, enforcing per-file and total size limits."""
             per_file_limit, total_limit = self._get_archive_limits()
             with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
                 total_size = 0

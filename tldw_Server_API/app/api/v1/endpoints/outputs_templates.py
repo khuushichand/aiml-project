@@ -311,7 +311,7 @@ async def preview_output_template(
                 rows, _ = db.list_content_items(run_id=payload.run_id, page=1, size=payload.limit)
                 items = build_items_context_from_content_items(rows)
             except Exception as exc:
-                logger.debug(
+                logger.opt(exception=True).warning(
                     f"Content items lookup failed for run_id={payload.run_id}, falling back to media IDs: {exc}"
                 )
                 items = []

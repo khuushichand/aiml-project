@@ -189,6 +189,26 @@ class ServiceInitializationTimeoutError(ServiceInitializationError):
     """Raised when a service initialization exceeds its timeout."""
 
 
+class DataTablesJobError(RuntimeError):
+    """Raised for data table job processing failures."""
+
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        if backoff_seconds is not None:
+            self.backoff_seconds = backoff_seconds
+
+
+class FileArtifactsJobError(RuntimeError):
+    """Raised for file artifact job processing failures."""
+
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        if backoff_seconds is not None:
+            self.backoff_seconds = backoff_seconds
+
+
 class WorkflowAdapterError(Exception):
     """Base exception for workflow adapter errors."""
 

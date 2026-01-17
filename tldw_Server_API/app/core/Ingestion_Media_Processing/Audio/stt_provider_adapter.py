@@ -9,6 +9,8 @@ dependencies. Transcription methods will be layered on gradually.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -39,7 +41,21 @@ def _raise_if_cancelled(cancel_check: Optional[Callable[[], bool]]) -> None:
     if cancel_check is None:
         return
     try:
-        should_cancel = bool(cancel_check())
+        result = cancel_check()
+        if inspect.isawaitable(result):
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None and loop.is_running():
+                raise CancelCheckError(
+                    "cancel_check must be synchronous; received awaitable while event loop is running"
+                )
+            should_cancel = asyncio.run(result)
+        else:
+            should_cancel = bool(result)
+    except CancelCheckError:
+        raise
     except Exception as exc:
         raise CancelCheckError(f"cancel_check failed: {exc}") from exc
     if should_cancel:
