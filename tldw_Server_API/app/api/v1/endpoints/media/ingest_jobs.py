@@ -44,13 +44,13 @@ _job_manager_lock = threading.Lock()
 
 
 def get_job_manager() -> JobManager:
-    cache_key = (os.getenv("JOBS_DB_URL", "default") or "default").strip() or "default"
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    cache_key = db_url or "default"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        db_url = (os.getenv("JOBS_DB_URL") or "").strip()
         if not db_url:
             job_manager = JobManager()
         else:
@@ -111,8 +111,8 @@ class MediaIngestJobListResponse(BaseModel):
 def _cleanup_dir(path_str: str) -> None:
     try:
         shutil.rmtree(path_str, ignore_errors=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to cleanup temp dir {}: {}", path_str, exc)
 
 
 def _normalize_payload(payload: Any) -> Dict[str, Any]:
@@ -122,6 +122,10 @@ def _normalize_payload(payload: Any) -> Dict[str, Any]:
         try:
             parsed = json.loads(payload)
         except json.JSONDecodeError:
+            logger.debug(
+                "Failed to parse payload as JSON: {}",
+                payload[:100] if len(payload) > 100 else payload,
+            )
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
@@ -145,8 +149,15 @@ def _parse_job_created_at(value: Any) -> Optional[datetime]:
 
 def _job_to_status(job: Dict[str, Any]) -> MediaIngestJobStatus:
     payload = _normalize_payload(job.get("payload"))
+    id_value = job.get("id")
+    if id_value is None:
+        raise ValueError(f"Missing job id in job: {job!r}")
+    try:
+        job_id = int(id_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid job id {id_value!r} in job: {job!r}") from exc
     return MediaIngestJobStatus(
-        id=int(job.get("id")),
+        id=job_id,
         uuid=job.get("uuid"),
         status=job.get("status"),
         job_type=job.get("job_type"),

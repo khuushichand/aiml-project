@@ -227,7 +227,7 @@ More detail: [Docs/Published/User_Guides/TTS_Getting_Started.md](TTS_Getting_Sta
 ## 7) Optional: Speech-to-Text (STT)
 
 For STT setup and testing, use the dedicated guide and API reference:
-- [Getting-Started-STT_and_TTS.md](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md)
+- [Getting-Started-STT_and_TTS.md](../../Getting-Started-STT_and_TTS.md)
 - [Docs/Published/API-related/Audio_Transcription_API.md](../API-related/Audio_Transcription_API.md)
 
 Quick STT verification:

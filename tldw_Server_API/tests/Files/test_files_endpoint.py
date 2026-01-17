@@ -1,5 +1,4 @@
 import base64
-import json
 import shutil
 import threading
 from io import BytesIO
@@ -261,7 +260,7 @@ def test_create_and_export_json_table(client_with_user):
     assert download.status_code == 200, download.text
     exported = download.json()
     expected_rows = [
-        dict(zip(payload["payload"]["columns"], payload["payload"]["rows"][0]))
+        dict(zip(payload["payload"]["columns"], payload["payload"]["rows"][0], strict=True))
     ]
     assert exported == expected_rows
 

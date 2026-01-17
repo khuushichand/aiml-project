@@ -16,18 +16,17 @@ function getLocale(element) {
     return locale ? locale : raw_locale;
 }
 
-if (typeof document$ !== "undefined") {
-    document$.subscribe(function() {
-        var nodes = document.querySelectorAll('.timeago');
-        if (nodes.length > 0) {
-            var locale = getLocale(nodes[0]);
-            timeago.render(nodes, locale);
-        }
-    })
-} else {
+// Shared hook for initial load and instant-loading updates.
+function renderTimeago() {
     var nodes = document.querySelectorAll('.timeago');
     if (nodes.length > 0) {
         var locale = getLocale(nodes[0]);
         timeago.render(nodes, locale);
     }
+}
+
+if (typeof document$ !== "undefined") {
+    document$.subscribe(renderTimeago);
+} else {
+    renderTimeago();
 }

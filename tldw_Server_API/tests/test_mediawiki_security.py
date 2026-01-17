@@ -19,6 +19,7 @@ from app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import (
     get_safe_log_path,
     import_mediawiki_dump,
 )
+from app.core.exceptions import InvalidStoragePathError
 
 
 class TestPathTraversalProtection:
@@ -27,20 +28,20 @@ class TestPathTraversalProtection:
     def test_null_byte_in_file_path(self):
 
         """Test that null bytes in file paths are rejected."""
-        with pytest.raises(ValueError, match="Null byte"):
+        with pytest.raises(InvalidStoragePathError, match="Null byte"):
             validate_file_path("/etc/passwd\x00.txt")
 
     def test_path_traversal_dots(self):
 
         """Test that path traversal with .. is blocked."""
-        with pytest.raises(ValueError, match="Path traversal"):
+        with pytest.raises(InvalidStoragePathError, match="Path traversal"):
             validate_file_path("../../../etc/passwd")
 
     def test_path_traversal_absolute(self):
 
         """Test that absolute paths outside allowed dir are blocked."""
         # This should fail with access denied or file not exist
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidStoragePathError):
             validate_file_path("/etc/passwd")
 
     def test_import_rejects_outside_allowed_base(self, tmp_path: Path):
@@ -165,11 +166,11 @@ class TestPathTraversalProtection:
 
         """Test that checkpoint paths are protected."""
         # Test path traversal in wiki name
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidStoragePathError):
             get_safe_checkpoint_path("../evil")
 
         # Test null byte in wiki name
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidStoragePathError):
             get_safe_checkpoint_path("test\x00wiki")
 
     def test_checkpoint_path_valid(self):
@@ -224,7 +225,7 @@ class TestPathTraversalProtection:
             symlink.symlink_to(outside_file)
 
             # This should fail because symlink points outside allowed dir
-            with pytest.raises(ValueError):
+            with pytest.raises(InvalidStoragePathError):
                 validate_file_path(str(symlink), allowed_dir)
 
     def test_file_size_limit(self):
@@ -248,7 +249,7 @@ class TestPathTraversalProtection:
         """Test that error messages don't disclose sensitive paths."""
         try:
             validate_file_path("/etc/shadow/../passwd")
-        except ValueError as e:
+        except InvalidStoragePathError as e:
             error_msg = str(e)
             # Check that the actual path is not in the error message
             assert "/etc/shadow" not in error_msg

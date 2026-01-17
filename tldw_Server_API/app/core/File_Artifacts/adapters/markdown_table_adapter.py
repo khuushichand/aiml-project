@@ -1,10 +1,12 @@
+"""Markdown table adapter for File Artifacts exports."""
+
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict
+from typing import Any, ClassVar
 
+from tldw_Server_API.app.core.exceptions import FileArtifactsValidationError
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult
 from tldw_Server_API.app.core.File_Artifacts.adapters.table_adapter_base import TableAdapterBase
-from tldw_Server_API.app.core.exceptions import FileArtifactsValidationError
 
 
 class MarkdownTableAdapter(TableAdapterBase):
@@ -12,9 +14,9 @@ class MarkdownTableAdapter(TableAdapterBase):
 
     file_type: ClassVar[str] = "markdown_table"
     export_formats: ClassVar[set[str]] = {"md"}
-    validation_error = FileArtifactsValidationError
+    validation_error: ClassVar[type[Exception]] = FileArtifactsValidationError
 
-    def export(self, structured: Dict[str, Any], *, format: str) -> ExportResult:
+    def export(self, structured: dict[str, Any], *, format: str) -> ExportResult:
         """Export structured table content to Markdown."""
         if format != "md":
             raise FileArtifactsValidationError("unsupported_format")

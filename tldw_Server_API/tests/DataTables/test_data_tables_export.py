@@ -1,3 +1,4 @@
+import contextlib
 import shutil
 from pathlib import Path
 
@@ -5,18 +6,17 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
 from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
-from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
-
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 pytestmark = pytest.mark.integration
 
@@ -81,21 +81,19 @@ def _build_app(tmp_path: Path, monkeypatch):
     app.dependency_overrides[get_auth_principal] = _principal_override()
     app.dependency_overrides[get_media_db_for_user] = _override_media_db
     app.dependency_overrides[get_collections_db_for_user] = _override_collections_db
-    return app, media_db, prev_base_dir
+    return app, media_db, collections_db, prev_base_dir
 
 
 def _restore_settings(prev_base_dir):
     if prev_base_dir is not None:
         settings.USER_DB_BASE_DIR = prev_base_dir
     else:
-        try:
+        with contextlib.suppress(AttributeError):
             del settings.USER_DB_BASE_DIR
-        except AttributeError:
-            pass
 
 
 def test_export_data_table_csv(tmp_path, monkeypatch):
-    app, media_db, prev_base_dir = _build_app(tmp_path, monkeypatch)
+    app, media_db, collections_db, prev_base_dir = _build_app(tmp_path, monkeypatch)
     try:
         table = media_db.create_data_table(
             name="Roster",
@@ -134,11 +132,12 @@ def test_export_data_table_csv(tmp_path, monkeypatch):
     finally:
         app.dependency_overrides.clear()
         media_db.close_connection()
+        collections_db.close()
         _restore_settings(prev_base_dir)
 
 
 def test_export_data_table_async_pending(tmp_path, monkeypatch):
-    app, media_db, prev_base_dir = _build_app(tmp_path, monkeypatch)
+    app, media_db, collections_db, prev_base_dir = _build_app(tmp_path, monkeypatch)
     try:
         table = media_db.create_data_table(
             name="Roster Async",
@@ -171,4 +170,5 @@ def test_export_data_table_async_pending(tmp_path, monkeypatch):
     finally:
         app.dependency_overrides.clear()
         media_db.close_connection()
+        collections_db.close()
         _restore_settings(prev_base_dir)

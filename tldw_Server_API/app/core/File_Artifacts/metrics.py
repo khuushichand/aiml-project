@@ -1,15 +1,13 @@
-from __future__ import annotations
-
 """
 File artifacts metrics registration.
 
 Importing this module ensures the metrics exist before recording.
 """
+from __future__ import annotations
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Metrics import MetricDefinition, MetricType, get_metrics_registry
-
 
 _REGISTERED = False
 
@@ -32,5 +30,5 @@ def register_file_artifacts_metrics() -> None:
 
 try:
     register_file_artifacts_metrics()
-except Exception as exc:
+except Exception as exc:  # noqa: BLE001 - optional observability should never block imports
     logger.debug(f"File artifacts metrics registration skipped: {exc}")

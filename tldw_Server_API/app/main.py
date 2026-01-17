@@ -2014,7 +2014,7 @@ async def lifespan(app: FastAPI):
             logger.info("File Artifacts Jobs worker started with explicit stop_event signal")
         else:
             logger.info("File Artifacts Jobs worker disabled by flag (FILES_JOBS_WORKER_ENABLED)")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
         logger.warning(f"Failed to start File Artifacts Jobs worker: {e}")
 
     # Embeddings Vector Compactor (soft-delete propagation)
@@ -2452,7 +2452,7 @@ async def lifespan(app: FastAPI):
             _files_gc_task = await start_file_artifacts_export_gc_scheduler()
             if _files_gc_task:
                 logger.info("File artifacts export GC scheduler started")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
         logger.warning(f"Failed to start File artifacts export GC scheduler: {e}")
 
     # Start Jobs prune scheduler (daily maintenance)
@@ -2699,7 +2699,7 @@ async def lifespan(app: FastAPI):
                     files_jobs_stop_event.set()
                     await _asyncio.wait_for(files_jobs_task, timeout=5.0)
                     logger.info("File Artifacts Jobs worker stopped via stop_event")
-                except Exception:
+                except Exception:  # noqa: BLE001 - startup/shutdown guard; log and continue
                     files_jobs_task.cancel()
             else:
                 files_jobs_task.cancel()
@@ -2739,6 +2739,8 @@ async def lifespan(app: FastAPI):
             claims_task.cancel()
         if "jobs_prune_task" in locals() and jobs_prune_task:
             jobs_prune_task.cancel()
+        if "_files_gc_task" in locals() and _files_gc_task:
+            _files_gc_task.cancel()
         if "embeddings_compactor_task" in locals() and embeddings_compactor_task:
             if "embeddings_compactor_stop_event" in locals() and embeddings_compactor_stop_event:
                 try:

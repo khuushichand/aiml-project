@@ -595,8 +595,13 @@ class VoiceManager:
             processed_file.unlink()
 
         # Delete original upload if exists
-        for upload_file in (voices_path / "uploads").glob(f"{voice_id}_*"):
-            upload_file.unlink()
+        uploads_dir = (voices_path / "uploads").resolve()
+        for upload_file in uploads_dir.glob(f"{voice_id}_*"):
+            try:
+                upload_file.resolve().relative_to(uploads_dir)
+                upload_file.unlink()
+            except (ValueError, RuntimeError):
+                logger.warning(f"Skipping invalid upload file path: {upload_file}")
 
         # Remove from registry
         await self.registry.remove_voice(user_id, voice_id)

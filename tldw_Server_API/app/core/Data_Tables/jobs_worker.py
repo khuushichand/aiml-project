@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -351,7 +352,7 @@ def _normalize_columns(
         raise DataTablesJobError("columns_missing", retryable=False)
 
     deduped = _dedupe_column_names([col.get("name") or "" for col in columns])
-    for col, name in zip(columns, deduped):
+    for col, name in zip(columns, deduped, strict=True):
         col["name"] = name
         col_type = _normalize_column_type(col.get("type"))
         col["type"] = col_type or "text"
@@ -800,7 +801,7 @@ def _is_job_cancelled(jm: JobManager, job_id: int) -> bool:
     return status == "cancelled"
 
 
-async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
+async def _handle_job(job: Dict[str, Any], jm: JobManager) -> Dict[str, Any]:
     """Handle a single data tables job and persist the generated table."""
     payload = _normalize_payload(job.get("payload"))
     user_id = _normalize_user_id(job, payload)
@@ -817,7 +818,6 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
         prompt = str(payload.get("prompt") or "").strip()
         model = str(payload.get("model") or "").strip() or None
 
-        jm = _jobs_manager()
         job_id = _coerce_int(job.get("id"), 0)
         max_rows = _resolve_max_rows(payload)
 
@@ -1086,15 +1086,15 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
         if db is not None and table_id > 0:
             try:
                 db.update_data_table(table_id, status="failed", last_error=str(exc), owner_user_id=user_id)
-            except Exception:
-                pass
+            except Exception as reset_exc:
+                logger.debug("data_tables worker: failed to update table status for %s: %s", table_id, reset_exc)
         raise
     except Exception as exc:
         if db is not None and table_id > 0:
             try:
                 db.update_data_table(table_id, status="failed", last_error=str(exc), owner_user_id=user_id)
-            except Exception:
-                pass
+            except Exception as reset_exc:
+                logger.debug("data_tables worker: failed to update table status for %s: %s", table_id, reset_exc)
         raise DataTablesJobError(str(exc), retryable=False) from exc
 
 
@@ -1114,17 +1114,28 @@ async def run_data_tables_jobs_worker(stop_event: Optional[asyncio.Event] = None
         retry_on_exception=True,
         retry_backoff_seconds=_coerce_int(os.getenv("DATA_TABLES_JOBS_RETRY_BACKOFF_SECONDS"), 10),
     )
-    sdk = WorkerSDK(_jobs_manager(), cfg)
+    jm = _jobs_manager()
+    sdk = WorkerSDK(jm, cfg)
+    stop_watcher_task: Optional[asyncio.Task[None]] = None
 
     if stop_event is not None:
         async def _watch_stop() -> None:
             await stop_event.wait()
             sdk.stop()
 
-        asyncio.create_task(_watch_stop())
+        stop_watcher_task = asyncio.create_task(_watch_stop())
 
     logger.info("Data Tables Jobs worker starting (queue=%s, worker_id=%s)", queue, worker_id)
-    await sdk.run(handler=_handle_job)
+    async def _handler(job: Dict[str, Any]) -> Dict[str, Any]:
+        return await _handle_job(job, jm)
+
+    try:
+        await sdk.run(handler=_handler)
+    finally:
+        if stop_watcher_task is not None and not stop_watcher_task.done():
+            stop_watcher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_watcher_task
 
 
 if __name__ == "__main__":

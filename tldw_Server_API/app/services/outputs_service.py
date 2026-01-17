@@ -55,7 +55,7 @@ def render_output_template(template_str: str, context: Dict[str, Any]) -> str:
         return template_str
 
 
-def _build_items_context_from_content_items(rows: Iterable[Any]) -> List[Dict[str, Any]]:
+def build_items_context_from_content_items(rows: Iterable[Any]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for row in rows:
         media_id = getattr(row, "media_id", None)

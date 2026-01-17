@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from html import escape
-from typing import Any, Dict
+from typing import Any, ClassVar, Dict
 
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult
 from tldw_Server_API.app.core.File_Artifacts.adapters.table_adapter_base import TableAdapterBase
+from tldw_Server_API.app.core.exceptions import FileArtifactsValidationError
 
 
 class HtmlTableAdapter(TableAdapterBase):
     file_type = "html_table"
-    export_formats = {"html"}
+    export_formats: ClassVar[set[str]] = {"html"}
 
     def export(self, structured: Dict[str, Any], *, format: str) -> ExportResult:
         if format != "html":
-            raise ValueError("unsupported_format")
+            raise FileArtifactsValidationError("unsupported_format")
         columns = structured.get("columns") or []
         rows = structured.get("rows") or []
         head_cells = "".join(f"<th>{escape(str(col))}</th>" for col in columns)

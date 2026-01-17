@@ -1,14 +1,14 @@
+from typing import ClassVar
+
 import pytest
 
-from tldw_Server_API.app.core.File_Artifacts.adapter_registry import (
-    AdapterInitializationError,
-    FileAdapterRegistry,
-)
+from tldw_Server_API.app.core.File_Artifacts.adapter_registry import FileAdapterRegistry
+from tldw_Server_API.app.core.exceptions import AdapterInitializationError
 
 
 class BoomAdapter:
     file_type = "boom"
-    export_formats: set[str] = set()
+    export_formats: ClassVar[set[str]] = set()
 
     def __init__(self) -> None:
         raise RuntimeError("boom")
@@ -25,4 +25,5 @@ def test_get_adapter_init_failure_raises():
     with pytest.raises(AdapterInitializationError) as excinfo:
         registry.get_adapter("boom")
     assert excinfo.value.adapter_name == "boom"
-    assert "boom" not in registry._adapters
+    with pytest.raises(AdapterInitializationError):
+        registry.get_adapter("boom")

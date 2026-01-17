@@ -83,7 +83,7 @@ Installer flags:
 | ElevenLabs | Hosted API | `ELEVENLABS_API_KEY` | Yes (via ElevenLabs voices) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#commercial-providers) |
 | Kokoro ONNX | Local ONNX | `pip install -e ".[TTS_kokoro_onnx]"` + `espeak-ng` | No | [Getting Started](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md#option-b--kokoro-tts-local-onnx) |
 | NeuTTS Air | Local hybrid | `pip install -e ".[TTS_neutts]"` + `espeak-ng` | **Required** (reference audio + text) | [NeuTTS Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/NEUTTS_TTS_SETUP.md) |
-| Chatterbox | Local PyTorch | `pip install -e ".[TTS_chatterbox]"` (+ `.[TTS_chatterbox_lang]` for multilingual) | Yes (5–20 s) | [Chatterbox Runbook](Chatterbox_TTS_Setup.md) |
+| Chatterbox | Local PyTorch | `pip install -e ".[TTS_chatterbox]"` (+ `.[TTS_chatterbox_lang]` for multilingual) | Yes (5–20 s) | [Chatterbox Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/Published/User_Guides/Chatterbox_TTS_Setup.md) |
 | VibeVoice | Local PyTorch | `pip install -e ".[TTS_vibevoice]"` + clone [VibeVoice](https://github.com/microsoft/VibeVoice) | Yes (3–30 s) | [VibeVoice Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/VIBEVOICE_GETTING_STARTED.md) |
 | Higgs Audio V2 | Local PyTorch | `pip install -e ".[TTS_higgs]"` + install `bosonai/higgs-audio` | Yes (3–10 s) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#higgs-audio-v2-setup) |
 | Dia | Local PyTorch | `pip install torch transformers accelerate nltk spacy` | Yes (dialogue prompts) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#dia-setup) |
@@ -222,7 +222,7 @@ Each section highlights installation, configuration, and a smoke test.
       target_latency_ms: 200
   ```
 - **Voice cloning**: send `voice_reference` (5–20 s, 24 kHz) and optional `emotion` + `emotion_intensity` to tune delivery.
-- **Reference**: see [Chatterbox Runbook](Chatterbox_TTS_Setup.md) for streaming examples and troubleshooting.
+- **Reference**: see [Chatterbox Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/Published/User_Guides/Chatterbox_TTS_Setup.md) for streaming examples and troubleshooting.
 
 ### VibeVoice
 - **Install**: `pip install -e ".[TTS_vibevoice]"`; clone the upstream repo into `libs/VibeVoice` and `pip install -e .` there. Optional: `bitsandbytes`, `flash-attn`, `ninja` for CUDA optimizations.

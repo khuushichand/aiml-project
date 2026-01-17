@@ -196,7 +196,7 @@ async def _handle_import(service: ChatbookService, payload: Dict[str, Any], job_
     conflict_resolution = _parse_conflict_resolution(payload.get("conflict_resolution", "skip"))
     file_ref = payload.get("file_token") or payload.get("file_path")
     if not file_ref or not str(file_ref).strip():
-        raise ChatbooksJobError("Missing file token for import job", retryable=False)
+        raise ChatbooksJobError("Missing file reference for import job", retryable=False)
     ok, msg, warnings = await asyncio.to_thread(
         service._import_chatbook_sync,
         str(file_ref),

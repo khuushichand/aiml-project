@@ -317,36 +317,64 @@ class ChatbookService:
         if not ref:
             raise ValidationError("Chatbook file path is required", field="file_path")
 
-        base_dirs = [self.temp_dir.resolve(), self.import_dir.resolve()]
+        base_dirs = [("import", self.import_dir.resolve()), ("temp", self.temp_dir.resolve())]
+        base_map = dict(base_dirs)
         ref_path = Path(ref)
-        candidates: List[Path] = []
+        base_hint: Optional[str] = None
 
+        if not (ref_path.is_absolute() or (ref_path.drive and ref_path.root)):
+            token_parts = ref.split("/", 1)
+            if token_parts[0] in base_map:
+                base_hint = token_parts[0]
+                if len(token_parts) == 1 or not token_parts[1]:
+                    raise ValidationError("Chatbook file path is required", field="file_path")
+                ref_path = Path(token_parts[1])
+
+        bases_to_check = base_dirs
+        if base_hint is not None:
+            bases_to_check = [(base_hint, base_map[base_hint])]
+
+        candidates: List[Tuple[str, Path, Path]] = []
         if ref_path.is_absolute() or (ref_path.drive and ref_path.root):
-            candidates.append(ref_path)
+            for base_name, base in bases_to_check:
+                candidates.append((base_name, base, ref_path))
         else:
-            for base in base_dirs:
-                candidates.append(base / ref_path)
+            for base_name, base in bases_to_check:
+                candidates.append((base_name, base, base / ref_path))
 
-        for candidate in candidates:
+        for _base_name, base, candidate in candidates:
+            exists = False
             try:
-                resolved = candidate.resolve(strict=False)
+                exists = candidate.exists()
             except Exception:
-                continue
-            for base in base_dirs:
+                exists = False
+            if exists:
+                try:
+                    resolved = candidate.resolve(strict=True)
+                except Exception:
+                    continue
                 try:
                     resolved.relative_to(base)
                 except Exception:
                     continue
                 return resolved
+            try:
+                resolved = candidate.resolve(strict=False)
+            except Exception:
+                continue
+            try:
+                resolved.relative_to(base)
+            except Exception:
+                continue
 
         raise SecurityError("Chatbook file path is outside allowed import directories")
 
     def _build_import_file_token(self, resolved_path: Path) -> str:
         """Return a tokenized relative path for import job payloads."""
-        base_dirs = [self.temp_dir.resolve(), self.import_dir.resolve()]
-        for base in base_dirs:
+        base_dirs = [("import", self.import_dir.resolve()), ("temp", self.temp_dir.resolve())]
+        for base_name, base in base_dirs:
             try:
-                return resolved_path.relative_to(base).as_posix()
+                return f"{base_name}/{resolved_path.relative_to(base).as_posix()}"
             except Exception:
                 continue
         return resolved_path.name

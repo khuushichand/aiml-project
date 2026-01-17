@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, Optional
 
 import asyncio
 import json
@@ -22,6 +22,8 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ProcessedMediaWikiPage,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import (
+    ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS,
+    MAX_MEDIAWIKI_FILE_SIZE_BYTES,
     import_mediawiki_dump as core_import_mediawiki_dump,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
@@ -31,6 +33,72 @@ from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 from pydantic import ValidationError
 
 router = APIRouter()
+
+ALLOWED_DUMP_MIME_TYPES = frozenset(
+    {
+        "application/xml",
+        "text/xml",
+        "application/x-xml",
+        "text/plain",
+        "application/octet-stream",
+        "application/gzip",
+        "application/x-gzip",
+        "application/x-gzip-compressed",
+        "application/bzip2",
+        "application/x-bzip2",
+        "application/x-bzip",
+    }
+)
+
+
+def _validate_dump_filename(filename: str) -> None:
+    """Validate dump file has an allowed extension."""
+    base_name = Path(filename).name
+    lower = base_name.lower()
+    if not any(lower.endswith(ext) for ext in ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS):
+        allowed = ", ".join(sorted(ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file type. Allowed: {allowed}",
+        )
+
+
+def _validate_dump_content_type(content_type: Optional[str]) -> None:
+    """Validate dump file content type when provided."""
+    if not content_type:
+        return
+    normalized = content_type.split(";", 1)[0].strip().lower()
+    if normalized and normalized not in ALLOWED_DUMP_MIME_TYPES:
+        allowed = ", ".join(sorted(ALLOWED_DUMP_MIME_TYPES))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid content type '{content_type}'. Allowed: {allowed}",
+        )
+
+
+def _validate_dump_magic_bytes(first_chunk: bytes, filename: str) -> None:
+    """Validate file headers for XML, gzip, or bzip2 dumps."""
+    lower = Path(filename).name.lower()
+    if lower.endswith((".gz", ".xml.gz")):
+        if len(first_chunk) < 2 or not first_chunk.startswith(b"\x1f\x8b"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Gzip dump file has invalid header.",
+            )
+        return
+    if lower.endswith((".bz2", ".xml.bz2")):
+        if len(first_chunk) < 3 or not first_chunk.startswith(b"BZh"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bzip2 dump file has invalid header.",
+            )
+        return
+    stripped = first_chunk.lstrip(b"\xef\xbb\xbf \t\r\n")
+    if not stripped.startswith(b"<"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="XML dump file has invalid header.",
+        )
 
 
 async def _process_mediawiki_dump(
@@ -53,6 +121,14 @@ async def _process_mediawiki_dump(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Dump file has no filename.",
         )
+    _validate_dump_filename(dump_file.filename)
+    _validate_dump_content_type(dump_file.content_type)
+    dump_file_size = getattr(dump_file, "size", None)
+    if isinstance(dump_file_size, int) and dump_file_size > MAX_MEDIAWIKI_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large",
+        )
 
     prefix = "mediawiki_ingest_" if store_to_db or store_to_vector_db else "mediawiki_process_"
     with TempDirManager(prefix=prefix, cleanup=False) as temp_dir:
@@ -60,10 +136,35 @@ async def _process_mediawiki_dump(
         temp_file_path = temp_dir_path / sanitize_filename(dump_file.filename)
         try:
             async with aiofiles.open(temp_file_path, "wb") as f:
+                bytes_written = 0
+                first_chunk = await dump_file.read(8192)
+                if not first_chunk:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Dump file is empty.",
+                    )
+                _validate_dump_magic_bytes(first_chunk, dump_file.filename)
+                bytes_written += len(first_chunk)
+                if bytes_written > MAX_MEDIAWIKI_FILE_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="File too large",
+                    )
+                await f.write(first_chunk)
                 while chunk := await dump_file.read(8192):
+                    bytes_written += len(chunk)
+                    if bytes_written > MAX_MEDIAWIKI_FILE_SIZE_BYTES:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail="File too large",
+                        )
                     await f.write(chunk)
+        except HTTPException:
+            shutil.rmtree(temp_dir_path, ignore_errors=True)
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to save uploaded MediaWiki dump: {}", exc, exc_info=True)
+            shutil.rmtree(temp_dir_path, ignore_errors=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to save uploaded file",
@@ -158,6 +259,7 @@ async def ingest_mediawiki_dump_endpoint(
     "/mediawiki/process-dump",
     summary="Process a MediaWiki XML dump and return structured content without database storage.",
     tags=["MediaWiki Processing"],
+    dependencies=[Depends(guard_backpressure_and_quota)],
 )
 async def process_mediawiki_dump_ephemeral_endpoint(
     form_data: Dict[str, Any] = Depends(get_mediawiki_form_data),

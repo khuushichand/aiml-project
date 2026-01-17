@@ -8,7 +8,7 @@ from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import FileExport
 try:
     # Pydantic v2
     from pydantic import model_validator  # type: ignore
-except Exception:  # pragma: no cover - fallback for older environments
+except ImportError:  # pragma: no cover - fallback for older environments
     model_validator = None  # type: ignore
 
 
@@ -174,8 +174,6 @@ class DataTablesListResponse(BaseModel):
     """Paginated response containing data table summaries."""
 
     tables: List[DataTableSummary]
-    items: List[DataTableSummary]
-    results: List[DataTableSummary]
     count: int
     limit: int
     offset: int

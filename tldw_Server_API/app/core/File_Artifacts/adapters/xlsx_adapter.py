@@ -4,6 +4,7 @@ from io import BytesIO
 from typing import Any, ClassVar, Dict, List
 
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, ValidationIssue
+from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
 
 
 class XlsxAdapter:
@@ -23,18 +24,18 @@ class XlsxAdapter:
             }
         sheets = payload.get("sheets")
         if not isinstance(sheets, list):
-            raise ValueError("sheets_required")
+            raise FileArtifactsValidationError("sheets_required")
         normalized_sheets = []
         for sheet in sheets:
             if not isinstance(sheet, dict):
-                raise ValueError("sheet_must_be_object")
+                raise FileArtifactsValidationError("sheet_must_be_object")
             name = sheet.get("name") or "Sheet1"
             columns = sheet.get("columns")
             rows = sheet.get("rows")
             if columns is None or rows is None:
-                raise ValueError("columns_and_rows_required")
+                raise FileArtifactsValidationError("columns_and_rows_required")
             if not isinstance(columns, list) or not isinstance(rows, list):
-                raise ValueError("columns_rows_must_be_lists")
+                raise FileArtifactsValidationError("columns_rows_must_be_lists")
             normalized_sheets.append(
                 {
                     "name": str(name),
@@ -93,17 +94,21 @@ class XlsxAdapter:
 
     def export(self, structured: Dict[str, Any], *, format: str) -> ExportResult:
         if format != "xlsx":
-            raise ValueError("unsupported_format")
+            raise FileArtifactsValidationError("unsupported_format")
         try:
             from openpyxl import Workbook
         except Exception as exc:
-            raise RuntimeError("xlsx_export_unavailable") from exc
+            raise FileArtifactsError("xlsx_export_unavailable", detail=str(exc)) from exc
 
         sheets = structured.get("sheets") or []
         wb = Workbook()
-        # Remove default sheet to avoid empty extra sheet
         default = wb.active
-        wb.remove(default)
+        if sheets:
+            # Remove default sheet to avoid empty extra sheet when we add custom sheets.
+            wb.remove(default)
+        else:
+            # Ensure there's always at least one worksheet for empty payloads.
+            default.title = "Sheet1"
 
         for sheet in sheets:
             name = sheet.get("name") or "Sheet1"

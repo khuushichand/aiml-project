@@ -9,47 +9,44 @@ Provides REST API endpoints for creating, importing, and managing chatbooks.
 """
 
 import os
-import re
 import shutil
-import hashlib
-from uuid import uuid4
 from datetime import datetime, timezone
-from typing import Optional
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks, Request
+from typing import Optional
+from uuid import uuid4
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from loguru import logger
+
+# Unified audit service
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 
-# Unified audit service
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-
+from ....core.AuthNZ.User_DB_Handling import User, get_request_user
 from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ....core.DB_Management.db_path_utils import DatabasePaths
-from ....core.Chatbooks.chatbook_service import ChatbookService
-from ....core.Chatbooks.chatbook_models import ContentType, ConflictResolution, ExportStatus, ExportJob
 from ....core.Chatbooks.quota_manager import QuotaManager
+from ....core.Chatbooks.chatbook_models import ContentType, ExportJob, ExportStatus
+from ....core.Chatbooks.chatbook_service import ChatbookService
 from ....core.Chatbooks.chatbook_validators import ChatbookValidator
-from ....core.AuthNZ.User_DB_Handling import User
-from ....core.AuthNZ.User_DB_Handling import get_request_user
 from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ..schemas.chatbook_schemas import (
+    CancelJobResponse,
+    ChatbookManifestResponse,
+    ChatbookVersion as SchemaChatbookVersion,
+    CleanupExpiredExportsResponse,
     CreateChatbookRequest,
     CreateChatbookResponse,
+    ExportJobResponse,
     ImportChatbookRequest,
     ImportChatbookResponse,
-    PreviewChatbookResponse,
-    ExportJobResponse,
     ImportJobResponse,
     ListExportJobsResponse,
     ListImportJobsResponse,
-    CleanupExpiredExportsResponse,
-    CancelJobResponse,
-    ChatbookErrorResponse,
-    ChatbookManifestResponse,
-    ChatbookVersion as SchemaChatbookVersion
+    PreviewChatbookResponse,
 )
 
 router = APIRouter(prefix="/chatbooks", tags=["chatbooks"])
@@ -1043,7 +1040,7 @@ async def download_chatbook(
                 logger.warning(f"Failed to log audit event for path traversal: {audit_err}")
             raise HTTPException(status_code=403, detail="Access denied")
 
-        # Verify file exists and is within secure storage
+        # Verify file exists (containment already validated above)
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(status_code=404, detail="Export file no longer exists")
 

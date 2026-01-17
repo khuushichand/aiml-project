@@ -2609,16 +2609,16 @@ async def create_output(
                 template_record = template_store.load_template(template_name)
             except template_store.TemplateNotFoundError:
                 template_record = None
-            except TemplateValidationError:
-                raise HTTPException(status_code=400, detail="invalid_template_name")
+            except TemplateValidationError as exc:
+                raise HTTPException(status_code=400, detail="invalid_template_name") from exc
         try:
             if template_record is None:
                 output_template = collections_db.get_output_template_by_name(template_name)
         except KeyError:
             output_template = None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.error(f"Watchlists template lookup failed: {exc}")
-            raise HTTPException(status_code=500, detail="template_lookup_failed")
+            raise HTTPException(status_code=500, detail="template_lookup_failed") from exc
         if output_template and output_template.format not in {"md", "html"}:
             raise HTTPException(status_code=400, detail="template_format_not_supported")
         if template_record is None and output_template is None:
@@ -2783,7 +2783,7 @@ async def create_output(
                 path.write_text(output_content or "", encoding="utf-8")
             except Exception as exc:
                 logger.error(f"watchlists outputs: failed to write output file: {exc}")
-                raise HTTPException(status_code=500, detail="write_failed")
+                raise HTTPException(status_code=500, detail="write_failed") from exc
         try:
             row = collections_db.create_output_artifact(
                 type_=output_type,
@@ -2801,9 +2801,9 @@ async def create_output(
             try:
                 if path.exists():
                     path.unlink()
-            except Exception:
-                pass
-            raise HTTPException(status_code=500, detail="db_insert_failed")
+            except Exception as cleanup_exc:
+                logger.debug(f"watchlists outputs: cleanup failed for {path}: {cleanup_exc}")
+            raise HTTPException(status_code=500, detail="db_insert_failed") from exc
         created_outputs.append((row.id, path))
 
         if payload.ingest_to_media_db:
@@ -2829,12 +2829,12 @@ async def create_output(
             try:
                 if path and hasattr(path, "exists") and path.exists():
                     path.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"watchlists: cleanup failed to remove file {path}: {exc}")
             try:
                 collections_db.delete_output_artifact(oid, hard=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"watchlists: cleanup failed to delete artifact {oid}: {exc}")
 
     try:
         row = await _persist_output_artifact(
@@ -3061,8 +3061,6 @@ async def list_outputs(
         if metadata.get("origin") != "watchlists":
             continue
         items.append(_row_to_output(row, user_id=user_id))
-    if run_id is not None or job_id is not None:
-        return WatchlistOutputsListResponse(items=items, total=total)
     return WatchlistOutputsListResponse(items=items, total=len(items))
 
 
@@ -3075,8 +3073,8 @@ async def get_output(
     collections_db.purge_expired_outputs()
     try:
         row = collections_db.get_output_artifact(output_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="output_not_found") from exc
     metadata = _parse_output_metadata(row)
     if metadata.get("origin") != "watchlists":
         raise HTTPException(status_code=404, detail="output_not_found")
@@ -3102,8 +3100,8 @@ async def download_output(
     collections_db.purge_expired_outputs()
     try:
         row = collections_db.get_output_artifact(output_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="output_not_found") from exc
     metadata = _parse_output_metadata(row)
     if metadata.get("origin") != "watchlists":
         raise HTTPException(status_code=404, detail="output_not_found")
@@ -3125,7 +3123,7 @@ async def download_output(
     try:
         output_path = _resolve_output_path_for_user(user_id, storage_name)
     except HTTPException as exc:
-        raise HTTPException(status_code=400, detail=exc.detail)
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
     if not output_path.exists():
         raise HTTPException(status_code=404, detail="output_file_missing")
     if fmt == "mp3":
@@ -3133,8 +3131,8 @@ async def download_output(
         return FileResponse(path=output_path, media_type="audio/mpeg", headers=headers)
     try:
         content = output_path.read_text(encoding="utf-8")
-    except Exception:
-        raise HTTPException(status_code=404, detail="output_file_missing")
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="output_file_missing") from exc
     if fmt == "html":
         headers = {"Content-Disposition": f'attachment; filename="{filename}.html"'}
         return HTMLResponse(content=content, headers=headers)

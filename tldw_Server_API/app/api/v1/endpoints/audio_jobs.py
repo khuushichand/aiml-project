@@ -50,7 +50,7 @@ def get_job_manager() -> JobManager:
     DSN, use the Postgres backend; otherwise fall back to JobManager's default
     backend resolution (typically SQLite).
     """
-    cache_key = (os.getenv("JOBS_DB_URL", "default") or "default").strip() or "default"
+    cache_key = (os.getenv("JOBS_DB_URL") or "").strip() or "default"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:

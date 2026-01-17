@@ -10,8 +10,9 @@ Executes a watchlist job for a given user:
   highest-priority matching rule. Filter decisions and tallies are recorded into run stats
   (filters_matched, filters_actions, filter_tallies) and filtered items are recorded into
   `scraped_items` with status="filtered".
-- Persist per-run stats, upsert Collections content_items, and append media IDs to
-  scrape_run_items only when Media DB persistence is enabled
+- Persist per-run stats for each run, upsert Collections content_items for ingested
+  items regardless of Media DB persistence, and append media IDs to scrape_run_items
+  only when Media DB persistence is enabled
 
 Include-only gating semantics:
 - A job may set `require_include=true` in its filters payload. When any include rules exist and
@@ -171,7 +172,16 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
             job_output_prefs = json.loads(job.output_prefs_json or "{}")
             if not isinstance(job_output_prefs, dict):
                 job_output_prefs = {}
-    except Exception:
+    except Exception as e:
+        logger.exception(
+            "Failed to parse job.output_prefs_json; job_id={} job_record_id={} job_repr={} "
+            "output_prefs_json={!r} error={}",
+            job_id,
+            getattr(job, "id", None),
+            repr(job),
+            getattr(job, "output_prefs_json", None),
+            e,
+        )
         job_output_prefs = {}
     ingest_cfg = job_output_prefs.get("ingest") if isinstance(job_output_prefs, dict) else None
     persist_to_media_db = False
@@ -611,7 +621,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         summary_text = article.get("content") or it.get("summary") or ""
                         if persist_to_media_db and mdb is not None:
                             try:
-                                media_id, media_uuid, msg = mdb.add_media_with_keywords(
+                                media_id, media_uuid, _msg = mdb.add_media_with_keywords(
                                     url=article.get("url") or link,
                                     title=article.get("title") or (it.get("title") or "Untitled"),
                                     media_type="article",
@@ -689,8 +699,10 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     etag=None,
                                     last_modified=(it.get("published") or None),
                                 )
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                logger.debug(
+                                    f"watchlists: failed to mark seen item for source {src.id}: {exc}"
+                                )
                             _record_scraped(
                                 status="ingested",
                                 url=article.get("url") or link,
@@ -898,7 +910,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             flagged = False
                         if persist_to_media_db and mdb is not None:
                             try:
-                                media_id, media_uuid, msg = mdb.add_media_with_keywords(
+                                media_id, media_uuid, _msg = mdb.add_media_with_keywords(
                                     url=article.get("url") or page_url,
                                     title=article.get("title") or src.name,
                                     media_type="article",

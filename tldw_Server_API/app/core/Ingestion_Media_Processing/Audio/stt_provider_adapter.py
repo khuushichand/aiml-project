@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Callable
 
 from tldw_Server_API.app.core.config import get_stt_config
-from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
+from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 
 try:
@@ -41,7 +41,7 @@ def _raise_if_cancelled(cancel_check: Optional[Callable[[], bool]]) -> None:
     try:
         should_cancel = bool(cancel_check())
     except Exception as exc:
-        raise RuntimeError(f"cancel_check failed: {exc}") from exc
+        raise CancelCheckError(f"cancel_check failed: {exc}") from exc
     if should_cancel:
         raise TranscriptionCancelled("Cancelled by user")
 
@@ -213,11 +213,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
         segments_list, detected_lang = result
         # Strip Whisper metadata header so callers see only user content
         segments_for_response = strip_whisper_metadata_header(segments_list)
-        text = " ".join(
-            str(seg.get("Text", "")).strip()
-            for seg in segments_for_response
-            if isinstance(seg, dict)
-        )
+        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_for_response if isinstance(seg, dict))
 
         return {
             "text": text,
@@ -287,11 +283,7 @@ class ParakeetAdapter(SttProviderAdapter):
             base_dir=base_dir,
             cancel_check=cancel_check,
         )
-        text = " ".join(
-            str(seg.get("Text", "")).strip()
-            for seg in segments_list
-            if isinstance(seg, dict)
-        )
+        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_list if isinstance(seg, dict))
         return {
             "text": text,
             "language": language or lang,
@@ -344,14 +336,14 @@ class CanaryAdapter(SttProviderAdapter):
             # Enforce that local audio paths stay within base_dir for path safety.
             safe_path = resolve_safe_local_path(path_obj, base_dir)
             if safe_path is None:
-                raise ValueError(f"Audio path rejected outside base_dir: {audio_path}")
+                raise BadRequestError(f"Audio path rejected outside base_dir: {audio_path}")
             path_obj = safe_path
 
+        _raise_if_cancelled(cancel_check)
         try:
-            _raise_if_cancelled(cancel_check)
             audio_np, sample_rate = sf.read(str(path_obj))
         except Exception as e:
-            raise ValueError(f"Failed to read audio file {path_obj}: {e}") from e
+            raise BadRequestError(f"Failed to read audio file {path_obj}: {e}") from e
         if not isinstance(audio_np, np.ndarray):
             audio_np = np.array(audio_np, dtype="float32")
 
@@ -429,11 +421,7 @@ class Qwen2AudioAdapter(SttProviderAdapter):
             base_dir=base_dir,
             cancel_check=cancel_check,
         )
-        text = " ".join(
-            str(seg.get("Text", "")).strip()
-            for seg in segments_list
-            if isinstance(seg, dict)
-        )
+        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_list if isinstance(seg, dict))
         return {
             "text": text,
             "language": language or lang,

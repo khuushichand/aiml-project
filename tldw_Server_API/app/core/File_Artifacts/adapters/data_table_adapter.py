@@ -29,6 +29,7 @@ class DataTableAdapter(TableAdapterBase):
         raise FileArtifactsValidationError("unsupported_format")
 
     def _export_csv(self, structured: Dict[str, Any]) -> ExportResult:
+        """Export structured table data to CSV bytes."""
         columns = structured.get("columns") or []
         rows = structured.get("rows") or []
         buf = StringIO(newline="")
@@ -40,6 +41,7 @@ class DataTableAdapter(TableAdapterBase):
         return ExportResult(status="ready", content_type="text/csv", bytes_len=len(data), content=data)
 
     def _export_json(self, structured: Dict[str, Any]) -> ExportResult:
+        """Export structured table data to JSON bytes."""
         columns = structured.get("columns") or []
         rows = structured.get("rows") or []
         try:
@@ -50,6 +52,7 @@ class DataTableAdapter(TableAdapterBase):
         return ExportResult(status="ready", content_type="application/json", bytes_len=len(data), content=data)
 
     def _export_xlsx(self, structured: Dict[str, Any]) -> ExportResult:
+        """Export structured table data to XLSX bytes via XlsxAdapter."""
         columns = structured.get("columns") or []
         rows = structured.get("rows") or []
         adapter = XlsxAdapter()
@@ -58,6 +61,7 @@ class DataTableAdapter(TableAdapterBase):
 
     @staticmethod
     def _sanitize_cell(value: Any) -> str:
+        """Normalize a CSV cell and mitigate formula injection."""
         if value is None:
             return ""
         text = str(value).replace("\n", " ")

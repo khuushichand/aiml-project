@@ -6994,6 +6994,17 @@ class MediaDatabase:
             return str(scope.user_id)
         return None
 
+    def _get_data_table_owner_client_id(self, conn, table_id: int) -> Optional[str]:
+        """Fetch the owning client_id for a data table id."""
+        row = self._fetchone_with_connection(
+            conn,
+            "SELECT client_id FROM data_tables WHERE id = ? AND deleted = 0",
+            (int(table_id),),
+        )
+        if not row:
+            return None
+        return str(row.get("client_id"))
+
     def create_data_table(
         self,
         *,
@@ -7005,6 +7016,7 @@ class MediaDatabase:
         row_count: int = 0,
         generation_model: Optional[str] = None,
         table_uuid: Optional[str] = None,
+        owner_user_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Create a data table metadata record and return the row."""
         if not name:
@@ -7014,6 +7026,7 @@ class MediaDatabase:
 
         now = self._get_current_utc_timestamp_str()
         table_uuid = table_uuid or self._generate_uuid()
+        owner_client_id = self._resolve_data_tables_owner(owner_user_id) or str(self.client_id)
 
         column_hints_json = None
         if column_hints is not None:
@@ -7050,7 +7063,7 @@ class MediaDatabase:
                     now,
                     now,
                     1,
-                    str(self.client_id),
+                    owner_client_id,
                     0,
                 ),
             )
@@ -7190,22 +7203,34 @@ class MediaDatabase:
     def get_data_table_counts(
         self,
         table_ids: List[int],
+        *,
+        owner_user_id: Optional[int] = None,
     ) -> Dict[int, Dict[str, int]]:
         """Return column/source counts for the provided table ids."""
         ids = [int(table_id) for table_id in table_ids if table_id is not None]
         if not ids:
             return {}
+        owner_filter = self._resolve_data_tables_owner(owner_user_id)
         placeholders = ",".join(["?"] * len(ids))
+        owner_clause = ""
+        params: List[Any] = list(ids)
+        if owner_filter is not None:
+            owner_clause = " AND dt.client_id = ?"
+            params.append(owner_filter)
         columns_sql = (
-            "SELECT table_id, COUNT(*) as count FROM data_table_columns "
-            f"WHERE deleted = 0 AND table_id IN ({placeholders}) GROUP BY table_id"
+            "SELECT c.table_id, COUNT(*) as count FROM data_table_columns c "
+            "INNER JOIN data_tables dt ON dt.id = c.table_id "
+            f"WHERE c.deleted = 0 AND dt.deleted = 0 AND c.table_id IN ({placeholders}){owner_clause} "
+            "GROUP BY c.table_id"
         )
         sources_sql = (
-            "SELECT table_id, COUNT(*) as count FROM data_table_sources "
-            f"WHERE deleted = 0 AND table_id IN ({placeholders}) GROUP BY table_id"
+            "SELECT s.table_id, COUNT(*) as count FROM data_table_sources s "
+            "INNER JOIN data_tables dt ON dt.id = s.table_id "
+            f"WHERE s.deleted = 0 AND dt.deleted = 0 AND s.table_id IN ({placeholders}){owner_clause} "
+            "GROUP BY s.table_id"
         )
-        columns_rows = self.execute_query(columns_sql, tuple(ids)).fetchall()
-        sources_rows = self.execute_query(sources_sql, tuple(ids)).fetchall()
+        columns_rows = self.execute_query(columns_sql, tuple(params)).fetchall()
+        sources_rows = self.execute_query(sources_sql, tuple(params)).fetchall()
 
         counts: Dict[int, Dict[str, int]] = {
             table_id: {"column_count": 0, "source_count": 0} for table_id in ids
@@ -7571,13 +7596,17 @@ class MediaDatabase:
         self,
         table_id: int,
         *,
+        owner_user_id: str,
         columns: List[Dict[str, Any]],
         rows: List[Dict[str, Any]],
     ) -> Tuple[int, int]:
         """Replace data table columns and rows, returning counts inserted."""
+        owner_value = str(owner_user_id).strip()
+        if not owner_value:
+            raise InputError("owner_user_id is required")
         if not columns:
             raise InputError("columns are required")
-        if not rows:
+        if rows is None:
             raise InputError("rows are required")
 
         now = self._get_current_utc_timestamp_str()
@@ -7640,6 +7669,11 @@ class MediaDatabase:
             )
 
         with self.transaction() as conn:
+            actual_owner = self._get_data_table_owner_client_id(conn, int(table_id))
+            if not actual_owner:
+                raise InputError("data_table_not_found")
+            if actual_owner != owner_value:
+                raise InputError("data_table_owner_mismatch")
             self._execute_with_connection(
                 conn,
                 """
@@ -7699,11 +7733,20 @@ class MediaDatabase:
         row_count: Optional[int] = None,
         generation_model: Optional[str] = None,
         last_error: Any = None,
+        owner_user_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Persist generated table data and update table metadata."""
+        """Persist generated table data and update table metadata.
+
+        If owner_user_id is provided, it must match the table owner.
+        """
+        owner_value = None
+        if owner_user_id is not None:
+            owner_value = str(owner_user_id).strip()
+            if not owner_value:
+                raise InputError("owner_user_id is required")
         if not columns:
             raise InputError("columns are required")
-        if not rows:
+        if rows is None:
             raise InputError("rows are required")
 
         now = self._get_current_utc_timestamp_str()
@@ -7815,6 +7858,12 @@ class MediaDatabase:
         params.append(int(table_id))
 
         with self.transaction() as conn:
+            if owner_value is not None:
+                actual_owner = self._get_data_table_owner_client_id(conn, int(table_id))
+                if not actual_owner:
+                    raise InputError("data_table_not_found")
+                if actual_owner != owner_value:
+                    raise InputError("data_table_owner_mismatch")
             self._execute_with_connection(
                 conn,
                 """

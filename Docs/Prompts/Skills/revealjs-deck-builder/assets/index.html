@@ -25,8 +25,13 @@
   </div>
   <script src="assets/reveal/reveal.js"></script>
   <script src="assets/reveal/plugin/notes/notes.js"></script>
+  <script id="reveal-settings" type="application/json">
+    {{settings_json}}
+  </script>
   <script>
-    const settings = {{settings_json}};
+    const settings = JSON.parse(
+      document.getElementById("reveal-settings").textContent
+    );
     const existingPlugins = Array.isArray(settings.plugins) ? settings.plugins : [];
     settings.plugins = [...existingPlugins, RevealNotes];
     Reveal.initialize(settings);

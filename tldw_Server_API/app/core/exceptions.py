@@ -24,6 +24,10 @@ class JSONDecodeError(Exception):
     """Raised when a response expected to be JSON cannot be decoded or is invalid."""
 
 
+class BadRequestError(ValueError):
+    """Raised when a caller provides invalid arguments for an operation."""
+
+
 class StreamingProtocolError(Exception):
     """Raised for streaming protocol violations (e.g., malformed SSE)."""
 
@@ -34,6 +38,10 @@ class DownloadError(Exception):
 
 class TranscriptionCancelled(RuntimeError):
     """Raised when transcription/conversion is cancelled."""
+
+
+class CancelCheckError(RuntimeError):
+    """Raised when a cancellation check fails unexpectedly."""
 
 
 class SecurityAlertWebhookError(Exception):
@@ -141,6 +149,17 @@ class FileArtifactsError(Exception):
 
 class FileArtifactsValidationError(FileArtifactsError):
     """Raised when file artifacts payload validation fails."""
+
+
+class AdapterInitializationError(FileArtifactsError):
+    """Raised when a file adapter fails to initialize."""
+
+    def __init__(self, name: str, spec: Any, exc: Exception) -> None:
+        message = f"Failed to initialize adapter '{name}' (spec={spec!r}): {exc}"
+        super().__init__("adapter_initialization_failed", detail=message)
+        self.adapter_name = name
+        self.spec = spec
+        self.original_exception = exc
 
 
 class ResourceNotFoundError(Exception):

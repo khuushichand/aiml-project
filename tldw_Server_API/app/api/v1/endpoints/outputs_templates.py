@@ -26,7 +26,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.services.outputs_service import (
-    _build_items_context_from_content_items,
+    build_items_context_from_content_items,
     render_output_template,
 )
 from datetime import datetime
@@ -309,15 +309,18 @@ async def preview_output_template(
             items = []
             try:
                 rows, _ = db.list_content_items(run_id=payload.run_id, page=1, size=payload.limit)
-                items = _build_items_context_from_content_items(rows)
-            except Exception:
+                items = build_items_context_from_content_items(rows)
+            except Exception as exc:
+                logger.debug(
+                    f"Content items lookup failed for run_id={payload.run_id}, falling back to media IDs: {exc}"
+                )
                 items = []
             if not items:
                 mids = _select_media_ids_for_run(media_db, payload.run_id, payload.limit)
                 items = _build_items_context_from_media_ids(media_db, mids, payload.limit) if mids else []
         else:
             # Provide samples when no selection is provided.
-            items_count = 5 if payload.run_id else 3
+            items_count = 3
             items = [
                 {
                     "title": f"Sample Article {i+1}",

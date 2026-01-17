@@ -84,11 +84,19 @@ Egress & Outbound Policy (global + Workflows)
 - `DATA_TABLES_JOBS_QUEUE`: Queue for data table generation jobs (default `default`).
 - `DATA_TABLES_JOBS_WORKER_ID`: Worker identifier for data tables jobs (default `data-tables-jobs-<pid>`).
 - `DATA_TABLES_JOBS_LEASE_SECONDS`: Lease duration for data tables jobs (default `60`).
+- `DATA_TABLES_JOBS_RENEW_JITTER_SECONDS`: Lease renew jitter in seconds (default `5`).
+- `DATA_TABLES_JOBS_RENEW_THRESHOLD_SECONDS`: Renew threshold in seconds (default `10`).
+- `DATA_TABLES_JOBS_BACKOFF_BASE_SECONDS`: Base retry backoff in seconds (default `2`).
+- `DATA_TABLES_JOBS_BACKOFF_MAX_SECONDS`: Max retry backoff in seconds (default `30`).
+- `DATA_TABLES_JOBS_RETRY_BACKOFF_SECONDS`: Backoff for retryable errors (default `10`).
 - `DATA_TABLES_DEFAULT_MAX_ROWS`: Default max rows per table when request omits `max_rows` (default `200`).
 - `DATA_TABLES_MAX_ROWS`: Hard cap on generated rows per table (default `2000`).
 - `DATA_TABLES_MAX_SOURCE_CHARS`: Per-source character cap used when building prompts (default `12000`).
 - `DATA_TABLES_MAX_TOTAL_SOURCE_CHARS`: Aggregate character cap across all sources (default `60000`).
+- `DATA_TABLES_MAX_SNAPSHOT_CHARS`: Per-chunk snapshot text cap for rag_query sources (default `8000`).
 - `DATA_TABLES_MAX_PROMPT_CHARS`: Total prompt size cap (default `24000`).
+- `DATA_TABLES_CHAT_BATCH_SIZE`: Batch size when loading chat messages (default `250`).
+- `DATA_TABLES_CHAT_MAX_MESSAGES`: Maximum chat messages loaded per source (default `1500`).
 - `DATA_TABLES_LLM_MAX_TOKENS`: LLM response token budget for table generation (default `2000`).
 - `DATA_TABLES_LLM_TEMPERATURE`: LLM temperature for table generation (default `0.2`).
 

@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import FileCreateOptions, FileExportRequest
+from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import FileCreateOptions
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
@@ -98,11 +98,14 @@ async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
         max_bytes=payload.get("max_bytes"),
         export_ttl_seconds=payload.get("export_ttl_seconds"),
     )
-    export_req = FileExportRequest(format=export_format, mode="url", async_mode="async")
-
     try:
-        export_result = await service._export_sync(adapter, structured, export_format)
-        export_info = await service._finalize_export(file_id, export_req, export_result, options)
+        export_info = await service.export_artifact_for_job(
+            adapter=adapter,
+            structured=structured,
+            file_id=file_id,
+            export_format=export_format,
+            options=options,
+        )
         return {
             "status": export_info.status,
             "bytes": export_info.bytes,

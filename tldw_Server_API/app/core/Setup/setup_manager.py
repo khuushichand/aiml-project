@@ -380,7 +380,8 @@ def _validate_user_db_base_dir_update(parser: ConfigParser, new_value: Any) -> N
         raise ValueError(
             "USER_DB_BASE_DIR must be under one of the allowed roots. "
             f"Allowed roots: {allowed_str}. "
-            "Set USER_DB_BASE_DIR_ALLOWED_ROOTS to allow additional locations."
+            "Set USER_DB_BASE_DIR_ALLOWED_ROOTS and/or "
+            "TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS to allow additional locations."
         )
 
 

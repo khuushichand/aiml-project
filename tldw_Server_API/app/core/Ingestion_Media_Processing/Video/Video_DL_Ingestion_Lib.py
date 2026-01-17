@@ -1224,7 +1224,7 @@ def process_single_video(
             logger.warning(f"cancel_check raised an error: {exc}")
             return False
 
-        from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
+    from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
 
     try:
         logger.info(f"Processing single video input: {video_input}") # Log original

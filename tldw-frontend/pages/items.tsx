@@ -91,7 +91,6 @@ export default function ItemsPage() {
   const outputItemIds = useMemo(
     () =>
       selectedItems
-        .filter((item) => item.content_item_id && item.id !== item.content_item_id)
         .map((item) => item.content_item_id)
         .filter((id): id is number => typeof id === 'number'),
     [selectedItems]

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
@@ -400,6 +401,7 @@ async def generate_data_table(
     tp = ensure_traceparent(request) if request is not None else ""
     table_id = None
     table_uuid = None
+    owner_user_id = _resolve_owner_id(principal, current_user)
 
     try:
         column_hints = None
@@ -414,6 +416,7 @@ async def generate_data_table(
             status="queued",
             row_count=0,
             generation_model=req.model,
+            owner_user_id=owner_user_id,
         )
         table_id = int(table_row.get("id"))
         table_uuid = str(table_row.get("uuid"))
@@ -441,7 +444,7 @@ async def generate_data_table(
                 }
             )
         if sources_db_payload:
-            db.insert_data_table_sources(table_id, sources_db_payload)
+            db.insert_data_table_sources(table_id, sources_db_payload, owner_user_id=owner_user_id)
 
         payload: Dict[str, Any] = {
             "table_id": table_id,
@@ -473,7 +476,6 @@ async def generate_data_table(
                     status_code=409,
                     detail=job_state.get("error_message") or "data_table_job_failed",
                 )
-            owner_user_id = _resolve_owner_id(principal, current_user)
             table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
             if not table_row:
                 raise HTTPException(status_code=404, detail="data_table_not_found")
@@ -512,6 +514,7 @@ async def generate_data_table(
                     table_id,
                     status="failed",
                     last_error=str(exc),
+                    owner_user_id=owner_user_id,
                 )
             except Exception:
                 logger.debug("data_tables.generate: failed to mark table as failed")
@@ -552,7 +555,7 @@ async def list_data_tables(
             table_ids.append(int(row.get("id")))
         except Exception:
             continue
-    counts_map = db.get_data_table_counts(table_ids)
+    counts_map = db.get_data_table_counts(table_ids, owner_user_id=owner_user_id)
     tables = []
     for row in rows:
         table_id = None
@@ -570,8 +573,6 @@ async def list_data_tables(
         )
     return DataTablesListResponse(
         tables=tables,
-        items=tables,
-        results=tables,
         count=len(tables),
         total=total,
         limit=limit,
@@ -840,20 +841,20 @@ async def update_data_table_content(
                     "row_json": row_json,
                 }
             )
+    except InputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        db.soft_delete_data_table_columns(table_id, owner_user_id=owner_user_id)
-        db.soft_delete_data_table_rows(table_id, owner_user_id=owner_user_id)
-        if columns_payload:
-            db.insert_data_table_columns(table_id, columns_payload, owner_user_id=owner_user_id)
-        if rows_payload:
-            db.insert_data_table_rows(table_id, rows_payload, owner_user_id=owner_user_id)
-        db.update_data_table(
-            table_id,
-            status="ready",
-            row_count=len(rows_payload),
-            last_error=None,
-            owner_user_id=owner_user_id,
-        )
+    try:
+        with db.transaction():
+            db.persist_data_table_generation(
+                table_id,
+                columns=columns_payload,
+                rows=rows_payload,
+                status="ready",
+                row_count=len(rows_payload),
+                last_error=None,
+                owner_user_id=owner_user_id,
+            )
     except InputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -895,7 +896,10 @@ async def update_data_table(
     )
     if not updated:
         raise HTTPException(status_code=500, detail="data_table_update_failed")
-    counts = db.get_data_table_counts([int(updated.get("id"))]).get(int(updated.get("id")), {})
+    counts = db.get_data_table_counts([int(updated.get("id"))], owner_user_id=owner_user_id).get(
+        int(updated.get("id")),
+        {},
+    )
     return _table_summary_from_row(
         updated,
         column_count=counts.get("column_count"),
@@ -1032,7 +1036,7 @@ async def regenerate_data_table(
         )
 
     response.status_code = status.HTTP_202_ACCEPTED
-    counts = db.get_data_table_counts([table_id]).get(table_id, {})
+    counts = db.get_data_table_counts([table_id], owner_user_id=owner_user_id).get(table_id, {})
     return DataTableGenerateResponse(
         job_id=int(job.get("id")),
         job_uuid=job.get("uuid"),

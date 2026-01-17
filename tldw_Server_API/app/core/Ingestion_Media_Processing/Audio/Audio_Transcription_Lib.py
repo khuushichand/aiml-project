@@ -2913,11 +2913,22 @@ class ConversionError(Exception):
 
 
 def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> None:
+    """Raise TranscriptionCancelled when cancel_check requests cancellation."""
     if cancel_check is None:
         return
     try:
         should_cancel = cancel_check()
         if inspect.isawaitable(should_cancel):
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None and loop.is_running():
+                raise RuntimeError(
+                    "_check_cancel received an awaitable cancel_check in the cancel_check handling branch "
+                    "while an event loop is running; provide a synchronous cancel_check or update the API "
+                    "to handle async cancel checks."
+                )
             should_cancel = asyncio.run(should_cancel)
         if should_cancel:
             raise TranscriptionCancelled(f"Cancelled during {label}")
@@ -3327,8 +3338,8 @@ def convert_to_wav(
             if proc.poll() is None:
                 try:
                     proc.terminate()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug(f"Failed to terminate ffmpeg process in {label}: {exc}")
 
     try:
         _check_cancel(cancel_check, label="ffmpeg conversion")

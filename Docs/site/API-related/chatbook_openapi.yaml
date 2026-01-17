@@ -92,7 +92,7 @@ paths:
                   description: Chatbook file to import
                 options:
                   type: string
-                  format: json
+                  contentMediaType: application/json
                   description: JSON string with import options
                   example: '{"conflict_resolution": "skip", "prefix_imported": true}'
       responses:
@@ -216,11 +216,11 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Export job cancelled successfully
+                $ref: '#/components/schemas/CancelJobResponse'
+              example:
+                success: true
+                message: Export job cb_export_20240115_abc123 cancelled
+                job_id: cb_export_20240115_abc123
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -292,11 +292,11 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Import job cancelled successfully
+                $ref: '#/components/schemas/CancelJobResponse'
+              example:
+                success: true
+                message: Import job cb_import_20240115_def456 cancelled
+                job_id: cb_import_20240115_def456
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -465,6 +465,7 @@ components:
       required:
         - name
         - description
+        - content_selections
       properties:
         name:
           type: string
@@ -474,12 +475,13 @@ components:
         description:
           type: string
           minLength: 1
-          maxLength: 1000
+          maxLength: 5000
           example: Regular weekly backup of all content
         content_selections:
           type: object
           additionalProperties:
             type: array
+            maxItems: 1000
             items:
               type: string
           example:
@@ -522,6 +524,7 @@ components:
           type: object
           additionalProperties:
             type: array
+            maxItems: 1000
             items:
               type: string
         conflict_resolution:
@@ -531,7 +534,7 @@ components:
           default: false
         import_media:
           type: boolean
-          default: true
+          default: false
         import_embeddings:
           type: boolean
           default: false
@@ -579,6 +582,28 @@ components:
             conversation: 5
             note: 10
             character: 2
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Validator and import warnings (sync imports only)
+
+    CancelJobResponse:
+      type: object
+      required:
+        - success
+        - message
+        - job_id
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Job cancelled successfully
+        job_id:
+          type: string
+          example: cb_export_20240115_abc123
 
     ContentItemResponse:
       type: object
@@ -607,6 +632,59 @@ components:
           type: string
         checksum:
           type: string
+
+    ChatbookTruncation:
+      type: object
+      description: Truncation metadata for resumable exports.
+      properties:
+        evaluations:
+          $ref: '#/components/schemas/EvaluationTruncation'
+        conversations:
+          $ref: '#/components/schemas/ConversationTruncation'
+      additionalProperties: false
+
+    EvaluationTruncation:
+      type: object
+      description: Truncation metadata for evaluation exports.
+      properties:
+        truncated:
+          type: boolean
+        max_rows:
+          type: integer
+        continuations:
+          type: array
+          items:
+            $ref: '#/components/schemas/TruncationContinuation'
+      additionalProperties: false
+
+    ConversationTruncation:
+      type: object
+      description: Truncation metadata for conversation exports.
+      properties:
+        truncated:
+          type: boolean
+        max_messages:
+          type: integer
+        conversation_ids:
+          type: array
+          items:
+            type: string
+      additionalProperties: false
+
+    TruncationContinuation:
+      type: object
+      required:
+        - evaluation_id
+        - run_id
+        - continuation_token
+      properties:
+        evaluation_id:
+          type: string
+        run_id:
+          type: string
+        continuation_token:
+          type: string
+      additionalProperties: false
 
     ChatbookManifestResponse:
       type: object
@@ -688,33 +766,7 @@ components:
               additionalProperties:
                 type: integer
         truncation:
-          type: object
-          description: Truncation metadata for resumable exports.
-          additionalProperties: true
-          properties:
-            evaluations:
-              type: object
-              additionalProperties: true
-              properties:
-                truncated:
-                  type: boolean
-                max_rows:
-                  type: integer
-                continuations:
-                  type: array
-                  items:
-                    type: object
-                    required:
-                      - evaluation_id
-                      - run_id
-                      - continuation_token
-                    properties:
-                      evaluation_id:
-                        type: string
-                      run_id:
-                        type: string
-                      continuation_token:
-                        type: string
+          $ref: '#/components/schemas/ChatbookTruncation'
 
     PreviewChatbookResponse:
       type: object

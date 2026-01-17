@@ -1,71 +1,15 @@
 import pytest
-
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
-from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
 pytestmark = pytest.mark.integration
 
 
-def _principal_override():
-    async def _override(request=None) -> AuthPrincipal:
-        principal = AuthPrincipal(
-            kind="user",
-            user_id=1,
-            api_key_id=None,
-            subject="test-user",
-            token_type="single_user",
-            jti=None,
-            roles=["admin"],
-            permissions=["media.create", "media.read", "media.update", "media.delete"],
-            is_admin=True,
-            org_ids=[],
-            team_ids=[],
-        )
-        if request is not None:
-            request.state.auth = AuthContext(
-                principal=principal,
-                ip=None,
-                user_agent=None,
-                request_id=None,
-            )
-        return principal
-
-    return _override
-
-
-def _build_app(db_path, monkeypatch) -> FastAPI:
-    monkeypatch.setenv("TEST_MODE", "1")
-    monkeypatch.setenv("JOBS_DB_PATH", str(db_path.parent / "jobs.db"))
-    app = FastAPI()
-    app.include_router(data_tables_router, prefix="/api/v1", tags=["data-tables"])
-
-    async def _override_user() -> User:
-        return User(id=1, username="tester", email=None, is_active=True, is_admin=True)
-
-    async def _override_db():
-        override_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-        try:
-            yield override_db
-        finally:
-            override_db.close_connection()
-
-    app.dependency_overrides[get_request_user] = _override_user
-    app.dependency_overrides[get_auth_principal] = _principal_override()
-    app.dependency_overrides[get_media_db_for_user] = _override_db
-    return app
-
-
-def test_generate_and_get_data_table(tmp_path, monkeypatch):
+def test_generate_and_get_data_table(tmp_path, data_tables_app_factory):
     db_path = tmp_path / "media.db"
-    app = _build_app(db_path, monkeypatch)
+    app, _ = data_tables_app_factory(db_path)
 
     with TestClient(app) as client:
         resp = client.post(
@@ -94,7 +38,7 @@ def test_generate_and_get_data_table(tmp_path, monkeypatch):
         assert detail_payload["sources"]
 
 
-def test_list_update_delete_data_table(tmp_path, monkeypatch):
+def test_list_update_delete_data_table(tmp_path, data_tables_app_factory):
     db_path = tmp_path / "media.db"
     seed_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
     table = seed_db.create_data_table(
@@ -120,7 +64,7 @@ def test_list_update_delete_data_table(tmp_path, monkeypatch):
     )
     seed_db.close_connection()
 
-    app = _build_app(db_path, monkeypatch)
+    app, _ = data_tables_app_factory(db_path)
     with TestClient(app) as client:
         resp = client.get("/api/v1/data-tables")
         assert resp.status_code == 200, resp.text
@@ -140,9 +84,9 @@ def test_list_update_delete_data_table(tmp_path, monkeypatch):
         assert delete.json()["success"] is True
 
 
-def test_job_status_and_cancel(tmp_path, monkeypatch):
+def test_job_status_and_cancel(tmp_path, data_tables_app_factory):
     db_path = tmp_path / "media.db"
-    app = _build_app(db_path, monkeypatch)
+    app, _ = data_tables_app_factory(db_path)
 
     with TestClient(app) as client:
         resp = client.post(

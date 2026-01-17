@@ -257,16 +257,28 @@ class IcalAdapter:
         cal.add("prodid", calendar.get("prodid") or "-//tldw//files//EN")
         cal.add("version", calendar.get("version") or "2.0")
         calendar_tz = calendar.get("timezone")
-        for event in calendar.get("events") or []:
+        for idx, event in enumerate(calendar.get("events") or []):
             if not isinstance(event, dict):
                 continue
+            event_uid = event.get("uid")
+            event_ref = f"index={idx}"
+            if event_uid:
+                event_ref = f"{event_ref} uid={event_uid}"
             event_tz = event.get("timezone") or calendar_tz
-            start_dt, start_issues = self._parse_event_datetime(event.get("start"), event_tz, path="calendar.events.start")
+            start_dt, start_issues = self._parse_event_datetime(
+                event.get("start"),
+                event_tz,
+                path=f"calendar.events[{idx}].start",
+            )
             if start_issues or not start_dt:
-                raise ValueError("event_start_invalid")
-            end_dt, end_issues = self._parse_event_datetime(event.get("end"), event_tz, path="calendar.events.end")
+                raise ValueError(f"event_start_invalid ({event_ref})")
+            end_dt, end_issues = self._parse_event_datetime(
+                event.get("end"),
+                event_tz,
+                path=f"calendar.events[{idx}].end",
+            )
             if end_issues:
-                raise ValueError("event_end_invalid")
+                raise ValueError(f"event_end_invalid ({event_ref})")
 
             ical_event = Event()
             ical_event.add("uid", event.get("uid"))

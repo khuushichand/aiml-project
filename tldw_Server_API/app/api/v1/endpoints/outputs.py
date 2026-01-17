@@ -23,7 +23,7 @@ from tldw_Server_API.app.api.v1.endpoints.outputs_templates import _build_items_
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 from starlette.responses import FileResponse
 from tldw_Server_API.app.services.outputs_service import (
-    _build_items_context_from_content_items,
+    build_items_context_from_content_items,
     _build_output_filename,
     _ingest_output_to_media_db,
     _outputs_dir_for_user,
@@ -195,8 +195,13 @@ async def create_output(
             items = []
             try:
                 rows, _ = cdb.list_content_items(run_id=payload.run_id, page=1, size=1000)
-                items = _build_items_context_from_content_items(rows)
-            except Exception:
+                items = build_items_context_from_content_items(rows)
+            except Exception as e:
+                logger.opt(exception=True).warning(
+                    "outputs: cdb.list_content_items/build_items_context_from_content_items failed for run_id={} ({})",
+                    payload.run_id,
+                    e,
+                )
                 items = []
             if not items:
                 mids = _select_media_ids_for_run(media_db, payload.run_id, 1000)

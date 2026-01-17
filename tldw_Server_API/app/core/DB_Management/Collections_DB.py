@@ -125,8 +125,11 @@ class CollectionsDatabase:
 
     def __init__(self, user_id: int | str, backend: Optional[DatabaseBackend] = None):
         self.user_id = str(user_id)
+        self._owns_backend = False
         if backend is None:
             backend = self._resolve_backend()
+        else:
+            self._owns_backend = False
         self.backend = backend
         self._fts_available = True
         self.ensure_schema()
@@ -147,6 +150,7 @@ class CollectionsDatabase:
             resolved = get_content_backend(parser)
             if resolved is None:
                 raise DatabaseError("PostgreSQL content backend requested but not initialized")
+            self._owns_backend = False
             return resolved
 
         try:
@@ -161,13 +165,30 @@ class CollectionsDatabase:
                     resolved = get_content_backend(parser)
                     if resolved is None:
                         raise DatabaseError("PostgreSQL content backend requested but not initialized")
+                    self._owns_backend = False
                     return resolved
             except Exception:
                 pass
 
         db_path = str(DatabasePaths.get_media_db_path(int(self.user_id)))
         cfg = DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=db_path)
+        self._owns_backend = True
         return DatabaseBackendFactory.create_backend(cfg)
+
+    def close(self) -> None:
+        """Release backend connections if this instance owns the backend."""
+        if not self._owns_backend:
+            return
+        try:
+            self.backend.close_all()
+        except Exception as exc:
+            logger.debug("collections_db: failed to close backend for user %s: %s", self.user_id, exc)
+
+    def __enter__(self) -> "CollectionsDatabase":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
 
     def _execute_insert(self, query: str, params: Tuple[Any, ...]) -> Any:
         if self.backend.backend_type == BackendType.POSTGRESQL:
@@ -287,6 +308,9 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_user_type ON file_artifacts(user_id, file_type);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_created ON file_artifacts(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_status ON file_artifacts(export_status);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_retention_until ON file_artifacts(retention_until);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_deleted_at ON file_artifacts(deleted_at);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_expires_at ON file_artifacts(export_expires_at);
             """
         else:
             ddl = """
@@ -371,6 +395,9 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_user_type ON file_artifacts(user_id, file_type);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_created ON file_artifacts(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_status ON file_artifacts(export_status);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_retention_until ON file_artifacts(retention_until);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_deleted_at ON file_artifacts(deleted_at);
+            CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_expires_at ON file_artifacts(export_expires_at);
             """
         try:
             self.backend.create_tables(ddl)
@@ -637,6 +664,7 @@ class CollectionsDatabase:
 
     @staticmethod
     def _fts_query_string(query: str) -> str:
+        """Build a simple FTS query string with prefix matches."""
         tokens = [tok.strip() for tok in query.replace('"', " ").split() if tok.strip()]
         if not tokens:
             return ""
@@ -644,6 +672,7 @@ class CollectionsDatabase:
 
     @staticmethod
     def _fts_query_candidates(query: str) -> List[str]:
+        """Generate FTS query candidates, preferring safe variants when needed."""
         raw = (query or "").strip()
         if not raw:
             return []
@@ -673,6 +702,7 @@ class CollectionsDatabase:
 
     @staticmethod
     def _is_fts_query_error(exc: Exception) -> bool:
+        """Detect common FTS query errors for fallback handling."""
         msg = str(exc).lower()
         return (
             "fts" in msg
@@ -2025,6 +2055,7 @@ class CollectionsDatabase:
         metadata_json: Optional[str] = None,
         retention_until: Optional[str] = None,
     ) -> "CollectionsDatabase.FileArtifactRow":
+        """Create a file artifact record and return the stored row."""
         now = _utcnow_iso()
         resolved_storage_path = None
         if export_storage_path is not None:
@@ -2061,6 +2092,7 @@ class CollectionsDatabase:
         return self.get_file_artifact(new_id)
 
     def get_file_artifact(self, file_id: int, include_deleted: bool = False) -> "CollectionsDatabase.FileArtifactRow":
+        """Fetch a file artifact by id."""
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
             "SELECT id, user_id, file_type, title, structured_json, validation_json, export_status, export_format, "
@@ -2085,6 +2117,7 @@ class CollectionsDatabase:
         export_expires_at: Optional[str] = None,
         export_consumed_at: Optional[str] = None,
     ) -> "CollectionsDatabase.FileArtifactRow":
+        """Update export fields for a file artifact."""
         updated_at = _utcnow_iso()
         resolved_storage_path = None
         if export_storage_path is not None:
@@ -2131,6 +2164,7 @@ class CollectionsDatabase:
         return res.rowcount > 0
 
     def delete_file_artifact(self, file_id: int, *, hard: bool = False) -> bool:
+        """Delete a file artifact (soft delete by default)."""
         if hard:
             q = "DELETE FROM file_artifacts WHERE id = ? AND user_id = ?"
             res = self.backend.execute(q, (file_id, self.user_id))
@@ -2146,6 +2180,7 @@ class CollectionsDatabase:
         soft_deleted_grace_days: int,
         include_retention: bool,
     ) -> Dict[int, Optional[str]]:
+        """List artifact ids and paths eligible for retention or soft-delete purges."""
         paths: Dict[int, Optional[str]] = {}
         if include_retention:
             q = (
@@ -2174,6 +2209,7 @@ class CollectionsDatabase:
         return paths
 
     def list_file_artifacts_expired_exports(self, *, now_iso: str) -> List[Dict[str, Any]]:
+        """List ready exports that have expired for cleanup."""
         rows: List[Dict[str, Any]] = []
         q = (
             "SELECT id, export_storage_path, export_format, export_bytes, export_content_type, export_job_id, export_expires_at "
@@ -2203,6 +2239,7 @@ class CollectionsDatabase:
         return rows
 
     def delete_file_artifacts_by_ids(self, ids: List[int]) -> int:
+        """Delete file artifacts by id list for the current user."""
         if not ids:
             return 0
         placeholders = ",".join(["?"] * len(ids))

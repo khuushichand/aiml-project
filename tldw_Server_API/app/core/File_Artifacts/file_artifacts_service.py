@@ -5,6 +5,7 @@ import base64
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from http import HTTPStatus
 from typing import Any, Dict, Tuple
 
@@ -36,6 +37,7 @@ DEFAULT_MAX_CELLS = 200000
 DEFAULT_ASYNC_ROWS = 2000
 DEFAULT_ASYNC_CELLS = 100000
 INLINE_MAX_BYTES = 256 * 1024
+INLINE_MAX_BYTES_UPPER_BOUND = 10 * 1024 * 1024
 DEFAULT_EXPORT_TTL_SECONDS = 900
 
 EXPORT_MIME_TYPES = {
@@ -48,6 +50,7 @@ EXPORT_MIME_TYPES = {
 }
 
 
+@lru_cache(maxsize=1)
 def _jobs_manager() -> JobManager:
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
     if not db_url:
@@ -182,6 +185,22 @@ class FileArtifactsService:
         """Fetch a file artifact by id."""
         row = self._cdb.get_file_artifact(file_id)
         return self._build_artifact_from_row(row)
+
+    async def export_artifact_for_job(
+        self,
+        *,
+        adapter: FileAdapter,
+        structured: Dict[str, Any],
+        file_id: int,
+        export_format: str,
+        options: FileCreateOptions,
+    ) -> FileExportInfo:
+        """Export and persist a file artifact for the jobs worker."""
+        if export_format not in adapter.export_formats:
+            raise FileArtifactsValidationError("unsupported_export_format")
+        export_req = FileExportRequest(format=export_format, mode="url", async_mode="async")
+        export_result = await self._export_sync(adapter, structured, export_format)
+        return await self._finalize_export(file_id, export_req, export_result, options)
 
     async def _handle_export(
         self,
@@ -427,8 +446,11 @@ class FileArtifactsService:
             value = int(str(raw).strip())
         except (TypeError, ValueError):
             return INLINE_MAX_BYTES
-        if value < 0:
-            return INLINE_MAX_BYTES
+        if value <= 0 or value > INLINE_MAX_BYTES_UPPER_BOUND:
+            raise ValueError(
+                "Invalid inline_max_bytes: must be between 1 and "
+                f"{INLINE_MAX_BYTES_UPPER_BOUND} bytes."
+            )
         return value
 
     @staticmethod
@@ -525,7 +547,7 @@ class FileArtifactsService:
 
     def _estimate_export_size(
         self,
-        file_type: str,
+        _file_type: str,
         structured: Dict[str, Any],
         export_format: str,
     ) -> int | None:

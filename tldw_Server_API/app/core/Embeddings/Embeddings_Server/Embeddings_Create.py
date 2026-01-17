@@ -54,7 +54,7 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     log_model_evicted,
     log_memory_limit_exceeded,
 )
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.config import rg_policy_path, resolve_repo_relative_path
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
 
@@ -172,10 +172,10 @@ def _normalize_model_storage_base_dir(base_dir: str) -> str:
     base_dir_str = str(base_dir or "").strip()
     if not base_dir_str:
         _log_rejected_path("model_storage_base_dir", base_dir_str, "empty")
-        raise ValueError("model_storage_base_dir must be a non-empty string.")
+        raise InvalidStoragePathError("model_storage_base_dir must be a non-empty string.")
     if "\x00" in base_dir_str:
         _log_rejected_path("model_storage_base_dir", base_dir_str, "nul_byte")
-        raise ValueError("model_storage_base_dir contains invalid characters.")
+        raise InvalidStoragePathError("model_storage_base_dir contains invalid characters.")
     resolved = Path(resolve_repo_relative_path(base_dir_str)).resolve(strict=False)
     try:
         resolved.relative_to(_EMBEDDINGS_STORAGE_ALLOWLIST_ROOT)
@@ -187,7 +187,7 @@ def _normalize_model_storage_base_dir(base_dir: str) -> str:
             resolved=str(resolved),
             base=str(_EMBEDDINGS_STORAGE_ALLOWLIST_ROOT),
         )
-        raise ValueError(
+        raise InvalidStoragePathError(
             f"model_storage_base_dir must be within {_EMBEDDINGS_STORAGE_ALLOWLIST_ROOT}."
         ) from exc
     return str(resolved)
@@ -197,10 +197,10 @@ def _safe_model_storage_subdir(base_dir: str, subpath: str, label: str) -> str:
     """Resolve and validate a storage subpath under base_dir."""
     if not isinstance(subpath, str) or not subpath.strip():
         _log_rejected_path(label, str(subpath), "empty", base=base_dir)
-        raise ValueError(f"{label} must be a non-empty relative path.")
+        raise InvalidStoragePathError(f"{label} must be a non-empty relative path.")
     if "\x00" in subpath:
         _log_rejected_path(label, subpath, "nul_byte", base=base_dir)
-        raise ValueError(f"{label} contains invalid characters.")
+        raise InvalidStoragePathError(f"{label} contains invalid characters.")
 
     def _path_error(_: Exception | None) -> Exception:
         candidate = ""
@@ -215,7 +215,9 @@ def _safe_model_storage_subdir(base_dir: str, subpath: str, label: str) -> str:
             resolved=candidate or None,
             base=base_dir,
         )
-        return ValueError(f"{label} must be a relative path within model_storage_base_dir.")
+        return InvalidStoragePathError(
+            f"{label} must be a relative path within model_storage_base_dir."
+        )
 
     return safe_join(base_dir, subpath, error_factory=_path_error)
 
@@ -395,7 +397,7 @@ class HFModelCfg(BaseModelCfg):
 class ONNXModelCfg(BaseModelCfg):
     provider: str = "onnx"
     onnx_storage_dir_subpath: str = "onnx_models"
-    onnx_providers: List[str] = ["CPUExecutionProvider"]
+    onnx_providers: List[str] = Field(default_factory=lambda: ["CPUExecutionProvider"])
 
 
 class OpenAIModelCfg(BaseModelCfg):

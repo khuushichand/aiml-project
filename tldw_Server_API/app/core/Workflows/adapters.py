@@ -214,6 +214,7 @@ def _unsafe_file_access_allowed(config: Dict[str, Any] | None) -> bool:  # noqa:
 
 
 def _parse_workflows_file_allowlist(raw: str | None) -> list[str]:
+    """Parse the allowlist env var into a list of non-empty path strings."""
     if not raw:
         return []
     parts = [p.strip() for p in raw.replace("\n", ",").split(",")]
@@ -221,6 +222,7 @@ def _parse_workflows_file_allowlist(raw: str | None) -> list[str]:
 
 
 def _resolve_workflows_file_allowlist_paths(paths: list[str]) -> list[Path]:
+    """Resolve allowlist entries into absolute Paths anchored to the project root."""
     if not paths:
         return []
     project_root = None
@@ -247,6 +249,7 @@ def _resolve_workflows_file_allowlist_paths(paths: list[str]) -> list[Path]:
 
 
 def _workflow_file_allowlist(context: Dict[str, Any]) -> list[Path]:
+    """Return the resolved allowlist for the current tenant, if configured."""
     tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
     tenant_key = f"WORKFLOWS_FILE_ALLOWLIST_{tenant_id.upper().replace('-', '_')}"
     if tenant_key in os.environ:

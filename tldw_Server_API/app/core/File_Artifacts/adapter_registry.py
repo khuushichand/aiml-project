@@ -6,17 +6,7 @@ from typing import Any, ClassVar, Dict, Optional, Type
 from loguru import logger
 
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import FileAdapter
-
-
-class AdapterInitializationError(RuntimeError):
-    """Raised when a file adapter fails to initialize."""
-
-    def __init__(self, name: str, spec: Any, exc: Exception) -> None:
-        message = f"Failed to initialize adapter '{name}' (spec={spec!r}): {exc}"
-        super().__init__(message)
-        self.adapter_name = name
-        self.spec = spec
-        self.original_exception = exc
+from tldw_Server_API.app.core.exceptions import AdapterInitializationError
 
 
 class FileAdapterRegistry:

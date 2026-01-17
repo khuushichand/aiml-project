@@ -898,9 +898,10 @@ skip_audio_prevalidation = false
 # If unset, the server falls back to Databases/user_databases under
 # the project root.
 # Setup-time updates to USER_DB_BASE_DIR are constrained to an allowlist.
-# To permit other roots, set USER_DB_BASE_DIR_ALLOWED_ROOTS or
-# TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS to a comma- or colon-separated list
-# of parent directories.
+# Default allowlist includes the project Databases directory and the parent of the
+# current USER_DB_BASE_DIR.
+# Add extra roots via USER_DB_BASE_DIR_ALLOWED_ROOTS and/or
+# TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS (comma- or colon-separated); values are merged.
 USER_DB_BASE_DIR = Databases/user_databases
 
 local_tts_device = cpu

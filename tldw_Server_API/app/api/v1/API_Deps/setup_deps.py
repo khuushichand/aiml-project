@@ -14,13 +14,11 @@ import ipaddress
 import os
 import time
 from configparser import ConfigParser
-from typing import Optional
 
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.core.Setup import setup_manager
-
 
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 # Treat these as local hostnames for the Host header check.
@@ -29,11 +27,21 @@ LOCAL_HOST_HEADERS = {"localhost", "127.0.0.1", "::1", "testserver"}
 _FALSEY_ENV_VALUES = {"0", "false", "no", "off", "n"}
 
 _CONFIG_REMOTE_CACHE_TTL = 30.0  # seconds
-_config_remote_cached: Optional[bool] = None
+_config_remote_cached: bool | None = None
 _config_remote_cached_at = 0.0
 
 
 async def _require_admin_for_remote(request: Request) -> None:
+    """Enforce admin-level authorization for remote setup access.
+
+    Principals satisfying any of these conditions are permitted:
+    - ``principal.is_admin`` is truthy (full admin privileges)
+    - Single-user mode principal (bootstrapped local user)
+    - Has "admin" role AND ``SYSTEM_CONFIGURE`` permission
+
+    Raises:
+        HTTPException: 403 Forbidden if the principal lacks required privileges.
+    """
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
     from tldw_Server_API.app.core.AuthNZ.principal_model import is_single_user_principal
@@ -55,12 +63,12 @@ async def _require_admin_for_remote(request: Request) -> None:
         )
 
 
-def reset_remote_access_cache(value: Optional[bool] = None) -> None:
+def reset_remote_access_cache(value: bool | None = None) -> None:
     """Reset the cached remote access flag (test helper/administrative hook)."""
     _set_remote_access_cache(value)
 
 
-def _set_remote_access_cache(value: Optional[bool]) -> None:
+def _set_remote_access_cache(value: bool | None) -> None:
     global _config_remote_cached, _config_remote_cached_at
     if value is None:
         _config_remote_cached = None
@@ -97,9 +105,9 @@ def _first_forwarded_ip(request: Request) -> str | None:
     try:
         # header can be comma-separated list of IPs; take the first hop
         first = raw.split(",", 1)[0].strip()
-        return first or None
     except Exception:  # noqa: BLE001
         return None
+    return first or None
 
 
 def _is_loopback_host(host: str | None) -> bool:
@@ -132,10 +140,7 @@ def _has_proxy_headers(request: Request) -> bool:
         "x-forwarded-proto",
     )
     headers = request.headers
-    for key in proxy_headers:
-        if key in headers or key.title() in headers:
-            return True
-    return False
+    return any(key in headers or key.title() in headers for key in proxy_headers)
 
 
 def _host_header_is_local(request: Request) -> bool:
@@ -266,7 +271,7 @@ def _config_allows_remote() -> bool:
         parser = ConfigParser()
         parser.read(config_path, encoding="utf-8")
         allow_remote = parser.getboolean("Setup", "allow_remote_setup_access", fallback=False)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort config read should not block setup access checks
         logger.debug("Unable to read allow_remote_setup_access from config.txt", exc_info=True)
 
     _set_remote_access_cache(allow_remote)

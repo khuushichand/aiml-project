@@ -165,7 +165,8 @@ def _ws_error_payload(
     if details:
         payload["details"] = details
     if extra:
-        payload.update(extra)
+        reserved = {"type", "message", "error_type", "request_id", "details"}
+        payload.update({key: value for key, value in extra.items() if key not in reserved})
     return payload
 
 
@@ -603,7 +604,7 @@ async def create_speech(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=_http_error_detail("TTS validation failed", request_id, exc=e),
-        )
+        ) from e
 
     # Resolve BYOK credentials for TTS providers (OpenAI/ElevenLabs)
     user_id_int: Optional[int] = None
@@ -718,18 +719,23 @@ async def create_speech(
             )
         if isinstance(exc, TTSAuthenticationError):
             logger.error(f"TTS authentication error: {exc}", exc_info=True)
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="TTS provider authentication failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=_http_error_detail("TTS provider authentication failed", request_id, exc=exc),
+            )
         if isinstance(exc, TTSRateLimitError):
             logger.warning(f"TTS rate limit exceeded: {exc}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="TTS provider rate limit exceeded. Please try again later.",
+                detail=_http_error_detail(
+                    "TTS provider rate limit exceeded. Please try again later.", request_id, exc=exc
+                ),
             )
         if isinstance(exc, TTSQuotaExceededError):
             logger.warning(f"TTS quota exceeded: {exc}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="TTS quota exceeded. Please review your plan or quota.",
+                detail=_http_error_detail("TTS quota exceeded. Please review your plan or quota.", request_id, exc=exc),
             )
         if isinstance(exc, TTSError):
             logger.error(f"TTS error: {exc}", exc_info=True)
@@ -1481,7 +1487,7 @@ async def create_transcription(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_http_error_detail("Transcription failed", rid, exc=e),
-        )
+        ) from e
     finally:
         if canonical_path and canonical_path != temp_audio_path and os.path.exists(canonical_path):
             try:
@@ -1911,7 +1917,7 @@ async def list_tts_providers(request: Request, tts_service: TTSServiceV2 = Depen
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_http_error_detail("Failed to list providers", request_id, exc=e),
-        )
+        ) from e
 
 
 @router.get("/voices/catalog", summary="List available TTS voices across providers")
@@ -1945,7 +1951,7 @@ async def list_tts_voices(
         raise HTTPException(
             status_code=500,
             detail=_http_error_detail("Failed to list voices", request_id, exc=e),
-        )
+        ) from e
 
 
 @router.post("/reset-metrics")
@@ -4033,13 +4039,13 @@ async def upload_voice(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=_http_error_detail("Voice quota exceeded", request_id, exc=e),
-        )
+        ) from e
     except VoiceProcessingError as e:
         logger.warning(f"Voice processing failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=_http_error_detail("Voice processing failed", request_id, exc=e),
-        )
+        ) from e
     except Exception as e:
         logger.error(f"Voice upload error: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload voice sample")

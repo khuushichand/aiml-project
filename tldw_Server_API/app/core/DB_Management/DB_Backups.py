@@ -12,6 +12,7 @@ from loguru import logger
 
 # Local Imports:
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseBackend, BackendType
@@ -32,10 +33,12 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
 
 
 def _get_backup_base_dir() -> str:
+    """Return the base directory used for database backups."""
     return os.environ.get("TLDW_DB_BACKUP_PATH") or get_project_relative_path("tldw_DB_Backups")
 
 
 def _ensure_within_base(base_dir: str, candidate_path: str) -> Optional[str]:
+    """Validate that candidate_path resolves within base_dir and return a safe path."""
     base_abs = os.path.abspath(base_dir)
     candidate_abs = os.path.abspath(candidate_path)
     try:
@@ -46,6 +49,7 @@ def _ensure_within_base(base_dir: str, candidate_path: str) -> Optional[str]:
 
 
 def _resolve_backup_dir(backup_dir: str) -> Optional[str]:
+    """Resolve a backup directory under the configured backup base."""
     raw = str(backup_dir or "").strip()
     if not raw:
         return None
@@ -60,15 +64,16 @@ def _resolve_backup_dir(backup_dir: str) -> Optional[str]:
 
 
 def _get_allowed_db_roots() -> list[str]:
+    """Return a list of allowed database root directories."""
     roots: list[str] = []
     try:
         roots.append(str(DatabasePaths.get_user_db_base_dir(allow_legacy_alias=True)))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to resolve user DB base dir: {}", exc)
     try:
         roots.append(get_project_relative_path("Databases"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to resolve project Databases path: {}", exc)
 
     extra = os.environ.get("TLDW_DB_ALLOWED_BASE_DIRS")
     if extra:
@@ -78,7 +83,8 @@ def _get_allowed_db_roots() -> list[str]:
                 continue
             try:
                 expanded = os.path.expanduser(candidate)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Failed to expand DB base dir %r: {}", candidate, exc)
                 expanded = candidate
             if os.path.isabs(expanded):
                 roots.append(os.path.abspath(expanded))
@@ -93,6 +99,7 @@ def _get_allowed_db_roots() -> list[str]:
 
 
 def _resolve_db_path(db_path: str) -> Optional[str]:
+    """Resolve a database path within the allowed roots."""
     raw = str(db_path or "").strip()
     if not raw:
         return None
@@ -156,7 +163,7 @@ def init_backup_directory(backup_base_dir: str, db_name: str) -> str:
     """Initialize backup directory for a specific database."""
     backup_dir = _safe_join(backup_base_dir, db_name) or ""
     if not backup_dir:
-        raise ValueError("Invalid backup directory")
+        raise InvalidStoragePathError("Invalid backup directory")
     os.makedirs(backup_dir, exist_ok=True)
     return backup_dir
 
