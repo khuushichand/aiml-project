@@ -113,7 +113,7 @@ export type State = {
   isSearchingInternet: boolean
   setIsSearchingInternet: (isSearchingInternet: boolean) => void
   selectedSystemPrompt: string | null
-  setSelectedSystemPrompt: (selectedSystemPrompt: string) => void
+  setSelectedSystemPrompt: (selectedSystemPrompt: string | null) => void
   selectedQuickPrompt: string | null
   setSelectedQuickPrompt: (selectedQuickPrompt: string) => void
   queuedMessages: { message: string; image: string }[]

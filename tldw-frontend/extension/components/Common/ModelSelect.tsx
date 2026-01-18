@@ -143,7 +143,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
               overflowY: "scroll"
             },
             className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
-            activeKey: selectedModel
+            activeKey: selectedModel ?? undefined
           }}
           placement={"topLeft"}
           trigger={["click"]}>

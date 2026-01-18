@@ -232,7 +232,7 @@ export const QualitySection: React.FC<QualitySectionProps> = ({
                   type="text"
                   label={rerankingModelLabel}
                   value={settings.reranking_model || ""}
-                  onChange={(val) => onUpdate("reranking_model", val || null)}
+                  onChange={(val) => onUpdate("reranking_model", val || "")}
                 />
 
                 <SettingField

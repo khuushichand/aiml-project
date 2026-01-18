@@ -311,7 +311,7 @@ export function CommandPalette({
       id: `setting-${setting.id}`,
       label: t(setting.labelKey, setting.defaultLabel),
       description: setting.descriptionKey
-        ? t(setting.descriptionKey, setting.defaultDescription)
+        ? t(setting.descriptionKey, setting.defaultDescription ?? "")
         : setting.defaultDescription,
       icon: <Settings className="size-4" />,
       action: () => { navigate(setting.route); setOpen(false) },

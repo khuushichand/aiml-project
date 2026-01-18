@@ -20,10 +20,15 @@ export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
   const [direction, setDirection] = useState<"ltr" | "rtl">("ltr")
   const portalRootRef = useRef<HTMLDivElement | null>(null)
 
-  const getPopupContainer = React.useCallback(() => {
-    if (typeof document === "undefined") return undefined
-    return portalRootRef.current ?? document.body
-  }, [])
+  const getPopupContainer = React.useCallback(
+    (triggerNode?: HTMLElement) => {
+      if (typeof document === "undefined") {
+        return (triggerNode ?? ({} as HTMLElement))
+      }
+      return portalRootRef.current ?? triggerNode ?? document.body
+    },
+    []
+  )
 
   useEffect(() => {
     if (typeof document === "undefined") return

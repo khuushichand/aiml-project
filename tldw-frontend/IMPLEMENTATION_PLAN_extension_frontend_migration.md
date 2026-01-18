@@ -8,7 +8,7 @@
 **Goal**: Bring the extension UI into the Next.js app with minimal wiring and no extension-only runtime errors.
 **Success Criteria**: Extension UI mounts in a Next page (client-only if needed); core providers (Antd, React Query, i18n, Tailwind) load; build succeeds.
 **Tests**: `npm run lint`, `npm run build`.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 3: De-extensionize platform dependencies
 **Goal**: Replace browser-extension APIs with web equivalents and stabilize data/storage flows.

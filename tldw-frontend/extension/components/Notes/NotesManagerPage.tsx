@@ -14,8 +14,8 @@ import { useServerCapabilities } from '@/hooks/useServerCapabilities'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { useAntdMessage } from '@/hooks/useAntdMessage'
 import { getAllNoteKeywords, searchNoteKeywords } from "@/services/note-keywords"
-import { useStoreMessageOption } from "@/store/option"
-import { shallow } from "zustand/shallow"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
+import { useShallow } from "zustand/react/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import { useScrollToServerCard } from "@/hooks/useScrollToServerCard"
@@ -168,7 +168,7 @@ const NotesManagerPage: React.FC = () => {
     setServerChatSource,
     setServerChatExternalRef
   } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       setHistory: state.setHistory,
       setMessages: state.setMessages,
       setHistoryId: state.setHistoryId,
@@ -178,11 +178,11 @@ const NotesManagerPage: React.FC = () => {
       setServerChatClusterId: state.setServerChatClusterId,
       setServerChatSource: state.setServerChatSource,
       setServerChatExternalRef: state.setServerChatExternalRef
-    }),
-    shallow
+    }))
   )
 
-  const editorDisabled = !isOnline || (!capsLoading && capabilities && !capabilities.hasNotes)
+  const editorDisabled =
+    !isOnline || (!!capabilities && !capsLoading && !capabilities.hasNotes)
 
   const fetchFilteredNotesRaw = async (
     q: string,

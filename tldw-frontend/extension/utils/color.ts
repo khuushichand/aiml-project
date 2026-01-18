@@ -1,4 +1,4 @@
-export const tagColors = {
+export const tagColors: Record<string, string> = {
     summary: "blue",
     explain: "green",
     translate: "purple",

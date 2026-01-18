@@ -2,8 +2,11 @@ import React from "react"
 import NextLink from "next/link"
 import { useRouter } from "next/router"
 
-type LinkProps = React.ComponentProps<typeof NextLink> & {
+type NextLinkProps = React.ComponentProps<typeof NextLink>
+
+type LinkProps = Omit<NextLinkProps, "href"> & {
   to?: string
+  href?: NextLinkProps["href"]
 }
 
 type NavLinkClassName =
@@ -69,15 +72,16 @@ export const useLocation = () => {
   const search =
     typeof window === "undefined" ? "" : window.location.search || ""
   const hash = typeof window === "undefined" ? "" : window.location.hash || ""
+  const pathname = router.asPath.split("?")[0].split("#")[0] || router.pathname
   return React.useMemo(
     () => ({
-      pathname: router.pathname,
+      pathname,
       search,
       hash,
       state: null,
       key: router.asPath
     }),
-    [router.pathname, router.asPath, search, hash]
+    [pathname, router.asPath, search, hash]
   )
 }
 

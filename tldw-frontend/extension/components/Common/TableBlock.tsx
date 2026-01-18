@@ -97,14 +97,14 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
   }
 
   const handleCopyCSV = () => {
-    const csvContent = convertToCSV()
+    const csvContent = convertToCSV() || ""
     navigator.clipboard.writeText(csvContent)
     setCopyStatus("csv")
     setTimeout(() => setCopyStatus(""), 3000)
   }
 
   const handleDownloadCSV = () => {
-    const csvContent = convertToCSV()
+    const csvContent = convertToCSV() || ""
     downloadFile(csvContent, `table-${Date.now()}.csv`, "text/csv")
   }
 

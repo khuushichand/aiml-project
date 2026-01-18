@@ -1,6 +1,6 @@
 import React from "react"
 import { useStorage } from "@plasmohq/storage/hook"
-import { shallow } from "zustand/shallow"
+import { useShallow } from "zustand/react/shallow"
 import {
   DEFAULT_RAG_SETTINGS,
   type RagPresetName,
@@ -8,7 +8,7 @@ import {
   applyRagPreset,
   toRagAdvancedOptions
 } from "@/services/rag/unified-rag"
-import { useStoreMessageOption } from "@/store/option"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
 
 /**
  * Keys that don't trigger preset change to "custom"
@@ -98,17 +98,19 @@ export function useKnowledgeSettings(
     "ragSearchSettingsV2",
     DEFAULT_RAG_SETTINGS
   )
+  const resolvedStoredSettings = storedSettings ?? DEFAULT_RAG_SETTINGS
   const [useCurrentMessage, setUseCurrentMessage] = useStorage<boolean>(
     "ragSearchUseCurrentMessage",
     true
   )
+  const resolvedUseCurrentMessage = useCurrentMessage ?? true
 
   // Draft (staged) state - not persisted until Apply
   const [draftSettings, setDraftSettings] = React.useState<RagSettings>(
-    normalizeSettings(storedSettings)
+    normalizeSettings(resolvedStoredSettings)
   )
   const [draftPreset, setDraftPreset] =
-    React.useState<RagPresetName>(storedPreset)
+    React.useState<RagPresetName>(storedPreset ?? "balanced")
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
   const [advancedSearch, setAdvancedSearch] = React.useState("")
 
@@ -121,25 +123,24 @@ export function useKnowledgeSettings(
     setRagSources,
     setRagAdvancedOptions
   } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       setRagSearchMode: state.setRagSearchMode,
       setRagTopK: state.setRagTopK,
       setRagEnableGeneration: state.setRagEnableGeneration,
       setRagEnableCitations: state.setRagEnableCitations,
       setRagSources: state.setRagSources,
       setRagAdvancedOptions: state.setRagAdvancedOptions
-    }),
-    shallow
+    }))
   )
 
   // Sync draft settings when stored settings change (e.g., from another tab)
   React.useEffect(() => {
-    setDraftSettings(normalizeSettings(storedSettings))
-  }, [storedSettings])
+    setDraftSettings(normalizeSettings(resolvedStoredSettings))
+  }, [resolvedStoredSettings])
 
   // Sync draft preset when stored preset changes
   React.useEffect(() => {
-    setDraftPreset(storedPreset)
+    setDraftPreset(storedPreset ?? "balanced")
   }, [storedPreset])
 
   // Update a single setting (staged, not persisted)
@@ -215,17 +216,17 @@ export function useKnowledgeSettings(
 
   // Discard staged changes and revert to stored settings
   const discardChanges = React.useCallback(() => {
-    setDraftSettings(normalizeSettings(storedSettings))
-    setDraftPreset(storedPreset)
-  }, [storedPreset, storedSettings])
+    setDraftSettings(normalizeSettings(resolvedStoredSettings))
+    setDraftPreset(storedPreset ?? "balanced")
+  }, [storedPreset, resolvedStoredSettings])
 
   // Resolve the query (use current message if enabled and query is empty)
   const resolvedQuery = React.useMemo(() => {
-    if (useCurrentMessage && !draftSettings.query.trim()) {
+    if (resolvedUseCurrentMessage && !draftSettings.query.trim()) {
       return (currentMessage || "").trim()
     }
     return draftSettings.query.trim()
-  }, [currentMessage, draftSettings.query, useCurrentMessage])
+  }, [currentMessage, draftSettings.query, resolvedUseCurrentMessage])
 
   // Check if there are uncommitted changes
   const isDirty = React.useMemo(() => {
@@ -242,8 +243,8 @@ export function useKnowledgeSettings(
     // State
     preset: draftPreset,
     draftSettings,
-    storedSettings,
-    useCurrentMessage,
+    storedSettings: resolvedStoredSettings,
+    useCurrentMessage: resolvedUseCurrentMessage,
     advancedOpen,
     advancedSearch,
 

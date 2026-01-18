@@ -26,8 +26,8 @@ import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { focusComposer } from "@/hooks/useComposerFocus"
-import { useStoreMessageOption } from "@/store/option"
-import { shallow } from "zustand/shallow"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
+import { useShallow } from "zustand/react/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 
@@ -240,7 +240,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     setServerChatSource,
     setServerChatExternalRef
   } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       setHistory: state.setHistory,
       setMessages: state.setMessages,
       setHistoryId: state.setHistoryId,
@@ -250,8 +250,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       setServerChatClusterId: state.setServerChatClusterId,
       setServerChatSource: state.setServerChatSource,
       setServerChatExternalRef: state.setServerChatExternalRef
-    }),
-    shallow
+    }))
   )
 
   const characterIdentifier = (record: any): string =>

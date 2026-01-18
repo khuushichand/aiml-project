@@ -50,20 +50,20 @@ function Markdown({
       : "mb-2 last:mb-0"
   message = preprocessLaTeX(message)
   return (
-    <React.Fragment>
+    <div className={className}>
       <ReactMarkdown
-        className={className}
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
           pre({ children }) {
             return children
           },
-          code({ node, inline, className, children, ...props }) {
+          code({ node, className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "")
             const blockIndex = blockIndexRef.current++
             const value = String(children).replace(/\n$/, "")
-            if (!inline) {
+            const isInline = !className && !value.includes("\n")
+            if (!isInline) {
               if (codeBlockVariant === "plain") {
                 return (
                   <div className="my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 text-xs font-mono leading-relaxed text-text whitespace-pre overflow-x-auto">
@@ -188,7 +188,7 @@ function Markdown({
         }}>
         {message}
       </ReactMarkdown>
-    </React.Fragment>
+    </div>
   )
 }
 

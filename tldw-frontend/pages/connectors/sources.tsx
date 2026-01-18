@@ -1,82 +1,14 @@
-import { useEffect, useState } from 'react'
-import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api'
+import dynamic from "next/dynamic"
 
-type Source = {
-  id: number; account_id: number; provider: 'drive' | 'notion'; remote_id: string; type: string; path?: string;
-  options?: { recursive?: boolean }; enabled?: boolean; last_synced_at?: string | null
-}
-
-export default function Sources() {
-  const [sources, setSources] = useState<Source[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<number | null>(null)
-  const [notEnabled, setNotEnabled] = useState(false)
-
-  async function load() {
-    setError(null)
-    try {
-      const j = await apiClient.get<Source[]>('/connectors/sources')
-      setSources(Array.isArray(j) ? j : [])
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to load sources';
-      setError(message);
-    }
+export default dynamic(async () => {
+  const { useRouter } = await import("next/router")
+  const { useEffect } = await import("react")
+  const Page = () => {
+    const router = useRouter()
+    useEffect(() => {
+      void router.replace("/settings")
+    }, [router])
+    return null
   }
-  useEffect(() => {
-    const ping = async () => {
-      try {
-        const url = `${getApiBaseUrl()}/connectors/providers`
-        const resp = await fetch(url, { headers: buildAuthHeaders('GET') })
-        if (resp.status === 404) { setNotEnabled(true); return }
-        await load()
-      } catch {
-        await load()
-      }
-    }
-    ping()
-  }, [])
-
-  async function toggleEnable(s: Source) {
-    setBusy(s.id)
-    try {
-      await apiClient.patch(`/connectors/sources/${s.id}`, { enabled: !s.enabled })
-      await load()
-    } catch (error: unknown) { const msg = error instanceof Error ? error.message : 'Failed to update'; setError(msg); } finally { setBusy(null) }
-  }
-
-  async function importNow(s: Source) {
-    setBusy(s.id)
-    try {
-      const j = await apiClient.post<{ id?: string }>(`/connectors/sources/${s.id}/import`)
-      const jobId = j?.id
-      if (jobId) window.location.href = `/connectors/jobs?job_id=${jobId}`
-    } catch (error: unknown) { const msg = error instanceof Error ? error.message : 'Failed to import'; setError(msg); } finally { setBusy(null) }
-  }
-
-  return (
-    <div className="p-6 space-y-4">
-      <h1 className="text-xl font-semibold">Sources</h1>
-      {notEnabled && (
-        <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
-          Connectors backend not enabled. This feature is optional and may be disabled on your server.
-        </div>
-      )}
-      {!notEnabled && error && <div className="text-red-600 text-sm">{error}</div>}
-      {!notEnabled && (<div className="grid grid-cols-1 gap-2">
-        {sources.length === 0 && <div className="text-sm text-gray-500">No sources yet. Add from Browse.</div>}
-        {sources.map(s => (
-          <div key={s.id} className="flex items-center justify-between border rounded p-3">
-            <div>
-              <div className="font-medium">[{s.provider}] {s.path || s.remote_id}</div>
-              <div className="text-xs text-gray-500">{s.type} • {s.enabled ? 'enabled' : 'disabled'} {s.last_synced_at ? `• ${s.last_synced_at}`: ''}</div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => toggleEnable(s)} disabled={busy === s.id} className="px-3 py-1 rounded bg-gray-200">{s.enabled ? 'Disable' : 'Enable'}</button>
-              <button onClick={() => importNow(s)} disabled={busy === s.id} className="px-3 py-1 rounded bg-blue-600 text-white">Import</button>
-            </div>
-          </div>
-        ))}
-      </div>)}
-    </div>
-  )
-}
+  return { default: Page }
+}, { ssr: false })

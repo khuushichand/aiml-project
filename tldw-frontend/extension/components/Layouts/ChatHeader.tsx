@@ -83,7 +83,7 @@ export function ChatHeader({
           <ConnectionStatus showLabel={false} className="px-2 py-1" />
           <div className="flex items-center gap-2 text-text">
             <img
-              src={logoImage}
+              src={logoImage.src}
               alt={t("common:pageAssist", "tldw Assistant")}
               className="h-5 w-auto"
             />

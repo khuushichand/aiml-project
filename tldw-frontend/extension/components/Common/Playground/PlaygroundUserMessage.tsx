@@ -62,11 +62,11 @@ type Props = {
 }
 
 export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
-  const [checkWideMode] = useStorage("checkWideMode", false)
-  const [userTextColor] = useStorage("chatUserTextColor", "default")
-  const [userTextFont] = useStorage("chatUserTextFont", "default")
-  const [userTextSize] = useStorage("chatUserTextSize", "md")
-  const [userDisplayName] = useStorage("chatUserDisplayName", "")
+  const [checkWideMode] = useStorage<boolean>("checkWideMode", false)
+  const [userTextColor] = useStorage<string>("chatUserTextColor", "default")
+  const [userTextFont] = useStorage<string>("chatUserTextFont", "default")
+  const [userTextSize] = useStorage<string>("chatUserTextSize", "md")
+  const [userDisplayName] = useStorage<string>("chatUserDisplayName", "")
   const [isBtnPressed, setIsBtnPressed] = React.useState(false)
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const [editMode, setEditMode] = React.useState(false)
@@ -150,7 +150,12 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
   }, [props.createdAt])
 
   const userTextClass = React.useMemo(
-    () => buildChatTextClass(userTextColor, userTextFont, userTextSize),
+    () =>
+      buildChatTextClass(
+        userTextColor ?? "default",
+        userTextFont ?? "default",
+        userTextSize ?? "md"
+      ),
     [userTextColor, userTextFont, userTextSize]
   )
   const bubbleToneClass = isSystemMessage
@@ -173,7 +178,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
             </span>
           ) : (
             <span className="text-caption font-semibold text-text">
-              {userDisplayName.trim() || t("common:you", "You")}
+              {userDisplayName?.trim() || t("common:you", "You")}
             </span>
           )}
           {messageTimestamp && (
@@ -219,7 +224,10 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
                 <DocumentChip
                   key={index}
                   document={{
-                    title: doc.title,
+                    title:
+                      doc.title ||
+                      doc.url ||
+                      t("common:untitled", "Untitled"),
                     url: doc.url,
                     favIconUrl: doc.favIconUrl
                   }}

@@ -1,4 +1,4 @@
-export const programmingLanguages = {
+export const programmingLanguages: Record<string, string> = {
     html: "html",
     javascript: "js",
     typescript: "ts",

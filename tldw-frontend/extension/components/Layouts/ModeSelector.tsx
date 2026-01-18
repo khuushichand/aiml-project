@@ -61,22 +61,22 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
     {
       key: "playground",
       label: t("option:header.modePlayground", "Chat"),
-      shortcut: shortcutConfig.modePlayground,
+      shortcut: shortcutConfig?.modePlayground,
     },
     {
       key: "notes",
       label: t("option:header.modeNotes", "Notes"),
-      shortcut: shortcutConfig.modeNotes,
+      shortcut: shortcutConfig?.modeNotes,
     },
     {
       key: "media",
       label: t("option:header.modeMedia", "Media"),
-      shortcut: shortcutConfig.modeMedia,
+      shortcut: shortcutConfig?.modeMedia,
     },
     {
       key: "flashcards",
       label: t("option:header.modeFlashcards", "Flashcards"),
-      shortcut: shortcutConfig.modeFlashcards,
+      shortcut: shortcutConfig?.modeFlashcards,
     },
     {
       key: "quiz",
@@ -86,7 +86,7 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
     {
       key: "prompts",
       label: t("option:header.modePromptsPlayground", "Prompts"),
-      shortcut: shortcutConfig.modePrompts,
+      shortcut: shortcutConfig?.modePrompts,
     },
     {
       key: "chunkingPlayground",
@@ -103,7 +103,7 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
     {
       key: "knowledge",
       label: t("option:header.modeKnowledge", "Knowledge QA"),
-      shortcut: shortcutConfig.modeKnowledge,
+      shortcut: shortcutConfig?.modeKnowledge,
     },
     {
       key: "mediaMulti",
@@ -133,17 +133,17 @@ export function ModeSelector({ currentMode, onModeChange }: ModeSelectorProps) {
     {
       key: "worldBooks",
       label: t("option:header.modeWorldBooks", "World Books"),
-      shortcut: shortcutConfig.modeWorldBooks,
+      shortcut: shortcutConfig?.modeWorldBooks,
     },
     {
       key: "dictionaries",
       label: t("option:header.modeDictionaries", "Chat dictionaries"),
-      shortcut: shortcutConfig.modeDictionaries,
+      shortcut: shortcutConfig?.modeDictionaries,
     },
     {
       key: "characters",
       label: t("option:header.modeCharacters", "Characters"),
-      shortcut: shortcutConfig.modeCharacters,
+      shortcut: shortcutConfig?.modeCharacters,
     },
     {
       key: "watchlists",

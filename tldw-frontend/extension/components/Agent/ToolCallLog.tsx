@@ -415,7 +415,7 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
                 </div>
 
                 {/* Result */}
-                {entry.result && (
+                {entry.result != null && (
                   <div>
                     <span className="text-xs font-medium text-text-subtle">
                       {t("result", "Result")}:

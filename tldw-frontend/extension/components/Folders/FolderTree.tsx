@@ -10,7 +10,7 @@ import type { TreeDataNode, TreeProps } from "antd"
 import { Folder, FolderOpen, ChevronRight, ChevronDown } from "lucide-react"
 import { buildFolderTree, useFolderStore, useFolderUIPrefs, type FolderTreeNode } from "@/store/folder"
 import { useTranslation } from "react-i18next"
-import { useMemo, useCallback } from "react"
+import { useMemo, useCallback, type Key } from "react"
 import { useShallow } from "zustand/react/shallow"
 
 interface FolderTreeProps {
@@ -144,26 +144,32 @@ export const FolderTree = ({
   }, [uiPrefs])
 
   // Handle expand/collapse
-  const handleExpand: TreeProps['onExpand'] = useCallback((_keys, { node }) => {
+  const handleExpand: TreeProps['onExpand'] = useCallback(
+    (_keys: Key[], { node }: { node: TreeDataNode }) => {
     const folderId = typeof node.key === 'number' ? node.key : Number(node.key)
     if (!isNaN(folderId) && !String(node.key).startsWith('conv-')) {
       toggleFolderOpen(folderId)
     }
-  }, [toggleFolderOpen])
+    },
+    [toggleFolderOpen]
+  )
 
   // Handle selection
-  const handleSelect: TreeProps['onSelect'] = useCallback((keys, { node }) => {
-    const key = String(node.key)
-    if (key.startsWith('conv-')) {
-      const conversationId = key.replace('conv-', '')
-      onConversationSelect?.(conversationId)
-    } else {
-      const folderId = Number(key)
-      if (!isNaN(folderId)) {
-        onFolderSelect?.(folderId)
+  const handleSelect: TreeProps['onSelect'] = useCallback(
+    (keys: Key[], { node }: { node: TreeDataNode }) => {
+      const key = String(node.key)
+      if (key.startsWith('conv-')) {
+        const conversationId = key.replace('conv-', '')
+        onConversationSelect?.(conversationId)
+      } else {
+        const folderId = Number(key)
+        if (!isNaN(folderId)) {
+          onFolderSelect?.(folderId)
+        }
       }
-    }
-  }, [onFolderSelect, onConversationSelect])
+    },
+    [onFolderSelect, onConversationSelect]
+  )
 
   if (isLoading) {
     return (

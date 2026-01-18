@@ -1,7 +1,7 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
-import { shallow } from "zustand/shallow"
+import { useShallow } from "zustand/react/shallow"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
   type RagSettings,
@@ -12,7 +12,7 @@ import {
   type RagCopyFormat,
   type RagPinnedResult
 } from "@/utils/rag-format"
-import { useStoreMessageOption } from "@/store/option"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
 
 /**
  * RAG search result type
@@ -268,14 +268,14 @@ export function useKnowledgeSearch({
     "ragSearchHintSeen",
     false
   )
+  const resolvedRagHintSeen = ragHintSeen ?? false
 
   // Pinned results from store
   const { ragPinnedResults, setRagPinnedResults } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       ragPinnedResults: state.ragPinnedResults,
       setRagPinnedResults: state.setRagPinnedResults
-    }),
-    shallow
+    }))
   )
 
   const pinnedResults = ragPinnedResults || []
@@ -464,7 +464,7 @@ export function useKnowledgeSearch({
     hasAttemptedSearch,
     queryError,
     previewItem,
-    ragHintSeen,
+    ragHintSeen: resolvedRagHintSeen,
 
     // Pinned results
     pinnedResults,

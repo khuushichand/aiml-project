@@ -78,8 +78,10 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
     }
   }, [])
 
+  const resolvedSelectedId = selectedId ?? null
+
   // Get currently selected workspace
-  const selectedWorkspace = workspaces?.find(w => w.id === selectedId) || null
+  const selectedWorkspace = workspaces?.find(w => w.id === resolvedSelectedId) || null
 
   const callbackRef = useRef(onWorkspaceChange)
   useEffect(() => {
@@ -94,7 +96,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   // Auto-select last used workspace on mount
   useAutoSelectWorkspace(
     workspaces || [],
-    selectedId,
+    resolvedSelectedId,
     // Auto-select callback always uses latest handleSelect
     (workspace: Workspace) => {
       handleSelect(workspace)

@@ -136,22 +136,31 @@ type Props = {
 export const PlaygroundMessage = (props: Props) => {
   const [isBtnPressed, setIsBtnPressed] = React.useState(false)
   const [editMode, setEditMode] = React.useState(false)
-  const [checkWideMode] = useStorage("checkWideMode", false)
-  const [isUserChatBubble] = useStorage("userChatBubble", true)
-  const [autoCopyResponseToClipboard] = useStorage(
+  const [checkWideMode] = useStorage<boolean>("checkWideMode", false)
+  const [isUserChatBubble] = useStorage<boolean>("userChatBubble", true)
+  const [autoCopyResponseToClipboard] = useStorage<boolean>(
     "autoCopyResponseToClipboard",
     false
   )
-  const [autoPlayTTS] = useStorage("isTTSAutoPlayEnabled", false)
-  const [copyAsFormattedText] = useStorage("copyAsFormattedText", false)
-  const [userTextColor] = useStorage("chatUserTextColor", "default")
-  const [assistantTextColor] = useStorage("chatAssistantTextColor", "default")
-  const [userTextFont] = useStorage("chatUserTextFont", "default")
-  const [assistantTextFont] = useStorage("chatAssistantTextFont", "default")
-  const [userTextSize] = useStorage("chatUserTextSize", "md")
-  const [assistantTextSize] = useStorage("chatAssistantTextSize", "md")
-  const [userDisplayName] = useStorage("chatUserDisplayName", "")
-  const [ttsProvider] = useStorage("ttsProvider", "browser")
+  const [autoPlayTTS] = useStorage<boolean>("isTTSAutoPlayEnabled", false)
+  const [copyAsFormattedText] = useStorage<boolean>("copyAsFormattedText", false)
+  const [userTextColor] = useStorage<string>("chatUserTextColor", "default")
+  const [assistantTextColor] = useStorage<string>(
+    "chatAssistantTextColor",
+    "default"
+  )
+  const [userTextFont] = useStorage<string>("chatUserTextFont", "default")
+  const [assistantTextFont] = useStorage<string>(
+    "chatAssistantTextFont",
+    "default"
+  )
+  const [userTextSize] = useStorage<string>("chatUserTextSize", "md")
+  const [assistantTextSize] = useStorage<string>(
+    "chatAssistantTextSize",
+    "md"
+  )
+  const [userDisplayName] = useStorage<string>("chatUserDisplayName", "")
+  const [ttsProvider] = useStorage<string>("ttsProvider", "browser")
   const { t } = useTranslation(["common", "playground"])
   const { capabilities } = useServerCapabilities()
   const uiMode = useUiModeStore((state) => state.mode)
@@ -444,16 +453,21 @@ export const PlaygroundMessage = (props: Props) => {
   ])
 
   const userTextClass = React.useMemo(
-    () => buildChatTextClass(userTextColor, userTextFont, userTextSize),
+    () =>
+      buildChatTextClass(
+        userTextColor ?? "default",
+        userTextFont ?? "default",
+        userTextSize ?? "md"
+      ),
     [userTextColor, userTextFont, userTextSize]
   )
 
   const assistantTextClass = React.useMemo(
     () =>
       buildChatTextClass(
-        assistantTextColor,
-        assistantTextFont,
-        assistantTextSize
+        assistantTextColor ?? "default",
+        assistantTextFont ?? "default",
+        assistantTextSize ?? "md"
       ),
     [assistantTextColor, assistantTextFont, assistantTextSize]
   )
@@ -738,7 +752,7 @@ export const PlaygroundMessage = (props: Props) => {
                             ""
                           )
                         )
-                      : userDisplayName.trim() || t("common:you", "You")}
+                      : userDisplayName?.trim() || t("common:you", "You")}
                   </span>
                 )}
                 {messageTimestamp && (

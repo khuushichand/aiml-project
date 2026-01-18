@@ -160,7 +160,7 @@ export const setSetting = async <T>(setting: SettingDef<T>, value: T) => {
   writeLocalStorageValue(setting, normalized)
 }
 
-export const clearSetting = async (setting: SettingDef<unknown>) => {
+export const clearSetting = async <T>(setting: SettingDef<T>) => {
   const storage = getStorageForSetting(setting)
   await storage.remove(setting.key)
   clearLocalStorageValue(setting)

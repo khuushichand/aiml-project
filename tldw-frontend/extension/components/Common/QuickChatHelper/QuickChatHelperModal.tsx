@@ -57,7 +57,7 @@ export const QuickChatHelperModal: React.FC<Props> = ({ open, onClose }) => {
     })
 
   const getModalContainer = useCallback(() => {
-    if (typeof document === "undefined") return null
+    if (typeof document === "undefined") return {} as HTMLElement
     return document.getElementById("tldw-portal-root") || document.body
   }, [])
 

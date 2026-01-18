@@ -163,7 +163,7 @@ export function CompactMessage({
   )
   const displayName = isBot
     ? removeModelSuffix(resolvedModelName)
-    : userDisplayName.trim() || t("common:you", "You")
+    : userDisplayName?.trim() || t("common:you", "You")
 
   const renderAvatar = () => {
     if (!isBot) {

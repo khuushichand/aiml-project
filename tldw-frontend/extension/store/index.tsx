@@ -54,7 +54,7 @@ type State = {
   currentURL: string
   setCurrentURL: (currentURL: string) => void
   selectedSystemPrompt: string | null
-  setSelectedSystemPrompt: (selectedSystemPrompt: string) => void
+  setSelectedSystemPrompt: (selectedSystemPrompt: string | null) => void
 
   selectedQuickPrompt: string | null
   setSelectedQuickPrompt: (selectedQuickPrompt: string) => void

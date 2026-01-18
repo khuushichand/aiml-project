@@ -21,7 +21,10 @@ const runtime = {
       return path
     }
   },
-  sendMessage: async () => undefined,
+  sendMessage: async (..._args: any[]) => undefined,
+  sendNativeMessage: async () => {
+    throw new Error("Native messaging is not available in web mode.")
+  },
   connect: () => ({
     postMessage: () => {},
     onMessage: createEventTarget(),
@@ -50,14 +53,77 @@ const notifications = {
   create: async () => undefined
 }
 
+const getStorageBackend = () => {
+  if (typeof window !== "undefined" && window.localStorage) {
+    return window.localStorage
+  }
+  return null
+}
+
 const storageArea = {
-  clear: noopAsync
+  get: (keys?: string | string[] | null, callback?: (items: any) => void) => {
+    const backend = getStorageBackend()
+    const result: Record<string, string | null> = {}
+    if (!backend) {
+      callback?.(result)
+      return Promise.resolve(result)
+    }
+    const parseValue = (raw: string | null) => {
+      if (raw == null) return raw
+      try {
+        return JSON.parse(raw)
+      } catch {
+        return raw
+      }
+    }
+    if (!keys) {
+      for (let i = 0; i < backend.length; i += 1) {
+        const key = backend.key(i)
+        if (key) {
+          result[key] = parseValue(backend.getItem(key))
+        }
+      }
+    } else {
+      const keyList = Array.isArray(keys) ? keys : [keys]
+      keyList.forEach((key) => {
+        result[key] = parseValue(backend.getItem(key))
+      })
+    }
+    callback?.(result)
+    return Promise.resolve(result)
+  },
+  set: (items: Record<string, unknown>, callback?: () => void) => {
+    const backend = getStorageBackend()
+    if (backend) {
+      Object.entries(items).forEach(([key, value]) => {
+        backend.setItem(key, JSON.stringify(value))
+      })
+    }
+    callback?.()
+    return Promise.resolve()
+  },
+  remove: (keys: string | string[], callback?: () => void) => {
+    const backend = getStorageBackend()
+    if (backend) {
+      const keyList = Array.isArray(keys) ? keys : [keys]
+      keyList.forEach((key) => backend.removeItem(key))
+    }
+    callback?.()
+    return Promise.resolve()
+  },
+  clear: (callback?: () => void) => {
+    const backend = getStorageBackend()
+    backend?.clear()
+    callback?.()
+    return Promise.resolve()
+  }
 }
 
 const storage = {
   local: storageArea,
   sync: storageArea,
-  session: storageArea
+  session: storageArea,
+  onChanged: createEventTarget()
 }
 
 const permissions = {

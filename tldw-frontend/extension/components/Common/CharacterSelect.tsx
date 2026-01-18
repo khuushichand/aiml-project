@@ -574,8 +574,9 @@ export const CharacterSelect: React.FC<Props> = ({
     })
   }, [data, searchQuery])
 
-  const characterItems = React.useMemo<MenuProps["items"]>(() => {
-    return filteredCharacters.reduce<MenuProps["items"]>((items, character, index) => {
+  const characterItems = React.useMemo<NonNullable<MenuProps["items"]>>(() => {
+    const items: NonNullable<MenuProps["items"]> = []
+    filteredCharacters.forEach((character, index) => {
       const normalized = normalizeCharacter(character)
       if (!normalized) {
         console.debug(
@@ -587,7 +588,7 @@ export const CharacterSelect: React.FC<Props> = ({
             title: character.title
           }
         )
-        return items
+        return
       }
       const displayName =
         normalized.name || character.slug || character.title || ""
@@ -620,11 +621,11 @@ export const CharacterSelect: React.FC<Props> = ({
           void applySelection(normalized)
         }
       })
-      return items
-    }, [] as MenuProps["items"])
+    })
+    return items
   }, [applySelection, filteredCharacters])
 
-  const clearItem: MenuProps["items"][number] | null =
+  const clearItem: NonNullable<MenuProps["items"]>[number] | null =
     selectedCharacter
       ? {
           key: "__clear__",
@@ -645,7 +646,7 @@ export const CharacterSelect: React.FC<Props> = ({
         }
       : null
 
-  const refreshItem: MenuProps["items"][number] = {
+  const refreshItem: NonNullable<MenuProps["items"]>[number] = {
     key: "__refresh__",
     label: (
       <button
@@ -662,14 +663,14 @@ export const CharacterSelect: React.FC<Props> = ({
     }
   } as const
 
-  const dividerItem = (key: string): MenuProps["items"][number] => ({
+  const dividerItem = (key: string): NonNullable<MenuProps["items"]>[number] => ({
     type: "divider",
     key
   })
 
   const menuItems: MenuProps["items"] = []
 
-  const noneItem: MenuProps["items"][number] = {
+  const noneItem: NonNullable<MenuProps["items"]>[number] = {
     key: "__none__",
     label: (
       <button
@@ -684,7 +685,7 @@ export const CharacterSelect: React.FC<Props> = ({
     }
   }
 
-  const createItem: MenuProps["items"][number] = {
+  const createItem: NonNullable<MenuProps["items"]>[number] = {
     key: "__create_character__",
     label: (
       <button
@@ -697,7 +698,7 @@ export const CharacterSelect: React.FC<Props> = ({
     onClick: handleOpenCreate
   }
 
-  const openPageItem: MenuProps["items"][number] = {
+  const openPageItem: NonNullable<MenuProps["items"]>[number] = {
     key: "__open_characters_page__",
     label: (
       <button
@@ -710,7 +711,7 @@ export const CharacterSelect: React.FC<Props> = ({
     onClick: () => handleOpenCharacters()
   }
 
-  const importItem: MenuProps["items"][number] = {
+  const importItem: NonNullable<MenuProps["items"]>[number] = {
     key: "__import_character__",
     label: (
       <button
@@ -723,7 +724,7 @@ export const CharacterSelect: React.FC<Props> = ({
     onClick: handleImportClick
   }
 
-  const displayNameItem: MenuProps["items"][number] = {
+  const displayNameItem: NonNullable<MenuProps["items"]>[number] = {
     key: "__user_display_name__",
     label: (
       <button
@@ -788,7 +789,7 @@ export const CharacterSelect: React.FC<Props> = ({
     menuItems.push(dividerItem("__divider_clear__"), clearItem)
   }
 
-  const actorItem: MenuProps["items"][number] = {
+  const actorItem: NonNullable<MenuProps["items"]>[number] = {
     key: "__actor__",
     label: (
       <button

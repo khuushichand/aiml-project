@@ -207,7 +207,7 @@ export const ShareModal: React.FC<Props> = ({
                 <PlaygroundMessage
                   key={index}
                   {...message}
-                  name={message?.modelName}
+                  name={message?.modelName ?? t("common:assistant", "Assistant")}
                   username={name}
                 />
               ))}

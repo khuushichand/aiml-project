@@ -2,6 +2,17 @@ import i18n from "i18next"
 import ICU from "./icu-format"
 import { initReactI18next } from "react-i18next"
 
+declare const require: {
+    context: (
+        path: string,
+        deep?: boolean,
+        filter?: RegExp
+    ) => {
+        keys: () => string[]
+        <T = unknown>(id: string): T
+    }
+}
+
 const isMacPlatform =
     typeof navigator !== "undefined" &&
     /Mac|iPod|iPhone|iPad/.test(navigator.platform)

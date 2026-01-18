@@ -145,6 +145,7 @@ export const CurrentChatModelSettings = ({
     setServerChatState,
     setServerChatVersion
   } = useMessageOption()
+  const selectedModelValue = selectedModel ?? null
 
   const [selectedCharacter, , selectedCharacterMeta] =
     useSelectedCharacter<Character | null>(null)
@@ -345,14 +346,14 @@ export const CurrentChatModelSettings = ({
     }
     const models = composerModels
     if (!models.length) {
-      if (selectedModel) {
-        const displayText = `Custom - ${selectedModel}`
+      if (selectedModelValue) {
+        const displayText = `Custom - ${selectedModelValue}`
         const fallbackGroup: GroupOption = {
           label: <span className="truncate">Custom</span>,
           options: [
             {
               label: <span className="truncate">{displayText}</span>,
-              value: selectedModel,
+              value: selectedModelValue,
               searchLabel: displayText.toLowerCase()
             }
           ]
@@ -428,19 +429,19 @@ export const CurrentChatModelSettings = ({
 
     const groupedOptions: GroupOption[] = Array.from(groups.values())
 
-    if (selectedModel) {
+    if (selectedModelValue) {
       const hasSelected = groupedOptions.some((group) =>
-        group.options.some((option) => option.value === selectedModel)
+        group.options.some((option) => option.value === selectedModelValue)
       )
 
       if (!hasSelected) {
-        const displayText = `Custom - ${selectedModel}`
+        const displayText = `Custom - ${selectedModelValue}`
         groupedOptions.push({
           label: <span className="truncate">Custom</span>,
           options: [
             {
               label: <span className="truncate">{displayText}</span>,
-              value: selectedModel,
+              value: selectedModelValue,
               searchLabel: displayText.toLowerCase()
             }
           ]
@@ -449,7 +450,7 @@ export const CurrentChatModelSettings = ({
     }
 
     return groupedOptions
-  }, [composerModels, selectedModel])
+  }, [composerModels, selectedModelValue])
 
   const providerOptions = useMemo(() => {
     const models = composerModels
@@ -476,7 +477,7 @@ export const CurrentChatModelSettings = ({
         children: (
           <ModelBasicsTab
             form={form}
-            selectedModel={selectedModel}
+            selectedModel={selectedModelValue}
             onModelChange={setSelectedModel}
             modelOptions={modelOptions}
             modelsLoading={modelsLoading}
@@ -541,7 +542,7 @@ export const CurrentChatModelSettings = ({
     [
       t,
       form,
-      selectedModel,
+      selectedModelValue,
       setSelectedModel,
       modelOptions,
       modelsLoading,

@@ -12,7 +12,7 @@ import { OptionsTab } from "./QuickIngest/OptionsTab/OptionsTab"
 import { ResultsTab } from "./QuickIngest/ResultsTab/ResultsTab"
 import { ProcessButton } from "./QuickIngest/shared/ProcessButton"
 import { QUICK_INGEST_ACCEPT_STRING } from "./QuickIngest/constants"
-import type { QuickIngestTab, IngestPreset } from "./QuickIngest/types"
+import type { QuickIngestTab, IngestPreset, CommonOptions } from "./QuickIngest/types"
 import {
   DEFAULT_PRESET,
   detectPreset,
@@ -75,6 +75,8 @@ type Entry = {
   video?: { captions?: boolean }
 }
 
+const EMPTY_ROWS: Entry[] = []
+
 type QueuedFileStub = {
   id: string
   key: string
@@ -128,7 +130,7 @@ type ResultItem = {
   url?: string
   fileName?: string
   type: string
-  data?: ProcessingResultPayload
+  data?: unknown
   error?: string
 }
 
@@ -249,7 +251,7 @@ const isLikelyUrl = (raw: string) => {
 }
 
 function mediaIdFromPayload(
-  data: ProcessingResultPayload,
+  data: unknown,
   visited?: WeakSet<object>
 ): string | number | null {
   if (!data || typeof data !== "object") {
@@ -397,7 +399,7 @@ const isProcessingItem = (value: unknown): value is ProcessingItem => {
   )
 }
 
-const extractProcessingItems = (data: ProcessingResultPayload): ProcessingItem[] => {
+const extractProcessingItems = (data: unknown): ProcessingItem[] => {
   if (!data) return []
   if (Array.isArray(data)) return data
   if (isResultsWrapper(data)) return data.results
@@ -467,10 +469,13 @@ export const QuickIngestModal: React.FC<Props> = ({
     "quickIngestReviewBeforeStorage",
     false
   )
-  const [rows, setRows] = useStorage<Entry[]>(
+  const resolvedStoreRemote = storeRemote ?? true
+  const resolvedReviewBeforeStorage = reviewBeforeStorage ?? false
+  const [storedRows, setRows] = useStorage<Entry[]>(
     "quickIngestQueuedRows",
-    () => [createEmptyRow()]
+    [createEmptyRow()]
   )
+  const rows = storedRows ?? EMPTY_ROWS
   const [queuedFiles, setQueuedFiles] = useStorage<QueuedFileStub[]>(
     "quickIngestQueuedFiles",
     []
@@ -502,6 +507,40 @@ export const QuickIngestModal: React.FC<Props> = ({
     perform_chunking: true,
     overwrite_existing: false
   })
+  const resolvedCommon =
+    common ?? {
+      perform_analysis: true,
+      perform_chunking: true,
+      overwrite_existing: false
+    }
+  const handleSetCommon = React.useCallback(
+    (
+      value: CommonOptions | ((prev: CommonOptions) => CommonOptions)
+    ) => {
+      if (typeof value === "function") {
+        setCommon((prev) => value(prev ?? resolvedCommon))
+        return
+      }
+      setCommon(value)
+    },
+    [resolvedCommon, setCommon]
+  )
+  const handleSetTypeDefaults = React.useCallback(
+    (value: React.SetStateAction<TypeDefaults | null>) => {
+      if (typeof value === "function") {
+        setTypeDefaults((prev) => {
+          const prevValue = prev ?? DEFAULT_TYPE_DEFAULTS
+          const next = (value as (prev: TypeDefaults | null) => TypeDefaults | null)(
+            prevValue
+          )
+          return next ?? DEFAULT_TYPE_DEFAULTS
+        })
+        return
+      }
+      setTypeDefaults(value ?? DEFAULT_TYPE_DEFAULTS)
+    },
+    [setTypeDefaults]
+  )
   const [running, setRunning] = React.useState<boolean>(false)
   const [results, setResults] = React.useState<ResultItem[]>([])
   const [localFiles, setLocalFiles] = React.useState<File[]>([])
@@ -516,7 +555,11 @@ export const QuickIngestModal: React.FC<Props> = ({
   const [specPrefs, setSpecPrefs] = useStorage<{ preferServer?: boolean; lastRemote?: { version?: string; cachedAt?: number } }>('quickIngestSpecPrefs', { preferServer: true })
   const [transcriptionModelOptions, setTranscriptionModelOptions] = React.useState<string[]>([])
   const [transcriptionModelsLoading, setTranscriptionModelsLoading] = React.useState(false)
-  const [storageHintSeen, setStorageHintSeen] = useStorage<boolean>('quickIngestStorageHintSeen', false)
+  const [storageHintSeen, setStorageHintSeen] = useStorage<boolean>(
+    'quickIngestStorageHintSeen',
+    false
+  )
+  const resolvedStorageHintSeen = storageHintSeen ?? false
   const navigate = useNavigate()
   const normalizedTypeDefaults = React.useMemo(
     () => ({
@@ -660,8 +703,8 @@ export const QuickIngestModal: React.FC<Props> = ({
   const lastFileIdByInstanceIdRef = React.useRef<Map<string, string> | null>(null)
   const pendingStoreWithoutReviewRef = React.useRef(false)
   const unmountedRef = React.useRef(false)
-  const processOnly = reviewBeforeStorage || !storeRemote
-  const shouldStoreRemote = storeRemote && !processOnly
+  const processOnly = resolvedReviewBeforeStorage || !resolvedStoreRemote
+  const shouldStoreRemote = resolvedStoreRemote && !processOnly
 
   React.useEffect(() => {
     return () => {
@@ -670,17 +713,17 @@ export const QuickIngestModal: React.FC<Props> = ({
   }, [])
 
   React.useEffect(() => {
-    if (reviewBeforeStorage && !storeRemote) {
+    if (resolvedReviewBeforeStorage && !resolvedStoreRemote) {
       setStoreRemote(true)
     }
-  }, [reviewBeforeStorage, storeRemote])
+  }, [resolvedReviewBeforeStorage, resolvedStoreRemote, setStoreRemote])
 
   React.useEffect(() => {
-    if (!reviewBeforeStorage) {
+    if (!resolvedReviewBeforeStorage) {
       setDraftCreationError(null)
       setReviewNavigationError(null)
     }
-  }, [reviewBeforeStorage])
+  }, [resolvedReviewBeforeStorage])
 
   // Track if we're currently applying a preset to avoid auto-switch to Custom
   const applyingPresetRef = React.useRef(false)
@@ -713,9 +756,9 @@ export const QuickIngestModal: React.FC<Props> = ({
     if (activePreset === "custom") return
 
     const currentConfig = {
-      common,
-      storeRemote,
-      reviewBeforeStorage: reviewBeforeStorage ?? false,
+      common: resolvedCommon,
+      storeRemote: resolvedStoreRemote,
+      reviewBeforeStorage: resolvedReviewBeforeStorage,
       typeDefaults: normalizedTypeDefaults,
       advancedValues
     }
@@ -727,7 +770,7 @@ export const QuickIngestModal: React.FC<Props> = ({
   }, [
     common,
     storeRemote,
-    reviewBeforeStorage,
+    resolvedReviewBeforeStorage,
     normalizedTypeDefaults,
     activePreset,
     open,
@@ -843,9 +886,9 @@ export const QuickIngestModal: React.FC<Props> = ({
       }
 
       const processingOptions: ProcessingOptions = {
-        perform_analysis: Boolean(common.perform_analysis),
-        perform_chunking: Boolean(common.perform_chunking),
-        overwrite_existing: Boolean(common.overwrite_existing),
+        perform_analysis: Boolean(resolvedCommon.perform_analysis),
+        perform_chunking: Boolean(resolvedCommon.perform_chunking),
+        overwrite_existing: Boolean(resolvedCommon.overwrite_existing),
         advancedValues: { ...(advancedValues || {}) }
       }
 
@@ -854,7 +897,7 @@ export const QuickIngestModal: React.FC<Props> = ({
 
       return { now, batchId, batch, processingOptions, expiresAt, rowMap }
     },
-    [advancedValues, common, rows]
+    [advancedValues, resolvedCommon, rows]
   )
 
   const extractMetadataForDraft = React.useCallback((processed: ProcessingItem) => {
@@ -1207,7 +1250,7 @@ export const QuickIngestModal: React.FC<Props> = ({
     []
   )
 
-  const typeIcon = React.useCallback((type: Entry['type']) => {
+  const typeIcon = React.useCallback((type: string) => {
     const cls = 'w-4 h-4 text-text-subtle'
     switch (type) {
       case 'audio':
@@ -1314,7 +1357,7 @@ export const QuickIngestModal: React.FC<Props> = ({
       const entries = parts.map((u) =>
         buildRowEntry(u, inferIngestTypeFromUrl(u) as Entry['type'])
       )
-      setRows((prev) => [...prev, ...entries])
+      setRows((prev) => [...(prev ?? []), ...entries])
       setPendingUrlInput('')
       setSelectedRowId(entries[0].id)
       setSelectedFileId(null)
@@ -1360,14 +1403,17 @@ export const QuickIngestModal: React.FC<Props> = ({
     [setSpecPrefs]
   )
 
-  const addRow = () => setRows((r) => [...r, buildRowEntry()])
+  const addRow = () => setRows((r) => [...(r ?? []), buildRowEntry()])
   const removeRow = (id: string) => {
-    setRows((r) => r.filter((x) => x.id !== id))
+    setRows((r) => (r ?? []).filter((x) => x.id !== id))
     if (selectedRowId === id) {
       setSelectedRowId(null)
     }
   }
-  const updateRow = (id: string, patch: Partial<Entry>) => setRows((r) => r.map((x) => (x.id === id ? { ...x, ...patch } : x)))
+  const updateRow = (id: string, patch: Partial<Entry>) =>
+    setRows((r) =>
+      (r ?? []).map((x) => (x.id === id ? { ...x, ...patch } : x))
+    )
 
   // Resolve current RAG embedding model for display in Advanced section
   React.useEffect(() => {
@@ -1402,23 +1448,25 @@ export const QuickIngestModal: React.FC<Props> = ({
     const snapshot = createDefaultsSnapshot()
     if (!snapshot) return
     setRows((prev) => {
+      const safePrev = prev ?? []
       let changed = false
-      const next = prev.map((row) => {
+      const next = safePrev.map((row) => {
         if (row.defaults) return row
         changed = true
         return { ...row, defaults: snapshotTypeDefaults(snapshot) }
       })
-      return changed ? next : prev
+      return changed ? next : safePrev
     })
     setQueuedFiles((prev) => {
-      if (!prev || prev.length === 0) return prev
+      const safePrev = prev ?? []
+      if (safePrev.length === 0) return safePrev
       let changed = false
-      const next = prev.map((stub) => {
+      const next = safePrev.map((stub) => {
         if (stub.defaults) return stub
         changed = true
         return { ...stub, defaults: snapshotTypeDefaults(snapshot) }
       })
-      return changed ? next : prev
+      return changed ? next : safePrev
     })
   }, [createDefaultsSnapshot, open, setQueuedFiles, setRows])
 
@@ -1491,18 +1539,19 @@ export const QuickIngestModal: React.FC<Props> = ({
   React.useEffect(() => {
     if (!stubsNeedingInstanceId.length) return
     setQueuedFiles((prev) => {
-      if (!prev || prev.length === 0) return prev
+      const safePrev = prev ?? []
+      if (safePrev.length === 0) return safePrev
       let changed = false
       const updates = new Map(
         stubsNeedingInstanceId.map((item) => [item.id, item.instanceId])
       )
-      const next = prev.map((stub) => {
+      const next = safePrev.map((stub) => {
         const nextInstanceId = updates.get(stub.id)
         if (!nextInstanceId || stub.instanceId === nextInstanceId) return stub
         changed = true
         return { ...stub, instanceId: nextInstanceId }
       })
-      return changed ? next : prev
+      return changed ? next : safePrev
     })
   }, [setQueuedFiles, stubsNeedingInstanceId])
 
@@ -1540,12 +1589,12 @@ export const QuickIngestModal: React.FC<Props> = ({
   const tabBadges = React.useMemo(() => {
     // Options modified: check if common options differ from defaults or typeDefaults differ
     const optionsModified =
-      common.perform_analysis !== true ||
-      common.perform_chunking !== true ||
-      common.overwrite_existing !== false ||
+      resolvedCommon.perform_analysis !== true ||
+      resolvedCommon.perform_chunking !== true ||
+      resolvedCommon.overwrite_existing !== false ||
       hasTypeDefaultChanges ||
-      reviewBeforeStorage ||
-      !storeRemote ||
+      resolvedReviewBeforeStorage ||
+      !resolvedStoreRemote ||
       Object.keys(advancedValues || {}).some((k) => advancedValues[k] != null)
 
     return {
@@ -1555,12 +1604,12 @@ export const QuickIngestModal: React.FC<Props> = ({
     }
   }, [
     plannedCount,
-    common,
+    resolvedCommon,
     advancedValues,
     hasTypeDefaultChanges,
-    reviewBeforeStorage,
+    resolvedReviewBeforeStorage,
     running,
-    storeRemote
+    resolvedStoreRemote
   ])
 
   const resultById = React.useMemo(() => {
@@ -1790,9 +1839,9 @@ export const QuickIngestModal: React.FC<Props> = ({
         payload: {
           entries,
           files: filesPayload,
-          storeRemote,
+          storeRemote: resolvedStoreRemote,
           processOnly,
-          common,
+          common: resolvedCommon,
           advancedValues,
           fileDefaults
         }
@@ -1828,7 +1877,7 @@ export const QuickIngestModal: React.FC<Props> = ({
         draftIds: string[]
         skippedAssets: number
       } | null = null
-      if (reviewBeforeStorage && hasOkResults) {
+      if (resolvedReviewBeforeStorage && hasOkResults) {
         let draftErrorMessage: string | null = null
         try {
           createdDraftBatch = await createDraftsFromResults(out, fileLookup)
@@ -1852,7 +1901,7 @@ export const QuickIngestModal: React.FC<Props> = ({
         }
       }
 
-      if (processOnly && !reviewBeforeStorage && out.length > 0) {
+      if (processOnly && !resolvedReviewBeforeStorage && out.length > 0) {
         messageApi.info(
           qi(
             "processingComplete",
@@ -1887,7 +1936,7 @@ export const QuickIngestModal: React.FC<Props> = ({
   }, [
     advancedValues,
     clearFailure,
-    common,
+    resolvedCommon,
     createDraftsFromResults,
     handleReviewBatchReady,
     ingestBlocked,
@@ -1901,9 +1950,9 @@ export const QuickIngestModal: React.FC<Props> = ({
     mergeDefaults,
     processOnly,
     qi,
-    reviewBeforeStorage,
+    resolvedReviewBeforeStorage,
     rows,
-    storeRemote,
+    resolvedStoreRemote,
     t,
     normalizedTypeDefaults,
     missingFileStubs.length
@@ -1987,11 +2036,11 @@ export const QuickIngestModal: React.FC<Props> = ({
   // Auto-run after "store without review" is triggered.
   React.useEffect(() => {
     if (!pendingStoreWithoutReviewRef.current) return
-    if (reviewBeforeStorage) return
+    if (resolvedReviewBeforeStorage) return
     // reviewBeforeStorage is now false, so re-run with storage enabled.
     pendingStoreWithoutReviewRef.current = false
     void run()
-  }, [reviewBeforeStorage, run])
+  }, [resolvedReviewBeforeStorage, run])
 
   const RECOMMENDED_FIELD_NAMES = new Set<string>([
     "cookies",
@@ -2637,14 +2686,14 @@ export const QuickIngestModal: React.FC<Props> = ({
   }, [results])
 
   const storageLabel = React.useMemo(() => {
-    if (!storeRemote) {
+    if (!resolvedStoreRemote) {
       return qi('process', 'Process locally')
     }
-    if (reviewBeforeStorage) {
+    if (resolvedReviewBeforeStorage) {
       return qi("storeAfterReview", "Store after review")
     }
     return qi('storeRemote', 'Store to remote DB')
-  }, [qi, reviewBeforeStorage, storeRemote])
+  }, [qi, resolvedReviewBeforeStorage, resolvedStoreRemote])
 
   const firstResultWithMedia = React.useMemo(
     () =>
@@ -2811,7 +2860,7 @@ export const QuickIngestModal: React.FC<Props> = ({
 
       if (newStubs.length > 0 || updatedStubs.length > 0) {
         setQueuedFiles((prev) => {
-          const base = prev || []
+          const base = prev ?? []
           let changed = false
           const updates = new Map(
             updatedStubs.map((item) => [item.id, item.instanceId])
@@ -2826,7 +2875,7 @@ export const QuickIngestModal: React.FC<Props> = ({
             changed = true
             return [...next, ...newStubs]
           }
-          return changed ? next : prev
+          return changed ? next : base
         })
       }
       if (accepted.length === 0) return
@@ -2878,8 +2927,9 @@ export const QuickIngestModal: React.FC<Props> = ({
       })
       if (stub.instanceId !== instanceId) {
         setQueuedFiles((prev) => {
-          if (!prev) return prev
-          return prev.map((item) =>
+          const safePrev = prev ?? []
+          if (safePrev.length === 0) return safePrev
+          return safePrev.map((item) =>
             item.id === stub.id ? { ...item, instanceId } : item
           )
         })
@@ -3047,7 +3097,7 @@ export const QuickIngestModal: React.FC<Props> = ({
 
     // Add URLs back to queue
     if (failedUrls.length > 0) {
-      setRows((prev) => [...prev, ...failedUrls])
+      setRows((prev) => [...(prev ?? []), ...failedUrls])
     }
     if (failedFileStubs.length > 0) {
       setQueuedFiles((prev) => [...(prev || []), ...failedFileStubs])
@@ -3874,8 +3924,8 @@ export const QuickIngestModal: React.FC<Props> = ({
             hasMissingFiles={hasMissingFiles}
             missingFileCount={missingFileCount}
             onRun={run}
-            storeRemote={storeRemote}
-            reviewBeforeStorage={reviewBeforeStorage}
+            storeRemote={resolvedStoreRemote}
+            reviewBeforeStorage={resolvedReviewBeforeStorage}
           />
         </div>
         </QueueTab>
@@ -3893,22 +3943,22 @@ export const QuickIngestModal: React.FC<Props> = ({
           hasVideoItems={hasVideoItems}
           running={running}
           ingestBlocked={ingestBlocked}
-          common={common}
-          setCommon={setCommon}
+          common={resolvedCommon}
+          setCommon={handleSetCommon}
           normalizedTypeDefaults={normalizedTypeDefaults}
-          setTypeDefaults={setTypeDefaults}
+          setTypeDefaults={handleSetTypeDefaults}
           transcriptionModelOptions={transcriptionModelChoices}
           transcriptionModelsLoading={transcriptionModelsLoading}
           transcriptionModelValue={transcriptionModelValue}
           onTranscriptionModelChange={handleTranscriptionModelChange}
           ragEmbeddingLabel={ragEmbeddingLabel}
           openModelSettings={openModelSettings}
-          storeRemote={storeRemote}
+          storeRemote={resolvedStoreRemote}
           setStoreRemote={setStoreRemote}
-          reviewBeforeStorage={reviewBeforeStorage}
+          reviewBeforeStorage={resolvedReviewBeforeStorage}
           handleReviewToggle={handleReviewToggle}
           storageLabel={storageLabel}
-          storageHintSeen={storageHintSeen}
+          storageHintSeen={resolvedStorageHintSeen}
           setStorageHintSeen={setStorageHintSeen}
           draftStorageCapLabel={draftStorageCapLabel}
           doneCount={doneCount}
@@ -4405,8 +4455,8 @@ export const QuickIngestModal: React.FC<Props> = ({
               hasMissingFiles={hasMissingFiles}
               missingFileCount={missingFileCount}
               onRun={run}
-              storeRemote={storeRemote}
-              reviewBeforeStorage={reviewBeforeStorage}
+              storeRemote={resolvedStoreRemote}
+              reviewBeforeStorage={resolvedReviewBeforeStorage}
             />
           }
           data={{

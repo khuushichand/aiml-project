@@ -920,7 +920,7 @@ const getPreviewCount = (manifest: any, key: ContentTypeKey) => {
 }
 
 const groupPreviewItems = (items: any[]): Record<ContentTypeKey, ChatbookEntity[]> => {
-  const grouped = buildSelectionState(() => [])
+  const grouped = buildSelectionState(() => [] as ChatbookEntity[])
   items.forEach((item) => {
     const type = item?.type as ContentTypeKey
     if (!type || !CONTENT_TYPE_KEYS.includes(type)) return

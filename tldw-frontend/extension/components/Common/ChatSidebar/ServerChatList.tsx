@@ -12,9 +12,9 @@ import { useServerChatHistory, type ServerChatHistoryItem } from "@/hooks/useSer
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useSelectServerChat } from "@/hooks/chat/useSelectServerChat"
 import { useBulkChatOperations } from "@/hooks/useBulkChatOperations"
-import { useStoreMessageOption } from "@/store/option"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
 import { useFolderStore } from "@/store/folder"
-import { shallow } from "zustand/shallow"
+import { useShallow } from "zustand/react/shallow"
 import {
   tldwClient,
   type ConversationState,
@@ -73,14 +73,13 @@ export function ServerChatList({
     setServerChatVersion,
     setServerChatTopic
   } = useStoreMessageOption(
-    (state) => ({
+    (state: MessageOptionState) => ({
       serverChatId: state.serverChatId,
       setServerChatTitle: state.setServerChatTitle,
       setServerChatState: state.setServerChatState,
       setServerChatVersion: state.setServerChatVersion,
       setServerChatTopic: state.setServerChatTopic
-    }),
-    shallow
+    })
   )
   const selectServerChat = useSelectServerChat()
   const clearChat = useClearChat()
@@ -141,17 +140,18 @@ export function ServerChatList({
     window.open(path, "_blank")
   }
 
+  type FolderStoreState = ReturnType<typeof useFolderStore.getState>
+
   const {
     folderApiAvailable,
     ensureKeyword,
     addKeywordToConversation
   } = useFolderStore(
-    (state) => ({
+    useShallow((state: FolderStoreState) => ({
       folderApiAvailable: state.folderApiAvailable,
       ensureKeyword: state.ensureKeyword,
       addKeywordToConversation: state.addKeywordToConversation
-    }),
-    shallow
+    }))
   )
 
   const updateChatRequest = React.useCallback(

@@ -17,6 +17,7 @@ type Props = {
 export const ModelSelectOption: React.FC<Props> = ({ iconClassName = "size-5" }) => {
   const { t } = useTranslation("common")
   const { setSelectedModel, selectedModel } = useMessageOption()
+  const selectedModelValue = typeof selectedModel === "string" ? selectedModel : null
   const [menuDensity] = useStorage("menuDensity", "comfortable")
   const { data } = useQuery({
     queryKey: ["getAllModelsForSelectOption"],
@@ -90,7 +91,7 @@ export const ModelSelectOption: React.FC<Props> = ({ iconClassName = "size-5" })
             items: groupedItems,
             style: { maxHeight: 500, overflowY: "scroll" },
             className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
-            activeKey: selectedModel
+            activeKey: selectedModelValue ?? undefined
           }}
           placement={"topLeft"}
           trigger={["click"]}>

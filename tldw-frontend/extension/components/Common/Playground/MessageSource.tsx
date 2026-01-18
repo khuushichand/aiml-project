@@ -84,7 +84,7 @@ export const MessageSource: React.FC<Props> = ({
         className="flex cursor-pointer items-center gap-2 text-caption text-text opacity-80 hover:opacity-100"
       >
         {isKnowledge && (
-          <KnowledgeIcon type={source.type} className="h-3 w-3" />
+          <KnowledgeIcon type={source.type ?? ""} className="h-3 w-3" />
         )}
         <span className="text-caption">{label}</span>
       </summary>

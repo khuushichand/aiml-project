@@ -1,96 +1,14 @@
-import { useMemo, useState, useCallback } from 'react'
-import { apiClient } from '@/lib/api'
-import { useConnectorBackend } from '@/hooks/useConnectorBackend'
+import dynamic from "next/dynamic"
 
-type Item = { id: string; name?: string; mimeType?: string; is_folder?: boolean; type?: string }
-
-export default function Browse() {
-  const url = new URL(typeof window !== 'undefined' ? window.location.href : 'http://local/')
-  const providerInit = (url.searchParams.get('provider') as 'drive' | 'notion') || 'drive'
-  const accountIdInit = Number(url.searchParams.get('account_id') || '0')
-  const [provider, setProvider] = useState<'drive' | 'notion'>(providerInit)
-  const [accountId, setAccountId] = useState<number>(accountIdInit)
-  const [_cursor, setCursor] = useState<string | null>(null)
-  const [items, setItems] = useState<Item[]>([])
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [parentId, setParentId] = useState<string | null>(null)
-
-  const canBrowse = useMemo(() => accountId > 0 && ['drive','notion'].includes(provider), [accountId, provider])
-
-  const load = useCallback(async (reset = false, cursorArg?: string | null) => {
-    if (!canBrowse) return
-    setBusy(true); setError(null)
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const params: any = { account_id: accountId }
-      if (parentId) params.parent_remote_id = parentId
-      if (!reset && cursorArg) params.cursor = cursorArg
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const j = await apiClient.get<any>(`/connectors/providers/${provider}/sources/browse`, { params })
-      setItems(j?.items || [])
-      setCursor(j?.next_cursor || null)
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Browse failed';
-      setError(message);
-    } finally { setBusy(false) }
-  }, [canBrowse, accountId, parentId, provider])
-
-  // Preflight connectors backend; if enabled, trigger initial load
-  const { notEnabled: hookNotEnabled } = useConnectorBackend(() => load(true))
-  const notEnabled = hookNotEnabled
-
-  async function addSource(item: Item) {
-    const payload = {
-      account_id: accountId,
-      provider,
-      remote_id: item.id,
-      type: item.is_folder ? 'folder' : (item.type || 'page'),
-      path: item.name || item.id,
-      options: { recursive: true }
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const s = await apiClient.post<any>('/connectors/sources', payload)
-    window.location.href = `/connectors/sources?sid=${s?.id}`
+export default dynamic(async () => {
+  const { useRouter } = await import("next/router")
+  const { useEffect } = await import("react")
+  const Page = () => {
+    const router = useRouter()
+    useEffect(() => {
+      void router.replace("/settings")
+    }, [router])
+    return null
   }
-
-  return (
-    <div className="p-6 space-y-4">
-      <h1 className="text-xl font-semibold">Browse {provider} (Account {accountId})</h1>
-      {notEnabled && (
-        <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
-          Connectors backend not enabled. This feature is optional and may be disabled on your server.
-        </div>
-      )}
-      {!notEnabled && error && <div className="text-red-600 text-sm">{error}</div>}
-      <div className="flex gap-2 items-center">
-        <label className="text-sm">Provider</label>
-        <select value={provider} onChange={e => setProvider(e.target.value as typeof provider)} className="border rounded px-2 py-1">
-          <option value="drive">drive</option>
-          <option value="notion">notion</option>
-        </select>
-        <label className="text-sm">Account ID</label>
-        <input value={accountId} onChange={e => setAccountId(Number(e.target.value))} className="border rounded px-2 py-1 w-28" />
-        <label className="text-sm">Parent ID</label>
-        <input value={parentId || ''} onChange={e => setParentId(e.target.value || null)} className="border rounded px-2 py-1" placeholder={provider === 'drive' ? 'root or folder id' : 'database id (optional)'} />
-        <button onClick={() => load(true)} disabled={busy} className="px-3 py-1 rounded bg-gray-800 text-white">Refresh</button>
-      </div>
-      {!notEnabled && (<div className="grid grid-cols-1 gap-2">
-        {items.map(it => (
-          <div key={it.id} className="flex items-center justify-between border rounded p-2">
-            <div>
-              <div className="font-medium">{it.name || it.id}</div>
-              <div className="text-xs text-gray-500">{it.mimeType || it.type || ''}</div>
-            </div>
-            <div className="flex items-center gap-2">
-              {provider === 'drive' && it.is_folder && (
-                <button onClick={() => setParentId(it.id)} className="px-3 py-1 rounded bg-gray-200">Open</button>
-              )}
-              <button onClick={() => addSource(it)} className="px-3 py-1 rounded bg-blue-600 text-white">Add Source</button>
-            </div>
-          </div>
-        ))}
-      </div>)}
-    </div>
-  )
-}
+  return { default: Page }
+}, { ssr: false })
