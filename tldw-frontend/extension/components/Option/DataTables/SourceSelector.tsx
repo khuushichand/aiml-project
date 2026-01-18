@@ -13,6 +13,7 @@ import {
 import { MessageSquare, FileText, Search, X, Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useDataTablesStore } from "@/store/data-tables"
+import type { DataTablesState } from "@/store/data-tables"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { DataTableSource, DataTableSourceType } from "@/types/data-tables"
 
@@ -45,15 +46,27 @@ export const SourceSelector: React.FC = () => {
   const { t } = useTranslation(["dataTables", "common"])
 
   // Store state
-  const selectedSources = useDataTablesStore((s) => s.selectedSources)
-  const activeSourceType = useDataTablesStore((s) => s.activeSourceType)
-  const sourceSearchQuery = useDataTablesStore((s) => s.sourceSearchQuery)
+  const selectedSources = useDataTablesStore(
+    (s: DataTablesState) => s.selectedSources
+  )
+  const activeSourceType = useDataTablesStore(
+    (s: DataTablesState) => s.activeSourceType
+  )
+  const sourceSearchQuery = useDataTablesStore(
+    (s: DataTablesState) => s.sourceSearchQuery
+  )
 
   // Store actions
-  const addSource = useDataTablesStore((s) => s.addSource)
-  const removeSource = useDataTablesStore((s) => s.removeSource)
-  const setActiveSourceType = useDataTablesStore((s) => s.setActiveSourceType)
-  const setSourceSearchQuery = useDataTablesStore((s) => s.setSourceSearchQuery)
+  const addSource = useDataTablesStore((s: DataTablesState) => s.addSource)
+  const removeSource = useDataTablesStore(
+    (s: DataTablesState) => s.removeSource
+  )
+  const setActiveSourceType = useDataTablesStore(
+    (s: DataTablesState) => s.setActiveSourceType
+  )
+  const setSourceSearchQuery = useDataTablesStore(
+    (s: DataTablesState) => s.setSourceSearchQuery
+  )
 
   // Local state for fetched items
   const [availableItems, setAvailableItems] = useState<DataTableSource[]>([])
@@ -179,7 +192,8 @@ export const SourceSelector: React.FC = () => {
   }
 
   // Check if source is selected
-  const isSelected = (id: string) => selectedSources.some((s) => s.id === id)
+  const isSelected = (id: string) =>
+    selectedSources.some((s: DataTableSource) => s.id === id)
 
   return (
     <div className="space-y-4">
@@ -190,7 +204,7 @@ export const SourceSelector: React.FC = () => {
             {t("dataTables:selectedSources", "Selected Sources")} ({selectedSources.length})
           </h4>
           <div className="flex flex-wrap gap-2">
-            {selectedSources.map((source) => (
+            {selectedSources.map((source: DataTableSource) => (
               <Tag
                 key={source.id}
                 closable

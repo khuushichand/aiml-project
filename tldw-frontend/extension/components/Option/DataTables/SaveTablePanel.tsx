@@ -3,6 +3,7 @@ import { Alert, Button, Card, Input, message, Result } from "antd"
 import { CheckCircle, Download, Save, Table2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useDataTablesStore } from "@/store/data-tables"
+import type { DataTablesState } from "@/store/data-tables"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { exportAndDownload } from "@/utils/data-table-export"
 import type { ExportFormat } from "@/types/data-tables"
@@ -18,12 +19,18 @@ export const SaveTablePanel: React.FC = () => {
   const { t } = useTranslation(["dataTables", "common"])
 
   // Store state
-  const generatedTable = useDataTablesStore((s) => s.generatedTable)
+  const generatedTable = useDataTablesStore(
+    (s: DataTablesState) => s.generatedTable
+  )
 
   // Store actions
-  const addTable = useDataTablesStore((s) => s.addTable)
-  const setActiveTab = useDataTablesStore((s) => s.setActiveTab)
-  const resetWizard = useDataTablesStore((s) => s.resetWizard)
+  const addTable = useDataTablesStore((s: DataTablesState) => s.addTable)
+  const setActiveTab = useDataTablesStore(
+    (s: DataTablesState) => s.setActiveTab
+  )
+  const resetWizard = useDataTablesStore(
+    (s: DataTablesState) => s.resetWizard
+  )
 
   // Local state
   const [tableName, setTableName] = useState(generatedTable?.name || "")

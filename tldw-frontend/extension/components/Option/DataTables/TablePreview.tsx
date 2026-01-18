@@ -38,9 +38,14 @@ import {
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useDataTablesStore } from "@/store/data-tables"
+import type { DataTablesState } from "@/store/data-tables"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { pollDataTableJob } from "@/utils/data-tables-jobs"
-import type { DataTableColumn, DataTableRow } from "@/types/data-tables"
+import type {
+  DataTableColumn,
+  DataTableRow,
+  DataTableSource
+} from "@/types/data-tables"
 import { EditableCell } from "./EditableCell"
 import { AddColumnModal } from "./AddColumnModal"
 
@@ -107,39 +112,81 @@ export const TablePreview: React.FC = () => {
   const { t } = useTranslation(["dataTables", "common"])
 
   // Store state
-  const tableName = useDataTablesStore((s) => s.tableName)
-  const prompt = useDataTablesStore((s) => s.prompt)
-  const selectedSources = useDataTablesStore((s) => s.selectedSources)
-  const columnHints = useDataTablesStore((s) => s.columnHints)
-  const selectedModel = useDataTablesStore((s) => s.selectedModel)
-  const maxRows = useDataTablesStore((s) => s.maxRows)
-  const isGenerating = useDataTablesStore((s) => s.isGenerating)
-  const generatedTable = useDataTablesStore((s) => s.generatedTable)
-  const generationError = useDataTablesStore((s) => s.generationError)
-  const generationWarnings = useDataTablesStore((s) => s.generationWarnings)
+  const tableName = useDataTablesStore((s: DataTablesState) => s.tableName)
+  const prompt = useDataTablesStore((s: DataTablesState) => s.prompt)
+  const selectedSources = useDataTablesStore(
+    (s: DataTablesState) => s.selectedSources
+  )
+  const columnHints = useDataTablesStore(
+    (s: DataTablesState) => s.columnHints
+  )
+  const selectedModel = useDataTablesStore(
+    (s: DataTablesState) => s.selectedModel
+  )
+  const maxRows = useDataTablesStore((s: DataTablesState) => s.maxRows)
+  const isGenerating = useDataTablesStore(
+    (s: DataTablesState) => s.isGenerating
+  )
+  const generatedTable = useDataTablesStore(
+    (s: DataTablesState) => s.generatedTable
+  )
+  const generationError = useDataTablesStore(
+    (s: DataTablesState) => s.generationError
+  )
+  const generationWarnings = useDataTablesStore(
+    (s: DataTablesState) => s.generationWarnings
+  )
 
   // Editing state from store
-  const editingTable = useDataTablesStore((s) => s.editingTable)
-  const editingRows = useDataTablesStore((s) => s.editingRows)
-  const editingState = useDataTablesStore((s) => s.editingState)
+  const editingTable = useDataTablesStore(
+    (s: DataTablesState) => s.editingTable
+  )
+  const editingRows = useDataTablesStore(
+    (s: DataTablesState) => s.editingRows
+  )
+  const editingState = useDataTablesStore(
+    (s: DataTablesState) => s.editingState
+  )
 
   // Store actions
-  const setIsGenerating = useDataTablesStore((s) => s.setIsGenerating)
-  const setGeneratedTable = useDataTablesStore((s) => s.setGeneratedTable)
-  const setGenerationError = useDataTablesStore((s) => s.setGenerationError)
-  const setGenerationWarnings = useDataTablesStore((s) => s.setGenerationWarnings)
+  const setIsGenerating = useDataTablesStore(
+    (s: DataTablesState) => s.setIsGenerating
+  )
+  const setGeneratedTable = useDataTablesStore(
+    (s: DataTablesState) => s.setGeneratedTable
+  )
+  const setGenerationError = useDataTablesStore(
+    (s: DataTablesState) => s.setGenerationError
+  )
+  const setGenerationWarnings = useDataTablesStore(
+    (s: DataTablesState) => s.setGenerationWarnings
+  )
 
   // Editing actions
-  const startEditing = useDataTablesStore((s) => s.startEditing)
-  const stopEditing = useDataTablesStore((s) => s.stopEditing)
-  const updateCell = useDataTablesStore((s) => s.updateCell)
-  const addRow = useDataTablesStore((s) => s.addRow)
-  const deleteRow = useDataTablesStore((s) => s.deleteRow)
-  const addColumn = useDataTablesStore((s) => s.addColumn)
-  const deleteColumn = useDataTablesStore((s) => s.deleteColumn)
-  const reorderColumns = useDataTablesStore((s) => s.reorderColumns)
-  const setEditingCellKey = useDataTablesStore((s) => s.setEditingCellKey)
-  const discardChanges = useDataTablesStore((s) => s.discardChanges)
+  const startEditing = useDataTablesStore(
+    (s: DataTablesState) => s.startEditing
+  )
+  const stopEditing = useDataTablesStore(
+    (s: DataTablesState) => s.stopEditing
+  )
+  const updateCell = useDataTablesStore(
+    (s: DataTablesState) => s.updateCell
+  )
+  const addRow = useDataTablesStore((s: DataTablesState) => s.addRow)
+  const deleteRow = useDataTablesStore((s: DataTablesState) => s.deleteRow)
+  const addColumn = useDataTablesStore((s: DataTablesState) => s.addColumn)
+  const deleteColumn = useDataTablesStore(
+    (s: DataTablesState) => s.deleteColumn
+  )
+  const reorderColumns = useDataTablesStore(
+    (s: DataTablesState) => s.reorderColumns
+  )
+  const setEditingCellKey = useDataTablesStore(
+    (s: DataTablesState) => s.setEditingCellKey
+  )
+  const discardChanges = useDataTablesStore(
+    (s: DataTablesState) => s.discardChanges
+  )
 
   // Local state
   const [addColumnModalOpen, setAddColumnModalOpen] = useState(false)
@@ -172,7 +219,7 @@ export const TablePreview: React.FC = () => {
       const response = await tldwClient.generateDataTable({
         name: tableName.trim() || "Untitled Table",
         prompt,
-        sources: selectedSources.map((s) => ({
+        sources: selectedSources.map((s: DataTableSource) => ({
           type: s.type,
           id: s.id,
           title: s.title,
@@ -253,7 +300,7 @@ export const TablePreview: React.FC = () => {
       // Update the generated table with edited data
       const updatedTable = {
         ...editingTable,
-        rows: editingRows.map(({ _id, ...rest }) => rest)
+        rows: editingRows.map(({ _id, ...rest }: DataTableRow) => rest)
       }
       setGeneratedTable(updatedTable)
     }
@@ -265,8 +312,12 @@ export const TablePreview: React.FC = () => {
       const { active, over } = event
       if (!over || active.id === over.id || !editingTable) return
 
-      const oldIndex = editingTable.columns.findIndex((c) => c.id === active.id)
-      const newIndex = editingTable.columns.findIndex((c) => c.id === over.id)
+      const oldIndex = editingTable.columns.findIndex(
+        (c: DataTableColumn) => c.id === active.id
+      )
+      const newIndex = editingTable.columns.findIndex(
+        (c: DataTableColumn) => c.id === over.id
+      )
 
       if (oldIndex !== -1 && newIndex !== -1) {
         reorderColumns(oldIndex, newIndex)
@@ -293,7 +344,8 @@ export const TablePreview: React.FC = () => {
   // Build columns
   const columns = useMemo((): ColumnsType<DataTableRow> => {
     const tableColumns = editingTable?.columns || generatedTable?.columns || []
-    const dataColumns: ColumnsType<DataTableRow> = tableColumns.map((col) => ({
+    const dataColumns: ColumnsType<DataTableRow> = tableColumns.map(
+      (col: DataTableColumn) => ({
       title: (
         <SortablePreviewHeader
           column={col}
@@ -324,7 +376,8 @@ export const TablePreview: React.FC = () => {
           />
         )
       }
-    }))
+      })
+    )
 
     // Add actions column
     dataColumns.push({
@@ -363,7 +416,10 @@ export const TablePreview: React.FC = () => {
 
   // Column IDs for sortable context
   const columnIds = useMemo(
-    () => (editingTable?.columns || generatedTable?.columns || []).map((c) => c.id),
+    () =>
+      (editingTable?.columns || generatedTable?.columns || []).map(
+        (c: DataTableColumn) => c.id
+      ),
     [editingTable, generatedTable]
   )
 
@@ -427,7 +483,7 @@ export const TablePreview: React.FC = () => {
           message={t("dataTables:warnings", "Warnings")}
           description={
             <ul className="list-disc list-inside">
-              {generationWarnings.map((warning, index) => (
+              {generationWarnings.map((warning: string, index: number) => (
                 <li key={index}>{warning}</li>
               ))}
             </ul>
@@ -499,10 +555,16 @@ export const TablePreview: React.FC = () => {
           strategy={horizontalListSortingStrategy}
         >
           <Table
-            dataSource={editingRows.length > 0 ? editingRows : generatedTable?.rows?.map((row, index) => ({
-              ...row,
-              _id: `row-${index}`
-            }))}
+            dataSource={
+              editingRows.length > 0
+                ? editingRows
+                : generatedTable?.rows?.map(
+                    (row: Record<string, any>, index: number) => ({
+                      ...row,
+                      _id: `row-${index}`
+                    })
+                  )
+            }
             columns={columns}
             rowKey="_id"
             pagination={{

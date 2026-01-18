@@ -14,9 +14,10 @@ import { Download, RefreshCw, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useDataTablesStore } from "@/store/data-tables"
+import type { DataTablesState } from "@/store/data-tables"
 import { exportAndDownload } from "@/utils/data-table-export"
 import { pollDataTableJob } from "@/utils/data-tables-jobs"
-import type { DataTable, ExportFormat } from "@/types/data-tables"
+import type { DataTable, DataTableSource, ExportFormat } from "@/types/data-tables"
 import { EditableDataTable } from "./EditableDataTable"
 
 interface TableDetailModalProps {
@@ -38,15 +39,27 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
   const { t } = useTranslation(["dataTables", "common"])
 
   // Store state
-  const currentTable = useDataTablesStore((s) => s.currentTable)
-  const currentTableLoading = useDataTablesStore((s) => s.currentTableLoading)
-  const editingState = useDataTablesStore((s) => s.editingState)
+  const currentTable = useDataTablesStore(
+    (s: DataTablesState) => s.currentTable
+  )
+  const currentTableLoading = useDataTablesStore(
+    (s: DataTablesState) => s.currentTableLoading
+  )
+  const editingState = useDataTablesStore(
+    (s: DataTablesState) => s.editingState
+  )
 
   // Store actions
-  const setCurrentTable = useDataTablesStore((s) => s.setCurrentTable)
-  const setCurrentTableLoading = useDataTablesStore((s) => s.setCurrentTableLoading)
-  const stopEditing = useDataTablesStore((s) => s.stopEditing)
-  const updateTableInList = useDataTablesStore((s) => s.updateTableInList)
+  const setCurrentTable = useDataTablesStore(
+    (s: DataTablesState) => s.setCurrentTable
+  )
+  const setCurrentTableLoading = useDataTablesStore(
+    (s: DataTablesState) => s.setCurrentTableLoading
+  )
+  const stopEditing = useDataTablesStore((s: DataTablesState) => s.stopEditing)
+  const updateTableInList = useDataTablesStore(
+    (s: DataTablesState) => s.updateTableInList
+  )
 
   // Local state
   const [error, setError] = useState<string | null>(null)
@@ -345,11 +358,13 @@ export const TableDetailModal: React.FC<TableDetailModalProps> = ({
                 {t("dataTables:sources", "Sources")} ({currentTable.sources.length})
               </h4>
               <div className="flex flex-wrap gap-2">
-                {currentTable.sources.map((source, index) => (
+                {currentTable.sources.map(
+                  (source: DataTableSource, index: number) => (
                   <Tag key={index}>
                     {source.type}: {source.title}
                   </Tag>
-                ))}
+                  )
+                )}
               </div>
             </div>
           )}
