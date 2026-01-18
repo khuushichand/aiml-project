@@ -868,7 +868,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                       />
                     </Form.Item>
 
-                    <Divider orientation="left" className="my-2">
+                    <Divider titlePlacement="left" className="my-2">
                       {t(
                         "settings:chunkingPlayground.advanced.llmOptionsTitle",
                         "LLM Options (internal steps)"

@@ -66,11 +66,12 @@ export const HighlightsList: React.FC = () => {
     setHighlightsError(null)
     try {
       const listResponse = await api.getReadingList({ page: 1, size: 50 })
-      const sourceItems = Array.isArray(listResponse?.items) ? listResponse.items : []
+      const sourceItems: Array<{ id: string | number; title?: string }> =
+        Array.isArray(listResponse?.items) ? listResponse.items : []
       const limitedItems = sourceItems.slice(0, 50)
       const results = await Promise.all(
         limitedItems.map(async (item) => {
-          const itemHighlights = await api.getHighlights(item.id)
+          const itemHighlights = await api.getHighlights(String(item.id))
           return itemHighlights.map((highlight: Highlight) => ({
             ...highlight,
             item_title: highlight.item_title || item.title

@@ -13,8 +13,9 @@ import { Plus, Trash2, Sparkles, Settings2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useQuery } from "@tanstack/react-query"
 import { useDataTablesStore } from "@/store/data-tables"
+import type { DataTablesState } from "@/store/data-tables"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import type { ColumnType, DataTableColumn } from "@/types/data-tables"
+import type { ColumnType, DataTableColumn, DataTableSource } from "@/types/data-tables"
 
 const { TextArea } = Input
 const { Panel } = Collapse
@@ -48,21 +49,33 @@ export const GenerationPanel: React.FC = () => {
   const { t } = useTranslation(["dataTables", "common"])
 
   // Store state
-  const tableName = useDataTablesStore((s) => s.tableName)
-  const prompt = useDataTablesStore((s) => s.prompt)
-  const columnHints = useDataTablesStore((s) => s.columnHints)
-  const selectedModel = useDataTablesStore((s) => s.selectedModel)
-  const maxRows = useDataTablesStore((s) => s.maxRows)
-  const selectedSources = useDataTablesStore((s) => s.selectedSources)
+  const tableName = useDataTablesStore((s: DataTablesState) => s.tableName)
+  const prompt = useDataTablesStore((s: DataTablesState) => s.prompt)
+  const columnHints = useDataTablesStore((s: DataTablesState) => s.columnHints)
+  const selectedModel = useDataTablesStore((s: DataTablesState) => s.selectedModel)
+  const maxRows = useDataTablesStore((s: DataTablesState) => s.maxRows)
+  const selectedSources = useDataTablesStore(
+    (s: DataTablesState) => s.selectedSources
+  )
 
   // Store actions
-  const setTableName = useDataTablesStore((s) => s.setTableName)
-  const setPrompt = useDataTablesStore((s) => s.setPrompt)
-  const addColumnHint = useDataTablesStore((s) => s.addColumnHint)
-  const updateColumnHint = useDataTablesStore((s) => s.updateColumnHint)
-  const removeColumnHint = useDataTablesStore((s) => s.removeColumnHint)
-  const setSelectedModel = useDataTablesStore((s) => s.setSelectedModel)
-  const setMaxRows = useDataTablesStore((s) => s.setMaxRows)
+  const setTableName = useDataTablesStore(
+    (s: DataTablesState) => s.setTableName
+  )
+  const setPrompt = useDataTablesStore((s: DataTablesState) => s.setPrompt)
+  const addColumnHint = useDataTablesStore(
+    (s: DataTablesState) => s.addColumnHint
+  )
+  const updateColumnHint = useDataTablesStore(
+    (s: DataTablesState) => s.updateColumnHint
+  )
+  const removeColumnHint = useDataTablesStore(
+    (s: DataTablesState) => s.removeColumnHint
+  )
+  const setSelectedModel = useDataTablesStore(
+    (s: DataTablesState) => s.setSelectedModel
+  )
+  const setMaxRows = useDataTablesStore((s: DataTablesState) => s.setMaxRows)
 
   // Local state for new column
   const [newColumnName, setNewColumnName] = useState("")
@@ -100,7 +113,7 @@ export const GenerationPanel: React.FC = () => {
           {t("dataTables:sourcesSelected", "Sources Selected")}
         </h4>
         <div className="flex flex-wrap gap-1">
-          {selectedSources.map((source) => (
+          {selectedSources.map((source: DataTableSource) => (
             <Tag key={source.id} className="truncate max-w-[150px]">
               {source.title}
             </Tag>
@@ -187,11 +200,12 @@ export const GenerationPanel: React.FC = () => {
               {/* Existing hints */}
               {columnHints.length > 0 && (
                 <div className="space-y-2 mb-3">
-                  {columnHints.map((hint, index) => (
-                    <div
-                      key={index}
-                      className="flex items-center gap-2 p-2 bg-zinc-50 dark:bg-zinc-800 rounded"
-                    >
+                  {columnHints.map(
+                    (hint: Partial<DataTableColumn>, index: number) => (
+                      <div
+                        key={index}
+                        className="flex items-center gap-2 p-2 bg-zinc-50 dark:bg-zinc-800 rounded"
+                      >
                       <Input
                         value={hint.name || ""}
                         onChange={(e) =>
@@ -218,7 +232,8 @@ export const GenerationPanel: React.FC = () => {
                         onClick={() => removeColumnHint(index)}
                       />
                     </div>
-                  ))}
+                  )
+                  )}
                 </div>
               )}
 

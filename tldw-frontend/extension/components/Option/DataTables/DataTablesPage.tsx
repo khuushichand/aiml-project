@@ -5,7 +5,7 @@ import { Table2, Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { PageShell } from "@/components/Common/PageShell"
-import { useDataTablesStore } from "@/store/data-tables"
+import { useDataTablesStore, type DataTablesState } from "@/store/data-tables"
 import { consumeDataTablesPrefill } from "@/utils/data-tables-prefill"
 import { DataTablesList } from "./DataTablesList"
 import { CreateTableWizard } from "./CreateTableWizard"
@@ -20,13 +20,19 @@ export const DataTablesPage: React.FC = () => {
   const { t } = useTranslation(["dataTables", "common"])
   const isOnline = useServerOnline()
 
-  const activeTab = useDataTablesStore((s) => s.activeTab)
-  const setActiveTab = useDataTablesStore((s) => s.setActiveTab)
-  const addSource = useDataTablesStore((s) => s.addSource)
-  const setWizardStep = useDataTablesStore((s) => s.setWizardStep)
-  const setGeneratedTable = useDataTablesStore((s) => s.setGeneratedTable)
-  const resetStore = useDataTablesStore((s) => s.resetStore)
-  const resetWizard = useDataTablesStore((s) => s.resetWizard)
+  const activeTab = useDataTablesStore((s: DataTablesState) => s.activeTab)
+  const setActiveTab = useDataTablesStore(
+    (s: DataTablesState) => s.setActiveTab
+  )
+  const addSource = useDataTablesStore((s: DataTablesState) => s.addSource)
+  const setWizardStep = useDataTablesStore(
+    (s: DataTablesState) => s.setWizardStep
+  )
+  const setGeneratedTable = useDataTablesStore(
+    (s: DataTablesState) => s.setGeneratedTable
+  )
+  const resetStore = useDataTablesStore((s: DataTablesState) => s.resetStore)
+  const resetWizard = useDataTablesStore((s: DataTablesState) => s.resetWizard)
 
   // Reset store on unmount
   useEffect(() => {

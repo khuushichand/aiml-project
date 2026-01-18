@@ -33,7 +33,7 @@ import {
   Trash2
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { useDataTablesStore } from "@/store/data-tables"
+import { useDataTablesStore, type DataTablesState } from "@/store/data-tables"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { DataTable, DataTableColumn, DataTableRow } from "@/types/data-tables"
 import { EditableCell } from "./EditableCell"
@@ -121,23 +121,47 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
   const { t } = useTranslation(["dataTables", "common"])
 
   // Store state
-  const editingTable = useDataTablesStore((s) => s.editingTable)
-  const editingRows = useDataTablesStore((s) => s.editingRows)
-  const editingState = useDataTablesStore((s) => s.editingState)
-  const originalTable = useDataTablesStore((s) => s.originalTable)
+  const editingTable = useDataTablesStore(
+    (s: DataTablesState) => s.editingTable
+  )
+  const editingRows = useDataTablesStore(
+    (s: DataTablesState) => s.editingRows
+  )
+  const editingState = useDataTablesStore(
+    (s: DataTablesState) => s.editingState
+  )
+  const originalTable = useDataTablesStore(
+    (s: DataTablesState) => s.originalTable
+  )
 
   // Store actions
-  const startEditing = useDataTablesStore((s) => s.startEditing)
-  const stopEditing = useDataTablesStore((s) => s.stopEditing)
-  const updateCell = useDataTablesStore((s) => s.updateCell)
-  const addRow = useDataTablesStore((s) => s.addRow)
-  const deleteRow = useDataTablesStore((s) => s.deleteRow)
-  const addColumn = useDataTablesStore((s) => s.addColumn)
-  const deleteColumn = useDataTablesStore((s) => s.deleteColumn)
-  const reorderColumns = useDataTablesStore((s) => s.reorderColumns)
-  const setEditingCellKey = useDataTablesStore((s) => s.setEditingCellKey)
-  const discardChanges = useDataTablesStore((s) => s.discardChanges)
-  const getEditedTableData = useDataTablesStore((s) => s.getEditedTableData)
+  const startEditing = useDataTablesStore(
+    (s: DataTablesState) => s.startEditing
+  )
+  const stopEditing = useDataTablesStore(
+    (s: DataTablesState) => s.stopEditing
+  )
+  const updateCell = useDataTablesStore(
+    (s: DataTablesState) => s.updateCell
+  )
+  const addRow = useDataTablesStore((s: DataTablesState) => s.addRow)
+  const deleteRow = useDataTablesStore((s: DataTablesState) => s.deleteRow)
+  const addColumn = useDataTablesStore((s: DataTablesState) => s.addColumn)
+  const deleteColumn = useDataTablesStore(
+    (s: DataTablesState) => s.deleteColumn
+  )
+  const reorderColumns = useDataTablesStore(
+    (s: DataTablesState) => s.reorderColumns
+  )
+  const setEditingCellKey = useDataTablesStore(
+    (s: DataTablesState) => s.setEditingCellKey
+  )
+  const discardChanges = useDataTablesStore(
+    (s: DataTablesState) => s.discardChanges
+  )
+  const getEditedTableData = useDataTablesStore(
+    (s: DataTablesState) => s.getEditedTableData
+  )
 
   // Local state
   const [isSaving, setIsSaving] = useState(false)
@@ -174,8 +198,12 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
       const { active, over } = event
       if (!over || active.id === over.id || !editingTable) return
 
-      const oldIndex = editingTable.columns.findIndex((c) => c.id === active.id)
-      const newIndex = editingTable.columns.findIndex((c) => c.id === over.id)
+      const oldIndex = editingTable.columns.findIndex(
+        (c: DataTableColumn) => c.id === active.id
+      )
+      const newIndex = editingTable.columns.findIndex(
+        (c: DataTableColumn) => c.id === over.id
+      )
 
       if (oldIndex !== -1 && newIndex !== -1) {
         reorderColumns(oldIndex, newIndex)
@@ -243,7 +271,8 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
   // Build table columns
   const columns = useMemo((): ColumnsType<DataTableRow> => {
     const tableColumns = editingTable?.columns || table.columns || []
-    const dataColumns: ColumnsType<DataTableRow> = tableColumns.map((col, colIndex) => ({
+    const dataColumns: ColumnsType<DataTableRow> = tableColumns.map(
+      (col: DataTableColumn, colIndex: number) => ({
       title: readOnly ? (
         <div>
           <div className="font-medium">{col.name}</div>
@@ -304,7 +333,8 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
           />
         )
       }
-    }))
+      })
+    )
 
     // Add actions column if not read-only
     if (!readOnly) {
@@ -351,7 +381,10 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
 
   // Column IDs for sortable context
   const columnIds = useMemo(
-    () => (editingTable?.columns || table.columns || []).map((c) => c.id),
+    () =>
+      (editingTable?.columns || table.columns || []).map(
+        (c: DataTableColumn) => c.id
+      ),
     [editingTable, table]
   )
 

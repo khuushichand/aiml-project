@@ -22,7 +22,7 @@ import {
   FileSpreadsheet
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { useDataTablesStore } from "@/store/data-tables"
+import { useDataTablesStore, type DataTablesState } from "@/store/data-tables"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { DataTableSummary } from "@/types/data-tables"
 import { ExportMenu } from "./ExportMenu"
@@ -41,29 +41,61 @@ export const DataTablesList: React.FC = () => {
   const { t } = useTranslation(["dataTables", "common"])
 
   // Store state
-  const tables = useDataTablesStore((s) => s.tables)
-  const tablesLoading = useDataTablesStore((s) => s.tablesLoading)
-  const tablesError = useDataTablesStore((s) => s.tablesError)
-  const tablesTotal = useDataTablesStore((s) => s.tablesTotal)
-  const tablesPage = useDataTablesStore((s) => s.tablesPage)
-  const tablesPageSize = useDataTablesStore((s) => s.tablesPageSize)
-  const tablesSearch = useDataTablesStore((s) => s.tablesSearch)
-  const selectedTableId = useDataTablesStore((s) => s.selectedTableId)
-  const tableDetailOpen = useDataTablesStore((s) => s.tableDetailOpen)
-  const deleteConfirmOpen = useDataTablesStore((s) => s.deleteConfirmOpen)
-  const deleteTargetId = useDataTablesStore((s) => s.deleteTargetId)
+  const tables = useDataTablesStore((s: DataTablesState) => s.tables)
+  const tablesLoading = useDataTablesStore(
+    (s: DataTablesState) => s.tablesLoading
+  )
+  const tablesError = useDataTablesStore((s: DataTablesState) => s.tablesError)
+  const tablesTotal = useDataTablesStore((s: DataTablesState) => s.tablesTotal)
+  const tablesPage = useDataTablesStore((s: DataTablesState) => s.tablesPage)
+  const tablesPageSize = useDataTablesStore(
+    (s: DataTablesState) => s.tablesPageSize
+  )
+  const tablesSearch = useDataTablesStore(
+    (s: DataTablesState) => s.tablesSearch
+  )
+  const selectedTableId = useDataTablesStore(
+    (s: DataTablesState) => s.selectedTableId
+  )
+  const tableDetailOpen = useDataTablesStore(
+    (s: DataTablesState) => s.tableDetailOpen
+  )
+  const deleteConfirmOpen = useDataTablesStore(
+    (s: DataTablesState) => s.deleteConfirmOpen
+  )
+  const deleteTargetId = useDataTablesStore(
+    (s: DataTablesState) => s.deleteTargetId
+  )
 
   // Store actions
-  const setTables = useDataTablesStore((s) => s.setTables)
-  const setTablesLoading = useDataTablesStore((s) => s.setTablesLoading)
-  const setTablesError = useDataTablesStore((s) => s.setTablesError)
-  const setTablesPage = useDataTablesStore((s) => s.setTablesPage)
-  const setTablesSearch = useDataTablesStore((s) => s.setTablesSearch)
-  const openTableDetail = useDataTablesStore((s) => s.openTableDetail)
-  const closeTableDetail = useDataTablesStore((s) => s.closeTableDetail)
-  const openDeleteConfirm = useDataTablesStore((s) => s.openDeleteConfirm)
-  const closeDeleteConfirm = useDataTablesStore((s) => s.closeDeleteConfirm)
-  const removeTable = useDataTablesStore((s) => s.removeTable)
+  const setTables = useDataTablesStore((s: DataTablesState) => s.setTables)
+  const setTablesLoading = useDataTablesStore(
+    (s: DataTablesState) => s.setTablesLoading
+  )
+  const setTablesError = useDataTablesStore(
+    (s: DataTablesState) => s.setTablesError
+  )
+  const setTablesPage = useDataTablesStore(
+    (s: DataTablesState) => s.setTablesPage
+  )
+  const setTablesSearch = useDataTablesStore(
+    (s: DataTablesState) => s.setTablesSearch
+  )
+  const openTableDetail = useDataTablesStore(
+    (s: DataTablesState) => s.openTableDetail
+  )
+  const closeTableDetail = useDataTablesStore(
+    (s: DataTablesState) => s.closeTableDetail
+  )
+  const openDeleteConfirm = useDataTablesStore(
+    (s: DataTablesState) => s.openDeleteConfirm
+  )
+  const closeDeleteConfirm = useDataTablesStore(
+    (s: DataTablesState) => s.closeDeleteConfirm
+  )
+  const removeTable = useDataTablesStore(
+    (s: DataTablesState) => s.removeTable
+  )
 
   // Fetch tables
   const fetchTables = useCallback(async () => {

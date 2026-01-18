@@ -215,9 +215,9 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
         {/* Right side: status & actions */}
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
-            <StatusBadge status={item.status} />
+            <StatusBadge status={item.status ?? "saved"} />
             <span className="text-xs text-zinc-400 dark:text-zinc-500">
-              {formatTimeAgo(item.updated_at)}
+              {formatTimeAgo(item.updated_at ?? "")}
             </span>
           </div>
 

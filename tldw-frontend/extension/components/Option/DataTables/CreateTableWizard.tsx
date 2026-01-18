@@ -2,13 +2,12 @@ import React from "react"
 import { Steps, Card, Button, Alert } from "antd"
 import { ArrowLeft, ArrowRight, Sparkles } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { useDataTablesStore } from "@/store/data-tables"
+import { useDataTablesStore, type DataTablesState } from "@/store/data-tables"
 import { SourceSelector } from "./SourceSelector"
 import { GenerationPanel } from "./GenerationPanel"
 import { TablePreview } from "./TablePreview"
 import { SaveTablePanel } from "./SaveTablePanel"
 
-const { Step } = Steps
 
 /**
  * CreateTableWizard
@@ -20,16 +19,26 @@ export const CreateTableWizard: React.FC = () => {
   const { t } = useTranslation(["dataTables", "common"])
 
   // Store state
-  const wizardStep = useDataTablesStore((s) => s.wizardStep)
-  const selectedSources = useDataTablesStore((s) => s.selectedSources)
-  const tableName = useDataTablesStore((s) => s.tableName)
-  const prompt = useDataTablesStore((s) => s.prompt)
-  const generatedTable = useDataTablesStore((s) => s.generatedTable)
-  const isGenerating = useDataTablesStore((s) => s.isGenerating)
+  const wizardStep = useDataTablesStore((s: DataTablesState) => s.wizardStep)
+  const selectedSources = useDataTablesStore(
+    (s: DataTablesState) => s.selectedSources
+  )
+  const tableName = useDataTablesStore((s: DataTablesState) => s.tableName)
+  const prompt = useDataTablesStore((s: DataTablesState) => s.prompt)
+  const generatedTable = useDataTablesStore(
+    (s: DataTablesState) => s.generatedTable
+  )
+  const isGenerating = useDataTablesStore(
+    (s: DataTablesState) => s.isGenerating
+  )
 
   // Store actions
-  const setWizardStep = useDataTablesStore((s) => s.setWizardStep)
-  const resetWizard = useDataTablesStore((s) => s.resetWizard)
+  const setWizardStep = useDataTablesStore(
+    (s: DataTablesState) => s.setWizardStep
+  )
+  const resetWizard = useDataTablesStore(
+    (s: DataTablesState) => s.resetWizard
+  )
 
   // Step configuration
   const steps = [
@@ -56,6 +65,11 @@ export const CreateTableWizard: React.FC = () => {
   ]
 
   const currentStepIndex = steps.findIndex((s) => s.key === wizardStep)
+  const stepItems = steps.map((step) => ({
+    key: step.key,
+    title: step.title,
+    description: step.description
+  }))
 
   // Navigation helpers
   const canGoNext = () => {
@@ -110,15 +124,7 @@ export const CreateTableWizard: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Steps indicator */}
-      <Steps current={currentStepIndex} className="mb-8">
-        {steps.map((step) => (
-          <Step
-            key={step.key}
-            title={step.title}
-            description={step.description}
-          />
-        ))}
-      </Steps>
+      <Steps current={currentStepIndex} className="mb-8" items={stepItems} />
 
       {/* Intro tip */}
       {wizardStep === "sources" && (
