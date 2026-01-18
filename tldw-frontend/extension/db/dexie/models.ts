@@ -41,7 +41,7 @@ export class ModelDb {
     return await db.customModels.add(model)
   }
 
-  getById = async (id: string): Promise<Model> => {
+  getById = async (id: string): Promise<Model | undefined> => {
     return await db.customModels.get(id)
   }
 

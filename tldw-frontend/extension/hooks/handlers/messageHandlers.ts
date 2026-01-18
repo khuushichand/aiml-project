@@ -99,12 +99,15 @@ export const createEditMessage = ({
       setMessages(previousMessages)
       const previousHistory = newHistory.slice(0, index)
       setHistory(previousHistory)
+      if (!historyId) {
+        return
+      }
       await updateMessageByIndex(historyId, index, message)
       await deleteChatForEdit(historyId, index)
       const abortController = new AbortController()
       await onSubmit({
         message: message,
-        image: currentHumanMessage.images[0] || "",
+        image: currentHumanMessage.images?.[0] || "",
         isRegenerate: true,
         messages: previousMessages,
         memory: previousHistory,
@@ -120,6 +123,9 @@ export const createEditMessage = ({
       idx === index ? { ...item, content: message } : item
     )
     setHistory(updatedHistory)
+    if (!historyId) {
+      return
+    }
     await updateMessageByIndex(historyId, index, message)
   }
 }
@@ -191,6 +197,9 @@ export const createBranchMessage = ({
 
     try {
       const newBranch = await generateBranchMessage(historyId, index)
+      if (!newBranch) {
+        return null
+      }
       setHistory(formatToChatHistory(newBranch.messages))
       setMessages(formatToMessage(newBranch.messages))
       setHistoryId(newBranch.history.id)
@@ -207,7 +216,7 @@ export const createBranchMessage = ({
             setSelectedSystemPrompt(lastUsedPrompt.prompt_id)
           }
         }
-        if (setSystemPrompt) {
+        if (setSystemPrompt && lastUsedPrompt.prompt_content) {
           setSystemPrompt(lastUsedPrompt.prompt_content)
         }
       }

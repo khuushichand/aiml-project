@@ -276,7 +276,9 @@ export async function getRestorableSession(
  * Get the active session reference
  */
 export async function getActiveSession(): Promise<ActiveSessionRef | null> {
-  return await storage.get<ActiveSessionRef>(STORAGE_KEYS.ACTIVE_SESSION)
+  return (
+    (await storage.get<ActiveSessionRef>(STORAGE_KEYS.ACTIVE_SESSION)) ?? null
+  )
 }
 
 /**

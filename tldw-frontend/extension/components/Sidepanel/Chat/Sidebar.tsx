@@ -19,7 +19,7 @@ import {
 } from "lucide-react"
 import type { TFunction } from "i18next"
 import { useTranslation } from "react-i18next"
-import { shallow } from "zustand/shallow"
+import { useShallow } from "zustand/react/shallow"
 import { classNames } from "@/libs/class-name"
 import type { SidepanelChatTab, ConversationStatus } from "@/store/sidepanel-chat-tabs"
 import { useSidepanelChatTabsStore } from "@/store/sidepanel-chat-tabs"
@@ -28,7 +28,7 @@ import { useDebounce } from "@/hooks/useDebounce"
 import { useServerChatHistory, type ServerChatHistoryItem } from "@/hooks/useServerChatHistory"
 import { PageAssistDatabase } from "@/db/dexie/chat"
 import type { HistoryInfo } from "@/db/dexie/types"
-import { useFolderStore } from "@/store/folder"
+import { useFolderStore, type FolderState } from "@/store/folder"
 import { useBulkChatOperations } from "@/hooks/useBulkChatOperations"
 import { useStorage } from "@plasmohq/storage/hook"
 import { ModeToggle } from "./ModeToggle"
@@ -95,11 +95,10 @@ const SidebarMetaRow: React.FC<{
   topic?: string | null
 }> = ({ conversationId, topic }) => {
   const { getFoldersForConversation, uiPrefs } = useFolderStore(
-    (state) => ({
+    useShallow((state: FolderState) => ({
       getFoldersForConversation: state.getFoldersForConversation,
       uiPrefs: state.uiPrefs
-    }),
-    shallow
+    }))
   )
   const normalizedTopic = (topic || "").trim()
   const folders = React.useMemo(
@@ -380,12 +379,11 @@ export const SidepanelChatSidebar = ({
     ensureKeyword,
     addKeywordToConversation
   } = useFolderStore(
-    (state) => ({
+    useShallow((state: FolderState) => ({
       folderApiAvailable: state.folderApiAvailable,
       ensureKeyword: state.ensureKeyword,
       addKeywordToConversation: state.addKeywordToConversation
-    }),
-    shallow
+    }))
   )
 
   const handleAddToFolder = React.useCallback((tabId: string) => {
@@ -491,7 +489,7 @@ export const SidepanelChatSidebar = ({
             title={tab.label}
           >
             <div className="flex items-center gap-1.5">
-              <StatusIndicator status={tab.status} />
+              <StatusIndicator status={tab.status ?? null} />
               <span className="truncate">{tab.label}</span>
             </div>
             <SidebarMetaRow

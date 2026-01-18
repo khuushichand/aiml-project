@@ -110,6 +110,7 @@ export const SettingsBody = () => {
       chunkSize: number
       overlap: number
     }) => {
+      if (!data) return
       await saveForRag(f.model, f.chunkSize, f.overlap, data.totalFilePerKB)
       await queryClient.invalidateQueries({ queryKey: ["sidebarSettings"] })
     }
@@ -118,9 +119,9 @@ export const SettingsBody = () => {
   React.useEffect(() => {
     if (data) {
       setOllamaURL(data.url)
-      setSystemPrompt(data.normalSystemPrompt)
-      setRagPrompt(data.ragSystemPrompt)
-      setRagQuestionPrompt(data.ragQuestionPrompt)
+      setSystemPrompt(data.normalSystemPrompt ?? "")
+      setRagPrompt(data.ragSystemPrompt ?? "")
+      setRagQuestionPrompt(data.ragQuestionPrompt ?? "")
     }
   }, [data])
 
@@ -312,10 +313,12 @@ export const SettingsBody = () => {
             ]}>
             <Select
               size="large"
-              filterOption={(input, option) =>
-                option.label.toLowerCase().indexOf(input.toLowerCase()) >= 0 ||
-                option.value.toLowerCase().indexOf(input.toLowerCase()) >= 0
-              }
+              filterOption={(input, option) => {
+                const query = input.toLowerCase()
+                const label = String(option?.label ?? "").toLowerCase()
+                const value = String(option?.value ?? "").toLowerCase()
+                return label.includes(query) || value.includes(query)
+              }}
               showSearch
               placeholder="Select a model"
               style={{ width: "100%" }}
@@ -432,10 +435,12 @@ export const SettingsBody = () => {
             showSearch
             options={SUPPORTED_LANGUAGES}
             value={speechToTextLanguage}
-            filterOption={(input, option) =>
-              option.label.toLowerCase().indexOf(input.toLowerCase()) >= 0 ||
-              option.value.toLowerCase().indexOf(input.toLowerCase()) >= 0
-            }
+            filterOption={(input, option) => {
+              const query = input.toLowerCase()
+              const label = String(option?.label ?? "").toLowerCase()
+              const value = String(option?.value ?? "").toLowerCase()
+              return label.includes(query) || value.includes(query)
+            }}
             onChange={(value) => {
               setSpeechToTextLanguage(value)
             }}
@@ -454,10 +459,12 @@ export const SettingsBody = () => {
             showSearch
             options={supportLanguage}
             value={locale}
-            filterOption={(input, option) =>
-              option.label.toLowerCase().indexOf(input.toLowerCase()) >= 0 ||
-              option.value.toLowerCase().indexOf(input.toLowerCase()) >= 0
-            }
+            filterOption={(input, option) => {
+              const query = input.toLowerCase()
+              const label = String(option?.label ?? "").toLowerCase()
+              const value = String(option?.value ?? "").toLowerCase()
+              return label.includes(query) || value.includes(query)
+            }}
             onChange={(value) => {
               changeLocale(value)
             }}

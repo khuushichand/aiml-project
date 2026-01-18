@@ -5,7 +5,9 @@ import {
   saveMessageOnSuccess as saveSuccess
 } from "../chat-helper"
 
-export const focusTextArea = (textareaRef?: React.RefObject<HTMLTextAreaElement>) => {
+export const focusTextArea = (
+  textareaRef?: React.RefObject<HTMLTextAreaElement | null>
+) => {
   try {
     if (textareaRef?.current) {
       textareaRef.current.focus()

@@ -130,7 +130,10 @@ export const parseAmazonWebsite = (html: string) => {
   // Configure turndown to handle product-specific elements better
   turndownService.addRule('productPrice', {
     filter: function (node) {
-      return node.className && node.className.includes('a-price')
+      return (
+        typeof node.className === "string" &&
+        node.className.includes("a-price")
+      )
     },
     replacement: function (content) {
       return `**Price: ${content.trim()}**\n\n`
@@ -139,7 +142,10 @@ export const parseAmazonWebsite = (html: string) => {
 
   turndownService.addRule('productTitle', {
     filter: function (node) {
-      return node.id === 'productTitle' || (node.tagName === 'H1' && node.className && node.className.includes('a-size-large'))
+      const hasLargeTitleClass =
+        typeof node.className === "string" &&
+        node.className.includes("a-size-large")
+      return node.id === "productTitle" || (node.tagName === "H1" && hasLargeTitleClass)
     },
     replacement: function (content) {
       return `# ${content.trim()}\n\n`

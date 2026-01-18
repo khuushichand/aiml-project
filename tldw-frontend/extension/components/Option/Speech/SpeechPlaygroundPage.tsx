@@ -504,6 +504,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     elevenLabsApiKey: ttsSettings?.elevenLabsApiKey,
     inferredProviderKey
   })
+  const resolvedHasAudio = Boolean(hasAudio)
 
   React.useEffect(() => {
     if (!ttsSettings) return
@@ -708,7 +709,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     (segmentIndex?: number) => {
       const idx = typeof segmentIndex === "number" ? segmentIndex : activeSegmentIndex ?? 0
       const seg = segments[idx]
-      if (!seg) return
+      if (!seg || !seg.blob) return
       const stamp = new Date().toISOString().replace(/[:.]/g, "-")
       const base = `speech-tts-${stamp}-${provider}`
       const filename = `${base}-part-${idx + 1}.${seg.format || "mp3"}`
@@ -1015,7 +1016,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   provider={provider}
                   ttsSettings={ttsSettings}
                   isTldw={isTldw}
-                  hasAudio={hasAudio}
+                  hasAudio={resolvedHasAudio}
                   activeProviderCaps={activeProviderCaps}
                   activeVoices={activeVoices}
                   providersInfo={providersInfo}
@@ -1330,7 +1331,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   </div>
                 )}
 
-                {isTldw && !hasAudio && (
+                {isTldw && !resolvedHasAudio && (
                   <Alert
                     type="warning"
                     showIcon

@@ -114,6 +114,7 @@ export const useMessage = () => {
     "chatWithWebsiteEmbedding",
     false
   )
+  const resolvedChatWithWebsiteEmbedding = chatWithWebsiteEmbedding ?? false
   const [maxWebsiteContext] = useStorage("maxWebsiteContext", 4028)
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
 
@@ -387,7 +388,7 @@ export const useMessage = () => {
       url: websiteUrl,
       type,
       pdf
-    } = await getContentFromCurrentTab(chatWithWebsiteEmbedding)
+    } = await getContentFromCurrentTab(resolvedChatWithWebsiteEmbedding)
 
     embedHTML = html
     embedURL = websiteUrl
@@ -446,7 +447,7 @@ export const useMessage = () => {
         metadata: Record<string, any>
       }[] = []
 
-      if (chatWithWebsiteEmbedding) {
+      if (resolvedChatWithWebsiteEmbedding) {
         try {
           await tldwClient.initialize()
           // Optionally ensure server has the page content in the media index
@@ -647,9 +648,10 @@ export const useMessage = () => {
       })
 
       if (!errorSave) {
+        const errorMessage = e instanceof Error ? e.message : t("somethingWentWrong")
         notification.error({
           message: t("error"),
-          description: e?.message || t("somethingWentWrong")
+          description: errorMessage
         })
       }
       setIsProcessing(false)
@@ -765,7 +767,9 @@ export const useMessage = () => {
 
     try {
       const prompt = await systemPromptForNonRag()
-      const selectedPrompt = await getPromptById(selectedSystemPrompt)
+      const selectedPrompt = selectedSystemPrompt
+        ? await getPromptById(selectedSystemPrompt)
+        : null
 
       const applicationChatHistory = []
       // Inject selected character's system prompt at highest priority
@@ -951,9 +955,10 @@ export const useMessage = () => {
       })
 
       if (!errorSave) {
+        const errorMessage = e instanceof Error ? e.message : t("somethingWentWrong")
         notification.error({
           message: t("error"),
-          description: e?.message || t("somethingWentWrong")
+          description: errorMessage
         })
       }
       setIsProcessing(false)
@@ -1319,9 +1324,10 @@ export const useMessage = () => {
       })
 
       if (!errorSave) {
+        const errorMessage = e instanceof Error ? e.message : t("somethingWentWrong")
         notification.error({
           message: t("error"),
-          description: e?.message || t("somethingWentWrong")
+          description: errorMessage
         })
       }
       setIsProcessing(false)
@@ -1448,7 +1454,7 @@ export const useMessage = () => {
     let contentToSave = ""
 
     try {
-      const prompt = await getPrompt(messageType)
+      const prompt = String(await getPrompt(messageType))
       let humanMessage = await humanMessageFormatter({
         content: [
           {
@@ -1611,9 +1617,10 @@ export const useMessage = () => {
       })
 
       if (!errorSave) {
+        const errorMessage = e instanceof Error ? e.message : t("somethingWentWrong")
         notification.error({
           message: t("error"),
-          description: e?.message || t("somethingWentWrong")
+          description: errorMessage
         })
       }
       setIsProcessing(false)
@@ -1626,7 +1633,7 @@ export const useMessage = () => {
   const onSubmit = async ({
     message,
     image,
-    isRegenerate,
+    isRegenerate = false,
     controller,
     memory,
     messages: chatHistory,
@@ -1647,6 +1654,10 @@ export const useMessage = () => {
     uploadedFiles?: UploadedFile[]
   }) => {
     if (!validateBeforeSubmit(selectedModel || "", t, notification)) {
+      return
+    }
+
+    if (!selectedModel) {
       return
     }
 
@@ -1859,8 +1870,10 @@ export const useMessage = () => {
       setMessages(previousMessages)
       const previousHistory = newHistory.slice(0, index)
       setHistory(previousHistory)
-      await updateMessageByIndex(historyId, index, message)
-      await deleteChatForEdit(historyId, index)
+      if (historyId) {
+        await updateMessageByIndex(historyId, index, message)
+        await deleteChatForEdit(historyId, index)
+      }
       // Server-backed edit and cleanup
       if (selectedCharacter?.id && serverChatId) {
         if (currentHumanMessage?.serverMessageId) {
@@ -1900,7 +1913,7 @@ export const useMessage = () => {
       const abortController = new AbortController()
       await onSubmit({
         message: message,
-        image: currentHumanMessage.images[0] || "",
+        image: currentHumanMessage.images?.[0] || "",
         isRegenerate: true,
         messages: previousMessages,
         memory: previousHistory,
@@ -1917,7 +1930,9 @@ export const useMessage = () => {
         idx === index ? { ...item, content: message } : item
       )
       setHistory(updatedHistory)
-      await updateMessageByIndex(historyId, index, message)
+      if (historyId) {
+        await updateMessageByIndex(historyId, index, message)
+      }
       // Server-backed: update assistant server message too
       if (selectedCharacter?.id && currentAssistant?.serverMessageId) {
         try {

@@ -6,6 +6,7 @@ import { pageAssistModel } from "@/models"
 import type { ActorSettings } from "@/types/actor"
 import type { ChatDocuments } from "@/models/ChatTypes"
 import type { SaveMessageData, SaveMessageErrorData } from "@/types/chat-modes"
+import type { BaseMessage } from "@/types/messages"
 import { buildAssistantErrorContent } from "@/utils/chat-error-message"
 import {
   buildMessageVariant,
@@ -68,8 +69,8 @@ export type ChatModeContext<TParams extends ChatModeParamsBase> = TParams & {
 }
 
 export type ChatModePrompt = {
-  chatHistory: ChatHistory
-  humanMessage?: any
+  chatHistory: BaseMessage[]
+  humanMessage?: BaseMessage
   sources?: unknown[]
   promptId?: string
   promptContent?: string

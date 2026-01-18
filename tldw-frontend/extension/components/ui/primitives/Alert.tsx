@@ -121,7 +121,7 @@ export const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
           {title && (
             <p className={cn("text-sm font-medium", config.text)}>{title}</p>
           )}
-          <div className={cn("text-sm", config.text, title && "mt-1")}>
+          <div className={cn("text-sm", config.text, title ? "mt-1" : undefined)}>
             {children}
           </div>
 

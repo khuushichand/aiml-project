@@ -78,6 +78,7 @@ const TtsPlaygroundPage: React.FC = () => {
     elevenLabsApiKey: ttsSettings?.elevenLabsApiKey,
     inferredProviderKey
   })
+  const resolvedHasAudio = Boolean(hasAudio)
 
   const {
     segments,
@@ -464,7 +465,7 @@ const TtsPlaygroundPage: React.FC = () => {
           provider={provider}
           ttsSettings={ttsSettings}
           isTldw={isTldw}
-          hasAudio={hasAudio}
+          hasAudio={resolvedHasAudio}
           activeProviderCaps={activeProviderCaps}
           activeVoices={activeVoices}
           providersInfo={providersInfo}
@@ -931,7 +932,7 @@ const TtsPlaygroundPage: React.FC = () => {
           </Space>
         </Card>
 
-        {isTldw && !hasAudio && (
+        {isTldw && !resolvedHasAudio && (
           <Alert
             type="warning"
             showIcon

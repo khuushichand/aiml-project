@@ -28,13 +28,14 @@ export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extend
   try {
     if (browser?.runtime?.sendMessage) {
       const resp = await browser.runtime.sendMessage({ type: 'tldw:request', payload })
-      return resp as ApiSendResponse<T>
+      return resp as unknown as ApiSendResponse<T>
     }
   } catch {
     // fall through to direct request
   }
   const storage = createSafeStorage()
   return await tldwRequest(payload, {
-    getConfig: () => storage.get('tldwConfig').catch(() => null)
+    getConfig: () =>
+      storage.get<Record<string, any>>('tldwConfig').catch(() => null)
   })
 }

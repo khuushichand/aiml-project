@@ -36,6 +36,7 @@ export const useCharacterGreeting = ({
   setSelectedCharacter
 }: UseCharacterGreetingOptions) => {
   const [userDisplayName] = useStorage("chatUserDisplayName", "")
+  const resolvedUserDisplayName = userDisplayName ?? ""
   const greetingInjectedRef = React.useRef<string | null>(null)
   const greetingFetchRef = React.useRef<string | null>(null)
   const greetingTemplateRef = React.useRef<{
@@ -107,7 +108,7 @@ export const useCharacterGreeting = ({
       if (!isCurrentSelection()) return
       const rendered = replaceUserDisplayNamePlaceholders(
         greetingValue,
-        userDisplayName
+        resolvedUserDisplayName
       )
       const trimmed = rendered.trim()
       if (!trimmed) return

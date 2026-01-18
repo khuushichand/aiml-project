@@ -129,13 +129,13 @@ export type State = {
   useOCR: boolean
   setUseOCR: (useOCR: boolean) => void
   documentContext: ChatDocuments | null
-  setDocumentContext: (documentContext: ChatDocuments) => void
+  setDocumentContext: (documentContext: ChatDocuments | null) => void
   uploadedFiles: UploadedFile[]
   setUploadedFiles: (uploadedFiles: UploadedFile[]) => void
   contextFiles: UploadedFile[]
   setContextFiles: (contextFiles: UploadedFile[]) => void
   actionInfo: string | null
-  setActionInfo: (actionInfo: string) => void
+  setActionInfo: (actionInfo: string | null) => void
   fileRetrievalEnabled: boolean
   setFileRetrievalEnabled: (fileRetrievalEnabled: boolean) => void
   // RAG media-scoped filters (e.g., "chat about this media")

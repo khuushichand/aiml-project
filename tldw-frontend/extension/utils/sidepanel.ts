@@ -31,7 +31,7 @@ export const openSidepanel = async (tabId?: number): Promise<void> => {
           if (id) {
             chromeGlobal.sidePanel.open({ tabId: id })
           } else {
-            chromeGlobal.sidePanel.open({} as chrome.sidePanel.OpenOptions)
+            chromeGlobal.sidePanel.open({} as Record<string, unknown>)
           }
         } catch {
           // no-op

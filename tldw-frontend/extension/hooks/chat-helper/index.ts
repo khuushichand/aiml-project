@@ -110,25 +110,31 @@ export const saveMessageOnError = async ({
         })
       }
 
+      const assistantPayload = {
+        id: assistantMessageId,
+        history_id: historyId,
+        name: selectedModel,
+        role: "assistant" as const,
+        content: assistantContent,
+        images: [],
+        source: [],
+        time: 2,
+        message_type: assistantMessageType ?? message_type,
+        clusterId,
+        modelId,
+        parent_message_id: assistantParentMessageId ?? null
+      }
+
       if (isContinue) {
         console.log("Saving Last Message")
         const lastMessage = await getLastChatHistory(historyId)
-        await updateMessage(historyId, lastMessage.id, botMessage)
+        if (lastMessage) {
+          await updateMessage(historyId, lastMessage.id, botMessage)
+        } else {
+          await saveMessage(assistantPayload)
+        }
       } else {
-        await saveMessage({
-          id: assistantMessageId,
-          history_id: historyId,
-          name: selectedModel,
-          role: "assistant",
-          content: assistantContent,
-          images: [],
-          source: [],
-          time: 2,
-          message_type: assistantMessageType ?? message_type,
-          clusterId,
-          modelId,
-          parent_message_id: assistantParentMessageId ?? null
-        })
+        await saveMessage(assistantPayload)
       }
       await setLastUsedChatModel(historyId, selectedModel)
       if (prompt_id || prompt_content) {
@@ -335,12 +341,13 @@ export const saveMessageOnSuccess = async ({
   isContinue?: boolean
   documents?: ChatDocuments
 }) => {
+  const modelName = selectedModel ?? ""
   if (historyId) {
     if (!isRegenerate && !isContinue) {
       await saveMessage({
         id: userMessageId,
         history_id: historyId,
-        name: selectedModel,
+        name: modelName,
         role: "user",
         content: message,
         images: [image],
@@ -355,40 +362,34 @@ export const saveMessageOnSuccess = async ({
       })
     }
 
+    const assistantPayload = {
+      id: assistantMessageId,
+      history_id: historyId,
+      name: modelName,
+      role: "assistant" as const,
+      content: fullText,
+      images: [],
+      source,
+      time: 2,
+      message_type: assistantMessageType ?? message_type,
+      clusterId,
+      modelId,
+      parent_message_id: assistantParentMessageId ?? null,
+      generationInfo,
+      reasoning_time_taken
+    }
+
     if (isContinue) {
       console.log("Saving Last Message")
       const lastMessage = await getLastChatHistory(historyId)
       console.log("lastMessage", lastMessage)
-      await updateMessage(historyId, lastMessage.id, fullText)
+      if (lastMessage) {
+        await updateMessage(historyId, lastMessage.id, fullText)
+      } else {
+        await saveMessage(assistantPayload)
+      }
     } else {
-      await saveMessage(
-        {
-          id: assistantMessageId,
-          history_id: historyId,
-          name: selectedModel,
-          role: "assistant",
-          content: fullText,
-          images: [],
-          source,
-          time: 2,
-          message_type: assistantMessageType ?? message_type,
-          clusterId,
-          modelId,
-          parent_message_id: assistantParentMessageId ?? null,
-          generationInfo,
-          reasoning_time_taken
-        }
-        // historyId,
-        // selectedModel!,
-        // "assistant",
-        // fullText,
-        // [],
-        // source,
-        // 2,
-        // message_type,
-        // generationInfo,
-        // reasoning_time_taken
-      )
+      await saveMessage(assistantPayload)
     }
 
     await setLastUsedChatModel(historyId, selectedModel!)
@@ -403,7 +404,7 @@ export const saveMessageOnSuccess = async ({
 
     return historyId
   } else {
-    const title = await generateTitle(selectedModel, message, message)
+    const title = await generateTitle(modelName, message, message)
     updatePageTitle(title)
     const newHistoryId = await saveHistory(title, false, message_source)
 
@@ -411,7 +412,7 @@ export const saveMessageOnSuccess = async ({
       {
         id: userMessageId,
         history_id: newHistoryId.id,
-        name: selectedModel,
+        name: modelName,
         role: "user",
         content: message,
         images: [image],
@@ -440,7 +441,7 @@ export const saveMessageOnSuccess = async ({
       {
         id: assistantMessageId,
         history_id: newHistoryId.id,
-        name: selectedModel,
+        name: modelName,
         role: "assistant",
         content: fullText,
         images: [],

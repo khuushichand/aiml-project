@@ -29,7 +29,7 @@ export const SidepanelSettingsHeader = () => {
       }
       </Link>
       <div className="focus:outline-none focus-visible:ring-2 focus-visible:ring-focus flex items-center text-text">
-        <img className="h-6 w-auto" src={logoImage} alt={t("pageAssist")} />
+        <img className="h-6 w-auto" src={logoImage.src} alt={t("pageAssist")} />
         <span className="ml-1 text-sm ">{t("pageAssist")}</span>
       </div>
       <div className="ml-auto">

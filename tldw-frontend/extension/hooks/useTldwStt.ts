@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { browser } from "wxt/browser"
 
 type SttEvent = { event: 'open' | 'data' | 'error' | 'close'; data?: any; message?: string }
 
 export function useTldwStt() {
-  const portRef = useRef<chrome.runtime.Port | null>(null)
+  const portRef = useRef<ReturnType<typeof browser.runtime.connect> | null>(null)
   const [connected, setConnected] = useState(false)
   const [lastError, setLastError] = useState<string | null>(null)
 
@@ -15,7 +16,7 @@ export function useTldwStt() {
 
   const connect = () => {
     if (portRef.current) return
-    const port = chrome.runtime.connect({ name: 'tldw:stt' })
+    const port = browser.runtime.connect({ name: 'tldw:stt' })
     port.onMessage.addListener((msg: SttEvent) => {
       if (msg.event === 'open') setConnected(true)
       if (msg.event === 'error') setLastError(msg.message || 'ws error')
@@ -40,4 +41,3 @@ export function useTldwStt() {
 
   return { connect, sendAudio, close, connected, lastError }
 }
-

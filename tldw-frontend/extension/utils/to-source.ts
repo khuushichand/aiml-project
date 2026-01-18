@@ -47,8 +47,11 @@ export const convertToSource = async ({
 }: {
   file: UploadFile, mime?: string, sourceType?: string
 }): Promise<Source> => {
-  let type = mime || file.type
-  let filename = file.name
+  let type = mime || file.type || ""
+  let filename = file.name || ""
+  if (!file.originFileObj) {
+    throw new Error("File does not exist")
+  }
   const content = await toBase64(file.originFileObj)
   return { content, type, filename, source_id: generateSourceId(), sourceType }
 }

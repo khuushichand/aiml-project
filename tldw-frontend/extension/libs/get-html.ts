@@ -66,7 +66,7 @@ export const getDataFromCurrentTab = async () => {
               // so I set up a weird method to fix this issue by asking tab to give the url 
               // and then I can get the pdf url
               const result: TabSnapshot = {
-                url: tab.url,
+                url: tab.url ?? "",
                 content: "",
                 type: "pdf"
               }

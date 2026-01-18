@@ -59,7 +59,7 @@ const findKeywordByName = (keywords: Keyword[], value: string): Keyword | null =
   )
 }
 
-interface FolderState {
+export interface FolderState {
   // Server data (cached)
   folders: Folder[]
   keywords: Keyword[]
@@ -634,7 +634,7 @@ export const useFolderStore = create<FolderState>()(
       addConversationToFolder: async (conversationId, folderId) => {
         const state = get()
         // Find a keyword associated with this folder, or create one
-        let keyword = state.keywords.find(
+        let keyword: Keyword | null | undefined = state.keywords.find(
           (k) =>
             !k.deleted &&
             state.folderKeywordLinks.some(
@@ -644,6 +644,8 @@ export const useFolderStore = create<FolderState>()(
 
         let createdKeywordForFolder = false
 
+        let keywordId: number
+
         if (!keyword) {
           // Create a keyword with the folder name
           const folder = state.folders.find(f => f.id === folderId)
@@ -652,20 +654,21 @@ export const useFolderStore = create<FolderState>()(
           if (!keyword) return false
           createdKeywordForFolder = true
 
-          const linked = await get().addKeywordToFolder(folderId, keyword.id)
+          keywordId = keyword.id
+          const linked = await get().addKeywordToFolder(folderId, keywordId)
           if (!linked) {
-            await apiDeleteKeyword(keyword.id)
+            await apiDeleteKeyword(keywordId)
             set((state) => ({
               keywords: state.keywords.map((k) =>
-                k.id === keyword.id ? { ...k, deleted: true } : k
+                k.id === keywordId ? { ...k, deleted: true } : k
               )
             }))
-            await db.keywords.update(keyword.id, { deleted: true })
+            await db.keywords.update(keywordId, { deleted: true })
             return false
           }
+        } else {
+          keywordId = keyword.id
         }
-
-        const keywordId = keyword.id
 
         const linkResult = await apiLinkKeywordToConversation(conversationId, keywordId)
         const success = linkResult.ok

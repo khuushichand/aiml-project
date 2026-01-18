@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Storage } from "./plasmo-storage"
 
 type UseStorageOptions<T> = {
@@ -7,8 +7,9 @@ type UseStorageOptions<T> = {
   defaultValue?: T
 }
 
-type UseStorageMeta = {
+type UseStorageMeta<T> = {
   isLoading: boolean
+  setRenderValue: (value: T | undefined) => void
 }
 
 type SetValue<T> = (
@@ -18,7 +19,7 @@ type SetValue<T> = (
 export function useStorage<T = unknown>(
   keyOrOptions: string | UseStorageOptions<T>,
   defaultValue?: T
-): [T | undefined, SetValue<T>, UseStorageMeta] {
+): [T | undefined, SetValue<T>, UseStorageMeta<T>] {
   const options: UseStorageOptions<T> =
     typeof keyOrOptions === "string"
       ? { key: keyOrOptions, defaultValue }
@@ -29,7 +30,8 @@ export function useStorage<T = unknown>(
     [options.instance]
   )
 
-  const [value, setValue] = useState<T | undefined>(options.defaultValue)
+  const defaultValueRef = useRef<T | undefined>(options.defaultValue)
+  const [value, setValue] = useState<T | undefined>(defaultValueRef.current)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
@@ -40,7 +42,7 @@ export function useStorage<T = unknown>(
       .then((stored) => {
         if (cancelled) return
         if (stored === undefined) {
-          setValue(options.defaultValue)
+          setValue(defaultValueRef.current)
         } else {
           setValue(stored)
         }
@@ -54,7 +56,7 @@ export function useStorage<T = unknown>(
     return () => {
       cancelled = true
     }
-  }, [options.key, options.defaultValue, storage])
+  }, [options.key, storage])
 
   const setStoredValue = useCallback<SetValue<T>>(
     async (next) => {
@@ -68,5 +70,5 @@ export function useStorage<T = unknown>(
     [options.key, storage, value]
   )
 
-  return [value, setStoredValue, { isLoading }]
+  return [value, setStoredValue, { isLoading, setRenderValue: setValue }]
 }

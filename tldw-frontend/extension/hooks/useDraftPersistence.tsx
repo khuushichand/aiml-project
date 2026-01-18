@@ -161,7 +161,7 @@ export const useDraftPersistence = ({
         clearLegacyDraft(storageKey)
       }
 
-      if (!cancelled && hasDraftContent(draftValue)) {
+      if (!cancelled && draftValue && hasDraftContent(draftValue)) {
         const setValueWithMetadata = setValueWithMetadataRef.current
         if (setValueWithMetadata) {
           setValueWithMetadata(draftValue.content, draftValue.metadata)

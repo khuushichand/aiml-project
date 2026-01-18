@@ -136,7 +136,7 @@ export const SidepanelHeaderSimple = ({
         <div className="flex items-center text-text">
           <img
             className="h-5 w-auto"
-            src={logoImage}
+            src={logoImage.src}
             alt={t("common:pageAssist")}
           />
           <span className="ml-2 text-sm font-medium">

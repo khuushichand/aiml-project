@@ -171,7 +171,7 @@ export const CharacterSelect: React.FC<Props> = ({
       (message) => message.messageType !== "character:greeting"
     )
   }, [messages, serverChatId])
-  const trimmedDisplayName = userDisplayName.trim()
+  const trimmedDisplayName = (userDisplayName ?? "").trim()
   const displayNameInputRef = useRef(trimmedDisplayName)
 
   const buildStoredCharacter = React.useCallback(

@@ -134,6 +134,17 @@ export class Storage {
     }
   }
 
+  unwatch(map: Record<string, WatchCallback>): void {
+    Object.entries(map).forEach(([key, cb]) => {
+      const set = this.watchers.get(key)
+      if (!set) return
+      set.delete(cb)
+      if (set.size === 0) {
+        this.watchers.delete(key)
+      }
+    })
+  }
+
   private emitWatch(key: string, change: StorageChange) {
     const callbacks = this.watchers.get(key)
     if (!callbacks) return

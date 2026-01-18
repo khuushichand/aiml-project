@@ -140,7 +140,7 @@ type ChatHistory = HistoryInfo[]
 type Prompts = Prompt[]
 
 export class PageAssitDatabase {
-  db: chrome.storage.StorageArea
+  db: typeof chrome.storage.local
 
   constructor() {
     this.db = chrome.storage.local
@@ -338,7 +338,7 @@ export class PageAssitDatabase {
     const mergedKeywords = prompt.keywords ?? prompt.tags
     const normalized: Prompt = {
       ...prompt,
-      title: prompt.title || prompt.name,
+      title: prompt.title || prompt.name || "Untitled",
       name: prompt.name ?? prompt.title,
       tags: mergedKeywords ?? prompt.tags,
       keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags
@@ -496,11 +496,11 @@ export const saveHistory = async (
 ) => {
   const id = generateID()
   const createdAt = Date.now()
-  const history = {
+  const history: HistoryInfo = {
     id,
     title,
     createdAt,
-    is_rag,
+    is_rag: is_rag ?? false,
     message_source,
     doc_id,
     server_chat_id

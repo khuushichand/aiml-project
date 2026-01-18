@@ -6,6 +6,7 @@ import { IconButton } from "../Common/IconButton"
 import { useLocation } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { useQueryClient } from "@tanstack/react-query"
+import { useShallow } from "zustand/react/shallow"
 
 import { classNames } from "@/libs/class-name"
 import { PageAssistDatabase } from "@/db/dexie/chat"
@@ -83,12 +84,14 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     pendingPath: shortcutPendingPath,
     startedAt: shortcutStartedAt,
     stop: stopShortcutLoading
-  } = useRouteTransitionStore((state) => ({
-    active: state.active,
-    pendingPath: state.pendingPath,
-    startedAt: state.startedAt,
-    stop: state.stop
-  }))
+  } = useRouteTransitionStore(
+    useShallow((state) => ({
+      active: state.active,
+      pendingPath: state.pendingPath,
+      startedAt: state.startedAt,
+      stop: state.stop
+    }))
+  )
 
   // Create toggle function for sidebar
   const toggleSidebar = () => {

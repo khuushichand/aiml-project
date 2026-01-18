@@ -28,7 +28,7 @@ const DEFAULTS: Required<PromptStudioDefaults> = {
   warnSeconds: 30
 }
 
-const PROMPT_STUDIO_DEFAULTS_SETTING = defineSetting(
+const PROMPT_STUDIO_DEFAULTS_SETTING = defineSetting<PromptStudioDefaults>(
   STORAGE_KEY,
   DEFAULTS,
   (value) => ({

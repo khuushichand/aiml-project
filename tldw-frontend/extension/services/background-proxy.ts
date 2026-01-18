@@ -280,7 +280,10 @@ export async function bgRequest<
       abortSignal,
       responseType
     },
-    { getConfig: () => storage.get("tldwConfig").catch(() => null) }
+    {
+      getConfig: () =>
+        storage.get<Record<string, any>>("tldwConfig").catch(() => null)
+    }
   )
   if (!resp?.ok) {
     const msg = formatErrorMessage(

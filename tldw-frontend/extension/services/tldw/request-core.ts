@@ -29,30 +29,26 @@ export const deriveRequestTimeout = (
 ): number => {
   if (override && override > 0) return override
   const p = String(path || "")
+  const requestTimeout = Number(cfg?.requestTimeoutMs)
   if (p.includes("/api/v1/chat/completions")) {
-    return Number(cfg?.chatRequestTimeoutMs) > 0
-      ? Number(cfg.chatRequestTimeoutMs)
-      : Number(cfg?.requestTimeoutMs) > 0
-        ? Number(cfg.requestTimeoutMs)
-        : 10000
+    const chatTimeout = Number(cfg?.chatRequestTimeoutMs)
+    if (chatTimeout > 0) return chatTimeout
+    if (requestTimeout > 0) return requestTimeout
+    return 10000
   }
   if (p.includes("/api/v1/rag/")) {
-    return Number(cfg?.ragRequestTimeoutMs) > 0
-      ? Number(cfg.ragRequestTimeoutMs)
-      : Number(cfg?.requestTimeoutMs) > 0
-        ? Number(cfg.requestTimeoutMs)
-        : 10000
+    const ragTimeout = Number(cfg?.ragRequestTimeoutMs)
+    if (ragTimeout > 0) return ragTimeout
+    if (requestTimeout > 0) return requestTimeout
+    return 10000
   }
   if (p.includes("/api/v1/media/")) {
-    return Number(cfg?.mediaRequestTimeoutMs) > 0
-      ? Number(cfg.mediaRequestTimeoutMs)
-      : Number(cfg?.requestTimeoutMs) > 0
-        ? Number(cfg.requestTimeoutMs)
-        : 10000
+    const mediaTimeout = Number(cfg?.mediaRequestTimeoutMs)
+    if (mediaTimeout > 0) return mediaTimeout
+    if (requestTimeout > 0) return requestTimeout
+    return 10000
   }
-  return Number(cfg?.requestTimeoutMs) > 0
-    ? Number(cfg.requestTimeoutMs)
-    : 10000
+  return requestTimeout > 0 ? requestTimeout : 10000
 }
 
 export const parseRetryAfter = (headerValue?: string | null): number | null => {

@@ -21,30 +21,32 @@ export function parseReasoning(text: string): {
       const closeTagMatch = text.slice(currentIndex).match(closeTagPattern)
 
       if (!isReasoning && openTagMatch) {
+        const openIndex = openTagMatch.index ?? 0
         const beforeText = text.slice(
           currentIndex,
-          currentIndex + openTagMatch.index
+          currentIndex + openIndex
         )
         if (beforeText.trim()) {
           result.push({ type: "text", content: beforeText.trim() })
         }
 
         isReasoning = true
-        currentIndex += openTagMatch.index! + openTagMatch[0].length
+        currentIndex += openIndex + openTagMatch[0].length
         continue
       }
 
       if (isReasoning && closeTagMatch) {
+        const closeIndex = closeTagMatch.index ?? 0
         const reasoningContent = text.slice(
           currentIndex,
-          currentIndex + closeTagMatch.index
+          currentIndex + closeIndex
         )
         if (reasoningContent.trim()) {
           result.push({ type: "reasoning", content: reasoningContent.trim() })
         }
 
         isReasoning = false
-        currentIndex += closeTagMatch.index! + closeTagMatch[0].length
+        currentIndex += closeIndex + closeTagMatch[0].length
         continue
       }
 

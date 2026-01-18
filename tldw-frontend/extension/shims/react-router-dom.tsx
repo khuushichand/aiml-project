@@ -122,9 +122,12 @@ export const Routes: React.FC<{ children?: React.ReactNode }> = ({
   children
 }) => <>{children}</>
 
-export const Route: React.FC<{ element?: React.ReactNode }> = ({ element }) => (
-  <>{element ?? null}</>
-)
+export const Route: React.FC<{
+  element?: React.ReactNode
+  path?: string
+  index?: boolean
+  children?: React.ReactNode
+}> = ({ element, children }) => <>{element ?? children ?? null}</>
 
 export const HashRouter: React.FC<{ children?: React.ReactNode }> = ({
   children

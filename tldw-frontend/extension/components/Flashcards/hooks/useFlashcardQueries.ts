@@ -313,5 +313,86 @@ export function useHasCardsQuery(options?: UseFlashcardQueriesOptions) {
   })
 }
 
+/**
+ * Hook to get the next due card info (for showing when the next review is due)
+ */
+export function useNextDueQuery(deckId?: number | null, options?: UseFlashcardQueriesOptions) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+
+  return useQuery({
+    queryKey: ["flashcards:next-due", deckId],
+    queryFn: async () => {
+      const PAGE_SIZE = 200
+      const MAX_PAGES = 10
+      const oneHour = 60 * 60 * 1000
+      const nowMs = Date.now()
+
+      let offset = 0
+      let pagesChecked = 0
+      let scanned = 0
+      let nextDueAt: string | null = null
+      let nextDueMs = 0
+      let cardsDue = 0
+
+      while (true) {
+        const res = await listFlashcards({
+          deck_id: deckId ?? undefined,
+          due_status: "all",
+          order_by: "due_at",
+          limit: PAGE_SIZE,
+          offset
+        })
+        const items = res.items || []
+        if (items.length === 0) break
+        pagesChecked += 1
+        scanned += items.length
+
+        for (const card of items) {
+          if (!card.due_at) continue
+          const dueMs = new Date(card.due_at).getTime()
+          if (Number.isNaN(dueMs)) continue
+
+          if (!nextDueAt) {
+            if (dueMs > nowMs) {
+              nextDueAt = card.due_at
+              nextDueMs = dueMs
+              cardsDue = 1
+            }
+            continue
+          }
+
+          if (dueMs <= nextDueMs + oneHour) {
+            cardsDue += 1
+          } else {
+            return { nextDueAt, cardsDue, isCapped: false, scanned }
+          }
+        }
+
+        if (pagesChecked >= MAX_PAGES) {
+          return {
+            nextDueAt,
+            cardsDue,
+            isCapped: true,
+            scanned
+          }
+        }
+
+        if (items.length < PAGE_SIZE) break
+        offset += PAGE_SIZE
+      }
+
+      if (!nextDueAt) return null
+
+      return {
+        nextDueAt,
+        cardsDue,
+        isCapped: false,
+        scanned
+      }
+    },
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
 // Re-export service functions that are used directly
 export { getFlashcard, exportFlashcards, exportFlashcardsFile }

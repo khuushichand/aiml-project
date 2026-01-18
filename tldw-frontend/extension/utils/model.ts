@@ -5,15 +5,16 @@ import { createSafeStorage } from "@/utils/safe-storage"
 const storage = createSafeStorage()
 
 export const getSelectedModelName = async (): Promise<string> => {
-    const selectedModel = await storage.get("selectedModel")
-    const isCustom = isCustomModel(selectedModel)
+    const selectedModel = await storage.get<string>("selectedModel")
+    const resolvedModel = typeof selectedModel === "string" ? selectedModel : ""
+    const isCustom = isCustomModel(resolvedModel)
     if (isCustom) {
-        const customModel = await getModelInfo(selectedModel)
+        const customModel = await getModelInfo(resolvedModel)
         if (customModel) {
             return customModel.name
         } else {
-            return selectedModel
+            return resolvedModel
         }
     }
-    return selectedModel
+    return resolvedModel
 }

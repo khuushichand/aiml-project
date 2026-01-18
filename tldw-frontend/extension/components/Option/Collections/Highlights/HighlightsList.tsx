@@ -15,7 +15,7 @@ import { Search, RefreshCw, ExternalLink, Layers } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useCollectionsStore } from "@/store/collections"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
-import type { Highlight, HighlightColor } from "@/types/collections"
+import type { Highlight, HighlightColor, ReadingItemSummary } from "@/types/collections"
 import { HighlightCard } from "./HighlightCard"
 import { HighlightEditor } from "./HighlightEditor"
 
@@ -66,12 +66,13 @@ export const HighlightsList: React.FC = () => {
     setHighlightsError(null)
     try {
       const listResponse = await api.getReadingList({ page: 1, size: 50 })
-      const sourceItems: Array<{ id: string | number; title?: string }> =
-        Array.isArray(listResponse?.items) ? listResponse.items : []
+      const sourceItems: ReadingItemSummary[] = Array.isArray(listResponse?.items)
+        ? listResponse.items
+        : []
       const limitedItems = sourceItems.slice(0, 50)
       const results = await Promise.all(
-        limitedItems.map(async (item) => {
-          const itemHighlights = await api.getHighlights(String(item.id))
+        limitedItems.map(async (item: ReadingItemSummary) => {
+          const itemHighlights = await api.getHighlights(item.id)
           return itemHighlights.map((highlight: Highlight) => ({
             ...highlight,
             item_title: highlight.item_title || item.title

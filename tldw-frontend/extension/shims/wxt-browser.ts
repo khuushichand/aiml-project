@@ -1,4 +1,12 @@
 type BrowserListener = (...args: any[]) => void
+type BrowserTab = {
+  id?: number
+  title?: string
+  url?: string
+  favIconUrl?: string
+  active?: boolean
+  status?: string
+}
 
 const createEventTarget = () => {
   const listeners = new Set<BrowserListener>()
@@ -10,9 +18,10 @@ const createEventTarget = () => {
   }
 }
 
-const noopAsync = async () => undefined
+const noopAsync = async (..._args: any[]) => undefined
 
 const runtime = {
+  id: undefined,
   getURL: (path: string) => {
     if (typeof window === "undefined") return path
     try {
@@ -25,13 +34,18 @@ const runtime = {
     name: "tldw",
     version: "0.0.0"
   }),
+  lastError: undefined,
   sendMessage: async (..._args: any[]) => undefined,
-  sendNativeMessage: async () => {
+  sendNativeMessage: async (
+    _host?: string,
+    _message?: unknown
+  ) => {
     throw new Error("Native messaging is not available in web mode.")
   },
-  connect: () => ({
-    postMessage: () => {},
+  connect: (_info?: Record<string, unknown>) => ({
+    postMessage: (_message?: unknown) => {},
     onMessage: createEventTarget(),
+    onDisconnect: createEventTarget(),
     disconnect: () => {}
   }),
   openOptionsPage: () => {
@@ -44,17 +58,32 @@ const runtime = {
 }
 
 const tabs = {
-  query: async () => [],
+  query: async (
+    _query?: Record<string, unknown>,
+    callback?: (tabs: BrowserTab[]) => void
+  ): Promise<BrowserTab[]> => {
+    const result: BrowserTab[] = []
+    callback?.(result)
+    return result
+  },
   create: async ({ url }: { url: string }) => {
     if (typeof window !== "undefined") {
       window.open(url, "_blank", "noopener,noreferrer")
     }
   },
-  captureVisibleTab: async () => null
+  captureVisibleTab: async (
+    _windowId?: number | null,
+    _options?: Record<string, unknown>,
+    callback?: (dataUrl: string | null) => void
+  ) => {
+    const result = null
+    callback?.(result)
+    return result
+  }
 }
 
 const notifications = {
-  create: async () => undefined
+  create: async (_options?: Record<string, unknown>) => undefined
 }
 
 const getStorageBackend = () => {
@@ -163,6 +192,29 @@ const alarms = {
   onAlarm: createEventTarget()
 }
 
+type ScriptResult = { result?: unknown }
+
+const scripting = {
+  executeScript: async (
+    _options?: Record<string, unknown>
+  ): Promise<ScriptResult[]> => []
+}
+
+const tts = {
+  speak: (_utterance: string, _options?: Record<string, unknown>) => {},
+  stop: () => {},
+  getVoices: async () => []
+}
+
+const extension = {
+  inIncognitoContext: false
+}
+
+const sidePanel = {
+  open: noopAsync,
+  setOptions: noopAsync
+}
+
 export const browser = {
   runtime,
   tabs,
@@ -174,7 +226,11 @@ export const browser = {
   browserAction,
   contextMenus,
   commands,
-  alarms
+  alarms,
+  scripting,
+  tts,
+  extension,
+  sidePanel
 }
 
 export type Browser = typeof browser

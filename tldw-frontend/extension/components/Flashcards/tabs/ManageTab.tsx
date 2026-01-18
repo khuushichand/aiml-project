@@ -27,15 +27,18 @@ import relativeTime from "dayjs/plugin/relativeTime"
 import { useTranslation } from "react-i18next"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
+import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { processInChunks } from "@/utils/chunk-processing"
 import {
   useDecksQuery,
   useManageQuery,
   useUpdateFlashcardMutation,
   useDeleteFlashcardMutation,
+  useCardsKeyboardNav,
   type DueStatus
 } from "../hooks"
 import { MarkdownWithBoundary, FlashcardActionsMenu, FlashcardEditDrawer, FlashcardCreateDrawer } from "../components"
+import { formatCardType } from "../utils/model-type-labels"
 import type { Flashcard, FlashcardUpdate } from "@/services/flashcards"
 
 dayjs.extend(relativeTime)
@@ -43,10 +46,19 @@ dayjs.extend(relativeTime)
 const { Text } = Typography
 
 const BULK_MUTATION_CHUNK_SIZE = 50
+const DELETE_UNDO_SECONDS = 30
+const DELETE_UNDO_MS = DELETE_UNDO_SECONDS * 1000
+
+type PendingDeletion = {
+  card: Flashcard
+  expiresAt: number
+  batchId: string
+}
 
 interface ManageTabProps {
   onNavigateToImport: () => void
   onReviewCard: (card: Flashcard) => void
+  isActive: boolean
 }
 
 /**
@@ -55,12 +67,24 @@ interface ManageTabProps {
  */
 export const ManageTab: React.FC<ManageTabProps> = ({
   onNavigateToImport,
-  onReviewCard
+  onReviewCard,
+  isActive
 }) => {
   const { t } = useTranslation(["option", "common"])
   const qc = useQueryClient()
   const message = useAntdMessage()
   const confirmDanger = useConfirmDanger()
+  const { showUndoNotification, contextHolder: undoContextHolder } = useUndoNotification()
+
+  // Track pending deletions for soft-delete with undo + trash view
+  const [pendingDeletions, setPendingDeletions] = React.useState<Record<string, PendingDeletion>>({})
+  const pendingDeletionsRef = React.useRef<Record<string, PendingDeletion>>({})
+  const pendingDeletionBatchesRef = React.useRef<Map<string, { uuids: Set<string>; timeoutId: number }>>(new Map())
+
+  // Track focused card index for keyboard navigation
+  const [focusedIndex, setFocusedIndex] = React.useState<number>(-1)
+  const [viewMode, setViewMode] = React.useState<"cards" | "trash">("cards")
+  const [nowMs, setNowMs] = React.useState(() => Date.now())
 
   // Shared: decks
   const decksQuery = useDecksQuery()
@@ -92,6 +116,29 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
   const [previewOpen, setPreviewOpen] = React.useState<Set<string>>(new Set())
   const [selectAllAcross, setSelectAllAcross] = React.useState<boolean>(false)
+
+  const updatePendingDeletions = React.useCallback(
+    (updater: (prev: Record<string, PendingDeletion>) => Record<string, PendingDeletion>) => {
+      setPendingDeletions((prev) => {
+        const next = updater(prev)
+        pendingDeletionsRef.current = next
+        return next
+      })
+    },
+    []
+  )
+
+  const pendingDeletionCount = Object.keys(pendingDeletions).length
+
+  React.useEffect(() => {
+    pendingDeletionsRef.current = pendingDeletions
+  }, [pendingDeletions])
+
+  React.useEffect(() => {
+    if (pendingDeletionCount === 0) return
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000)
+    return () => window.clearInterval(interval)
+  }, [pendingDeletionCount])
 
   // Bulk operation progress state
   const [bulkProgress, setBulkProgress] = React.useState<{
@@ -136,6 +183,15 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setSelectAllAcross(false)
   }, [mDeckId, mQuery, mTag, mDue])
 
+  React.useEffect(() => {
+    return () => {
+      pendingDeletionBatchesRef.current.forEach((batch) => {
+        window.clearTimeout(batch.timeoutId)
+      })
+      pendingDeletionBatchesRef.current.clear()
+    }
+  }, [])
+
   const toggleSelect = (uuid: string, checked: boolean) => {
     if (selectAllAcross) return
     setSelectedIds((prev) => {
@@ -171,8 +227,10 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     })
   }
 
-  // Selection across results helpers
-  const pageItems = manageQuery.data?.items || []
+  // Selection across results helpers - filter out pending deletions
+  const pageItems = (manageQuery.data?.items || []).filter(
+    (item) => !pendingDeletions[item.uuid]
+  )
   const pageCount = pageItems.length
   const selectedOnPageCount = selectAllAcross
     ? pageCount
@@ -185,6 +243,11 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
   const updateMutation = useUpdateFlashcardMutation()
   const deleteMutation = useDeleteFlashcardMutation()
+
+  // Reset focused index when page or filters change
+  React.useEffect(() => {
+    setFocusedIndex(-1)
+  }, [page, pageSize, mDeckId, mQuery, mTag, mDue])
 
   async function fetchAllItemsAcrossFilters(): Promise<Flashcard[]> {
     const { listFlashcards } = await import("@/services/flashcards")
@@ -241,17 +304,25 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setMoveOpen(true)
   }
 
-  const executeBulkDelete = async (items: Flashcard[]) => {
+  const executeBulkDelete = async (
+    items: Flashcard[],
+    options?: { showProgress?: boolean; showSuccessMessage?: boolean; clearSelection?: boolean }
+  ) => {
+    const showProgress = options?.showProgress ?? true
+    const showSuccessMessage = options?.showSuccessMessage ?? true
+    const shouldClearSelection = options?.clearSelection ?? true
     const { deleteFlashcard } = await import("@/services/flashcards")
     const total = items.length
-    setBulkProgress({
-      open: true,
-      current: 0,
-      total,
-      action: t("option:flashcards.bulkProgressDeleting", {
-        defaultValue: "Deleting cards"
+    if (showProgress) {
+      setBulkProgress({
+        open: true,
+        current: 0,
+        total,
+        action: t("option:flashcards.bulkProgressDeleting", {
+          defaultValue: "Deleting cards"
+        })
       })
-    })
+    }
     try {
       let processed = 0
       const failedIds = new Set<string>()
@@ -270,33 +341,160 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           console.warn(`${chunkFailures} deletions failed in chunk`)
         }
         processed += chunk.length
-        setBulkProgress((prev) =>
-          prev ? { ...prev, current: Math.min(processed, total) } : null
-        )
+        if (showProgress) {
+          setBulkProgress((prev) =>
+            prev ? { ...prev, current: Math.min(processed, total) } : null
+          )
+        }
       })
       const failedCount = failedIds.size
       const successCount = Math.max(0, total - failedCount)
       if (failedCount > 0) {
-        message.warning(
-          t("option:flashcards.bulkDeleteResult", {
-            defaultValue: "{{success}} deleted · {{failed}} failed",
-            success: successCount,
-            failed: failedCount
-          })
-        )
-        clearSelection()
+        if (showSuccessMessage) {
+          message.warning(
+            t("option:flashcards.bulkDeleteResult", {
+              defaultValue: "{{success}} deleted · {{failed}} failed",
+              success: successCount,
+              failed: failedCount
+            })
+          )
+        }
+        if (shouldClearSelection) clearSelection()
       } else {
-        message.success(t("common:deleted", { defaultValue: "Deleted" }))
-        clearSelection()
+        if (showSuccessMessage) {
+          message.success(t("common:deleted", { defaultValue: "Deleted" }))
+        }
+        if (shouldClearSelection) clearSelection()
       }
       await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Bulk delete failed"
       message.error(errorMessage)
     } finally {
-      setBulkProgress(null)
+      if (showProgress) {
+        setBulkProgress(null)
+      }
     }
   }
+
+  const removePendingDeletions = React.useCallback(
+    (uuids: string[]) => {
+      if (!uuids.length) return
+      updatePendingDeletions((prev) => {
+        let changed = false
+        const next = { ...prev }
+        uuids.forEach((uuid) => {
+          if (next[uuid]) {
+            delete next[uuid]
+            changed = true
+          }
+        })
+        return changed ? next : prev
+      })
+    },
+    [updatePendingDeletions]
+  )
+
+  const undoDeletionBatch = React.useCallback(
+    (batchId: string) => {
+      const batch = pendingDeletionBatchesRef.current.get(batchId)
+      if (!batch) return
+      window.clearTimeout(batch.timeoutId)
+      pendingDeletionBatchesRef.current.delete(batchId)
+      removePendingDeletions(Array.from(batch.uuids))
+    },
+    [removePendingDeletions]
+  )
+
+  const finalizeDeletionBatch = React.useCallback(
+    async (batchId: string) => {
+      const batch = pendingDeletionBatchesRef.current.get(batchId)
+      if (!batch) return
+      pendingDeletionBatchesRef.current.delete(batchId)
+
+      const pending = pendingDeletionsRef.current
+      const cardsToDelete = Array.from(batch.uuids)
+        .map((uuid) => pending[uuid]?.card)
+        .filter((card): card is Flashcard => !!card)
+
+      try {
+        if (cardsToDelete.length > 0) {
+          await executeBulkDelete(cardsToDelete, {
+            showProgress: false,
+            showSuccessMessage: true,
+            clearSelection: false
+          })
+        }
+      } finally {
+        removePendingDeletions(Array.from(batch.uuids))
+      }
+    },
+    [executeBulkDelete, removePendingDeletions]
+  )
+
+  const queueDeletionBatch = React.useCallback(
+    (cards: Flashcard[], notification: { title: string; description?: string }) => {
+      if (!cards.length) return
+      const batchId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+      const expiresAt = Date.now() + DELETE_UNDO_MS
+      const uuids = new Set(cards.map((card) => card.uuid))
+
+      updatePendingDeletions((prev) => {
+        const next = { ...prev }
+        cards.forEach((card) => {
+          next[card.uuid] = {
+            card,
+            expiresAt,
+            batchId
+          }
+        })
+        return next
+      })
+
+      const timeoutId = window.setTimeout(() => {
+        finalizeDeletionBatch(batchId)
+      }, DELETE_UNDO_MS)
+      pendingDeletionBatchesRef.current.set(batchId, { uuids, timeoutId })
+
+      showUndoNotification({
+        title: notification.title,
+        description: notification.description,
+        duration: DELETE_UNDO_SECONDS,
+        onUndo: async () => {
+          undoDeletionBatch(batchId)
+        }
+      })
+    },
+    [finalizeDeletionBatch, showUndoNotification, undoDeletionBatch, updatePendingDeletions]
+  )
+
+  const undoSinglePendingDeletion = React.useCallback(
+    (uuid: string) => {
+      const pending = pendingDeletionsRef.current[uuid]
+      if (!pending) return
+      const batch = pendingDeletionBatchesRef.current.get(pending.batchId)
+      if (batch) {
+        batch.uuids.delete(uuid)
+        if (batch.uuids.size === 0) {
+          window.clearTimeout(batch.timeoutId)
+          pendingDeletionBatchesRef.current.delete(pending.batchId)
+        }
+      }
+      removePendingDeletions([uuid])
+    },
+    [removePendingDeletions]
+  )
+
+  const undoAllPendingDeletions = React.useCallback(() => {
+    pendingDeletionBatchesRef.current.forEach((batch) => {
+      window.clearTimeout(batch.timeoutId)
+    })
+    pendingDeletionBatchesRef.current.clear()
+    updatePendingDeletions(() => ({}))
+  }, [updatePendingDeletions])
 
   const handleBulkDelete = async () => {
     const toDelete = await getSelectedItems()
@@ -314,14 +512,27 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       const ok = await confirmDanger({
         title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
         content: t("option:flashcards.bulkDeleteConfirm", {
-          defaultValue: "Delete {{count}} selected cards? This cannot be undone.",
-          count
+          defaultValue:
+            "Delete {{count}} selected cards? You can undo for {{seconds}} seconds.",
+          count,
+          seconds: DELETE_UNDO_SECONDS
         }),
         okText: t("common:delete", { defaultValue: "Delete" }),
         cancelText: t("common:cancel", { defaultValue: "Cancel" })
       })
       if (!ok) return
-      await executeBulkDelete(toDelete)
+      const undoHint = t("option:flashcards.deleteUndoHint", {
+        defaultValue: "Undo within {{seconds}}s to cancel deletion.",
+        seconds: DELETE_UNDO_SECONDS
+      })
+      queueDeletionBatch(toDelete, {
+        title: t("option:flashcards.cardsDeleted", {
+          defaultValue: "{{count}} cards deleted",
+          count
+        }),
+        description: undoHint
+      })
+      clearSelection()
     }
   }
 
@@ -332,7 +543,18 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setPendingDeleteItems([])
     setBulkDeleteCount(0)
     if (!items.length) return
-    await executeBulkDelete(items)
+    const undoHint = t("option:flashcards.deleteUndoHint", {
+      defaultValue: "Undo within {{seconds}}s to cancel deletion.",
+      seconds: DELETE_UNDO_SECONDS
+    })
+    queueDeletionBatch(items, {
+      title: t("option:flashcards.cardsDeleted", {
+        defaultValue: "{{count}} cards deleted",
+        count: items.length
+      }),
+      description: undoHint
+    })
+    clearSelection()
   }
 
   const handleExportSelected = async () => {
@@ -467,6 +689,32 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setEditOpen(true)
   }
 
+  // Keyboard navigation for Cards tab
+  useCardsKeyboardNav({
+    enabled: isActive && viewMode === "cards" && !editOpen && !createOpen && !moveOpen,
+    itemCount: pageCount,
+    focusedIndex,
+    onFocusChange: setFocusedIndex,
+    onEdit: (index) => {
+      const card = pageItems[index]
+      if (card) openEdit(card)
+    },
+    onToggleSelect: (index) => {
+      const card = pageItems[index]
+      if (card && !selectAllAcross) {
+        toggleSelect(card.uuid, !selectedIds.has(card.uuid))
+      }
+    },
+    onDelete: async (index) => {
+      const card = pageItems[index]
+      if (card) {
+        // Open edit drawer and trigger delete from there for consistency
+        setEditing(card)
+        setEditOpen(true)
+      }
+    }
+  })
+
   const doUpdate = async (values: FlashcardUpdate) => {
     const { updateFlashcard } = await import("@/services/flashcards")
     try {
@@ -483,18 +731,30 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   }
 
   const doDelete = async () => {
-    const { deleteFlashcard } = await import("@/services/flashcards")
     try {
       if (!editing) return
       if (typeof editing.version !== "number") {
         message.error("Missing version; reload and try again")
         return
       }
-      await deleteFlashcard(editing.uuid, editing.version)
-      message.success(t("common:deleted", { defaultValue: "Deleted" }))
+      const cardToDelete = { ...editing }
+
+      // Close drawer and mark as pending deletion (soft-delete)
       setEditOpen(false)
       setEditing(null)
-      await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
+
+      // Show undo notification with 30 second timeout
+      const preview = cardToDelete.front.slice(0, 60)
+      const undoHint = t("option:flashcards.deleteUndoHint", {
+        defaultValue: "Undo within {{seconds}}s to cancel deletion.",
+        seconds: DELETE_UNDO_SECONDS
+      })
+      queueDeletionBatch([cardToDelete], {
+        title: t("option:flashcards.cardDeleted", { defaultValue: "Card deleted" }),
+        description: preview
+          ? `${preview}${cardToDelete.front.length > 60 ? "…" : ""} · ${undoHint}`
+          : undoHint
+      })
     } catch (e: any) {
       message.error(e?.message || "Delete failed")
     }
@@ -502,8 +762,48 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
   return (
     <>
+      {undoContextHolder}
       <div>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <Segmented
+            value={viewMode}
+            onChange={(value) => {
+              setViewMode(value as "cards" | "trash")
+            }}
+            options={[
+              {
+                label: t("option:flashcards.cards", { defaultValue: "Cards" }),
+                value: "cards"
+              },
+              {
+                label: (
+                  <span className="inline-flex items-center gap-2">
+                    {t("option:flashcards.trash", { defaultValue: "Trash" })}
+                    {pendingDeletionCount > 0 && (
+                      <Badge count={pendingDeletionCount} size="small" />
+                    )}
+                  </span>
+                ),
+                value: "trash"
+              }
+            ]}
+          />
+          {viewMode === "trash" && pendingDeletionCount > 0 && (
+            <Button size="small" onClick={undoAllPendingDeletions}>
+              {t("option:flashcards.trashUndoAll", { defaultValue: "Undo all" })}
+            </Button>
+          )}
+        </div>
+        {viewMode === "trash" && (
+          <Text type="secondary" className="block text-xs mb-2">
+            {t("option:flashcards.trashEmptyDescription", {
+              defaultValue: "Deleted cards appear here for 30 seconds."
+            })}
+          </Text>
+        )}
+
         {/* Simplified Filter UI */}
+        {viewMode === "cards" && (
         <div className="mb-3 space-y-3">
           {/* Primary filters: Search + Deck (always visible) */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -614,8 +914,10 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             </Tooltip>
           </div>
         </div>
+        )}
 
         {/* Selection Summary Bar - simplified to two modes */}
+        {viewMode === "cards" && (
         <div className="mb-2 flex items-center gap-3">
           <Checkbox
             indeterminate={someOnPageSelected}
@@ -668,10 +970,12 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             )}
           </Text>
         </div>
+        )}
 
+        {viewMode === "cards" ? (
         <List
           loading={manageQuery.isFetching}
-          dataSource={manageQuery.data?.items || []}
+          dataSource={pageItems}
           locale={{
             emptyText: (
               <Empty
@@ -725,11 +1029,16 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               </Empty>
             )
           }}
-          renderItem={(item) => (
+          renderItem={(item, index) => {
+            const isFocused = index === focusedIndex
+            return (
             <List.Item
               data-testid={`flashcard-item-${item.uuid}`}
-              className="cursor-pointer hover:bg-surface2/50"
-              onClick={() => togglePreview(item.uuid)}
+              className={`cursor-pointer hover:bg-surface2/50 ${isFocused ? "ring-2 ring-primary ring-inset bg-surface2/30" : ""}`}
+              onClick={() => {
+                setFocusedIndex(index)
+                togglePreview(item.uuid)
+              }}
               actions={[
                 <Checkbox
                   key="sel"
@@ -802,10 +1111,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                             )?.name || `Deck ${item.deck_id}`}
                           </Tag>
                         )}
-                        <Tag>
-                          {item.model_type}
-                          {item.reverse ? " - reverse" : ""}
-                        </Tag>
+                        <Tag>{formatCardType(item, t)}</Tag>
                         {(item.tags || []).map((tg) => (
                           <Tag key={tg}>{tg}</Tag>
                         ))}
@@ -838,9 +1144,64 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                 </>
               )}
             </List.Item>
-          )}
+          )}}
         />
+        ) : (
+          <List
+            dataSource={Object.values(pendingDeletions).sort(
+              (a, b) => a.expiresAt - b.expiresAt
+            )}
+            locale={{
+              emptyText: (
+                <Empty
+                  description={t("option:flashcards.trashEmptyDescription", {
+                    defaultValue: "Deleted cards appear here for 30 seconds."
+                  })}
+                />
+              )
+            }}
+            renderItem={(item) => {
+              const remainingSeconds = Math.max(
+                0,
+                Math.ceil((item.expiresAt - nowMs) / 1000)
+              )
+              return (
+                <List.Item
+                  data-testid={`flashcard-trash-${item.card.uuid}`}
+                  actions={[
+                    <Button
+                      key="undo"
+                      size="small"
+                      onClick={() => undoSinglePendingDeletion(item.card.uuid)}
+                    >
+                      {t("option:flashcards.trashUndo", { defaultValue: "Undo" })}
+                    </Button>,
+                    <Tag key="expires" color="volcano">
+                      {t("option:flashcards.trashExpiresIn", {
+                        defaultValue: "Deletes in {{seconds}}s",
+                        seconds: remainingSeconds
+                      })}
+                    </Tag>
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={<Text>{item.card.front}</Text>}
+                    description={
+                      item.card.back ? (
+                        <Text type="secondary" className="text-xs">
+                          {item.card.back.slice(0, 120)}
+                          {item.card.back.length > 120 ? "…" : ""}
+                        </Text>
+                      ) : null
+                    }
+                  />
+                </List.Item>
+              )
+            }}
+          />
+        )}
 
+        {viewMode === "cards" && (
         <div className="mt-3 flex justify-end">
           <Pagination
             current={page}
@@ -854,10 +1215,11 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             pageSizeOptions={[10, 20, 50, 100]}
           />
         </div>
+        )}
       </div>
 
       {/* Floating Action Bar - appears when items are selected */}
-      {anySelection && (
+      {viewMode === "cards" && anySelection && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-surface border border-border rounded-lg shadow-lg px-4 py-3 flex items-center gap-4">
           <Badge
             count={selectedCount}
@@ -961,7 +1323,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       />
 
       {/* Floating Action Button for creating cards */}
-      {!anySelection && (
+      {viewMode === "cards" && !anySelection && (
         <Tooltip title={t("option:flashcards.createCard", { defaultValue: "Create Flashcard" })}>
           <Button
             type="primary"
@@ -1035,14 +1397,16 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             type="warning"
             showIcon
             message={t("option:flashcards.bulkDeleteLargeWarning", {
-              defaultValue: "You are about to delete a large number of cards."
+              defaultValue: "These cards will move to Trash for {{seconds}} seconds.",
+              seconds: DELETE_UNDO_SECONDS
             })}
           />
           <p className="text-text-muted">
             {t("option:flashcards.bulkDeleteLargeContent", {
               defaultValue:
-                "This will permanently delete {{count}} cards. This action cannot be undone.",
-              count: bulkDeleteCount
+                "After {{seconds}} seconds, {{count}} cards will be permanently deleted.",
+              count: bulkDeleteCount,
+              seconds: DELETE_UNDO_SECONDS
             })}
           </p>
           <div className="pt-2">

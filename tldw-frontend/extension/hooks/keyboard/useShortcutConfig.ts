@@ -123,13 +123,14 @@ export const useShortcutConfig = () => {
     "keyboardShortcuts",
     defaultShortcuts
   )
+  const resolvedShortcuts = shortcuts ?? defaultShortcuts
 
   const updateShortcut = (
     shortcutName: keyof ShortcutConfig,
     newShortcut: KeyboardShortcut
   ) => {
     setShortcuts(prev => ({
-      ...prev,
+      ...(prev ?? defaultShortcuts),
       [shortcutName]: newShortcut
     }))
   }
@@ -140,13 +141,13 @@ export const useShortcutConfig = () => {
 
   const resetShortcut = (shortcutName: keyof ShortcutConfig) => {
     setShortcuts(prev => ({
-      ...prev,
+      ...(prev ?? defaultShortcuts),
       [shortcutName]: defaultShortcuts[shortcutName]
     }))
   }
 
   return {
-    shortcuts,
+    shortcuts: resolvedShortcuts,
     updateShortcut,
     resetShortcuts,
     resetShortcut

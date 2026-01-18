@@ -173,7 +173,7 @@ export class PageAssistDatabase {
     return chatHistory?.title || '';
   }
 
-  async getHistoryInfo(id: string): Promise<HistoryInfo> {
+  async getHistoryInfo(id: string): Promise<HistoryInfo | undefined> {
     return db.chatHistories.get(id);
   }
 
@@ -427,7 +427,7 @@ export class PageAssistDatabase {
     const mergedKeywords = prompt.keywords ?? prompt.tags;
     const normalized: Prompt = {
       ...prompt,
-      title: prompt.title || prompt.name,
+      title: prompt.title || prompt.name || "Untitled",
       name: prompt.name ?? prompt.title,
       tags: mergedKeywords ?? prompt.tags,
       keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags
@@ -546,7 +546,7 @@ export class PageAssistDatabase {
       const mergedKeywords = prompt.keywords ?? prompt.tags;
       const normalizedPrompt: Prompt = {
         ...prompt,
-        title: prompt.title || prompt.name,
+        title: prompt.title || prompt.name || "Untitled",
         name: prompt.name ?? prompt.title,
         tags: mergedKeywords ?? prompt.tags,
         keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags

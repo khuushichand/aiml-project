@@ -8,7 +8,6 @@ import {
   Empty,
   Skeleton,
   Dropdown,
-  Menu,
   Tooltip,
   Input,
   Modal,
@@ -58,7 +57,7 @@ import { IconButton } from "../Common/IconButton"
 import { useServerChatHistory, type ServerChatHistoryItem } from "@/hooks/useServerChatHistory"
 import { useConnectionState } from "@/hooks/useConnectionState"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
-import { shallow } from "zustand/shallow"
+import { useShallow } from "zustand/react/shallow"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useSelectServerChat } from "@/hooks/chat/useSelectServerChat"
@@ -133,15 +132,14 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
     setContextFiles,
     temporaryChat
   } = useStoreMessageOption(
-    (state: MessageOptionState) => ({
+    useShallow((state: MessageOptionState) => ({
       serverChatId: state.serverChatId,
       setServerChatId: state.setServerChatId,
       setSelectedModel: state.setSelectedModel,
       setSelectedSystemPrompt: state.setSelectedSystemPrompt,
       setContextFiles: state.setContextFiles,
       temporaryChat: state.temporaryChat
-    }),
-    shallow
+    }))
   )
   const {
     data: serverChatData,
@@ -365,7 +363,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
           queryKey: ["fetchChatHistory"]
         })
 
-        if (deletedIds.includes(historyId)) {
+        if (historyId && deletedIds.includes(historyId)) {
           clearChat()
         }
 
@@ -969,44 +967,44 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
                     </button>
                     <div className="flex items-center gap-2">
                       <Dropdown
-                        overlay={
-                          <Menu id={`history-actions-${chat.id}`}>
-                            <Menu.Item
-                              key="pin"
-                              icon={
-                                chat.is_pinned ? (
-                                  <PinOffIcon className="w-4 h-4" />
-                                ) : (
-                                  <PinIcon className="w-4 h-4" />
-                                )
-                              }
-                              onClick={() =>
+                        menu={{
+                          items: [
+                            {
+                              key: "pin",
+                              icon: chat.is_pinned ? (
+                                <PinOffIcon className="w-4 h-4" />
+                              ) : (
+                                <PinIcon className="w-4 h-4" />
+                              ),
+                              label: chat.is_pinned
+                                ? t("common:unpin")
+                                : t("common:pin"),
+                              onClick: () =>
                                 pinChatHistory({
                                   id: chat.id,
                                   is_pinned: !chat.is_pinned
-                                })
-                              }
-                              disabled={pinLoading}>
-                              {chat.is_pinned
-                                ? t("common:unpin")
-                                : t("common:pin")}
-                            </Menu.Item>
-                            {isConnected && (
-                              <Menu.Item
-                                key="moveToFolder"
-                                icon={<FolderIcon className="w-4 h-4" />}
-                                onClick={() => {
-                                  setFolderPickerChatId(chat.id)
-                                  setFolderPickerOpen(true)
-                                  setOpenMenuFor(null)
-                                }}>
-                                {t("common:moveToFolder")}
-                              </Menu.Item>
-                            )}
-                            <Menu.Item
-                              key="edit"
-                              icon={<PencilIcon className="w-4 h-4" />}
-                              onClick={async () => {
+                                }),
+                              disabled: pinLoading
+                            },
+                            ...(isConnected
+                              ? [
+                                  {
+                                    key: "moveToFolder",
+                                    icon: <FolderIcon className="w-4 h-4" />,
+                                    label: t("common:moveToFolder"),
+                                    onClick: () => {
+                                      setFolderPickerChatId(chat.id)
+                                      setFolderPickerOpen(true)
+                                      setOpenMenuFor(null)
+                                    }
+                                  }
+                                ]
+                              : []),
+                            {
+                              key: "edit",
+                              icon: <PencilIcon className="w-4 h-4" />,
+                              label: t("common:edit"),
+                              onClick: async () => {
                                 const newTitle = await promptInput({
                                   title: t("editHistoryTitle", { defaultValue: "Rename chat" }),
                                   defaultValue: chat.title,
@@ -1016,14 +1014,14 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
                                 if (newTitle && newTitle !== chat.title) {
                                   editHistory({ id: chat.id, title: newTitle })
                                 }
-                              }}>
-                              {t("common:edit")}
-                            </Menu.Item>
-                            <Menu.Item
-                              key="delete"
-                              icon={<Trash2 className="w-4 h-4" />}
-                              danger
-                              onClick={async () => {
+                              }
+                            },
+                            {
+                              key: "delete",
+                              icon: <Trash2 className="w-4 h-4" />,
+                              label: t("common:delete"),
+                              danger: true,
+                              onClick: async () => {
                                 const ok = await confirmDanger({
                                   title: t("common:confirmTitle", {
                                     defaultValue: "Please confirm"
@@ -1038,11 +1036,10 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
                                 })
                                 if (!ok) return
                                 deleteHistory(chat.id)
-                              }}>
-                              {t("common:delete")}
-                            </Menu.Item>
-                          </Menu>
-                        }
+                              }
+                            }
+                          ]
+                        }}
                         trigger={["click"]}
                         placement="bottomRight"
                         open={openMenuFor === chat.id}

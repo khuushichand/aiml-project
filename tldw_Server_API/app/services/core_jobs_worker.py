@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
 from tldw_Server_API.app.core.Chatbooks.chatbook_models import ExportStatus, ImportStatus, ContentType, ConflictResolution
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
@@ -303,7 +304,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
             else:
                 jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
         except Exception as e:
-            logger.error(f"Core Jobs worker loop error: {e}")
+            logger.exception("Core Jobs worker loop error")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",

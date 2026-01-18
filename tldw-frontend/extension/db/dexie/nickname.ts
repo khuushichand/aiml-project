@@ -71,7 +71,7 @@ export const getModelNicknameByID = async (
 ): Promise<{ model_name: string; model_avatar?: string } | null> => {
   try {
     const modelNickname = new ModelNickname()
-    return await modelNickname.getModelNicknameByID(model_id)
+    return (await modelNickname.getModelNicknameByID(model_id)) ?? null
   } catch (e) {
     return null
   }

@@ -22,7 +22,8 @@ const getGoogleDocs = () => {
       propNames = Object.getOwnPropertyNames(obj)
     ) {
       const visited = new Set()
-      const results = []
+      const results: Array<{ path: Array<string | number>; value: unknown }> =
+        []
       let iterations = 0
 
       const traverseObj = (
@@ -127,7 +128,7 @@ export const parseGoogleDocs = async () => {
         })
 
         if (data.length > 0) {
-          resolve(data[0].result)
+          resolve(data[0].result as { content?: string })
         }
       })
     } else {
@@ -142,7 +143,7 @@ export const parseGoogleDocs = async () => {
           })
 
           if (data.length > 0) {
-            resolve(data[0].result)
+            resolve(data[0].result as { content?: string })
           }
         })
     }

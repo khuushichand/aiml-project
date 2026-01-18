@@ -22,7 +22,7 @@ export const copyToClipboard = async ({
         throwOnError: false
       }
 
-      marked.use(markedKatexExtension(options))
+      marked.use(markedKatexExtension(options) as any)
 
       const html = marked.parse(replaceThinkTagToEM(text))
       const styledHtml = `

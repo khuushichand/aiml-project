@@ -44,9 +44,9 @@ export interface SlashCommandItem {
 }
 
 interface UseSlashCommandsOptions {
-  chatMode: string
+  chatMode: "normal" | "rag" | "vision"
   webSearch: boolean
-  setChatMode: (mode: string) => void
+  setChatMode: (mode: "normal" | "rag" | "vision") => void
   setWebSearch: (enabled: boolean) => void
   onOpenModelSettings: () => void
   inputValue: string

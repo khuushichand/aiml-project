@@ -4,6 +4,7 @@ import { splitMessageContent } from "@/utils/tts"
 import { resolveTtsProviderContext } from "@/services/tts-provider"
 import { useAntdNotification } from "./useAntdNotification"
 import { useTranslation } from "react-i18next"
+import { browser } from "wxt/browser"
 import { isChromiumTarget } from "@/config/platform"
 
 export interface VoiceOptions {
@@ -36,10 +37,10 @@ export const useTTS = () => {
       if (provider === "browser") {
         const voice = await getVoice()
         if (isChromiumTarget) {
-          chrome.tts.speak(processedUtterance, {
+          browser.tts.speak(processedUtterance, {
             voiceName: voice,
             rate: playbackSpeed,
-            onEvent(event) {
+            onEvent(event: { type: string }) {
               if (event.type === "start") {
                 setIsSpeaking(true)
               } else if (event.type === "end") {
@@ -149,7 +150,7 @@ export const useTTS = () => {
     if (
       isChromiumTarget
     ) {
-      chrome.tts.stop()
+      browser.tts.stop()
     } else {
       window.speechSynthesis.cancel()
     }

@@ -17,6 +17,9 @@ export const generateBranchMessage = async (
         .equals(history_id)
         .toArray()
       const historyInfo = await db.chatHistories.get(history_id)
+      if (!historyInfo) {
+        return null
+      }
 
       const sortedMessages = chats.sort((a, b) => a.createdAt - b.createdAt)
 

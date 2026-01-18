@@ -1,11 +1,11 @@
 import React from "react"
 import { useNavigate } from "react-router-dom"
 import { Modal } from "antd"
-import { shallow } from "zustand/shallow"
+import { useShallow } from "zustand/react/shallow"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { focusTextArea } from "@/hooks/utils/messageHelpers"
-import { useStoreMessageOption } from "@/store/option"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
 import { usePlaygroundSessionStore } from "@/store/playground-session"
 import { useStoreChatModelSettings } from "@/store/model"
 import { cleanupAntOverlays } from "@/utils/cleanup-ant-overlays"
@@ -49,7 +49,7 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
     clearReplyTarget,
     setWebSearch
   } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       setServerChatId: state.setServerChatId,
       setServerChatVersion: state.setServerChatVersion,
       setContextFiles: state.setContextFiles,
@@ -68,8 +68,7 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
       setCompareSelectedModels: state.setCompareSelectedModels,
       clearReplyTarget: state.clearReplyTarget,
       setWebSearch: state.setWebSearch
-    }),
-    shallow
+    }))
   )
 
   return React.useCallback(() => {

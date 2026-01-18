@@ -129,7 +129,7 @@ type UseChatActionsOptions = {
   setIsSearchingInternet: (isSearchingInternet: boolean) => void
   setIsProcessing: (isProcessing: boolean) => void
   setStreaming: (streaming: boolean) => void
-  setActionInfo: (actionInfo: string) => void
+  setActionInfo: (actionInfo: string | null) => void
   fileRetrievalEnabled: boolean
   ragMediaIds: number[] | null
   ragSearchMode: "hybrid" | "vector" | "fts"
@@ -405,11 +405,13 @@ export const useChatActions = ({
       historyId: resolvedHistoryId ?? historyId,
       serverChatId: resolvedServerChatId
     })
+    const resolvedSelectedModel = selectedModel ?? ""
+    const resolvedSelectedSystemPrompt = selectedSystemPrompt ?? ""
 
     return {
-      selectedModel,
+      selectedModel: resolvedSelectedModel,
       useOCR,
-      selectedSystemPrompt,
+      selectedSystemPrompt: resolvedSelectedSystemPrompt,
       selectedKnowledge,
       toolChoice,
       currentChatModelSettings,
@@ -1034,7 +1036,7 @@ export const useChatActions = ({
       }
       return true
     }
-    return validateBeforeSubmit(selectedModel, t, notification)
+    return validateBeforeSubmit(selectedModel ?? "", t, notification)
   }
 
   const onSubmit = async ({
@@ -1124,12 +1126,16 @@ export const useChatActions = ({
         return
       }
 
-      if (docs?.length > 0 || documentContext?.length > 0) {
-        const processingTabs = docs || documentContext || []
+      const docsCount = docs?.length ?? 0
+      const contextCount = documentContext?.length ?? 0
+      if (docsCount > 0 || contextCount > 0) {
+        const resolvedDocs = docs ?? []
+        const resolvedContext = documentContext ?? []
+        const processingTabs = docsCount > 0 ? resolvedDocs : resolvedContext
 
-        if (docs?.length > 0) {
+        if (docsCount > 0) {
           setDocumentContext(
-            Array.from(new Set([...(documentContext || []), ...docs]))
+            Array.from(new Set([...resolvedContext, ...resolvedDocs]))
           )
         }
         await tabChatMode(
@@ -1657,7 +1663,10 @@ export const useChatActions = ({
               setSelectedSystemPrompt(lastUsedPrompt.prompt_id)
             }
           }
-          if (currentChatModelSettings?.setSystemPrompt) {
+          if (
+            currentChatModelSettings?.setSystemPrompt &&
+            lastUsedPrompt.prompt_content
+          ) {
             currentChatModelSettings.setSystemPrompt(
               lastUsedPrompt.prompt_content
             )

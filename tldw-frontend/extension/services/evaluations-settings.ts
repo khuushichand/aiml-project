@@ -18,7 +18,7 @@ const DEFAULTS: Required<EvaluationDefaults> = {
   defaultDatasetId: null
 }
 
-const EVALUATIONS_DEFAULTS_SETTING = defineSetting(
+const EVALUATIONS_DEFAULTS_SETTING = defineSetting<EvaluationDefaults>(
   STORAGE_KEY,
   DEFAULTS,
   (value) => ({

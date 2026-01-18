@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react"
 import { usePlaygroundSessionStore } from "@/store/playground-session"
-import { useStoreMessageOption } from "@/store/option"
-import { shallow } from "zustand/shallow"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
+import { useShallow } from "zustand/react/shallow"
 import {
   formatToChatHistory,
   formatToMessage,
@@ -58,7 +58,7 @@ export function usePlaygroundSessionPersistence() {
     setMessages,
     setSelectedSystemPrompt
   } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       historyId: state.historyId,
       serverChatId: state.serverChatId,
       chatMode: state.chatMode,
@@ -85,8 +85,7 @@ export function usePlaygroundSessionPersistence() {
       setHistory: state.setHistory,
       setMessages: state.setMessages,
       setSelectedSystemPrompt: state.setSelectedSystemPrompt
-    }),
-    shallow
+    }))
   )
 
   const { setSystemPrompt } = useStoreChatModelSettings()

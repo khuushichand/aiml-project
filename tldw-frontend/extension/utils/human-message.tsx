@@ -4,6 +4,7 @@ import {
   type MessageContent,
   type MessageContentPart
 } from "@/types/messages"
+import { processImageForOCR } from "@/utils/ocr"
 
 type HumanMessageType = {
   content: MessageContent

@@ -70,8 +70,8 @@ import { useSetting } from "@/hooks/useSetting"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
 import { useQuickIngestStore } from "@/store/quick-ingest"
 import { useUiModeStore } from "@/store/ui-mode"
-import { useStoreMessageOption } from "@/store/option"
-import { shallow } from "zustand/shallow"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
+import { useShallow } from "zustand/react/shallow"
 import { Button } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { generateID } from "@/db/dexie/helpers"
@@ -125,12 +125,11 @@ export const SidepanelForm = ({
   const uiMode = useUiModeStore((state) => state.mode)
   const isProMode = uiMode === "pro"
   const { replyTarget, clearReplyTarget, ragPinnedResults } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       replyTarget: state.replyTarget,
       clearReplyTarget: state.clearReplyTarget,
       ragPinnedResults: state.ragPinnedResults
-    }),
-    shallow
+    }))
   )
   const composerPadding = SPACING.COMPOSER_PADDING
   const composerGap = getComposerGap(isProMode)
@@ -259,7 +258,9 @@ export const SidepanelForm = ({
   const hasServerAudio =
     isConnectionReady && !capsLoading && capabilities?.hasAudio
   const { healthState: audioHealthState } = useTldwAudioStatus()
-  const canUseServerAudio = hasServerAudio && audioHealthState !== "unhealthy"
+  const canUseServerAudio = Boolean(
+    hasServerAudio && audioHealthState !== "unhealthy"
+  )
   const speechAvailable =
     browserSupportsSpeechRecognition || canUseServerAudio
   const speechUsesServer = canUseServerAudio
@@ -301,6 +302,7 @@ export const SidepanelForm = ({
   const previousServerChatIdRef = React.useRef<string | null | undefined>(
     serverChatId
   )
+  const resolvedSpeechToTextLanguage = speechToTextLanguage ?? "en-US"
 
   React.useEffect(() => {
     const previous = previousServerChatIdRef.current
@@ -482,7 +484,7 @@ export const SidepanelForm = ({
     stopServerDictation
   } = useServerDictation({
     canUseServerAudio,
-    speechToTextLanguage,
+    speechToTextLanguage: resolvedSpeechToTextLanguage,
     sttSettings,
     onTranscript: (text) => form.setFieldValue("message", text)
   })
@@ -787,7 +789,8 @@ export const SidepanelForm = ({
     return [...filteredStatic, ...tabItems]
   }, [filteredTabs, mentionQuery, staticMentionItems, tabMentionsEnabled])
 
-  const showMentionMenu = Boolean(mentionPosition) && tabMentionsEnabled
+  const showMentionMenu =
+    Boolean(mentionPosition) && Boolean(tabMentionsEnabled)
 
   React.useEffect(() => {
     if (!showMentionMenu) {
@@ -1100,13 +1103,13 @@ export const SidepanelForm = ({
       resetTranscript()
       startListening({
         continuous: true,
-        lang: speechToTextLanguage
+        lang: resolvedSpeechToTextLanguage
       })
     }
   }, [
     isListening,
     resetTranscript,
-    speechToTextLanguage,
+    resolvedSpeechToTextLanguage,
     startListening,
     stopListening
   ])
@@ -1662,9 +1665,13 @@ export const SidepanelForm = ({
                         <>
                           {/* Control Row - contains Prompt, Model, RAG, and More tools */}
                           <ControlRow
-                            selectedSystemPrompt={selectedSystemPrompt}
-                            setSelectedSystemPrompt={setSelectedSystemPrompt}
-                            setSelectedQuickPrompt={setSelectedQuickPrompt}
+                            selectedSystemPrompt={selectedSystemPrompt ?? undefined}
+                            setSelectedSystemPrompt={(promptId) =>
+                              setSelectedSystemPrompt(promptId ?? null)
+                            }
+                            setSelectedQuickPrompt={(prompt) =>
+                              setSelectedQuickPrompt(prompt ?? null)
+                            }
                             selectedCharacterId={selectedCharacterId}
                             setSelectedCharacterId={setSelectedCharacterId}
                             webSearch={webSearch}

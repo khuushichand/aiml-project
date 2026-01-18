@@ -28,6 +28,9 @@ export const extractReadabilityContent = async (url: string) => {
   const reader = new Readability(doc)
   const article = reader.parse()
 
+  if (!article?.content) {
+    return ""
+  }
   const markdown = defaultExtractContent(article.content)
   return markdown
 }

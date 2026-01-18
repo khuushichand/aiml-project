@@ -1,9 +1,9 @@
 import React from "react"
 import { useNavigate } from "react-router-dom"
 import { Modal } from "antd"
-import { shallow } from "zustand/shallow"
+import { useShallow } from "zustand/react/shallow"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
-import { useStoreMessageOption } from "@/store/option"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
 import { cleanupAntOverlays } from "@/utils/cleanup-ant-overlays"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import { updatePageTitle } from "@/utils/update-page-title"
@@ -34,7 +34,7 @@ export const useSelectServerChat = () => {
     setServerChatExternalRef,
     setServerChatMetaLoaded
   } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       setIsSearchingInternet: state.setIsSearchingInternet,
       clearReplyTarget: state.clearReplyTarget,
       setServerChatId: state.setServerChatId,
@@ -47,8 +47,7 @@ export const useSelectServerChat = () => {
       setServerChatSource: state.setServerChatSource,
       setServerChatExternalRef: state.setServerChatExternalRef,
       setServerChatMetaLoaded: state.setServerChatMetaLoaded
-    }),
-    shallow
+    }))
   )
 
   return React.useCallback(

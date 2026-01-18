@@ -30,7 +30,7 @@ export type SettingDef<T> = {
 
 const storageCache = new Map<StorageOptions["area"] | undefined, ReturnType<typeof createSafeStorage>>()
 
-export const getStorageForSetting = (setting: SettingDef<unknown>) => {
+export const getStorageForSetting = <T>(setting: SettingDef<T>) => {
   const area = setting.area
   if (storageCache.has(area)) {
     return storageCache.get(area)!
@@ -86,7 +86,7 @@ const readLocalStorageValue = <T>(setting: SettingDef<T>): unknown => {
   }
 }
 
-const clearLocalStorageValue = (setting: SettingDef<unknown>) => {
+const clearLocalStorageValue = <T>(setting: SettingDef<T>) => {
   if (!setting.localStorageKey) return
   if (typeof window === "undefined") return
   try {

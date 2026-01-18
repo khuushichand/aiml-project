@@ -22,9 +22,9 @@ type SpeechRecognition = {
   continuous: boolean
   maxAlternatives: number
   grammars: any
-  onresult: (event: SpeechRecognitionEvent) => void
-  onerror: (event: Event) => void
-  onend: () => void
+  onresult: ((event: SpeechRecognitionEvent) => void) | null
+  onerror: ((event: Event) => void) | null
+  onend: (() => void) | null
   start: () => void
   stop: () => void
 }

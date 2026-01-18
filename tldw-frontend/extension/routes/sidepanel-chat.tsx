@@ -206,7 +206,7 @@ const MODEL_SETTINGS_KEYS = [
 ] as const
 
 type ModelSettingsKey = (typeof MODEL_SETTINGS_KEYS)[number]
-type ChatModelSettingsState = ReturnType<typeof useStoreChatModelSettings>
+type ChatModelSettingsState = ReturnType<typeof useStoreChatModelSettings.getState>
 
 const pickChatModelSettings = (
   state: ChatModelSettingsState
@@ -414,13 +414,17 @@ const SidepanelChat = () => {
     DEFAULT_CHAT_SETTINGS.stickyChatInput
   )
   const [userDisplayName] = useStorage("chatUserDisplayName", "")
+  const setHistoryWithUpdater = setHistory as (
+    historyOrUpdater: ChatHistory | ((prev: ChatHistory) => ChatHistory)
+  ) => void
+
   useCharacterGreeting({
     playgroundReady: !isRestoringChat,
-    selectedCharacter,
+    selectedCharacter: selectedCharacter ?? null,
     serverChatId,
     messagesLength: messages.length,
     setMessages,
-    setHistory,
+    setHistory: setHistoryWithUpdater,
     setSelectedCharacter
   })
   const composerPadding = composerHeight
@@ -635,10 +639,14 @@ const SidepanelChat = () => {
   useChatModeShortcuts(toggleChatMode, true)
   useWebSearchShortcuts(toggleWebSearchMode, true)
 
-  const [chatBackgroundImage] = useStorage({
-    key: CHAT_BACKGROUND_IMAGE_SETTING.key,
-    instance: createSafeStorage()
-  })
+  const [chatBackgroundImage] = useStorage<string | null>(
+    {
+      key: CHAT_BACKGROUND_IMAGE_SETTING.key,
+      instance: createSafeStorage()
+    },
+    null
+  )
+  const resolvedChatBackgroundImage = chatBackgroundImage ?? null
   const bgMsg = useBackgroundMessage()
   const lastBgMsgRef = React.useRef<typeof bgMsg | null>(null)
 
@@ -1203,8 +1211,9 @@ const SidepanelChat = () => {
         }
 
         if (localHistoryId) {
-          const metadataMap = await getHistoriesWithMetadata([localHistoryId])
-          const existingMeta = metadataMap.get(localHistoryId)
+          const resolvedHistoryId = localHistoryId
+          const metadataMap = await getHistoriesWithMetadata([resolvedHistoryId])
+          const existingMeta = metadataMap.get(resolvedHistoryId)
           if (!existingMeta || existingMeta.messageCount === 0) {
             const now = Date.now()
             const results = await Promise.allSettled(
@@ -1229,7 +1238,7 @@ const SidepanelChat = () => {
                       : "You"
                 return saveMessage({
                   id: normalizedId,
-                  history_id: localHistoryId,
+                  history_id: resolvedHistoryId,
                   name,
                   role,
                   content: m.content,
@@ -1725,9 +1734,9 @@ const SidepanelChat = () => {
             dropState === "dragging" ? "bg-surface2" : ""
           }`}
           style={
-            chatBackgroundImage
+            resolvedChatBackgroundImage
               ? {
-                  backgroundImage: `url(${chatBackgroundImage})`,
+                  backgroundImage: `url(${resolvedChatBackgroundImage})`,
                   backgroundSize: "cover",
                   backgroundPosition: "center",
                   backgroundRepeat: "no-repeat"
@@ -1735,7 +1744,7 @@ const SidepanelChat = () => {
               : {}
           }>
           {/* Background overlay for opacity effect */}
-          {chatBackgroundImage && (
+          {resolvedChatBackgroundImage && (
             <div
               className="absolute inset-0 bg-bg"
               style={{ opacity: 0.9, pointerEvents: "none" }}

@@ -108,7 +108,7 @@ export const PageAssistSelect: React.FC<SelectProps> = ({
 
     if (Array.isArray(element.props.children)) {
       return element.props.children
-        .map((child) => {
+        .map((child: React.ReactNode) => {
           if (typeof child === "string") return child
           if (React.isValidElement(child)) return extractTextFromJSX(child)
           return ""

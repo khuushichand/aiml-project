@@ -1,8 +1,8 @@
 import React from "react"
 import { Modal, Empty, Spin, Select, message } from "antd"
 import { useTranslation } from "react-i18next"
-import { shallow } from "zustand/shallow"
-import { useFolderStore } from "@/store/folder"
+import { useShallow } from "zustand/react/shallow"
+import { useFolderStore, type FolderState } from "@/store/folder"
 
 type BulkTagPickerModalProps = {
   open: boolean
@@ -31,15 +31,14 @@ export const BulkTagPickerModal: React.FC<BulkTagPickerModalProps> = ({
     addKeywordToConversation,
     refreshFromServer
   } = useFolderStore(
-    (state) => ({
+    useShallow((state: FolderState) => ({
       keywords: state.keywords,
       isLoading: state.isLoading,
       folderApiAvailable: state.folderApiAvailable,
       ensureKeyword: state.ensureKeyword,
       addKeywordToConversation: state.addKeywordToConversation,
       refreshFromServer: state.refreshFromServer
-    }),
-    shallow
+    }))
   )
 
   React.useEffect(() => {

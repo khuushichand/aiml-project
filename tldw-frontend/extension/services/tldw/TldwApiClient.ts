@@ -14,7 +14,7 @@ import {
   type ApiDataTableGenerateResponse,
   type ApiDataTableJobStatus
 } from "@/services/tldw/data-tables"
-import type { DataTableColumn } from "@/types/data-tables"
+import type { DataTableColumn, DataTableSource } from "@/types/data-tables"
 
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
@@ -2213,7 +2213,7 @@ export class TldwApiClient {
   async generateDataTable(payload: {
     name: string
     prompt: string
-    sources: Array<{ type: string; id: string; title: string; snippet?: string }>
+    sources: DataTableSource[]
     column_hints?: Array<{ name?: string; type?: string; description?: string; format?: string }>
     model?: string
     max_rows?: number
@@ -2354,7 +2354,7 @@ export class TldwApiClient {
       if (response.data instanceof ArrayBuffer) {
         body = response.data
       } else if (response.data instanceof Uint8Array) {
-        body = response.data
+        body = response.data.buffer as BodyInit
       } else if (response.data instanceof Blob) {
         body = response.data
       } else if (typeof response.data === "string") {

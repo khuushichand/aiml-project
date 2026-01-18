@@ -1,8 +1,8 @@
 import React from "react"
-import { shallow } from "zustand/shallow"
+import { useShallow } from "zustand/react/shallow"
 import type { TFunction } from "i18next"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
-import { useStoreMessageOption } from "@/store/option"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { getHistoriesWithMetadata, saveMessage } from "@/db/dexie/helpers"
 import { normalizeConversationState } from "@/utils/conversation-state"
@@ -54,7 +54,7 @@ export const useServerChatLoader = ({
     setServerChatExternalRef,
     setServerChatMetaLoaded
   } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       serverChatId: state.serverChatId,
       serverChatTitle: state.serverChatTitle,
       serverChatCharacterId: state.serverChatCharacterId,
@@ -69,8 +69,7 @@ export const useServerChatLoader = ({
       setServerChatSource: state.setServerChatSource,
       setServerChatExternalRef: state.setServerChatExternalRef,
       setServerChatMetaLoaded: state.setServerChatMetaLoaded
-    }),
-    shallow
+    }))
   )
 
   const serverChatLoadRef = React.useRef<{

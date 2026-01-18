@@ -30,6 +30,7 @@ import {
 } from ".."
 import { ModelNickname } from "./nickname"
 import { ModelDb } from "./models"
+import { isDatabaseClosedError } from "@/utils/ff-error"
 
 // Helper function to generate IDs (keeping the same format)
 export const generateID = () => {

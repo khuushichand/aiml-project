@@ -41,7 +41,7 @@ export const FontSizeProvider = ({
     return scale;
   };
   
-  const scale = validScale(storedScale);
+  const scale = validScale(storedScale ?? initialScale);
 
   const increase = () => {
     setStoredScale(validScale(scale + step));

@@ -17,7 +17,7 @@ import { X } from "lucide-react"
 import { useStorage } from "@plasmohq/storage/hook"
 import { browser } from "wxt/browser"
 import { useTranslation } from "react-i18next"
-import { shallow } from "zustand/shallow"
+import { useShallow } from "zustand/react/shallow"
 import type { UploadedFile } from "@/db/dexie/types"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
@@ -35,7 +35,7 @@ import {
   type RagPinnedResult
 } from "@/utils/rag-format"
 import { formatFileSize } from "@/utils/format"
-import { useStoreMessageOption } from "@/store/option"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
 
 type Props = {
   onInsert: (text: string) => void
@@ -362,7 +362,7 @@ export const RagSearchBar: React.FC<Props> = ({
     setRagSources,
     setRagAdvancedOptions
   } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       ragPinnedResults: state.ragPinnedResults,
       setRagPinnedResults: state.setRagPinnedResults,
       setRagSearchMode: state.setRagSearchMode,
@@ -371,8 +371,7 @@ export const RagSearchBar: React.FC<Props> = ({
       setRagEnableCitations: state.setRagEnableCitations,
       setRagSources: state.setRagSources,
       setRagAdvancedOptions: state.setRagAdvancedOptions
-    }),
-    shallow
+    }))
   )
 
   React.useEffect(() => {

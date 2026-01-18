@@ -7,7 +7,7 @@ import { usePageAssist } from "@/context"
 import { useWebUI } from "@/store/webui"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useStoreChatModelSettings } from "@/store/model"
-import { UploadedFile } from "@/db/dexie/types"
+import type { UploadedFile } from "@/db/dexie/types"
 import { formatFileSize } from "@/utils/format"
 import { useAntdNotification } from "./useAntdNotification"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
@@ -15,15 +15,20 @@ import { useSelectServerChat } from "@/hooks/chat/useSelectServerChat"
 import { useServerChatHistoryId } from "@/hooks/chat/useServerChatHistoryId"
 import { useServerChatLoader } from "@/hooks/chat/useServerChatLoader"
 import { useClearChat } from "@/hooks/chat/useClearChat"
-import { useCompareMode } from "@/hooks/chat/useCompareMode"
 import { useChatActions } from "@/hooks/chat/useChatActions"
+import { MAX_COMPARE_MODELS } from "@/hooks/chat/compare-constants"
 import type { Character } from "@/types/character"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useSetting } from "@/hooks/useSetting"
 import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings"
+import type { UseMessageOptionReturn } from "./useMessageOptionTypes"
 
-export const useMessageOption = () => {
+const useMessageOptionImpl = () => {
   // Controllers come from Context (for aborting streaming requests)
+  const compareModeState = require(
+    "@/hooks/chat/useCompareMode"
+  ) as typeof import("@/hooks/chat/useCompareMode")
+
   const {
     controller: abortController,
     setController: setAbortController
@@ -120,6 +125,10 @@ export const useMessageOption = () => {
     clearReplyTarget
   } = useStoreMessageOption()
 
+  const compareModeResult =
+    compareModeState.useCompareMode({ historyId }) as ReturnType<
+      typeof import("@/hooks/chat/useCompareMode").useCompareMode
+    >
   const {
     compareMode,
     setCompareMode,
@@ -141,7 +150,11 @@ export const useMessageOption = () => {
     setCompareMaxModels,
     compareModeActive,
     markCompareHistoryCreated
-  } = useCompareMode({ historyId })
+  } = compareModeResult
+
+  const resolvedCompareFeatureEnabled = compareFeatureEnabled ?? false
+  const resolvedCompareModeActive = compareModeActive ?? false
+  const resolvedCompareMaxModels = compareMaxModels ?? MAX_COMPARE_MODELS
 
   const currentChatModelSettings = useStoreChatModelSettings()
   const [selectedModel, setSelectedModel] = useStorage<string | null>(
@@ -246,8 +259,12 @@ export const useMessageOption = () => {
     "selectedQuickPrompt",
     null
   )
-  const storedSystemPromptRef = React.useRef<string | null>(storedSystemPrompt)
-  const storedQuickPromptRef = React.useRef<string | null>(storedQuickPrompt)
+  const storedSystemPromptRef = React.useRef<string | null>(
+    storedSystemPrompt ?? null
+  )
+  const storedQuickPromptRef = React.useRef<string | null>(
+    storedQuickPrompt ?? null
+  )
 
   React.useEffect(() => {
     if (storedSystemPrompt && storedSystemPrompt !== selectedSystemPrompt) {
@@ -367,7 +384,7 @@ export const useMessageOption = () => {
     historyId,
     setHistoryId,
     temporaryChat,
-    selectedModel,
+    selectedModel: selectedModel ?? null,
     useOCR,
     selectedSystemPrompt,
     selectedKnowledge,
@@ -410,16 +427,16 @@ export const useMessageOption = () => {
     documentContext,
     setDocumentContext,
     uploadedFiles,
-    compareModeActive,
+    compareModeActive: resolvedCompareModeActive,
     compareSelectedModels,
-    compareMaxModels,
-    compareFeatureEnabled,
+    compareMaxModels: resolvedCompareMaxModels,
+    compareFeatureEnabled: resolvedCompareFeatureEnabled,
     markCompareHistoryCreated,
     replyTarget,
     clearReplyTarget,
     setSelectedSystemPrompt,
     invalidateServerChatHistory,
-    selectedCharacter
+    selectedCharacter: selectedCharacter ?? null
   })
 
   return {
@@ -521,7 +538,7 @@ export const useMessageOption = () => {
     documentContext,
     compareMode,
     setCompareMode,
-    compareFeatureEnabled,
+    compareFeatureEnabled: resolvedCompareFeatureEnabled,
     setCompareFeatureEnabled,
     compareSelectedModels,
     setCompareSelectedModels,
@@ -537,7 +554,7 @@ export const useMessageOption = () => {
     setCompareCanonicalForCluster,
     compareSplitChats,
     setCompareSplitChat,
-    compareMaxModels,
+    compareMaxModels: resolvedCompareMaxModels,
     setCompareMaxModels,
     selectedCharacter,
     setSelectedCharacter,
@@ -545,3 +562,6 @@ export const useMessageOption = () => {
     clearReplyTarget
   }
 }
+
+export const useMessageOption =
+  useMessageOptionImpl as () => UseMessageOptionReturn

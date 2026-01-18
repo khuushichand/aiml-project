@@ -17,13 +17,20 @@ export const DemoModeProvider: React.FC<{ children: React.ReactNode }> = ({
     "demoModeEnabled",
     false
   )
+  const resolvedDemoEnabled = demoEnabled ?? false
+  const handleSetDemoEnabled = React.useCallback(
+    (enabled: boolean) => {
+      setDemoEnabled(enabled)
+    },
+    [setDemoEnabled]
+  )
 
   const value = React.useMemo(
     () => ({
-      demoEnabled,
-      setDemoEnabled
+      demoEnabled: resolvedDemoEnabled,
+      setDemoEnabled: handleSetDemoEnabled
     }),
-    [demoEnabled, setDemoEnabled]
+    [resolvedDemoEnabled, handleSetDemoEnabled]
   )
 
   return (

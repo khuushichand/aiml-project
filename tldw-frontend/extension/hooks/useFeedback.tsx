@@ -10,8 +10,8 @@ import {
   type FeedbackThumb,
   type FeedbackDetail
 } from "@/store/feedback"
-import { useStoreMessageOption } from "@/store/option"
-import { shallow } from "zustand/shallow"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
+import { useShallow } from "zustand/react/shallow"
 import { useAntdNotification } from "./useAntdNotification"
 import { extractSourceFeedbackIds } from "@/utils/feedback"
 import { useTranslation } from "react-i18next"
@@ -49,11 +49,10 @@ export const useFeedback = ({
 }: FeedbackContext) => {
   const notification = useAntdNotification()
   const { serverChatVersion, setServerChatVersion } = useStoreMessageOption(
-    (state) => ({
+    useShallow((state: MessageOptionState) => ({
       serverChatVersion: state.serverChatVersion,
       setServerChatVersion: state.setServerChatVersion
-    }),
-    shallow
+    }))
   )
   const { t } = useTranslation(["common", "playground"])
   const entry = useFeedbackStore((state) => state.entries[messageKey])

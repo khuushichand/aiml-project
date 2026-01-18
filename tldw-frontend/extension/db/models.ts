@@ -30,7 +30,7 @@ export const generateID = () => {
   })
 }
 export class ModelDb {
-  db: chrome.storage.StorageArea
+  db: typeof chrome.storage.local
 
   constructor() {
     this.db = chrome.storage.local

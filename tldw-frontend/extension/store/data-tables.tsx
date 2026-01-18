@@ -232,7 +232,7 @@ const initialState = {
 // Store
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const useDataTablesStore = create<DataTablesState>()((set) => ({
+export const useDataTablesStore = create<DataTablesState>()((set, get) => ({
   ...initialState,
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -585,7 +585,7 @@ export const useDataTablesStore = create<DataTablesState>()((set) => ({
     }),
 
   getEditedTableData: () => {
-    const state = useDataTablesStore.getState()
+    const state = get()
     if (!state.editingTable) return null
     // Remove _id from rows before returning
     const rows = state.editingRows.map((row) => {

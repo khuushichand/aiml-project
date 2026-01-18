@@ -63,18 +63,24 @@ export const useSttSettings = (): SttSettings => {
   )
 
   return {
-    model,
-    temperature,
-    task,
-    responseFormat,
-    timestampGranularities,
-    prompt,
-    useSegmentation,
-    segK,
-    segMinSegmentSize,
-    segLambdaBalance,
-    segUtteranceExpansionWidth,
-    segEmbeddingsProvider,
-    segEmbeddingsModel
+    model: model ?? STT_DEFAULTS.MODEL,
+    temperature: temperature ?? STT_DEFAULTS.TEMPERATURE,
+    task: task ?? STT_DEFAULTS.TASK,
+    responseFormat: responseFormat ?? STT_DEFAULTS.RESPONSE_FORMAT,
+    timestampGranularities:
+      timestampGranularities ?? STT_DEFAULTS.TIMESTAMP_GRANULARITIES,
+    prompt: prompt ?? STT_DEFAULTS.PROMPT,
+    useSegmentation: useSegmentation ?? false,
+    segK: segK ?? STT_DEFAULTS.SEG_K,
+    segMinSegmentSize:
+      segMinSegmentSize ?? STT_DEFAULTS.SEG_MIN_SEGMENT_SIZE,
+    segLambdaBalance:
+      segLambdaBalance ?? STT_DEFAULTS.SEG_LAMBDA_BALANCE,
+    segUtteranceExpansionWidth:
+      segUtteranceExpansionWidth ?? STT_DEFAULTS.SEG_UTTERANCE_EXPANSION_WIDTH,
+    segEmbeddingsProvider:
+      segEmbeddingsProvider ?? STT_DEFAULTS.SEG_EMBEDDINGS_PROVIDER,
+    segEmbeddingsModel:
+      segEmbeddingsModel ?? STT_DEFAULTS.SEG_EMBEDDINGS_MODEL
   }
 }

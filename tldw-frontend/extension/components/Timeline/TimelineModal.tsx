@@ -82,9 +82,6 @@ export const TimelineModal: React.FC = () => {
           height: 'calc(100vh - 55px)',
           padding: 0,
           overflow: 'hidden'
-        },
-        content: {
-          borderRadius: 0
         }
       }}
       closable={true}

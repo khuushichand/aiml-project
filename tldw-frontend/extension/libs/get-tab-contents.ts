@@ -53,16 +53,17 @@ export const getTabContents = async (documents: ChatDocuments) => {
                 url: string
                 isPDF: boolean
             }
-            const header = formatDocumentHeader(doc.title, doc.url)
+            const docUrl = doc.url ?? ""
+            const header = formatDocumentHeader(doc.title ?? "", docUrl)
             let extractedContent = ""
 
-            if (isWikipedia(doc.url)) {
+            if (isWikipedia(docUrl)) {
                 extractedContent = parseWikipedia(content.html)
-            } else if (isAmazonURL(doc.url)) {
+            } else if (isAmazonURL(docUrl)) {
                 extractedContent = parseAmazonWebsite(content.html)
-            } else if (isTwitterProfile(doc.url)) {
+            } else if (isTwitterProfile(docUrl)) {
                 extractedContent = parseTweetProfile(content.html)
-            } else if (isTwitterTimeline(doc.url)) {
+            } else if (isTwitterTimeline(docUrl)) {
                 extractedContent = parseTwitterTimeline(content.html)
             } else {
                 extractedContent = defaultExtractContent(content.html)
