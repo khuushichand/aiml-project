@@ -116,59 +116,83 @@ export const useChatSettings = () => {
   )
 
   return {
-    copilotResumeLastChat,
+    copilotResumeLastChat:
+      copilotResumeLastChat ?? DEFAULT_CHAT_SETTINGS.copilotResumeLastChat,
     setCopilotResumeLastChat,
-    defaultChatWithWebsite,
+    defaultChatWithWebsite:
+      defaultChatWithWebsite ?? DEFAULT_CHAT_SETTINGS.defaultChatWithWebsite,
     setDefaultChatWithWebsite,
-    webUIResumeLastChat,
+    webUIResumeLastChat:
+      webUIResumeLastChat ?? DEFAULT_CHAT_SETTINGS.webUIResumeLastChat,
     setWebUIResumeLastChat,
-    hideCurrentChatModelSettings,
+    hideCurrentChatModelSettings:
+      hideCurrentChatModelSettings ??
+      DEFAULT_CHAT_SETTINGS.hideCurrentChatModelSettings,
     setHideCurrentChatModelSettings,
-    hideQuickChatHelper,
+    hideQuickChatHelper:
+      hideQuickChatHelper ?? DEFAULT_CHAT_SETTINGS.hideQuickChatHelper,
     setHideQuickChatHelper,
-    restoreLastChatModel,
+    restoreLastChatModel:
+      restoreLastChatModel ?? DEFAULT_CHAT_SETTINGS.restoreLastChatModel,
     setRestoreLastChatModel,
-    generateTitle,
+    generateTitle: generateTitle ?? DEFAULT_CHAT_SETTINGS.titleGenEnabled,
     setGenerateTitle,
-    checkWideMode,
+    checkWideMode: checkWideMode ?? DEFAULT_CHAT_SETTINGS.checkWideMode,
     setCheckWideMode,
-    stickyChatInput,
+    stickyChatInput:
+      stickyChatInput ?? DEFAULT_CHAT_SETTINGS.stickyChatInput,
     setStickyChatInput,
-    menuDensity,
+    menuDensity: menuDensity ?? DEFAULT_CHAT_SETTINGS.menuDensity,
     setMenuDensity,
-    openReasoning,
+    openReasoning: openReasoning ?? DEFAULT_CHAT_SETTINGS.openReasoning,
     setOpenReasoning,
-    userChatBubble,
+    userChatBubble: userChatBubble ?? DEFAULT_CHAT_SETTINGS.userChatBubble,
     setUserChatBubble,
-    autoCopyResponseToClipboard,
+    autoCopyResponseToClipboard:
+      autoCopyResponseToClipboard ??
+      DEFAULT_CHAT_SETTINGS.autoCopyResponseToClipboard,
     setAutoCopyResponseToClipboard,
-    useMarkdownForUserMessage,
+    useMarkdownForUserMessage:
+      useMarkdownForUserMessage ??
+      DEFAULT_CHAT_SETTINGS.useMarkdownForUserMessage,
     setUseMarkdownForUserMessage,
-    copyAsFormattedText,
+    copyAsFormattedText:
+      copyAsFormattedText ?? DEFAULT_CHAT_SETTINGS.copyAsFormattedText,
     setCopyAsFormattedText,
-    allowExternalImages,
+    allowExternalImages:
+      allowExternalImages ?? DEFAULT_CHAT_SETTINGS.allowExternalImages,
     setAllowExternalImages,
-    tabMentionsEnabled,
+    tabMentionsEnabled:
+      tabMentionsEnabled ?? DEFAULT_CHAT_SETTINGS.tabMentionsEnabled,
     setTabMentionsEnabled,
-    pasteLargeTextAsFile,
+    pasteLargeTextAsFile:
+      pasteLargeTextAsFile ?? DEFAULT_CHAT_SETTINGS.pasteLargeTextAsFile,
     setPasteLargeTextAsFile,
-    sidepanelTemporaryChat,
+    sidepanelTemporaryChat:
+      sidepanelTemporaryChat ?? DEFAULT_CHAT_SETTINGS.sidepanelTemporaryChat,
     setSidepanelTemporaryChat,
-    removeReasoningTagFromCopy,
+    removeReasoningTagFromCopy:
+      removeReasoningTagFromCopy ??
+      DEFAULT_CHAT_SETTINGS.removeReasoningTagFromCopy,
     setRemoveReasoningTagFromCopy,
-    promptSearchIncludeServer,
+    promptSearchIncludeServer:
+      promptSearchIncludeServer ??
+      DEFAULT_CHAT_SETTINGS.promptSearchIncludeServer,
     setPromptSearchIncludeServer,
-    userTextColor,
+    userTextColor: userTextColor ?? DEFAULT_CHAT_SETTINGS.chatUserTextColor,
     setUserTextColor,
-    assistantTextColor,
+    assistantTextColor:
+      assistantTextColor ?? DEFAULT_CHAT_SETTINGS.chatAssistantTextColor,
     setAssistantTextColor,
-    userTextFont,
+    userTextFont: userTextFont ?? DEFAULT_CHAT_SETTINGS.chatUserTextFont,
     setUserTextFont,
-    assistantTextFont,
+    assistantTextFont:
+      assistantTextFont ?? DEFAULT_CHAT_SETTINGS.chatAssistantTextFont,
     setAssistantTextFont,
-    userTextSize,
+    userTextSize: userTextSize ?? DEFAULT_CHAT_SETTINGS.chatUserTextSize,
     setUserTextSize,
-    assistantTextSize,
+    assistantTextSize:
+      assistantTextSize ?? DEFAULT_CHAT_SETTINGS.chatAssistantTextSize,
     setAssistantTextSize
   }
 }

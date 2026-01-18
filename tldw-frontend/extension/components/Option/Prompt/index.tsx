@@ -469,7 +469,7 @@ export const PromptBody = () => {
     if (!insertPrompt) return
     if (choice === "system") {
       setSelectedSystemPrompt(insertPrompt.id)
-      setSelectedQuickPrompt(undefined)
+      setSelectedQuickPrompt(null)
       setInsertPrompt(null)
       navigate("/")
       return
@@ -477,7 +477,7 @@ export const PromptBody = () => {
     const quickContent = insertPrompt.userText ?? insertPrompt.systemText
     if (quickContent) {
       setSelectedQuickPrompt(quickContent)
-      setSelectedSystemPrompt(undefined)
+      setSelectedSystemPrompt(null)
       setInsertPrompt(null)
       navigate("/")
     }
@@ -850,11 +850,11 @@ export const PromptBody = () => {
                       }
 
                       const quickContent = userText ?? record?.content
-                      if (quickContent) {
-                        setSelectedQuickPrompt(quickContent)
-                        setSelectedSystemPrompt(undefined)
-                        navigate("/")
-                      }
+                        if (quickContent) {
+                          setSelectedQuickPrompt(quickContent)
+                          setSelectedSystemPrompt(null)
+                          navigate("/")
+                        }
                     }}
                     onDelete={async () => {
                       const ok = await confirmDanger({

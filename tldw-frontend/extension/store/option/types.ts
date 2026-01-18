@@ -101,7 +101,7 @@ export type State = {
   isProcessing: boolean
   setIsProcessing: (isProcessing: boolean) => void
   selectedModel: string | null
-  setSelectedModel: (selectedModel: string) => void
+  setSelectedModel: (selectedModel: string | null) => void
   chatMode: "normal" | "rag"
   setChatMode: (chatMode: "normal" | "rag") => void
   isEmbedding: boolean
@@ -115,7 +115,7 @@ export type State = {
   selectedSystemPrompt: string | null
   setSelectedSystemPrompt: (selectedSystemPrompt: string | null) => void
   selectedQuickPrompt: string | null
-  setSelectedQuickPrompt: (selectedQuickPrompt: string) => void
+  setSelectedQuickPrompt: (selectedQuickPrompt: string | null) => void
   queuedMessages: { message: string; image: string }[]
   addQueuedMessage: (payload: { message: string; image: string }) => void
   setQueuedMessages: (messages: { message: string; image: string }[]) => void

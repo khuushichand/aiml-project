@@ -12,6 +12,8 @@ export const SidepanelRag = ({ hideBorder }: { hideBorder?: boolean }) => {
     "maxWebsiteContext",
     7028
   )
+  const resolvedChatWithWebsiteEmbedding = chatWithWebsiteEmbedding ?? false
+  const resolvedMaxWebsiteContext = maxWebsiteContext ?? 7028
 
   return (
     <div>
@@ -36,7 +38,7 @@ export const SidepanelRag = ({ hideBorder }: { hideBorder?: boolean }) => {
           <div>
             <Switch
               className="mt-4 sm:mt-0"
-              checked={chatWithWebsiteEmbedding}
+              checked={resolvedChatWithWebsiteEmbedding}
               onChange={(checked) => setChatWithWebsiteEmbedding(checked)}
               aria-label={t("generalSettings.sidepanelRag.ragEnabled.label")}
             />
@@ -47,7 +49,7 @@ export const SidepanelRag = ({ hideBorder }: { hideBorder?: boolean }) => {
             <span className="text-text truncate">
               {t("generalSettings.sidepanelRag.maxWebsiteContext.label")}
             </span>
-            {maxWebsiteContext === 7028 && (
+            {resolvedMaxWebsiteContext === 7028 && (
               <Tag className="text-[10px] py-0 px-1.5 leading-4">
                 {t("generalSettings.settings.defaultBadge", "default")}
               </Tag>
@@ -56,8 +58,10 @@ export const SidepanelRag = ({ hideBorder }: { hideBorder?: boolean }) => {
           <div>
             <InputNumber
               className="mt-4 sm:mt-0"
-              value={maxWebsiteContext}
-              onChange={(value) => setMaxWebsiteContext(value)}
+              value={resolvedMaxWebsiteContext}
+              onChange={(value) =>
+                setMaxWebsiteContext(value ?? resolvedMaxWebsiteContext)
+              }
               placeholder={t(
                 "generalSettings.sidepanelRag.maxWebsiteContext.placeholder"
               )}

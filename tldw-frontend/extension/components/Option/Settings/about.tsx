@@ -14,9 +14,9 @@ export const AboutApp = () => {
     queryKey: ["fetchOllamaURL"],
     queryFn: async () => {
       const runtime =
-        typeof browser !== "undefined" && browser?.runtime?.getManifest
+        typeof browser !== "undefined"
           ? browser.runtime
-          : typeof chrome !== "undefined" && chrome?.runtime?.getManifest
+          : typeof chrome !== "undefined"
             ? chrome.runtime
             : null
       const chromeVersion = runtime?.getManifest()?.version ?? "unknown"

@@ -143,7 +143,7 @@ export const ModelsBody = () => {
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
-      const res = await browser.runtime
+      const res: unknown = await browser.runtime
         .sendMessage({ type: "tldw:models:refresh" })
         .catch(() => null)
       if (!isRefreshResponse(res) || !res.ok) {

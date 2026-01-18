@@ -63,7 +63,7 @@ import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useSelectServerChat } from "@/hooks/chat/useSelectServerChat"
 import { useStoreChatModelSettings } from "@/store/model"
-import { useStoreMessageOption } from "@/store/option"
+import { useStoreMessageOption, type State as MessageOptionState } from "@/store/option"
 import { ModeToggle } from "@/components/Sidepanel/Chat/ModeToggle"
 
 const FOLDER_CONVERSATION_BATCH_SIZE = 10
@@ -133,7 +133,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
     setContextFiles,
     temporaryChat
   } = useStoreMessageOption(
-    (state) => ({
+    (state: MessageOptionState) => ({
       serverChatId: state.serverChatId,
       setServerChatId: state.setServerChatId,
       setSelectedModel: state.setSelectedModel,

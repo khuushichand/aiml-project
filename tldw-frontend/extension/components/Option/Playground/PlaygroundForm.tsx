@@ -338,7 +338,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [compareFeatureEnabled, compareMode, setCompareMode])
 
-  const compareModeActive = compareFeatureEnabled && compareMode
+  const compareModeActive = Boolean(compareFeatureEnabled && compareMode)
 
   const modelSummaryLabel = React.useMemo(() => {
     if (!selectedModel) {
@@ -2200,6 +2200,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       if (!command) {
         return { handled: false, message: text }
       }
+      if (!command.action) {
+        return { handled: false, message: text }
+      }
       command.action()
       return { handled: true, message: parsed.remainder }
     },
@@ -2209,7 +2212,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const handleSlashCommandSelect = React.useCallback(
     (command: SlashCommandItem) => {
       const parsed = parseSlashInput(form.values.message)
-      command.action()
+      command.action?.()
       form.setFieldValue("message", parsed?.remainder || "")
       requestAnimationFrame(() => textareaRef.current?.focus())
     },

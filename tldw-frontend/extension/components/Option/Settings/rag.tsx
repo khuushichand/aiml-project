@@ -244,11 +244,14 @@ export const RagSettings = () => {
                   placeholder={t("rag.ragSettings.model.placeholder")}
                   style={{ width: "100%" }}
                   className="mt-4"
-                  filterOption={(input, option) =>
-                    option.label.key
+                  filterOption={(input, option) => {
+                    const label = option?.label
+                    const key = React.isValidElement(label) ? label.key : label
+                    if (key == null) return false
+                    return String(key)
                       .toLowerCase()
-                      .indexOf(input.toLowerCase()) >= 0
-                  }
+                      .includes(input.toLowerCase())
+                  }}
                   options={ollamaInfo.models?.map((model) => ({
                     label: (
                       <span

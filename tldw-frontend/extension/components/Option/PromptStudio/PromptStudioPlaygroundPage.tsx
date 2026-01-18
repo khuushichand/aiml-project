@@ -158,14 +158,14 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
 
   // Unwrap payloads up front so effects/hooks don't use variables before declaration
   const projectsPayload = projectsQuery.data?.data
-  const projectList = React.useMemo(() => {
+  const projectList = React.useMemo<Project[]>(() => {
     const raw =
       Array.isArray(projectsPayload?.data)
         ? projectsPayload?.data
         : Array.isArray((projectsPayload as any)?.projects)
           ? (projectsPayload as any).projects
           : []
-    return raw || []
+    return (raw || []) as Project[]
   }, [projectsPayload])
   const projectMeta = React.useMemo(
     () => (projectsPayload as any)?.metadata || (projectsPayload as any)?.pagination,
@@ -192,8 +192,11 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
   })
 
   const promptsPayload = promptsQuery.data?.data
-  const promptList = React.useMemo(
-    () => (Array.isArray(promptsPayload?.data) ? promptsPayload?.data || [] : []),
+  const promptList = React.useMemo<Prompt[]>(
+    () =>
+      (Array.isArray(promptsPayload?.data)
+        ? promptsPayload?.data || []
+        : []) as Prompt[],
     [promptsPayload]
   )
   const promptMeta = React.useMemo(

@@ -1079,8 +1079,9 @@ export const PlaygroundChat = () => {
                               onClick={() => {
                                 const currentCanonical =
                                   compareCanonicalByCluster[block.clusterId] || null
+                                const messageId = message.id ?? null
                                 const next =
-                                  currentCanonical === message.id ? null : message.id
+                                  currentCanonical === messageId ? null : messageId
                                 setCompareCanonicalForCluster(block.clusterId, next)
                               }}
                               title={

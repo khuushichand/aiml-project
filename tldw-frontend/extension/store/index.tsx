@@ -44,7 +44,7 @@ type State = {
   isProcessing: boolean
   setIsProcessing: (isProcessing: boolean) => void
   selectedModel: string | null
-  setSelectedModel: (selectedModel: string) => void
+  setSelectedModel: (selectedModel: string | null) => void
   chatMode: "normal" | "rag" | "vision"
   setChatMode: (chatMode: "normal" | "rag" | "vision") => void
   isEmbedding: boolean
@@ -57,7 +57,7 @@ type State = {
   setSelectedSystemPrompt: (selectedSystemPrompt: string | null) => void
 
   selectedQuickPrompt: string | null
-  setSelectedQuickPrompt: (selectedQuickPrompt: string) => void
+  setSelectedQuickPrompt: (selectedQuickPrompt: string | null) => void
 
   useOCR: boolean
   setUseOCR: (useOCR: boolean) => void

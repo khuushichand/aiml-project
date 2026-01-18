@@ -260,7 +260,7 @@ export const Playground = () => {
 
   useCharacterGreeting({
     playgroundReady,
-    selectedCharacter,
+    selectedCharacter: selectedCharacter ?? null,
     serverChatId,
     messagesLength: messages.length,
     setMessages,
@@ -343,8 +343,9 @@ export const Playground = () => {
       }
 
       if (!detail.messageId) return true
+      const messageId = detail.messageId
 
-      const scrolled = scrollToMessage(detail.messageId)
+      const scrolled = scrollToMessage(messageId)
       if (!scrolled) {
         if (!containerRef.current) return false
         if (timelineActionRetryTimeoutRef.current) {
@@ -352,16 +353,16 @@ export const Playground = () => {
         }
         timelineActionRetryTimeoutRef.current = setTimeout(() => {
           timelineActionRetryTimeoutRef.current = null
-          const retry = scrollToMessage(detail.messageId)
+          const retry = scrollToMessage(messageId)
           if (retry && detail.action === "edit") {
-            dispatchEditMessage(detail.messageId)
+            dispatchEditMessage(messageId)
           }
         }, 80)
         return true
       }
 
       if (detail.action === "edit") {
-        dispatchEditMessage(detail.messageId)
+        dispatchEditMessage(messageId)
       }
       return true
     },

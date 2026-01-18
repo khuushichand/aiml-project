@@ -21,6 +21,10 @@ const runtime = {
       return path
     }
   },
+  getManifest: () => ({
+    name: "tldw",
+    version: "0.0.0"
+  }),
   sendMessage: async (..._args: any[]) => undefined,
   sendNativeMessage: async () => {
     throw new Error("Native messaging is not available in web mode.")

@@ -366,10 +366,12 @@ export const TTSModeSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 className="w-full mt-4 sm:mt-0 sm:w-[200px] focus-ring"
                 showSearch
                 optionFilterProp="label"
-                options={data?.browserTTSVoices?.map((voice) => ({
+                options={data?.browserTTSVoices?.map(
+                  (voice: { voiceName: string; lang: string }) => ({
                   label: `${voice.voiceName} - ${voice.lang}`.trim(),
                   value: voice.voiceName
-                }))}
+                  })
+                )}
                 {...form.getInputProps("voice")}
               />
             </div>

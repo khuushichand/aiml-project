@@ -24,6 +24,8 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
     "autoStopTimeout",
     2000
   )
+  const resolvedAutoStopTimeout =
+    typeof autoStopTimeout === "number" ? autoStopTimeout : 2000
 
   const [sttModel, setSttModel] = useStorage("sttModel", "whisper-1")
   const [sttUseSegmentation, setSttUseSegmentation] = useStorage(
@@ -312,10 +314,12 @@ export const SSTSettings = ({ hideBorder }: { hideBorder?: boolean }) => {
                 className={hideBorder ? "w-full" : "!min-w-[200px]"}
                 type="number"
                 placeholder={t("generalSettings.stt.autoStopTimeout.placeholder")}
-                value={autoStopTimeout}
+                value={resolvedAutoStopTimeout}
                 addonAfter="ms"
                 onChange={(e) => {
-                  setAutoStopTimeout(e)
+                  setAutoStopTimeout(
+                    typeof e === "number" ? e : resolvedAutoStopTimeout
+                  )
                 }}
               />
             </div>
