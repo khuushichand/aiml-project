@@ -246,8 +246,9 @@ export function LocalChatList({
     [chatHistoriesData]
   )
 
-  const allHistoryIds = chatHistories.flatMap((group) =>
-    group.items.map((item) => item.id)
+  const allHistoryIds = useMemo(
+    () => chatHistories.flatMap((group) => group.items.map((item) => item.id)),
+    [chatHistories]
   )
 
   const { data: historyMetadata } = useQuery({
@@ -487,8 +488,8 @@ export function LocalChatList({
           <div className="mt-1 text-xs text-red-500">{renameError}</div>
         )}
       </Modal>
-      {chatHistories.map((group, groupIndex) => (
-        <div key={groupIndex}>
+      {chatHistories.map((group) => (
+        <div key={group.label}>
           <div className="flex items-center justify-between mt-2 px-1">
             <h3 className="px-2 text-[11px] font-medium text-text-subtle uppercase tracking-wide">
               {group.label === "searchResults"
@@ -639,7 +640,6 @@ export function LocalChatList({
                       ariaLabel={`${t("option:header.moreActions", "More actions")}: ${chat.title}`}
                       hasPopup="menu"
                       ariaExpanded={openMenuFor === chat.id}
-                      ariaControls={`history-actions-${chat.id}`}
                     >
                       <MoreHorizontal className="w-4 h-4" />
                     </IconButton>

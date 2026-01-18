@@ -2,7 +2,7 @@
  * DiffViewer - Display unified diffs with hunk selection
  */
 
-import { FC, useState, useMemo, useEffect } from "react"
+import { FC, useState, useMemo, useEffect, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import {
   FileText,
@@ -11,7 +11,6 @@ import {
   ChevronDown,
   ChevronRight,
   Check,
-  X,
   Copy,
   CheckCheck
 } from "lucide-react"
@@ -57,7 +56,11 @@ interface DiffViewerProps {
 /**
  * Parse a unified diff string into structured FileDiff objects
  */
-export function parseDiff(diffText: string): FileDiff[] {
+let parseDiffCounter = 0
+
+export function parseDiff(diffText: string, idPrefix?: string): FileDiff[] {
+  const resolvedPrefix = idPrefix || `diff-${parseDiffCounter++}`
+  const prefix = resolvedPrefix ? `${resolvedPrefix}-` : ""
   const files: FileDiff[] = []
   const lines = diffText.split("\n")
   let currentFile: FileDiff | null = null
@@ -84,7 +87,7 @@ export function parseDiff(diffText: string): FileDiff[] {
         finalizeFile(currentFile, currentHunk)
       }
       currentFile = {
-        id: `file-${files.length}`,
+        id: `${prefix}file-${files.length}`,
         oldPath: "",
         newPath: "",
         hunks: []
@@ -171,14 +174,15 @@ export function parseDiff(diffText: string): FileDiff[] {
           content: line.slice(1),
           oldLineNum: oldLineNum++
         })
-      } else if (line.startsWith(" ") || line === "") {
+      } else if (line.startsWith(" ")) {
         currentHunk.lines.push({
           type: "context",
-          content: line.slice(1) || "",
+          content: line.slice(1),
           oldLineNum: oldLineNum++,
           newLineNum: newLineNum++
         })
       }
+      // Ignore truly empty lines (e.g., trailing newlines or malformed input).
     }
   }
 
@@ -241,7 +245,7 @@ export const DiffViewer: FC<DiffViewerProps> = ({
   diffs,
   selectedHunks,
   onHunkSelectionChange,
-  viewMode = "unified",
+  viewMode: _viewMode = "unified",
   className = "",
   collapsible = true,
   showLineNumbers = true
@@ -251,6 +255,9 @@ export const DiffViewer: FC<DiffViewerProps> = ({
     () => new Set(diffs.map(d => d.id))
   )
   const [copiedHunk, setCopiedHunk] = useState<string | null>(null)
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const previousDiffIdsRef = useRef<Set<string>>(new Set())
+  const previousHunkIdsRef = useRef<Set<string>>(new Set())
 
   // Track selected hunks internally if not controlled
   const [internalSelected, setInternalSelected] = useState<Set<string>>(
@@ -260,36 +267,49 @@ export const DiffViewer: FC<DiffViewerProps> = ({
   const setSelected = onHunkSelectionChange ?? setInternalSelected
 
   useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const previousDiffIds = previousDiffIdsRef.current
+    const currentDiffIds = new Set(diffs.map(d => d.id))
     setExpandedFiles((prev) => {
-      let changed = false
-      const next = new Set(prev)
+      const next = new Set<string>()
       for (const diff of diffs) {
-        if (!next.has(diff.id)) {
+        const isNew = !previousDiffIds.has(diff.id)
+        if (prev.has(diff.id) || isNew) {
           next.add(diff.id)
-          changed = true
         }
       }
-      return changed ? next : prev
+      return next
     })
+    previousDiffIdsRef.current = currentDiffIds
   }, [diffs])
 
   useEffect(() => {
-    if (selectedHunks) {
-      return
-    }
-    setInternalSelected((prev) => {
-      let changed = false
-      const next = new Set(prev)
-      for (const diff of diffs) {
-        for (const hunk of diff.hunks) {
-          if (!next.has(hunk.id)) {
-            next.add(hunk.id)
-            changed = true
+    const previousHunkIds = previousHunkIdsRef.current
+    const currentHunkIds = new Set(diffs.flatMap(d => d.hunks.map(h => h.id)))
+
+    if (!selectedHunks) {
+      setInternalSelected((prev) => {
+        const next = new Set<string>()
+        for (const diff of diffs) {
+          for (const hunk of diff.hunks) {
+            const isNew = !previousHunkIds.has(hunk.id)
+            if (prev.has(hunk.id) || isNew) {
+              next.add(hunk.id)
+            }
           }
         }
-      }
-      return changed ? next : prev
-    })
+        return next
+      })
+    }
+
+    previousHunkIdsRef.current = currentHunkIds
   }, [diffs, selectedHunks])
 
   // Count changes
@@ -349,9 +369,14 @@ export const DiffViewer: FC<DiffViewerProps> = ({
       await navigator.clipboard.writeText(text)
       setCopiedHunk(hunk.id)
       message.success(t("copiedToClipboard", "Copied to clipboard"))
-      setTimeout(() => setCopiedHunk(null), 2000)
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current)
+      }
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopiedHunk(null)
+        copyTimeoutRef.current = null
+      }, 2000)
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("Failed to copy hunk to clipboard:", err)
       message.error(t("copyFailed", "Failed to copy"))
     }
@@ -495,37 +520,43 @@ export const DiffViewer: FC<DiffViewerProps> = ({
 
                       {/* Diff lines */}
                       <div className={`overflow-x-auto font-mono text-sm ${!isSelected ? "opacity-50" : ""}`}>
-                        {hunk.lines.filter(l => l.type !== "header").map((line, idx) => (
-                          <div
-                            key={idx}
-                          className={`flex ${
-                              line.type === "add"
-                                ? "bg-success/10"
-                                : line.type === "remove"
-                                  ? "bg-danger/10"
-                                  : ""
-                            }`}
-                          >
-                            {showLineNumbers && (
-                              <>
-                                <LineNumber num={line.oldLineNum} className="border-r border-border" />
-                                <LineNumber num={line.newLineNum} className="border-r border-border" />
-                              </>
-                            )}
-                            <span className={`w-5 flex-shrink-0 select-none text-center ${
-                              line.type === "add"
-                                ? "text-success"
-                                : line.type === "remove"
-                                  ? "text-danger"
-                                  : "text-text-subtle"
-                            }`}>
-                              {line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}
-                            </span>
-                            <pre className="flex-1 px-2 whitespace-pre">
-                              {line.content}
-                            </pre>
-                          </div>
-                        ))}
+                        {hunk.lines.filter(l => l.type !== "header").map((line, idx) => {
+                          const lineKey = line.oldLineNum != null || line.newLineNum != null
+                            ? `${line.type}-${line.oldLineNum ?? "n"}-${line.newLineNum ?? "n"}`
+                            : `${line.type}-${idx}`
+
+                          return (
+                            <div
+                              key={lineKey}
+                              className={`flex ${
+                                line.type === "add"
+                                  ? "bg-success/10"
+                                  : line.type === "remove"
+                                    ? "bg-danger/10"
+                                    : ""
+                              }`}
+                            >
+                              {showLineNumbers && (
+                                <>
+                                  <LineNumber num={line.oldLineNum} className="border-r border-border" />
+                                  <LineNumber num={line.newLineNum} className="border-r border-border" />
+                                </>
+                              )}
+                              <span className={`w-5 flex-shrink-0 select-none text-center ${
+                                line.type === "add"
+                                  ? "text-success"
+                                  : line.type === "remove"
+                                    ? "text-danger"
+                                    : "text-text-subtle"
+                              }`}>
+                                {line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}
+                              </span>
+                              <pre className="flex-1 px-2 whitespace-pre">
+                                {line.content}
+                              </pre>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   )

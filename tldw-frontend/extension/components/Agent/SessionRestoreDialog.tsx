@@ -68,7 +68,7 @@ export const SessionRestoreDialog: FC<SessionRestoreDialogProps> = ({
       centered
       width={480}
     >
-        <div className="space-y-4 py-2">
+      <div className="space-y-4 py-2">
         {/* Session info */}
         <div className="rounded-lg bg-surface2 p-4">
           <h4

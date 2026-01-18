@@ -2,6 +2,7 @@ import { browser } from "wxt/browser"
 import { Storage } from "@plasmohq/storage"
 import { createSafeStorage } from "@/utils/safe-storage"
 import { formatErrorMessage } from "@/utils/format-error-message"
+import { isPlaceholderApiKey } from "@/utils/api-key"
 import { tldwRequest } from "@/services/tldw/request-core"
 import type {
   AllowedMethodFor,
@@ -73,6 +74,8 @@ const SENSITIVE_KEY_FRAGMENTS = [
   "bearer"
 ]
 
+const hasExtensionRuntime = () => Boolean(browser?.runtime?.id)
+
 const isSensitiveKey = (key: string): boolean => {
   const normalized = key.toLowerCase().replace(/[\s-]/g, "_")
   return SENSITIVE_KEY_FRAGMENTS.some((fragment) => normalized.includes(fragment))
@@ -100,6 +103,69 @@ const sanitizeResponseData = (
     result[key] = sanitizeResponseData(entry, seen)
   })
   return result
+}
+
+const resolveWebRequestUrl = async (path: PathOrUrl): Promise<{
+  url: string
+  config: Record<string, any> | null
+}> => {
+  const storage = createSafeStorage()
+  const config = await storage.get<Record<string, any>>("tldwConfig").catch(() => null)
+  const isAbsoluteUrl = typeof path === "string" && /^https?:/i.test(path)
+  if (!config?.serverUrl && !isAbsoluteUrl) {
+    throw new Error("tldw server not configured")
+  }
+  const baseUrl = config?.serverUrl ? String(config.serverUrl).replace(/\/$/, "") : ""
+  const url = isAbsoluteUrl
+    ? String(path)
+    : `${baseUrl}${String(path).startsWith("/") ? "" : "/"}${String(path)}`
+  return { url, config: config || null }
+}
+
+const applyAuthHeaders = (
+  headers: Record<string, string>,
+  config: Record<string, any> | null
+): void => {
+  if (!config) return
+  for (const key of Object.keys(headers)) {
+    const lower = key.toLowerCase()
+    if (lower === "x-api-key" || lower === "authorization") {
+      delete headers[key]
+    }
+  }
+  if (config.authMode === "multi-user") {
+    const token = String(config.accessToken || "").trim()
+    if (!token) {
+      throw new Error("Not authenticated. Please login under Settings > tldw.")
+    }
+    headers["Authorization"] = `Bearer ${token}`
+    return
+  }
+  const key = String(config.apiKey || "").trim()
+  if (!key) {
+    throw new Error(
+      "Add or update your API key in Settings -> tldw server, then try again."
+    )
+  }
+  if (isPlaceholderApiKey(key)) {
+    throw new Error(
+      "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings -> tldw server before continuing."
+    )
+  }
+  headers["X-API-KEY"] = key
+}
+
+const isBinaryBody = (value: any): boolean => {
+  if (!value || typeof value !== "object") return false
+  if (typeof FormData !== "undefined" && value instanceof FormData) return true
+  if (typeof Blob !== "undefined" && value instanceof Blob) return true
+  if (typeof URLSearchParams !== "undefined" && value instanceof URLSearchParams)
+    return true
+  if (typeof ArrayBuffer !== "undefined") {
+    if (value instanceof ArrayBuffer) return true
+    if (ArrayBuffer.isView?.(value)) return true
+  }
+  return false
 }
 
 export interface BgRequestInit<
@@ -164,7 +230,7 @@ export async function bgRequest<
 
   // If extension messaging is available, use it (extension context)
   try {
-    if (browser?.runtime?.sendMessage) {
+    if (browser?.runtime?.sendMessage && hasExtensionRuntime()) {
       const payload = {
         type: 'tldw:request',
         payload: {
@@ -329,6 +395,129 @@ export async function* bgStream<
 >(
   { path, method = 'POST' as UpperLower<M>, headers = {}, body, streamIdleTimeoutMs, abortSignal }: BgStreamInit<P, M>
 ): AsyncGenerator<string> {
+  if (!hasExtensionRuntime()) {
+    const { url, config } = await resolveWebRequestUrl(path)
+    const resolvedHeaders: Record<string, string> = { ...(headers || {}) }
+    applyAuthHeaders(resolvedHeaders, config)
+    const hasContentType = Object.keys(resolvedHeaders).some(
+      (key) => key.toLowerCase() === "content-type"
+    )
+    const resolvedBody =
+      body == null
+        ? undefined
+        : typeof body === "string" || isBinaryBody(body)
+          ? body
+          : JSON.stringify(body)
+    if (body != null && !hasContentType && !isBinaryBody(body)) {
+      resolvedHeaders["Content-Type"] = "application/json"
+    }
+
+    const controller = new AbortController()
+    const onAbort = () => {
+      try {
+        controller.abort()
+      } catch {}
+    }
+    if (abortSignal) {
+      if (abortSignal.aborted) onAbort()
+      else abortSignal.addEventListener("abort", onAbort, { once: true })
+    }
+
+    let idleTimeoutId: ReturnType<typeof setTimeout> | null = null
+    const resetIdleTimeout = () => {
+      if (!streamIdleTimeoutMs || streamIdleTimeoutMs <= 0) return
+      if (idleTimeoutId) clearTimeout(idleTimeoutId)
+      idleTimeoutId = setTimeout(() => {
+        try {
+          controller.abort()
+        } catch {}
+      }, streamIdleTimeoutMs)
+    }
+
+    try {
+      const resp = await fetch(url, {
+        method,
+        headers: resolvedHeaders,
+        body: resolvedBody as any,
+        signal: controller.signal
+      })
+
+      if (!resp.ok) {
+        let errorBody: any = null
+        try {
+          const raw = await resp.text()
+          try {
+            errorBody = JSON.parse(raw)
+          } catch {
+            errorBody = raw
+          }
+        } catch {
+          errorBody = null
+        }
+        const detail =
+          typeof errorBody === "object" &&
+          errorBody &&
+          (errorBody.detail || errorBody.error || errorBody.message)
+        const msg = formatErrorMessage(
+          typeof detail !== "undefined" ? detail : errorBody,
+          `Request failed: ${resp.status}`
+        )
+        const error = new Error(`${msg} (${method} ${path})`) as Error & {
+          status?: number
+        }
+        error.status = resp.status
+        throw error
+      }
+
+      const reader = resp.body?.getReader()
+      if (!reader) {
+        throw new Error("Stream response has no body.")
+      }
+      const decoder = new TextDecoder()
+      let buffer = ""
+      resetIdleTimeout()
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        if (value) {
+          resetIdleTimeout()
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split(/\r?\n/)
+          buffer = lines.pop() ?? ""
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed) continue
+            if (trimmed.startsWith("event:")) continue
+            const normalized = trimmed.startsWith("data:")
+              ? trimmed.slice(5).trim()
+              : trimmed
+            if (!normalized || normalized === "[DONE]") continue
+            yield normalized
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        const normalized = buffer.trim().startsWith("data:")
+          ? buffer.trim().slice(5).trim()
+          : buffer.trim()
+        if (normalized && normalized !== "[DONE]") {
+          yield normalized
+        }
+      }
+    } finally {
+      if (idleTimeoutId) clearTimeout(idleTimeoutId)
+      if (abortSignal) {
+        try {
+          abortSignal.removeEventListener("abort", onAbort)
+        } catch {}
+      }
+    }
+
+    return
+  }
+
   const port = browser.runtime.connect({ name: 'tldw:stream' })
   const encoder = new TextEncoder()
   const queue: string[] = []
@@ -404,23 +593,67 @@ export interface BgUploadInit<P extends AllowedPath = AllowedPath, M extends All
 export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
   { path, method = 'POST' as UpperLower<M>, fields = {}, file, fileFieldName }: BgUploadInit<P, M>
 ): Promise<T> {
-  const resp = await browser.runtime.sendMessage({
-    type: 'tldw:upload',
-    payload: { path, method, fields, file, fileFieldName }
-  }) as { ok: boolean; error?: string; status?: number; data: T } | undefined
-  if (!resp?.ok) {
+  if (browser?.runtime?.sendMessage && hasExtensionRuntime()) {
+    const resp = await browser.runtime.sendMessage({
+      type: 'tldw:upload',
+      payload: { path, method, fields, file, fileFieldName }
+    }) as { ok: boolean; error?: string; status?: number; data: T } | undefined
+    if (!resp?.ok) {
+      const msg = formatErrorMessage(
+        resp?.error,
+        `Upload failed: ${resp?.status}`
+      )
+      const error = new Error(msg) as Error & { status?: number; details?: unknown }
+      error.status = resp?.status
+      if (typeof resp?.data !== "undefined") {
+        error.details = sanitizeResponseData(resp.data)
+      }
+      throw error
+    }
+    return resp.data as T
+  }
+
+  const { url, config } = await resolveWebRequestUrl(path)
+  const resolvedHeaders: Record<string, string> = {}
+  applyAuthHeaders(resolvedHeaders, config)
+
+  const form = new FormData()
+  Object.entries(fields || {}).forEach(([key, value]) => {
+    if (typeof value === "undefined" || value === null) return
+    form.append(key, String(value))
+  })
+  if (file) {
+    const blob = new Blob([file.data], {
+      type: file.type || "application/octet-stream"
+    })
+    form.append(fileFieldName || "file", blob, file.name || "upload")
+  }
+
+  const resp = await fetch(url, {
+    method,
+    headers: resolvedHeaders,
+    body: form
+  })
+
+  const contentType = resp.headers.get("content-type") || ""
+  const data = contentType.includes("application/json")
+    ? await resp.json().catch(() => null)
+    : await resp.text().catch(() => null)
+
+  if (!resp.ok) {
     const msg = formatErrorMessage(
-      resp?.error,
-      `Upload failed: ${resp?.status}`
+      data,
+      `Upload failed: ${resp.status}`
     )
     const error = new Error(msg) as Error & { status?: number; details?: unknown }
-    error.status = resp?.status
-    if (typeof resp?.data !== "undefined") {
-      error.details = sanitizeResponseData(resp.data)
+    error.status = resp.status
+    if (typeof data !== "undefined") {
+      error.details = sanitizeResponseData(data)
     }
     throw error
   }
-  return resp.data as T
+
+  return data as T
 }
 
 export async function bgRequestValidated<

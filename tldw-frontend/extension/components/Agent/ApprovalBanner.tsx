@@ -114,6 +114,10 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
   onToggleExpanded
 }) => {
   const { t } = useTranslation("common")
+  const pendingApprovals = useMemo(
+    () => approvals.filter((approval) => approval.status === "pending"),
+    [approvals]
+  )
 
   // Group approvals by category
   const categories = useMemo(() => {
@@ -127,7 +131,7 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
       other: []
     }
 
-    for (const approval of approvals) {
+    for (const approval of pendingApprovals) {
       groups[getToolCategory(approval.toolName)].push(approval)
     }
 
@@ -201,12 +205,12 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
     }
 
     return result
-  }, [approvals, t])
-  const allIds = useMemo(() => approvals.map(a => a.toolCallId), [approvals])
-  const pendingCount = useMemo(
-    () => approvals.filter(a => a.status === "pending").length,
-    [approvals]
+  }, [pendingApprovals, t])
+  const allIds = useMemo(
+    () => pendingApprovals.map((approval) => approval.toolCallId),
+    [pendingApprovals]
   )
+  const pendingCount = pendingApprovals.length
 
   // Confirm before rejecting all pending actions
   const handleRejectAll = useCallback(() => {
@@ -225,12 +229,12 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
   }, [t, pendingCount, onReject, allIds])
 
   // Nothing to approve
-  if (approvals.length === 0) {
+  if (pendingApprovals.length === 0) {
     return null
   }
 
-    return (
-      <div
+  return (
+    <div
       className={`border-t border-warn/30 bg-warn/10 ${className}`}
       role="region"
       aria-label={t("pendingApprovalsRegion", "Pending approvals requiring your action")}
@@ -254,14 +258,14 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
 
             {/* Category badges */}
             <div className="flex items-center gap-1.5">
-              {categories.map((cat, idx) => {
+              {categories.map((cat) => {
                 const Icon = cat.icon
                 const tooltipLabel =
                   typeof cat.label === "string"
                     ? cat.label.toLowerCase()
                     : String(cat.label).toLowerCase()
                 return (
-                  <Tooltip key={idx} title={`${cat.approvals.length} ${tooltipLabel}`}>
+                  <Tooltip key={cat.key} title={`${cat.approvals.length} ${tooltipLabel}`}>
                     <span className={`flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-xs ${cat.color}`}>
                       <Icon className="size-3" />
                       {cat.approvals.length}
@@ -322,7 +326,7 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
       {/* Expanded view with individual items */}
       {expanded && (
         <div className="max-h-48 space-y-2 overflow-y-auto border-t border-warn/30 px-4 py-2">
-          {approvals.map((approval) => {
+          {pendingApprovals.map((approval) => {
             const Icon = getToolIcon(approval.toolName)
             const isRisky = approval.tier === "individual"
 

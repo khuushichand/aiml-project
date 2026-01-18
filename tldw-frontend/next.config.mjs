@@ -7,15 +7,20 @@ const __dirname = path.dirname(__filename);
 
 const nextConfig = {
   reactStrictMode: true,
-  experimental: {
-    reactCompiler: false,
+  reactCompiler: false,
+  turbopack: {
+    // Keep Turbopack aliases aligned with extension shims.
+    resolveAlias: {
+      '@': './extension',
+      '~': './extension',
+      'react-router-dom': './extension/shims/react-router-dom.tsx',
+      '@plasmohq/storage': './extension/shims/plasmo-storage.ts',
+      '@plasmohq/storage/hook': './extension/shims/plasmo-storage-hook.tsx',
+      'wxt/browser': './extension/shims/wxt-browser.ts',
+    },
   },
   // Ensure Next resolves the correct monorepo root when multiple lockfiles exist.
   outputFileTracingRoot: path.resolve(__dirname, '..'),
-  eslint: {
-    // Enforce ESLint during builds so lint failures block deployments.
-    ignoreDuringBuilds: false,
-  },
   webpack: (config) => {
     // Support extension-aligned aliases + shims
     config.resolve.alias['@'] = path.resolve(__dirname, 'extension');

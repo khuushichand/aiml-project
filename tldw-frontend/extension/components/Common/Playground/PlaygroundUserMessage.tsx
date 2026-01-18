@@ -256,7 +256,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
           <div className="w-screen max-w-[100%]">
             <EditMessageForm
               value={props.message}
-              onSumbit={props.onEditFormSubmit}
+              onSubmit={props.onEditFormSubmit}
               onClose={() => setEditMode(false)}
               isBot={props.isBot}
             />

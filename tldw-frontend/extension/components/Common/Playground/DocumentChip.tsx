@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useEffect, useState } from "react"
 import { Globe, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { translateMessage } from "@/i18n/translateMessage"
@@ -32,6 +32,9 @@ export const DocumentChip: React.FC<DocumentChipProps> = ({
 }) => {
   const { t } = useTranslation("option")
   const [imgError, setImgError] = useState(false)
+  useEffect(() => {
+    setImgError(false)
+  }, [document.favIconUrl, document.id])
   const isCompact = variant === "compact"
   const canRemove =
     typeof onRemove === "function" && typeof document.id === "number"

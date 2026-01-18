@@ -73,7 +73,12 @@ export function ChatSidebar({
   // Folder conversation count for tab badge
   const conversationKeywordLinks = useFolderStore((s) => s.conversationKeywordLinks)
   const folderConversationCount = useMemo(
-    () => new Set(conversationKeywordLinks.map((link) => link.conversation_id)).size,
+    () =>
+      new Set(
+        conversationKeywordLinks
+          .map((link) => link.conversation_id)
+          .filter((id): id is string => Boolean(id))
+      ).size,
     [conversationKeywordLinks]
   )
 

@@ -35,10 +35,57 @@ const resolveMermaidTheme = () => {
   return "default"
 }
 
+const useMermaidTheme = () => {
+  const [theme, setTheme] = useState<string>(() => resolveMermaidTheme())
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return
+    }
+
+    const updateTheme = () => {
+      setTheme(resolveMermaidTheme())
+    }
+
+    updateTheme()
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)")
+    const handleMediaChange = () => {
+      updateTheme()
+    }
+
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener("change", handleMediaChange)
+    } else {
+      mediaQuery.addListener(handleMediaChange)
+    }
+
+    const observer = new MutationObserver(() => {
+      updateTheme()
+    })
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"]
+    })
+
+    return () => {
+      observer.disconnect()
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener("change", handleMediaChange)
+      } else {
+        mediaQuery.removeListener(handleMediaChange)
+      }
+    }
+  }, [])
+
+  return theme
+}
+
 export const Mermaid: React.FC<MermaidProps> = ({ code, className }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [error, setError] = useState<string | null>(null)
   const renderIdRef = useRef(0)
+  const theme = useMermaidTheme()
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -48,14 +95,16 @@ export const Mermaid: React.FC<MermaidProps> = ({ code, className }) => {
     let active = true
     const renderDiagram = async () => {
       if (!code?.trim()) {
+        if (containerRef.current) {
+          containerRef.current.textContent = ""
+        }
+        setError(null)
         return
       }
 
       try {
         const mermaidModule = await import("mermaid")
         const mermaid = mermaidModule.default
-        const theme = resolveMermaidTheme()
-
         mermaid.initialize({
           startOnLoad: false,
           theme,
@@ -86,7 +135,7 @@ export const Mermaid: React.FC<MermaidProps> = ({ code, className }) => {
     return () => {
       active = false
     }
-  }, [code])
+  }, [code, theme])
 
   if (typeof window === "undefined") {
     return (

@@ -1,13 +1,13 @@
 # Extension Frontend Migration Map (Stage 1)
 
 ## Source references
-- `/Users/macbook-dev/Documents/GitHub/custom-extension/src/routes/route-registry.tsx`
-- `/Users/macbook-dev/Documents/GitHub/custom-extension/src/routes/*`
-- `/Users/macbook-dev/Documents/GitHub/custom-extension/src/entries/background.ts`
-- `/Users/macbook-dev/Documents/GitHub/custom-extension/src/entries/shared/background-init.ts`
-- `/Users/macbook-dev/Documents/GitHub/custom-extension/src/entries/hf-pull.content.ts`
-- `/Users/macbook-dev/Documents/GitHub/custom-extension/tailwind.config.js`
-- `/Users/macbook-dev/Documents/GitHub/custom-extension/package.json`
+- `src/routes/route-registry.tsx`
+- `src/routes/*`
+- `src/entries/background.ts`
+- `src/entries/shared/background-init.ts`
+- `src/entries/hf-pull.content.ts`
+- `tailwind.config.js`
+- `package.json`
 - `pages/*` in `tldw-frontend`
 
 ## Extension route inventory (options)
@@ -166,7 +166,7 @@ Version conflicts to resolve
 - React version alignment (extension `18.2`, frontend `18.3`).
 
 ## Styling + assets to migrate
-- Tailwind tokens from `/Users/macbook-dev/Documents/GitHub/custom-extension/tailwind.config.js`.
-- CSS variables and token files in `/Users/macbook-dev/Documents/GitHub/custom-extension/src/styles/`.
+- Tailwind tokens from `<extension-repo>/tailwind.config.js`.
+- CSS variables and token files in `<extension-repo>/src/styles/`.
 - Fonts referenced in Tailwind config (Space Grotesk, Inter, Arimo).
-- Icons and static assets in `/Users/macbook-dev/Documents/GitHub/custom-extension/src/public` (exclude `_locales`).
+- Icons and static assets in `<extension-repo>/src/public` (exclude `_locales`).

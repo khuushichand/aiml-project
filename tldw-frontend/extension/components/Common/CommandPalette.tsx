@@ -82,6 +82,7 @@ export function CommandPalette({
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
   const navigate = useNavigate()
   const { t } = useTranslation(["common", "settings"])
   const isSidepanel = scope === "sidepanel"
@@ -364,11 +365,18 @@ export function CommandPalette({
 
   // Focus input when opened
   useEffect(() => {
-    if (open) {
-      setQuery("")
-      setSelectedIndex(0)
-      setTimeout(() => inputRef.current?.focus(), 0)
+    if (!open) {
+      const previousFocus = previousFocusRef.current
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus()
+      }
+      previousFocusRef.current = null
+      return
     }
+    previousFocusRef.current = document.activeElement as HTMLElement | null
+    setQuery("")
+    setSelectedIndex(0)
+    setTimeout(() => inputRef.current?.focus(), 0)
   }, [open])
 
   // Scroll selected item into view
@@ -422,10 +430,12 @@ export function CommandPalette({
 
     switch (e.key) {
       case "ArrowDown":
+        if (filteredCommands.length === 0) return
         e.preventDefault()
         setSelectedIndex((i) => Math.min(i + 1, filteredCommands.length - 1))
         break
       case "ArrowUp":
+        if (filteredCommands.length === 0) return
         e.preventDefault()
         setSelectedIndex((i) => Math.max(i - 1, 0))
         break

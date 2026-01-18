@@ -155,6 +155,8 @@ const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
 
+const ERROR_BOUNDARY_TEST_ENABLED = process.env.NODE_ENV !== "production"
+
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/", element: <OptionIndex /> },
   {
@@ -531,12 +533,16 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     targets: ALL_TARGETS
   },
   { kind: "sidepanel", path: "/settings", element: <SidepanelSettings /> },
-  {
-    kind: "sidepanel",
-    path: "/error-boundary-test",
-    element: <SidepanelErrorBoundaryTest />,
-    targets: ALL_TARGETS
-  }
+  ...(ERROR_BOUNDARY_TEST_ENABLED
+    ? [
+        {
+          kind: "sidepanel",
+          path: "/error-boundary-test",
+          element: <SidepanelErrorBoundaryTest />,
+          targets: ALL_TARGETS
+        }
+      ]
+    : [])
 ]
 
 export const optionRoutes = ROUTE_DEFINITIONS.filter(

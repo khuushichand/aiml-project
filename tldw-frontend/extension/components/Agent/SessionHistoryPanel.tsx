@@ -103,7 +103,6 @@ export const SessionHistoryPanel: FC<SessionHistoryPanelProps> = ({
   className = ""
 }) => {
   const { t } = useTranslation("common")
-  const translateStatus = (key: string, defaultValue: string) => t(key, defaultValue)
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   // Sort sessions by updatedAt descending
@@ -181,7 +180,7 @@ export const SessionHistoryPanel: FC<SessionHistoryPanelProps> = ({
                     <span className="font-medium text-sm truncate">
                       {session.title || session.task.substring(0, 50)}
                     </span>
-                    <StatusBadge status={session.status} t={translateStatus} />
+                    <StatusBadge status={session.status} t={t} />
                   </div>
 
                   <div className="flex items-center gap-3 text-xs text-text-subtle">

@@ -1,30 +1,12 @@
+import React from "react"
 import { KnowledgeIcon } from "@/components/Option/Knowledge/KnowledgeIcon"
 import { useTranslation } from "react-i18next"
+import type { Source } from "./types"
 
 type Props = {
-  source: {
-    name?: string
-    url?: string
-    mode?: string
-    type?: string
-    pageContent?: string
-    content?: string
-    text?: string
-    snippet?: string
-    metadata?: {
-      source?: string
-      title?: string
-      page?: number
-      loc?: {
-        lines?: {
-          from?: number
-          to?: number
-        }
-      }
-    }
-  }
-  onSourceClick?: (source: any) => void
-  onSourceNavigate?: (source: any) => void
+  source: Source
+  onSourceClick?: (source: Source) => void
+  onSourceNavigate?: (source: Source) => void
 }
 
 export const MessageSource: React.FC<Props> = ({

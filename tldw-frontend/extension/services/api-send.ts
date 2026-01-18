@@ -26,9 +26,12 @@ export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extend
   payload: ApiSendPayload<P, M>
 ): Promise<ApiSendResponse<T>> {
   try {
-    if (browser?.runtime?.sendMessage) {
+    const hasRuntimeId = Boolean(browser?.runtime?.id)
+    if (browser?.runtime?.sendMessage && hasRuntimeId) {
       const resp = await browser.runtime.sendMessage({ type: 'tldw:request', payload })
-      return resp as unknown as ApiSendResponse<T>
+      if (resp) {
+        return resp as unknown as ApiSendResponse<T>
+      }
     }
   } catch {
     // fall through to direct request

@@ -4,12 +4,6 @@
   font-display: swap;
 }
 
-.arimo {
-  font-family: "Arimo", sans-serif;
-  font-weight: 500;
-  font-style: normal;
-}
-
 @font-face {
   font-family: "Inter";
   src: url("fonts/Inter-Regular.ttf") format("truetype");
@@ -45,6 +39,16 @@
   font-style: normal;
   font-weight: 600;
   font-display: swap;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.arimo {
+  font-family: "Arimo", sans-serif;
+  font-weight: 500;
+  font-style: normal;
 }
 
 :root {
@@ -93,10 +97,6 @@ body {
   color: var(--color-text);
   font-family: "Arimo", "Inter", system-ui, -apple-system, sans-serif;
 }
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
 
 /* Simple fade-in animation for filter chips */
 @keyframes chip-in {
@@ -297,19 +297,19 @@ body {
 }
 
 .focus-ring:focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
   border-radius: 8px;
 }
 
 .focus-ring.ant-switch:focus-visible {
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 35%, transparent);
 }
 
 .focus-ring.ant-select-focused .ant-select-selector,
 .focus-ring .ant-select-selector:focus-visible {
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35) !important;
-  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 35%, transparent) !important;
+  border-color: var(--color-focus) !important;
   border-radius: 8px !important;
 }
 
@@ -359,40 +359,48 @@ body {
 
 @keyframes gradient-border {
   0% {
-    border-image-source: linear-gradient(
-      45deg,
-      #f79533,
-      #f37055,
-      #ef4e7b,
-      #a166ab
-    );
+    background-position: 0% 50%;
   }
   50% {
-    border-image-source: linear-gradient(45deg, #ef4e7b, #a166ab);
-  }
-  74% {
-    border-image-source: linear-gradient(60deg, #5073b8, #1098ad);
+    background-position: 100% 50%;
   }
   100% {
-    border-image-source: linear-gradient(
-      45deg,
-      #f79533,
-      #f37055,
-      #ef4e7b,
-      #a166ab
-    );
+    background-position: 0% 50%;
   }
 }
 
 .animated-gradient-border {
-  border: 3px solid;
-  border-image-slice: 1;
-  animation: gradient-border 3s infinite;
+  position: relative;
+  border: 3px solid transparent;
   border-radius: 10px;
+}
+
+.animated-gradient-border::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 3px;
+  background: linear-gradient(
+    45deg,
+    #f79533,
+    #f37055,
+    #ef4e7b,
+    #a166ab,
+    #5073b8,
+    #1098ad
+  );
+  background-size: 300% 300%;
+  animation: gradient-border 3s ease infinite;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
 }
 /* Hide scrollbar by default */
 .custom-scrollbar {
-  scrollbar-width: none;
   -ms-overflow-style: none;
 }
 
@@ -402,7 +410,6 @@ body {
 
 /* Show scrollbar on hover */
 .custom-scrollbar:hover {
-  scrollbar-width: thin;
   -ms-overflow-style: auto;
 }
 
@@ -427,14 +434,16 @@ body {
   @apply bg-border-strong;
 }
 
-/* For Firefox */
-.custom-scrollbar {
-  scrollbar-color: var(--color-border) var(--color-surface-2);
-  scrollbar-width: thin;
-}
+/* Firefox: scrollbar-width can't toggle on hover, so keep it always thin. */
+@supports not selector(::-webkit-scrollbar) {
+  .custom-scrollbar {
+    scrollbar-color: var(--color-border) var(--color-surface-2);
+    scrollbar-width: thin;
+  }
 
-.dark .custom-scrollbar {
-  scrollbar-color: #404040 #262626;
+  .dark .custom-scrollbar {
+    scrollbar-color: var(--color-border) var(--color-surface-2);
+  }
 }
 
 @keyframes shimmer-text {

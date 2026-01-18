@@ -906,7 +906,7 @@ export const PlaygroundMessage = (props: Props) => {
             ) : (
               <EditMessageForm
                 value={props.message}
-                onSumbit={props.onEditFormSubmit}
+                onSubmit={props.onEditFormSubmit}
                 onClose={() => setEditMode(false)}
                 isBot={props.isBot}
               />

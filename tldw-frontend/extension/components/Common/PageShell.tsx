@@ -17,10 +17,9 @@ export const PageShell: React.FC<PageShellProps> = ({
       className={classNames(
         "w-full mx-auto px-4 sm:px-6 lg:px-8",
         maxWidthClassName,
-        className || ""
+        className
       )}>
       {children}
     </div>
   )
 }
-

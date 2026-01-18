@@ -83,7 +83,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
         </div>
       )
       const item = {
-        key: d.name,
+        key: d.model,
         label: labelNode,
         onClick: () => {
           if (selectedModel === d.model) {

@@ -183,7 +183,7 @@ const formatFullArgs = (
 
 // Format result for display (compact preview)
 const formatResult = (result: unknown): string => {
-  if (!result) return ""
+  if (result == null) return ""
 
   try {
     if (typeof result === "string") {
@@ -318,7 +318,11 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
   // Auto-scroll to bottom
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      const el = scrollRef.current
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
+      if (isNearBottom) {
+        el.scrollTop = el.scrollHeight
+      }
     }
   }, [entries, autoScroll])
 
@@ -351,7 +355,7 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
               aria-expanded={onToggleExpand ? isExpanded : undefined}
               aria-label={`${getToolDisplayName(entry.toolCall.function.name)} - ${getStatusLabel(entry.status, t)}`}
               disabled={!onToggleExpand}
-              className="w-full rounded-lg px-3 py-2 text-left transition-colors hover:bg-surface"
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-surface"
             >
               {/* Expand/collapse toggle */}
               {onToggleExpand && (

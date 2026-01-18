@@ -73,13 +73,13 @@ export function ServerChatList({
     setServerChatVersion,
     setServerChatTopic
   } = useStoreMessageOption(
-    (state: MessageOptionState) => ({
+    useShallow((state: MessageOptionState) => ({
       serverChatId: state.serverChatId,
       setServerChatTitle: state.setServerChatTitle,
       setServerChatState: state.setServerChatState,
       setServerChatVersion: state.setServerChatVersion,
       setServerChatTopic: state.setServerChatTopic
-    })
+    }))
   )
   const selectServerChat = useSelectServerChat()
   const clearChat = useClearChat()

@@ -294,7 +294,12 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
   }, [conversationId, ensureTldwClient, t])
 
   React.useEffect(() => {
-    if (!open || !conversationId) return
+    if (!open || !conversationId) {
+      setDocuments([])
+      setJobs([])
+      setActiveDoc(null)
+      return
+    }
     void refreshDocuments()
   }, [open, conversationId, refreshDocuments])
 

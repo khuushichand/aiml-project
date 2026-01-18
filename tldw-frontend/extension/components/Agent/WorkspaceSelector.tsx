@@ -2,9 +2,10 @@
  * WorkspaceSelector - Select and manage workspace directories
  */
 
-import { FC, useState, useEffect, useRef } from "react"
+import { FC, useState, useEffect, useRef, useCallback } from "react"
 import { useTranslation } from "react-i18next"
-import { Dropdown, Modal, Input, message, Divider } from "antd"
+import { Dropdown, Modal, Input, message } from "antd"
+import type { MenuProps } from "antd"
 import {
   FolderOpen,
   ChevronDown,
@@ -17,6 +18,7 @@ import {
 import { useStorage } from "@plasmohq/storage/hook"
 import * as nativeClient from "@/services/native/native-client"
 import { useWorkspaceHistory, useAutoSelectWorkspace } from "@/hooks/useWorkspaceHistory"
+import { formatRelativeTime } from "@/utils/dateFormatters"
 
 export interface Workspace {
   id: string
@@ -93,18 +95,8 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
     callbackRef.current?.(selectedWorkspace)
   }, [selectedWorkspace])
 
-  // Auto-select last used workspace on mount
-  useAutoSelectWorkspace(
-    workspaces || [],
-    resolvedSelectedId,
-    // Auto-select callback always uses latest handleSelect
-    (workspace: Workspace) => {
-      handleSelect(workspace)
-    }
-  )
-
   // Handle workspace selection
-  const handleSelect = async (workspace: Workspace) => {
+  const handleSelect = useCallback(async (workspace: Workspace) => {
     setIsSelecting(true)
     try {
       // Set workspace in native agent
@@ -126,7 +118,22 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
     } finally {
       setIsSelecting(false)
     }
-  }
+  }, [recordUsage, setSelectedId, t])
+
+  const handleAutoSelect = useCallback(
+    (workspace: Workspace) => {
+      handleSelect(workspace)
+    },
+    [handleSelect]
+  )
+
+  // Auto-select last used workspace on mount
+  useAutoSelectWorkspace(
+    workspaces || [],
+    resolvedSelectedId,
+    // Auto-select callback always uses latest handleSelect
+    handleAutoSelect
+  )
 
   // Handle adding new workspace
   const handleAddWorkspace = async () => {
@@ -145,8 +152,10 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
       }
 
       // Add to list
+      const fallbackId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+      const generatedId = globalThis.crypto?.randomUUID?.() ?? fallbackId
       const workspace: Workspace = {
-        id: (crypto as any)?.randomUUID?.() || Math.random().toString(36).slice(2),
+        id: generatedId,
         name: newName.trim() || (newPath.split(/[/\\]/).pop() || t("workspace", "Workspace")),
         path: newPath.trim()
       }
@@ -213,27 +222,35 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
     )
   }
 
-  // Format relative time for recent workspaces
-  const formatRelativeTime = (isoString: string): string => {
-    const date = new Date(isoString)
-    const now = new Date()
-    const diffMs = now.getTime() - date.getTime()
-    const diffMins = Math.floor(diffMs / (1000 * 60))
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-    if (diffMins < 1) return t("justNow", "Just now")
-    if (diffMins < 60) return `${diffMins}m ${t("ago", "ago")}`
-    if (diffHours < 24) return `${diffHours}h ${t("ago", "ago")}`
-    if (diffDays < 7) return `${diffDays}d ${t("ago", "ago")}`
-    return date.toLocaleDateString()
-  }
-
   // Build menu items with recent workspaces section
-  const menuItems = []
+  const menuItems: MenuProps["items"] = []
 
   // Recent workspaces section (if any)
-  if (recentWorkspaces.length > 0) {
+  const recentItems = recentWorkspaces.slice(0, 3).flatMap(recent => {
+    const ws = workspaces?.find(w => w.id === recent.workspaceId)
+    if (!ws) return []
+    return [
+      {
+        key: `recent-${ws.id}`,
+        label: (
+          <div className="flex items-center justify-between gap-3 py-1">
+            <div className="flex flex-col min-w-0">
+              <span className="font-medium truncate">{ws.name}</span>
+              <span className="text-xs text-text-subtle">
+                {formatRelativeTime(recent.lastUsedAt, t)}
+              </span>
+            </div>
+            {ws.id === selectedId && (
+              <Check className="size-4 flex-shrink-0 text-success" />
+            )}
+          </div>
+        ),
+        onClick: () => handleSelect(ws)
+      }
+    ]
+  })
+
+  if (recentItems.length > 0) {
     menuItems.push({
       key: "recent-header",
       type: "group" as const,
@@ -243,27 +260,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
           {t("recent", "Recent")}
         </div>
       ),
-      children: recentWorkspaces.slice(0, 3).map(recent => {
-        const ws = workspaces?.find(w => w.id === recent.workspaceId)
-        if (!ws) return null
-        return {
-          key: `recent-${ws.id}`,
-          label: (
-            <div className="flex items-center justify-between gap-3 py-1">
-              <div className="flex flex-col min-w-0">
-                <span className="font-medium truncate">{ws.name}</span>
-                <span className="text-xs text-text-subtle">
-                  {formatRelativeTime(recent.lastUsedAt)}
-                </span>
-              </div>
-              {ws.id === selectedId && (
-                <Check className="size-4 flex-shrink-0 text-success" />
-              )}
-            </div>
-          ),
-          onClick: () => handleSelect(ws)
-        }
-      }).filter(Boolean)
+      children: recentItems
     })
 
     menuItems.push({ type: "divider" as const, key: "recent-divider" })

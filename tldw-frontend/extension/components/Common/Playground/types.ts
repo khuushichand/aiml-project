@@ -6,9 +6,21 @@ export interface Source {
   content?: string
   pageContent?: string
   snippet?: string
+  text?: string
   score?: number
   mode?: string
   type?: string
+  metadata?: {
+    source?: string
+    title?: string
+    page?: number
+    loc?: {
+      lines?: {
+        from?: number
+        to?: number
+      }
+    }
+  }
   /**
    * Additional provider-specific metadata.
    */
@@ -29,4 +41,3 @@ export interface GenerationInfo {
    */
   [key: string]: unknown
 }
-

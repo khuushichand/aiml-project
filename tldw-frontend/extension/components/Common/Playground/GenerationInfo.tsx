@@ -4,32 +4,43 @@ type Props = {
   generationInfo?: GenerationInfoType
 }
 
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value)
+
+const calculateTokensPerSecond = (
+  evalCount?: number,
+  evalDuration?: number
+) => {
+  if (!isFiniteNumber(evalCount) || !isFiniteNumber(evalDuration)) return 0
+  if (evalDuration <= 0) return 0
+  return (evalCount / evalDuration) * 1e9
+}
+
+const formatDuration = (nanoseconds?: number) => {
+  if (!isFiniteNumber(nanoseconds)) return "0ms"
+  const ms = nanoseconds / 1e6
+  if (ms < 1) return `${ms.toFixed(3)}ms`
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(2)}s`
+}
+
 export const GenerationInfo = ({ generationInfo }: Props) => {
   if (!generationInfo) return null
 
-  const calculateTokensPerSecond = (
-    evalCount?: number,
-    evalDuration?: number
-  ) => {
-    if (!evalCount || !evalDuration) return 0
-    return (evalCount / evalDuration) * 1e9
-  }
-
-  const formatDuration = (nanoseconds?: number) => {
-    if (!nanoseconds) return "0ms"
-    const ms = nanoseconds / 1e6
-    if (ms < 1) return `${ms.toFixed(3)}ms`
-    if (ms < 1000) return `${Math.round(ms)}ms`
-    return `${(ms / 1000).toFixed(2)}s`
-  }
+  const evalCount = generationInfo.eval_count
+  const evalDuration = generationInfo.eval_duration
+  const shouldShowTokensPerSecond =
+    isFiniteNumber(evalCount) &&
+    isFiniteNumber(evalDuration) &&
+    evalDuration > 0
 
   const metricsToDisplay = {
     ...generationInfo,
-    ...(generationInfo?.eval_count && generationInfo?.eval_duration
+    ...(shouldShowTokensPerSecond
       ? {
           tokens_per_second: calculateTokensPerSecond(
-            generationInfo.eval_count,
-            generationInfo.eval_duration
+            evalCount,
+            evalDuration
           ).toFixed(2)
         }
       : {})
@@ -44,8 +55,8 @@ export const GenerationInfo = ({ generationInfo }: Props) => {
             <div key={key} className="flex flex-wrap justify-between">
               <div className="font-medium text-xs">{key}</div>
               <div className="font-medium text-xs break-all">
-                {key.includes("duration")
-                  ? formatDuration(value as number)
+                {key.includes("duration") && isFiniteNumber(value)
+                  ? formatDuration(value)
                   : String(value)}
               </div>
             </div>

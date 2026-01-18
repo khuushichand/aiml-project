@@ -407,7 +407,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
                     title="Preview"
                     srcDoc={buildPreviewDoc()}
                     className="w-full h-full border-0"
-                    sandbox="allow-scripts allow-same-origin"
+                    sandbox=""
                   />
                 </div>
               )}

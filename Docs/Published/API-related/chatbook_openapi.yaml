@@ -503,6 +503,7 @@ components:
           default: true
         tags:
           type: array
+          maxItems: 50
           items:
             type: string
           example: ["backup", "weekly"]

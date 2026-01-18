@@ -1,8 +1,10 @@
+import React from "react"
 import { KnowledgeIcon } from "@/components/Option/Knowledge/KnowledgeIcon"
 import { Modal } from "antd"
+import type { Source } from "./types"
 
 type Props = {
-  source: any
+  source: Source | null
   open: boolean
   setOpen: (open: boolean) => void
 }
@@ -15,8 +17,6 @@ export const MessageSourcePopup: React.FC<Props> = ({
   return (
     <Modal
       open={open}
-      // mask={false}
-      zIndex={10000}
       onCancel={() => setOpen(false)}
       footer={null}
       onOk={() => setOpen(false)}>

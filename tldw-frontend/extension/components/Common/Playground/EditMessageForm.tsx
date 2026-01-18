@@ -6,7 +6,7 @@ import { useSimpleForm } from "@/hooks/useSimpleForm"
 
 type Props = {
   value: string
-  onSumbit: (value: string, isSend: boolean) => void
+  onSubmit: (value: string, isSend: boolean) => void
   onClose: () => void
   isBot: boolean
 }
@@ -25,7 +25,7 @@ export const EditMessageForm = (props: Props) => {
 
   React.useEffect(() => {
     form.setFieldValue("message", props.value)
-  }, [props.value])
+  }, [props.value, form])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Escape") {
@@ -39,7 +39,7 @@ export const EditMessageForm = (props: Props) => {
       onSubmit={form.onSubmit((data) => {
         if (isComposing) return
         props.onClose()
-        props.onSumbit(data.message, true)
+        props.onSubmit(data.message, true)
       })}
       className="flex flex-col gap-2">
       <textarea
@@ -72,7 +72,7 @@ export const EditMessageForm = (props: Props) => {
             <button
               type="button"
               onClick={() => {
-                props.onSumbit(form.values.message, false)
+                props.onSubmit(form.values.message, false)
                 props.onClose()
               }}
               aria-label={t("save")}
@@ -90,6 +90,7 @@ export const EditMessageForm = (props: Props) => {
             </button>
 
             <button
+              type="button"
               onClick={props.onClose}
               aria-label={t("cancel")}
               title={t("cancel")}
@@ -98,7 +99,7 @@ export const EditMessageForm = (props: Props) => {
             </button>
           </div>
         </div>
-      </div>{" "}
+      </div>
     </form>
   )
 }

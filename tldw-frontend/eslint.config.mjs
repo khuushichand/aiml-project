@@ -13,24 +13,21 @@ const stripConfigs = (plugin) => {
 const nextRules = nextPlugin.configs["core-web-vitals"]?.rules ?? {}
 const reactHooksRules = reactHooks.configs.recommended?.rules ?? {}
 const tsRules = tsPlugin.configs.recommended?.rules ?? {}
+const codeFiles = ["**/*.{js,jsx,ts,tsx,mjs,cjs}"]
 
 export default [
   {
     ignores: [
       ".next/**",
-      "node_modules/**",
-      "components/**",
-      "hooks/**",
-      "lib/**",
-      "models/**",
-      "styles/**",
-      "types/**",
-      "test/**",
-      "__tests__/**"
+      "node_modules/**"
     ]
   },
-  js.configs.recommended,
   {
+    ...js.configs.recommended,
+    files: codeFiles
+  },
+  {
+    files: codeFiles,
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -64,21 +61,7 @@ export default [
       "no-unused-vars": "off",
       "no-empty": ["error", { allowEmptyCatch: true }],
       "no-useless-catch": "warn",
-      "@typescript-eslint/triple-slash-reference": "off",
-      "react-hooks/purity": "off",
-      "react-hooks/set-state-in-effect": "off",
-      "react-hooks/static-components": "off",
-      "react-hooks/use-memo": "off",
-      "react-hooks/component-hook-factories": "off",
-      "react-hooks/preserve-manual-memoization": "off",
-      "react-hooks/incompatible-library": "off",
-      "react-hooks/immutability": "off",
-      "react-hooks/globals": "off",
-      "react-hooks/refs": "off",
-      "react-hooks/error-boundaries": "off",
-      "react-hooks/set-state-in-render": "off",
-      "react-hooks/unsupported-syntax": "off",
-      "react-hooks/config": "off"
+      "@typescript-eslint/triple-slash-reference": "off"
     }
   }
 ]

@@ -14,6 +14,7 @@ interface Props {
   children: ReactNode
   fallbackMessage?: string
   onReset?: () => void
+  showErrorDetails?: boolean
 }
 
 interface State {
@@ -53,6 +54,8 @@ export class AgentErrorBoundary extends Component<Props, State> {
 
   render(): ReactNode {
     if (this.state.hasError) {
+      const showErrorDetails = this.props.showErrorDetails === true
+
       return (
         <div className="flex h-full flex-col items-center justify-center bg-surface p-8">
           <div className="flex flex-col items-center max-w-md text-center">
@@ -77,7 +80,7 @@ export class AgentErrorBoundary extends Component<Props, State> {
               )}
             </p>
 
-            {this.state.error && (
+            {showErrorDetails && this.state.error && (
               <details className="w-full mb-4 text-left">
                 <summary className="cursor-pointer text-sm text-text-subtle hover:text-text">
                   {translateMessage(

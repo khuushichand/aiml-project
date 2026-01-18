@@ -383,7 +383,7 @@ components:
       description: Filter by job status
       schema:
         type: string
-        enum: [pending, in_progress, completed, failed, cancelled, expired]
+        enum: [pending, validating, in_progress, completed, failed, cancelled, expired]
 
     Limit:
       name: limit
@@ -632,6 +632,7 @@ components:
           format: date-time
         tags:
           type: array
+          maxItems: 50
           items:
             type: string
         metadata:

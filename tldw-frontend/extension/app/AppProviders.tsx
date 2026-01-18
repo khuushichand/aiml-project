@@ -13,12 +13,24 @@ type AppProvidersProps = {
 }
 
 const queryClient = getQueryClient()
+const EMPTY_STYLES = { image: { height: 60 } }
 
 export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
   const { mode } = useDarkMode()
-  const { i18n } = useTranslation()
-  const [direction, setDirection] = useState<"ltr" | "rtl">("ltr")
+  const { i18n, t } = useTranslation("common")
+  const [direction, setDirection] = useState<"ltr" | "rtl">(() =>
+    i18n.dir(i18n.resolvedLanguage || i18n.language || "en")
+  )
   const portalRootRef = useRef<HTMLDivElement | null>(null)
+  const renderEmpty = React.useCallback(
+    () => (
+      <Empty
+        styles={EMPTY_STYLES}
+        description={t("noData", { defaultValue: "No data" })}
+      />
+    ),
+    [t]
+  )
 
   const getPopupContainer = React.useCallback(
     (triggerNode?: HTMLElement) => {
@@ -52,12 +64,7 @@ export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
                 }
               }}
               getPopupContainer={getPopupContainer}
-              renderEmpty={() => (
-                <Empty
-                  styles={{ image: { height: 60 } }}
-                  description="No data"
-                />
-              )}
+              renderEmpty={renderEmpty}
               direction={direction}
             >
               <AntdApp>{children}</AntdApp>
