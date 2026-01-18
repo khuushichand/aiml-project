@@ -15,6 +15,9 @@
         module.exports = factory()
     } else {
         // Browser globals (root is window)
+        if (!root.lunr) {
+            throw new Error("tinyseg requires lunr to be loaded first.")
+        }
         factory()(root.lunr);
     }
 }(this, function () {

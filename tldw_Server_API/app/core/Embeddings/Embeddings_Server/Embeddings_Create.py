@@ -79,7 +79,11 @@ COMMIT_HASHES: Dict[str, str] = {
 }
 
 _CACHE_SUBDIR_PATTERN = re.compile(r"[^0-9A-Za-z_.-]+")
-_EMBEDDINGS_STORAGE_ALLOWLIST_ROOT = Path(resolve_repo_relative_path("models")).resolve(strict=False)
+_ALLOWLIST_ENV_VAR = "EMBEDDINGS_STORAGE_ALLOWLIST_ROOT"
+_allowlist_root_env = (os.environ.get(_ALLOWLIST_ENV_VAR) or "").strip()
+_EMBEDDINGS_STORAGE_ALLOWLIST_ROOT = Path(
+    _allowlist_root_env or resolve_repo_relative_path("models")
+).resolve(strict=False)
 
 
 def _get_http_status_from_exception(exc: Exception) -> Optional[int]:

@@ -141,7 +141,7 @@ def _has_proxy_headers(request: Request) -> bool:
         "x-forwarded-proto",
     )
     headers = request.headers
-    return any(key in headers or key.title() in headers for key in proxy_headers)
+    return any(key in headers for key in proxy_headers)
 
 
 def _host_header_is_local(request: Request) -> bool:
@@ -237,7 +237,10 @@ async def require_local_setup_access(request: Request) -> None:
     # If proxy headers are present, require both the proxy connection and forwarded IP to be loopback.
     if method == "GET" and path.endswith("/api/v1/setup/config"):
         if not host_header_is_local:
-            logger.warning("Blocked GET to setup config due to non-local Host header: %s", request.headers.get("host"))
+            logger.warning(
+                "Blocked GET to setup config due to non-local Host header: {}",
+                request.headers.get("host"),
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Setup access is restricted to local requests. Host header must target localhost.",
@@ -248,7 +251,7 @@ async def require_local_setup_access(request: Request) -> None:
             logger.debug("Allowing proxied localhost GET to /api/v1/setup/config with loopback client and forwarded IP")
             return
         logger.warning(
-            "Blocked proxied GET to setup config from client=%s forwarded=%s (local=%s/%s)",
+            "Blocked proxied GET to setup config from client={} forwarded={} (local={}/{})",
             client_host,
             forwarded_ip,
             client_is_local,
@@ -265,7 +268,7 @@ async def require_local_setup_access(request: Request) -> None:
     if has_proxy_headers:
         if not (client_is_local and forwarded_is_local and host_header_is_local):
             logger.warning(
-                "Blocked setup access via proxy (client=%s, forwarded=%s, host_local=%s)",
+                "Blocked setup access via proxy (client={}, forwarded={}, host_local={})",
                 client_host,
                 forwarded_ip,
                 host_header_is_local,
@@ -282,7 +285,7 @@ async def require_local_setup_access(request: Request) -> None:
     if client_is_local and host_header_is_local:
         return
 
-    logger.warning("Blocked remote setup access from host=%s", client_host)
+    logger.warning("Blocked remote setup access from host={}", client_host)
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail=(

@@ -1953,7 +1953,7 @@ async def list_tts_voices(
         logger.error(f"Error listing TTS voices: {e}", exc_info=True)
         request_id = ensure_request_id(request)
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_http_error_detail("Failed to list voices", request_id, exc=e),
         ) from e
 
@@ -3831,7 +3831,7 @@ async def streaming_status():
 
         logger.error(f"Error checking streaming status: {e}\n{traceback.format_exc()}")
         return JSONResponse(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"status": "error", "message": "An internal error occurred. Please try again later."},
         )
 
@@ -3974,7 +3974,7 @@ async def test_streaming():
     except Exception as e:
         logger.error(f"Streaming test failed: {e}")
         return JSONResponse(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "status": "error",
                 "test_passed": False,

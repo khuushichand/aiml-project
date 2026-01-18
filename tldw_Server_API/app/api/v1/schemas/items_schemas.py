@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class Item(BaseModel):
     id: int
     content_item_id: Optional[int] = None
+    media_id: Optional[int] = None
     title: str
     url: Optional[str] = None
     domain: Optional[str] = None

@@ -199,7 +199,7 @@ def _resolve_model(provider: str, model: Optional[str], app_config: Dict[str, An
     return (app_config.get(key) or {}).get("model")
 
 
-def _get_adapter(provider: str):
+def _get_adapter(provider: str) -> Any:
     registry = get_registry()
     adapter = registry.get_adapter(provider)
     if adapter is None:
@@ -693,7 +693,11 @@ def _extract_media_text(db: MediaDatabase, media_id: int) -> str:
         try:
             latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
         except Exception as exc:
-            logger.debug("data_tables: get_document_version failed for media_id=%s: %s", media_id, exc)
+            logger.debug(
+                "data_tables: get_document_version failed for media_id {}: {}",
+                media_id,
+                exc,
+            )
             latest = None
         if latest and latest.get("content"):
             text = str(latest.get("content") or "")
@@ -701,7 +705,11 @@ def _extract_media_text(db: MediaDatabase, media_id: int) -> str:
             try:
                 fallback = get_latest_transcription(db, media_id)
             except Exception as exc:
-                logger.debug("data_tables: get_latest_transcription failed for media_id=%s: %s", media_id, exc)
+                logger.debug(
+                    "data_tables: get_latest_transcription failed for media_id {}: {}",
+                    media_id,
+                    exc,
+                )
                 fallback = None
             if fallback:
                 text = fallback
@@ -1006,7 +1014,10 @@ async def _handle_job(job: Dict[str, Any], jm: JobManager) -> Dict[str, Any]:
                 )
             jm.update_job_progress(job_id, progress_percent=55.0, progress_message="llm_timeout")
             raise DataTablesJobError("llm_timeout", retryable=True) from exc
-        logger.info("data_tables worker: LLM call completed in %.1fms", (time.time() - start) * 1000.0)
+        logger.info(
+            "data_tables worker: LLM call completed in {:.1f}ms",
+            (time.time() - start) * 1000.0,
+        )
 
         content_text = extract_response_content(raw_response)
         payload_obj = _extract_json_payload(content_text if content_text is not None else raw_response)
@@ -1084,14 +1095,22 @@ async def _handle_job(job: Dict[str, Any], jm: JobManager) -> Dict[str, Any]:
             try:
                 db.update_data_table(table_id, status="failed", last_error=str(exc), owner_user_id=user_id)
             except Exception as reset_exc:
-                logger.debug("data_tables worker: failed to update table status for %s: %s", table_id, reset_exc)
+                logger.debug(
+                    "data_tables worker: failed to update table status for {}: {}",
+                    table_id,
+                    reset_exc,
+                )
         raise
     except Exception as exc:
         if db is not None and table_id > 0:
             try:
                 db.update_data_table(table_id, status="failed", last_error=str(exc), owner_user_id=user_id)
             except Exception as reset_exc:
-                logger.debug("data_tables worker: failed to update table status for %s: %s", table_id, reset_exc)
+                logger.debug(
+                    "data_tables worker: failed to update table status for {}: {}",
+                    table_id,
+                    reset_exc,
+                )
         raise DataTablesJobError(str(exc), retryable=False) from exc
 
 
@@ -1122,7 +1141,11 @@ async def run_data_tables_jobs_worker(stop_event: Optional[asyncio.Event] = None
 
         stop_watcher_task = asyncio.create_task(_watch_stop())
 
-    logger.info("Data Tables Jobs worker starting (queue=%s, worker_id=%s)", queue, worker_id)
+    logger.info(
+        "Data Tables Jobs worker starting (queue={}, worker_id={})",
+        queue,
+        worker_id,
+    )
     async def _handler(job: Dict[str, Any]) -> Dict[str, Any]:
         return await _handle_job(job, jm)
 

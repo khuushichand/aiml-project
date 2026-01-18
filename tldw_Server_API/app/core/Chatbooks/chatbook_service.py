@@ -396,6 +396,10 @@ class ChatbookService:
                 return f"{base_name}/{resolved_path.relative_to(base).as_posix()}"
             except Exception:
                 continue
+        logger.debug(
+            "Chatbooks: path {} not under import/temp dirs; using filename only",
+            resolved_path,
+        )
         return resolved_path.name
 
     def _get_prompts_db(self) -> Optional["PromptsDatabase"]:
@@ -462,6 +466,17 @@ class ChatbookService:
         if isinstance(value, datetime):
             return value.isoformat()
         return value
+
+    @staticmethod
+    def _convert_datetimes(obj: Any) -> Any:
+        """Recursively convert datetime values to ISO 8601 strings."""
+        if isinstance(obj, dict):
+            return {k: ChatbookService._convert_datetimes(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [ChatbookService._convert_datetimes(item) for item in obj]
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return obj
 
     @staticmethod
     def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -2971,17 +2986,7 @@ class ChatbookService:
                     continue
 
                 # Convert datetime objects to strings for JSON serialization
-                def convert_datetimes(obj):
-                    """Recursively convert datetime values to ISO 8601 strings."""
-                    if isinstance(obj, dict):
-                        return {k: convert_datetimes(v) for k, v in obj.items()}
-                    elif isinstance(obj, list):
-                        return [convert_datetimes(item) for item in obj]
-                    elif isinstance(obj, datetime):
-                        return obj.isoformat()
-                    return obj
-
-                wb_data_serializable = convert_datetimes(wb_data)
+                wb_data_serializable = self._convert_datetimes(wb_data)
 
                 # Write world book file
                 wb_file = wb_dir / f"world_book_{wb_id}.json"
@@ -3026,17 +3031,7 @@ class ChatbookService:
                     continue
 
                 # Convert datetime objects to strings for JSON serialization
-                def convert_datetimes(obj):
-                    """Recursively convert datetime values to ISO 8601 strings."""
-                    if isinstance(obj, dict):
-                        return {k: convert_datetimes(v) for k, v in obj.items()}
-                    elif isinstance(obj, list):
-                        return [convert_datetimes(item) for item in obj]
-                    elif isinstance(obj, datetime):
-                        return obj.isoformat()
-                    return obj
-
-                dict_data_serializable = convert_datetimes(dict_data)
+                dict_data_serializable = self._convert_datetimes(dict_data)
 
                 # Write dictionary file
                 dict_file = dict_dir / f"dictionary_{dict_id}.json"

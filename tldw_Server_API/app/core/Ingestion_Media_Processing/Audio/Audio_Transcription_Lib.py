@@ -936,6 +936,7 @@ def re_generate_transcription(
         selected_source_lang: The language code for the source audio (e.g., 'en', 'es').
             Defaults to 'en'.
         base_dir: Optional base directory used to validate the audio file path.
+        cancel_check: Optional callable that returns True when processing should be cancelled.
 
     Returns:
         A tuple containing:
@@ -3071,7 +3072,7 @@ def validate_audio_file(file_path: str, *, base_dir: Optional[Path] = None) -> t
         result = subprocess.run(
             [ffprobe_cmd, "-v", "error", "-select_streams", "a:0",
              "-show_entries", "stream=codec_name,channels,sample_rate",
-             "-of", "json", str(file_path)],
+             "-of", "json", str(path)],
             capture_output=True,
             text=True,
             timeout=10  # 10 second timeout

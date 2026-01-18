@@ -6988,8 +6988,8 @@ class MediaDatabase:
             return str(owner_user_id)
         try:
             scope = get_scope()
-        except Exception as exc:
-            logging.debug("Failed to resolve scope for data tables owner: %s", exc)
+        except Exception:
+            logger.debug("Failed to resolve scope for data tables owner")
             return None
         if scope and not scope.is_admin and scope.user_id is not None:
             return str(scope.user_id)

@@ -1,0 +1,693 @@
+import { create } from "zustand"
+
+import { tldwClient, type TldwConfig } from "@/services/tldw/TldwApiClient"
+import { getStoredTldwServerURL } from "@/services/tldw-server"
+import { apiSend } from "@/services/api-send"
+import { createSafeStorage } from "@/utils/safe-storage"
+import {
+  ConnectionPhase,
+  type ConnectionState,
+  type KnowledgeStatus,
+  deriveConnectionUxState
+} from "@/types/connection"
+import { CONNECTED_THROTTLE_MS } from "@/config/connection-timing"
+import { env } from "@/config/env"
+
+// Shared timeout before treating the server as unreachable.
+// See New-Views-PRD.md §5.1.x / §10.1 (20 seconds).
+export const CONNECTION_TIMEOUT_MS = 20_000
+
+const TEST_BYPASS_KEY = "__tldw_allow_offline"
+const FORCE_UNCONFIGURED_KEY = "__tldw_force_unconfigured"
+const FIRST_RUN_COMPLETE_KEY = "__tldw_first_run_complete"
+
+const getStorageFlag = async (key: string): Promise<boolean> => {
+  try {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+      return await new Promise<boolean>((resolve) => {
+        chrome.storage.local.get(key, (res) =>
+          resolve(Boolean(res?.[key]))
+        )
+      })
+    }
+  } catch {
+    // ignore storage read errors
+  }
+
+  try {
+    if (typeof localStorage !== "undefined") {
+      return localStorage.getItem(key) === "true"
+    }
+  } catch {
+    // ignore localStorage availability
+  }
+
+  return false
+}
+
+const getOfflineBypassFlag = async (): Promise<boolean> => {
+  // Build-time flag for Playwright/CI: VITE_TLDW_E2E_ALLOW_OFFLINE=true
+  if (env.VITE_TLDW_E2E_ALLOW_OFFLINE === "true") {
+    return true
+  }
+
+  // Runtime toggle (settable by tests) via chrome.storage.local or localStorage.
+  return getStorageFlag(TEST_BYPASS_KEY)
+}
+
+const setOfflineBypassFlag = async (enabled: boolean): Promise<void> => {
+  try {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+      await new Promise<void>((resolve) => {
+        const storage = chrome.storage.local
+        if (enabled) {
+          storage.set({ [TEST_BYPASS_KEY]: true }, () => resolve())
+        } else {
+          storage.remove(TEST_BYPASS_KEY, () => resolve())
+        }
+      })
+      return
+    }
+  } catch {
+    // ignore storage write errors
+  }
+
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (enabled) {
+        localStorage.setItem(TEST_BYPASS_KEY, "true")
+      } else {
+        localStorage.removeItem(TEST_BYPASS_KEY)
+      }
+    }
+  } catch {
+    // ignore localStorage availability
+  }
+}
+
+const getForceUnconfiguredFlag = async (): Promise<boolean> => {
+  return getStorageFlag(FORCE_UNCONFIGURED_KEY)
+}
+
+const getFirstRunCompleteFlag = async (): Promise<boolean> => {
+  return getStorageFlag(FIRST_RUN_COMPLETE_KEY)
+}
+
+const setFirstRunCompleteFlag = async (complete: boolean): Promise<void> => {
+  try {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+      await new Promise<void>((resolve) => {
+        const storage = chrome.storage.local
+        if (complete) {
+          storage.set({ [FIRST_RUN_COMPLETE_KEY]: true }, () => resolve())
+        } else {
+          storage.remove(FIRST_RUN_COMPLETE_KEY, () => resolve())
+        }
+      })
+      return
+    }
+  } catch {
+    // ignore storage write errors
+  }
+
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (complete) {
+        localStorage.setItem(FIRST_RUN_COMPLETE_KEY, "true")
+      } else {
+        localStorage.removeItem(FIRST_RUN_COMPLETE_KEY)
+      }
+    }
+  } catch {
+    // ignore localStorage availability
+  }
+}
+
+const ensurePlaceholderConfig = async (): Promise<string | null> => {
+  try {
+    const cfg = await tldwClient.getConfig()
+    if (cfg?.serverUrl) return cfg.serverUrl
+  } catch {
+    // ignore missing config
+  }
+
+  const placeholderUrl = "http://127.0.0.1:0"
+  try {
+    await tldwClient.updateConfig({
+      serverUrl: placeholderUrl,
+      authMode: "single-user",
+      apiKey: "test-bypass"
+    })
+    return placeholderUrl
+  } catch {
+    return null
+  }
+}
+
+const deriveKnowledgeStatusFromHealth = (raw: any): KnowledgeStatus => {
+  try {
+    if (!raw || typeof raw !== "object") {
+      return "ready"
+    }
+    const components = (raw as any).components
+    if (components && typeof components === "object") {
+      const search =
+        (components as any).search_index || (components as any).searchIndex
+      if (search && typeof search === "object") {
+        const status = String((search as any).status || "").toLowerCase()
+        const message = String((search as any).message || "")
+        const rawCount = (search as any).fts_table_count
+        const ftsCount =
+          typeof rawCount === "number" && Number.isFinite(rawCount)
+            ? rawCount
+            : null
+
+        const noIndexByCount = ftsCount !== null && ftsCount <= 0
+        const noIndexByMessage = /no fts indexes found/i.test(message)
+
+        if ((noIndexByCount || noIndexByMessage) && status !== "unhealthy") {
+          return "empty"
+        }
+      }
+    }
+  } catch {
+    // ignore parse errors and fall back to ready
+  }
+  return "ready"
+}
+
+type ConnectionStore = {
+  state: ConnectionState
+  checkOnce: () => Promise<void>
+  setServerUrl: (url: string) => Promise<void>
+  enableOfflineBypass: () => Promise<void>
+  disableOfflineBypass: () => Promise<void>
+  beginOnboarding: () => Promise<void>
+  setConfigPartial: (config: Partial<TldwConfig>) => Promise<void>
+  testConnectionFromOnboarding: () => Promise<void>
+  setDemoMode: () => void
+  markFirstRunComplete: () => Promise<void>
+}
+
+const initialState: ConnectionState = {
+  phase: ConnectionPhase.SEARCHING,
+  serverUrl: null,
+  lastCheckedAt: null,
+  lastError: null,
+  lastStatusCode: null,
+  isConnected: false,
+  isChecking: false,
+  offlineBypass: false,
+  knowledgeStatus: "unknown",
+  knowledgeLastCheckedAt: null,
+  knowledgeError: null,
+  mode: "normal",
+  configStep: "none",
+  errorKind: "none",
+  hasCompletedFirstRun: false,
+  lastConfigUpdatedAt: null,
+  checksSinceConfigChange: 0
+}
+
+const getPersistedServerUrl = async (): Promise<string | null> => {
+  try {
+    const cfg = await tldwClient.getConfig()
+    if (cfg?.serverUrl) return cfg.serverUrl
+  } catch {
+    // ignore config read errors
+  }
+
+  try {
+    const storage = createSafeStorage()
+    const cfg = await storage.get<TldwConfig>("tldwConfig")
+    if (cfg?.serverUrl) return cfg.serverUrl
+  } catch {
+    // ignore storage read errors
+  }
+
+  return null
+}
+
+export const useConnectionStore = create<ConnectionStore>((set, get) => ({
+  state: initialState,
+
+  async checkOnce() {
+    const prev = get().state
+
+    // Avoid overlapping checks
+    if (prev.isChecking) {
+      return
+    }
+
+    // Load all persisted flags upfront
+    const persistedFirstRun = await getFirstRunCompleteFlag()
+    const persistedServerUrl = await getPersistedServerUrl()
+    const forceUnconfigured = await getForceUnconfiguredFlag()
+    const bypass = await getOfflineBypassFlag()
+
+    // Apply persisted first-run flag if not already set
+    if (!prev.hasCompletedFirstRun && persistedFirstRun) {
+      set({
+        state: {
+          ...prev,
+          hasCompletedFirstRun: true
+        }
+      })
+    }
+
+    // Test-only hook: force a missing/unconfigured state without network calls.
+    if (forceUnconfigured) {
+      set({
+        state: {
+          ...prev,
+          errorKind: "none",
+          phase: ConnectionPhase.UNCONFIGURED,
+          serverUrl: persistedServerUrl,
+          isConnected: false,
+          isChecking: false,
+          offlineBypass: false,
+          lastCheckedAt: Date.now(),
+          lastError: null,
+          lastStatusCode: null,
+          knowledgeStatus: "unknown",
+          knowledgeLastCheckedAt: null,
+          knowledgeError: null
+        }
+      })
+      return
+    }
+
+    // Optional test toggle: allow CI/Playwright to treat the app as "connected"
+    // without hitting a live server. Controlled via env VITE_TLDW_E2E_ALLOW_OFFLINE
+    // or chrome.storage.local[__tldw_allow_offline].
+    if (bypass) {
+      const serverUrl =
+        persistedServerUrl ??
+        (await ensurePlaceholderConfig()) ??
+        prev.serverUrl ??
+        "offline://local"
+
+      set({
+        state: {
+          ...prev,
+          phase: ConnectionPhase.CONNECTED,
+          serverUrl,
+          isConnected: true,
+          isChecking: false,
+          offlineBypass: true,
+          errorKind: "none",
+          lastCheckedAt: Date.now(),
+          lastError: null,
+          lastStatusCode: null,
+          knowledgeStatus: "ready",
+          knowledgeLastCheckedAt: Date.now(),
+          knowledgeError: null
+        }
+      })
+      return
+    }
+
+    // Throttle repeated checks when already connected recently.
+    // This prevents the landing page/header from hammering the server.
+    const now = Date.now()
+    const nextChecksSinceConfigChange = prev.checksSinceConfigChange + 1
+    if (
+      prev.isConnected &&
+      prev.phase === ConnectionPhase.CONNECTED &&
+      prev.lastCheckedAt != null &&
+      now - prev.lastCheckedAt < CONNECTED_THROTTLE_MS
+    ) {
+      return
+    }
+
+    set({
+      state: {
+        ...prev,
+        phase: ConnectionPhase.SEARCHING,
+        serverUrl: persistedServerUrl ?? prev.serverUrl,
+        errorKind: "none",
+        isChecking: true,
+        offlineBypass: false,
+        lastError: null,
+        checksSinceConfigChange: nextChecksSinceConfigChange
+      }
+    })
+
+    try {
+      let cfg = await tldwClient.getConfig()
+      let serverUrl = cfg?.serverUrl ?? null
+
+      if (!serverUrl) {
+        try {
+          // Only reuse a previously stored URL; do not implicitly
+          // fall back to the hard-coded localhost default here.
+          const storedUrl = await getStoredTldwServerURL()
+          if (storedUrl) {
+            await tldwClient.updateConfig({
+              serverUrl: storedUrl
+            })
+            cfg = await tldwClient.getConfig()
+            serverUrl = cfg?.serverUrl ?? storedUrl
+          }
+        } catch {
+          // ignore fallback errors; we will treat as unconfigured below
+        }
+      }
+
+      // If we have a server URL but no API key, treat as unconfigured/unauthenticated.
+      // Users must explicitly configure their own credentials in Settings/Onboarding.
+
+      if (!serverUrl) {
+        set({
+          state: {
+            ...prev,
+            phase: ConnectionPhase.UNCONFIGURED,
+            serverUrl: null,
+            isConnected: false,
+            isChecking: false,
+            offlineBypass: false,
+            errorKind: "none",
+            lastCheckedAt: Date.now(),
+            lastError: null,
+            lastStatusCode: null,
+            knowledgeStatus: "unknown",
+            knowledgeLastCheckedAt: null,
+            knowledgeError: null
+          }
+        })
+        return
+      }
+
+      await tldwClient.initialize()
+
+      // Request health via background for detailed status codes.
+      // Health endpoints may require auth; apiSend injects headers based
+      // on tldwConfig (API key / access token).
+      const healthPromise = (async () => {
+        try {
+          const resp = await apiSend({
+            path: '/api/v1/health',
+            method: 'GET',
+            // Allow unauthenticated health checks when no credentials have
+            // been configured yet so first‑run onboarding can still detect a
+            // reachable server URL. Once an API key or access token exists,
+            // health should run with auth.
+            noAuth:
+              !cfg ||
+              (!cfg.apiKey &&
+                !cfg.accessToken &&
+                cfg.authMode !== "multi-user")
+          })
+          return { ok: Boolean(resp?.ok), status: Number(resp?.status) || 0, error: resp?.ok ? null : (resp?.error || null) }
+        } catch (e) {
+          return { ok: false, status: 0, error: (e as Error)?.message || 'Network error' }
+        }
+      })()
+      const raced = await Promise.race([
+        healthPromise,
+        new Promise<{ ok: boolean; status: number; error: string | null }>((resolve) =>
+          setTimeout(() => resolve({ ok: false, status: 0, error: 'timeout' }), CONNECTION_TIMEOUT_MS)
+        )
+      ])
+      const ok = raced.ok
+
+      let knowledgeStatus: KnowledgeStatus = prev.knowledgeStatus
+      let knowledgeLastCheckedAt = prev.knowledgeLastCheckedAt
+      let knowledgeError = prev.knowledgeError
+
+      if (ok) {
+        try {
+          const rag = await tldwClient.ragHealth()
+          knowledgeStatus = deriveKnowledgeStatusFromHealth(rag)
+          knowledgeLastCheckedAt = Date.now()
+          knowledgeError =
+            knowledgeStatus === "empty" ? "no-index" : null
+        } catch (e) {
+          knowledgeStatus = "offline"
+          knowledgeLastCheckedAt = Date.now()
+          knowledgeError = (e as Error)?.message ?? "unknown-error"
+        }
+      } else {
+        knowledgeStatus = "offline"
+        knowledgeLastCheckedAt = Date.now()
+        knowledgeError = "core-offline"
+      }
+
+      let errorKind: ConnectionState["errorKind"] = "none"
+
+      if (ok) {
+        if (knowledgeStatus === "offline") {
+          errorKind = "partial"
+        } else {
+          errorKind = "none"
+        }
+      } else {
+        const status = raced.status
+        if (status === 401 || status === 403) {
+          errorKind = "auth"
+        } else {
+          errorKind = "unreachable"
+        }
+      }
+
+      set({
+        state: {
+          ...prev,
+          phase: ok ? ConnectionPhase.CONNECTED : ConnectionPhase.ERROR,
+          serverUrl,
+          isConnected: ok,
+          isChecking: false,
+          offlineBypass: false,
+          lastCheckedAt: Date.now(),
+          lastError: ok ? null : (raced.error || 'timeout-or-offline'),
+          lastStatusCode: ok ? null : raced.status,
+          knowledgeStatus,
+          knowledgeLastCheckedAt,
+          knowledgeError,
+          errorKind,
+          checksSinceConfigChange: nextChecksSinceConfigChange
+        }
+      })
+    } catch (error) {
+      set({
+        state: {
+          ...prev,
+          phase: ConnectionPhase.ERROR,
+          isConnected: false,
+          isChecking: false,
+          offlineBypass: false,
+          lastCheckedAt: Date.now(),
+          lastError: (error as Error)?.message ?? "unknown-error",
+          lastStatusCode: 0,
+          knowledgeStatus: "offline",
+          knowledgeLastCheckedAt: Date.now(),
+          knowledgeError: (error as Error)?.message ?? "unknown-error",
+          errorKind: "unreachable",
+          checksSinceConfigChange: nextChecksSinceConfigChange
+        }
+      })
+    }
+  },
+
+  async setServerUrl(url: string) {
+    await tldwClient.updateConfig({ serverUrl: url })
+    await get().checkOnce()
+  },
+
+  async enableOfflineBypass() {
+    await setOfflineBypassFlag(true)
+    await get().checkOnce()
+  },
+
+  async disableOfflineBypass() {
+    await setOfflineBypassFlag(false)
+    await get().checkOnce()
+  },
+
+  async beginOnboarding() {
+    const prev = get().state
+    // Clear the persisted first-run flag so onboarding can restart
+    await setFirstRunCompleteFlag(false)
+    set({
+      state: {
+        ...prev,
+        phase: ConnectionPhase.UNCONFIGURED,
+        // Always return to the guided config flow when onboarding starts.
+        configStep: "url",
+        hasCompletedFirstRun: false,
+        // Exit demo/offline modes so the wizard can take over again.
+        mode: "normal",
+        isConnected: false,
+        isChecking: false,
+        offlineBypass: false,
+        errorKind: "none",
+        lastError: null,
+        lastStatusCode: null,
+        knowledgeStatus: "unknown",
+        knowledgeLastCheckedAt: null,
+        knowledgeError: null
+      }
+    })
+  },
+
+  async setConfigPartial(config: Partial<TldwConfig>) {
+    await tldwClient.updateConfig(config)
+    const prev = get().state
+
+    let nextStep: ConnectionState["configStep"] = prev.configStep
+    const now = Date.now()
+
+    if (typeof config.serverUrl === "string" && config.serverUrl.trim()) {
+      nextStep = "auth"
+    }
+
+    if (
+      typeof config.authMode !== "undefined" ||
+      typeof config.apiKey !== "undefined" ||
+      typeof config.accessToken !== "undefined"
+    ) {
+      nextStep = "auth"
+    }
+
+    set({
+      state: {
+        ...prev,
+        serverUrl:
+          typeof config.serverUrl === "string"
+            ? config.serverUrl
+            : prev.serverUrl,
+        configStep: nextStep,
+        lastConfigUpdatedAt: now,
+        checksSinceConfigChange: 0
+      }
+    })
+  },
+
+  async testConnectionFromOnboarding() {
+    const prev = get().state
+    const isTestBypass =
+      prev.offlineBypass || (await getOfflineBypassFlag())
+
+    // When offline bypass is enabled (Playwright/CI path), treat the
+    // connection as healthy immediately so onboarding can progress
+    // without waiting on real network checks. In normal production
+    // runs offlineBypass is false and we fall back to checkOnce().
+    if (isTestBypass) {
+      set({
+        state: {
+          ...prev,
+          configStep: "health",
+          phase: ConnectionPhase.CONNECTED,
+          isConnected: true,
+          isChecking: false,
+          offlineBypass: true,
+          errorKind: "none",
+          lastError: null,
+          lastStatusCode: null,
+          knowledgeStatus: "ready",
+          knowledgeLastCheckedAt: Date.now(),
+          knowledgeError: null
+        }
+      })
+      return
+    }
+
+    set({
+      state: {
+        ...prev,
+        configStep: "health"
+      }
+    })
+    await get().checkOnce()
+  },
+
+  setDemoMode() {
+    const prev = get().state
+    set({
+      state: {
+        ...prev,
+        mode: "demo",
+        phase: ConnectionPhase.CONNECTED,
+        isConnected: true,
+        offlineBypass: false,
+        errorKind: "none",
+        lastError: null,
+        lastStatusCode: null,
+        hasCompletedFirstRun: true
+      }
+    })
+  },
+
+  async markFirstRunComplete() {
+    const prev = get().state
+    if (prev.hasCompletedFirstRun) {
+      return
+    }
+    // Persist to chrome.storage so it survives browser data clears
+    await setFirstRunCompleteFlag(true)
+    set({
+      state: {
+        ...prev,
+        hasCompletedFirstRun: true
+      }
+    })
+  }
+}))
+
+if (typeof window !== "undefined") {
+  // Expose for Playwright tests and debugging only.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(window as any).__tldw_useConnectionStore = useConnectionStore
+
+  // Optional helper so tests can derive the UX state from a raw
+  // ConnectionState snapshot without re‑implementing the logic.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(window as any).__tldw_deriveUx = (state: any) => {
+    try {
+      return deriveConnectionUxState(state as ConnectionState)
+    } catch {
+      return "unknown"
+    }
+  }
+
+  // Allow tests to flip the offline bypass without rebuilding the extension.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(window as any).__tldw_enableOfflineBypass = async () => {
+    try {
+      await useConnectionStore.getState().enableOfflineBypass()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(window as any).__tldw_disableOfflineBypass = async () => {
+    try {
+      await useConnectionStore.getState().disableOfflineBypass()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // Allow tests to force the unconfigured/waiting state without network calls.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(window as any).__tldw_forceUnconfigured = async () => {
+    try {
+      if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+        await new Promise<void>((resolve) =>
+          chrome.storage.local.set({ [FORCE_UNCONFIGURED_KEY]: true }, () =>
+            resolve()
+          )
+        )
+      } else if (typeof localStorage !== "undefined") {
+        localStorage.setItem(FORCE_UNCONFIGURED_KEY, "true")
+      }
+      await useConnectionStore.getState().checkOnce()
+      return true
+    } catch {
+      return false
+    }
+  }
+}

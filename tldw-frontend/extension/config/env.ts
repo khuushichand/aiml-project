@@ -1,0 +1,26 @@
+export type RuntimeEnv = {
+  DEV: boolean
+  PROD: boolean
+  BROWSER?: string
+  VITE_TLDW_API_KEY?: string
+  VITE_TLDW_DEFAULT_API_KEY?: string
+  VITE_TLDW_DOCS_URL?: string
+  VITE_TLDW_E2E_ALLOW_OFFLINE?: string
+  VITE_ACTOR_ASPECT_SOFT_LIMIT?: string
+  VITE_ACTOR_TOKENS_WARNING_THRESHOLD?: string
+}
+
+const nodeEnv = process.env.NODE_ENV || "development"
+
+export const env: RuntimeEnv = {
+  DEV: nodeEnv !== "production",
+  PROD: nodeEnv === "production",
+  BROWSER: process.env.NEXT_PUBLIC_BROWSER,
+  VITE_TLDW_API_KEY: process.env.NEXT_PUBLIC_TLDW_API_KEY,
+  VITE_TLDW_DEFAULT_API_KEY: process.env.NEXT_PUBLIC_TLDW_DEFAULT_API_KEY,
+  VITE_TLDW_DOCS_URL: process.env.NEXT_PUBLIC_TLDW_DOCS_URL,
+  VITE_TLDW_E2E_ALLOW_OFFLINE: process.env.NEXT_PUBLIC_TLDW_E2E_ALLOW_OFFLINE,
+  VITE_ACTOR_ASPECT_SOFT_LIMIT: process.env.NEXT_PUBLIC_ACTOR_ASPECT_SOFT_LIMIT,
+  VITE_ACTOR_TOKENS_WARNING_THRESHOLD:
+    process.env.NEXT_PUBLIC_ACTOR_TOKENS_WARNING_THRESHOLD
+}

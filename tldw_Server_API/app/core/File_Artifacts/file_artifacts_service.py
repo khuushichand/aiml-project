@@ -599,7 +599,7 @@ class FileArtifactsService:
         quote_escape = 0
         formula_prefix = 0
         cell_count = 0
-        rows_all = [columns] + list(rows)
+        rows_all = [columns, *rows]
         for row in rows_all:
             if not isinstance(row, list):
                 continue
@@ -621,7 +621,7 @@ class FileArtifactsService:
         total_chars = 0
         escape_extra = 0
         row_overhead = 0
-        rows_all = [columns] + list(rows)
+        rows_all = [columns, *rows]
         for row in rows_all:
             if not isinstance(row, list):
                 continue
@@ -644,8 +644,8 @@ class FileArtifactsService:
         escape_extra = 0
         cell_count = 0
         row_count = 0
-        rows_all = [columns] + list(rows)
-        for idx, row in enumerate(rows_all):
+        rows_all = [columns, *rows]
+        for row in rows_all:
             if not isinstance(row, list):
                 continue
             row_count += 1
@@ -686,7 +686,7 @@ class FileArtifactsService:
         total_chars = 0
         cell_count = 0
         for columns, rows in tables:
-            rows_all = [columns] + list(rows)
+            rows_all = [columns, *rows]
             for row in rows_all:
                 if not isinstance(row, list):
                     continue

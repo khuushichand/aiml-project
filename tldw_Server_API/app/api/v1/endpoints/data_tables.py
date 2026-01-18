@@ -702,6 +702,10 @@ async def export_data_table(
         try:
             normalized = adapter.normalize(structured)
             export_result = await _export_structured(adapter, normalized, format)
+        except FileArtifactsValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except FileArtifactsError as exc:
+            raise _file_artifacts_http_exception(exc) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if export_result.status != "ready" or not export_result.content:

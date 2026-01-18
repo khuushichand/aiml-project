@@ -1,0 +1,1193 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  Skeleton,
+  Table,
+  Tooltip,
+  notification,
+  Modal,
+  Input,
+  Form,
+  Segmented,
+  Tag,
+  Select,
+  Alert
+} from "antd"
+import { Computer, Zap, Star, UploadCloud, Download, Trash2, Pen } from "lucide-react"
+import { PromptActionsMenu } from "./PromptActionsMenu"
+import { PromptDrawer } from "./PromptDrawer"
+import React, { useMemo, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
+import {
+  deletePromptById,
+  getAllPrompts,
+  savePrompt,
+  updatePrompt,
+  exportPrompts,
+  importPromptsV2
+} from "@/db/dexie/helpers"
+import {
+  getAllCopilotPrompts,
+  setAllCopilotPrompts
+} from "@/services/application"
+import { tagColors } from "@/utils/color"
+import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
+import { useConfirmDanger } from "@/components/Common/confirm-danger"
+import { useServerOnline } from "@/hooks/useServerOnline"
+import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
+import { useMessageOption } from "@/hooks/useMessageOption"
+
+export const PromptBody = () => {
+  const queryClient = useQueryClient()
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create")
+  const [editId, setEditId] = useState("")
+  const [drawerInitialValues, setDrawerInitialValues] = useState<any>(null)
+  const { t } = useTranslation(["settings", "common", "option"])
+  const navigate = useNavigate()
+  const isOnline = useServerOnline()
+  const [selectedSegment, setSelectedSegment] = useState<"custom" | "copilot">(
+    "custom"
+  )
+  const [searchText, setSearchText] = useState("")
+  const [typeFilter, setTypeFilter] = useState<"all" | "system" | "quick">(
+    "all"
+  )
+  const [tagFilter, setTagFilter] = useState<string[]>([])
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [importMode, setImportMode] = useState<"merge" | "replace">("merge")
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [insertPrompt, setInsertPrompt] = useState<{
+    id: string
+    systemText?: string
+    userText?: string
+  } | null>(null)
+  const confirmDanger = useConfirmDanger()
+
+  const [openCopilotEdit, setOpenCopilotEdit] = useState(false)
+  const [editCopilotId, setEditCopilotId] = useState("")
+  const [editCopilotForm] = Form.useForm()
+
+  const { setSelectedQuickPrompt, setSelectedSystemPrompt } = useMessageOption()
+
+  const { data, status } = useQuery({
+    queryKey: ["fetchAllPrompts"],
+    queryFn: getAllPrompts
+  })
+
+  const { data: copilotData, status: copilotStatus } = useQuery({
+    queryKey: ["fetchCopilotPrompts"],
+    queryFn: getAllCopilotPrompts,
+    enabled: isOnline
+  })
+
+  const promptLoadFailed = status === "error"
+  const copilotLoadFailed = isOnline && copilotStatus === "error"
+  const loadErrorDescription = [
+    promptLoadFailed
+      ? t(
+          "managePrompts.loadErrorDetail",
+          "Custom prompts couldn’t be retrieved from local storage."
+        )
+      : null,
+    copilotLoadFailed
+      ? t(
+          "managePrompts.copilotLoadErrorDetail",
+          "Copilot prompts couldn’t be retrieved."
+        )
+      : null
+  ]
+    .filter(Boolean)
+    .join(" ")
+  const systemPromptLabel = t("managePrompts.systemPrompt")
+  const quickPromptLabel = t("managePrompts.quickPrompt")
+
+  const guardPrivateMode = React.useCallback(() => {
+    if (!isFireFoxPrivateMode) return false
+    notification.error({
+      message: t(
+        "common:privateModeSaveErrorTitle",
+        "tldw Assistant can't save data"
+      ),
+      description: t(
+        "settings:prompts.privateModeDescription",
+        "Firefox Private Mode does not support saving data to IndexedDB. Please add prompts from a normal window."
+      )
+    })
+    return true
+  }, [isFireFoxPrivateMode, t])
+
+  React.useEffect(() => {
+    if (!isOnline && selectedSegment === "copilot") {
+      setSelectedSegment("custom")
+    }
+  }, [isOnline, selectedSegment])
+
+  const getPromptKeywords = React.useCallback(
+    (prompt: any) => prompt?.keywords ?? prompt?.tags ?? [],
+    []
+  )
+
+  const getPromptTexts = React.useCallback((prompt: any) => {
+    const systemText =
+      prompt?.system_prompt ||
+      (prompt?.is_system ? prompt?.content : undefined)
+    const userText =
+      prompt?.user_prompt ||
+      (!prompt?.is_system ? prompt?.content : undefined)
+    return { systemText, userText }
+  }, [])
+
+  const getPromptType = React.useCallback((prompt: any) => {
+    const { systemText, userText } = getPromptTexts(prompt)
+    const hasSystem = typeof systemText === "string" && systemText.trim().length > 0
+    const hasUser = typeof userText === "string" && userText.trim().length > 0
+    if (hasSystem && hasUser) return "mixed"
+    if (hasSystem) return "system"
+    if (hasUser) return "quick"
+    return prompt?.is_system ? "system" : "quick"
+  }, [getPromptTexts])
+
+  const normalizePromptPayload = React.useCallback((values: any) => {
+    const keywords = values?.keywords ?? values?.tags ?? []
+    const promptName = values?.name || values?.title
+    const hasSystemPrompt = !!(values?.system_prompt?.trim())
+    const resolvedContent =
+      values?.content ??
+      (hasSystemPrompt ? values?.system_prompt : values?.user_prompt) ??
+      values?.system_prompt ??
+      values?.user_prompt
+
+    return {
+      ...values,
+      title: promptName,
+      name: promptName,
+      tags: keywords,
+      keywords,
+      content: resolvedContent,
+      system_prompt: values?.system_prompt,
+      user_prompt: values?.user_prompt,
+      author: values?.author,
+      details: values?.details,
+      is_system: hasSystemPrompt
+    }
+  }, [])
+
+  const { mutate: deletePrompt } = useMutation({
+    mutationFn: deletePromptById,
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["fetchAllPrompts"]
+      })
+      notification.success({
+        message: t("managePrompts.notification.deletedSuccess"),
+        description: t("managePrompts.notification.deletedSuccessDesc")
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: bulkDeletePrompts, isPending: isBulkDeleting } = useMutation({
+    mutationFn: async (ids: string[]) => {
+      for (const id of ids) {
+        await deletePromptById(id)
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["fetchAllPrompts"]
+      })
+      setSelectedRowKeys([])
+      notification.success({
+        message: t("managePrompts.notification.bulkDeletedSuccess", { defaultValue: "Prompts deleted" }),
+        description: t("managePrompts.notification.bulkDeletedSuccessDesc", { defaultValue: "Selected prompts have been deleted." })
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: savePromptMutation, isPending: savePromptLoading } =
+    useMutation({
+      mutationFn: savePrompt,
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["fetchAllPrompts"]
+        })
+        setDrawerOpen(false)
+        setDrawerInitialValues(null)
+        notification.success({
+          message: t("managePrompts.notification.addSuccess"),
+          description: t("managePrompts.notification.addSuccessDesc")
+        })
+      },
+      onError: (error) => {
+        notification.error({
+          message: t("managePrompts.notification.error"),
+          description:
+            error?.message || t("managePrompts.notification.someError")
+        })
+      }
+    })
+
+  const { mutate: updatePromptDirect } = useMutation({
+    mutationFn: updatePrompt,
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["fetchAllPrompts"]
+      })
+    },
+    onError: (error) => {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description:
+          error?.message || t("managePrompts.notification.someError")
+      })
+    }
+  })
+
+  const { mutate: updatePromptMutation, isPending: isUpdatingPrompt } =
+    useMutation({
+      mutationFn: async (data: any) => {
+        return await updatePrompt({
+          ...data,
+          id: editId
+        })
+      },
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["fetchAllPrompts"]
+        })
+        setDrawerOpen(false)
+        setDrawerInitialValues(null)
+        notification.success({
+          message: t("managePrompts.notification.updatedSuccess"),
+          description: t("managePrompts.notification.updatedSuccessDesc")
+        })
+      },
+      onError: (error) => {
+        notification.error({
+          message: t("managePrompts.notification.error"),
+          description:
+            error?.message || t("managePrompts.notification.someError")
+        })
+      }
+    })
+
+  const { mutate: updateCopilotPrompt, isPending: isUpdatingCopilotPrompt } =
+    useMutation({
+      mutationFn: async (data: any) => {
+        return await setAllCopilotPrompts([
+          {
+            key: data.key,
+            prompt: data.prompt
+          }
+        ])
+      },
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["fetchCopilotPrompts"]
+        })
+        setOpenCopilotEdit(false)
+        editCopilotForm.resetFields()
+        notification.success({
+          message: t("managePrompts.notification.updatedSuccess"),
+          description: t("managePrompts.notification.updatedSuccessDesc")
+        })
+      },
+      onError: (error) => {
+        notification.error({
+          message: t("managePrompts.notification.error"),
+          description:
+            error?.message || t("managePrompts.notification.someError")
+        })
+      }
+    })
+
+  const allTags = useMemo(() => {
+    const set = new Set<string>()
+    ;(data || []).forEach((p: any) =>
+      (getPromptKeywords(p) || []).forEach((t: string) => set.add(t))
+    )
+    return Array.from(set.values())
+  }, [data, getPromptKeywords])
+
+  const filteredData = useMemo(() => {
+    let items = (data || []) as any[]
+    if (typeFilter !== "all") {
+      items = items.filter((p) => {
+        const promptType = getPromptType(p)
+        if (typeFilter === "system") return promptType === "system" || promptType === "mixed"
+        if (typeFilter === "quick") return promptType === "quick" || promptType === "mixed"
+        return promptType === typeFilter
+      })
+    }
+    if (tagFilter.length > 0) {
+      items = items.filter((p) =>
+        (getPromptKeywords(p) || []).some((t: string) => tagFilter.includes(t))
+      )
+    }
+    if (searchText.trim().length > 0) {
+      const q = searchText.toLowerCase()
+      items = items.filter(
+        (p) => {
+          const haystack = [
+            p.title,
+            p.name,
+            p.content,
+            p.system_prompt,
+            p.user_prompt,
+            p.details,
+            p.author,
+            ...(getPromptKeywords(p) || [])
+          ]
+          return haystack.some((field: any) =>
+            typeof field === "string" ? field.toLowerCase().includes(q) : false
+          )
+        }
+      )
+    }
+    // favorites first, then newest
+    items = items.sort(
+      (a, b) =>
+        Number(!!b.favorite) - Number(!!a.favorite) ||
+        (b.createdAt || 0) - (a.createdAt || 0)
+    )
+    return items
+  }, [data, typeFilter, tagFilter, searchText, getPromptKeywords, getPromptType])
+
+  React.useEffect(() => {
+    // Only clear selection for items that are no longer visible
+    const visibleIds = new Set(filteredData.map((p: any) => p.id))
+    setSelectedRowKeys((prev) => {
+      const stillVisible = prev.filter((key) => visibleIds.has(key as string))
+      if (stillVisible.length !== prev.length) {
+        if (stillVisible.length < prev.length && prev.length > 0) {
+          notification.info({
+            message: t("managePrompts.selectionFiltered", {
+              defaultValue: "Some selected items were filtered out"
+            }),
+            duration: 2
+          })
+        }
+        return stillVisible
+      }
+      return prev
+    })
+  }, [filteredData, t])
+
+  const triggerExport = async () => {
+    try {
+      if (guardPrivateMode()) return
+      const items = await exportPrompts()
+      const blob = new Blob([JSON.stringify(items, null, 2)], {
+        type: "application/json"
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      const safeStamp = new Date().toISOString().replace(/[:]/g, "-")
+      a.download = `prompts_${safeStamp}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: t("managePrompts.notification.someError")
+      })
+    }
+  }
+
+  const triggerBulkExport = async () => {
+    try {
+      if (guardPrivateMode()) return
+      const selectedItems = (data || []).filter((p: any) => selectedRowKeys.includes(p.id))
+      const blob = new Blob([JSON.stringify(selectedItems, null, 2)], {
+        type: "application/json"
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `prompts_selected_${new Date().toISOString()}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      setSelectedRowKeys([])
+    } catch (e) {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: t("managePrompts.notification.someError")
+      })
+    }
+  }
+
+  const handleImportFile = async (file: File) => {
+    try {
+      if (guardPrivateMode()) return
+      const text = await file.text()
+      const json = JSON.parse(text)
+      const prompts = Array.isArray(json) ? json : json?.prompts || []
+      if (importMode === "replace") {
+        const ok = await confirmDanger({
+          title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
+          content: t("managePrompts.importMode.replaceConfirm", {
+            defaultValue:
+              "Replace will overwrite all current prompts with the imported file. Continue?"
+          }),
+          okText: t("common:continue", { defaultValue: "Continue" }),
+          cancelText: t("common:cancel", { defaultValue: "Cancel" })
+        })
+        if (!ok) return
+      }
+      await importPromptsV2(prompts, {
+        replaceExisting: importMode === "replace",
+        mergeData: importMode === "merge"
+      })
+      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
+      notification.success({
+        message: t("managePrompts.notification.addSuccess"),
+        description: t("managePrompts.notification.addSuccessDesc")
+      })
+    } catch (e) {
+      notification.error({
+        message: t("managePrompts.notification.error"),
+        description: t("managePrompts.notification.someError")
+      })
+    }
+  }
+
+  const handleInsertChoice = (choice: "system" | "quick") => {
+    if (!insertPrompt) return
+    if (choice === "system") {
+      setSelectedSystemPrompt(insertPrompt.id)
+      setSelectedQuickPrompt(undefined)
+      setInsertPrompt(null)
+      navigate("/")
+      return
+    }
+    const quickContent = insertPrompt.userText ?? insertPrompt.systemText
+    if (quickContent) {
+      setSelectedQuickPrompt(quickContent)
+      setSelectedSystemPrompt(undefined)
+      setInsertPrompt(null)
+      navigate("/")
+    }
+  }
+
+  const openCreateDrawer = () => {
+    if (guardPrivateMode()) return
+    setDrawerMode("create")
+    setEditId("")
+    setDrawerInitialValues(null)
+    setDrawerOpen(true)
+  }
+
+  const openEditDrawer = (record: any) => {
+    if (guardPrivateMode()) return
+    setEditId(record.id)
+    setDrawerMode("edit")
+    const { systemText, userText } = getPromptTexts(record)
+    setDrawerInitialValues({
+      name: record?.name || record?.title,
+      author: record?.author,
+      details: record?.details,
+      system_prompt: systemText,
+      user_prompt: userText,
+      keywords: getPromptKeywords(record)
+    })
+    setDrawerOpen(true)
+  }
+
+  const handleDrawerSubmit = (values: any) => {
+    const payload = normalizePromptPayload(values)
+    if (drawerMode === "create") {
+      savePromptMutation(payload)
+    } else {
+      updatePromptMutation(payload)
+    }
+  }
+
+  function customPrompts() {
+    return (
+      <div data-testid="prompts-custom">
+        <div className="mb-6 space-y-3">
+          {/* Bulk action bar - shown when rows are selected */}
+          {selectedRowKeys.length > 0 && (
+            <div className="flex items-center gap-3 p-2 bg-primary/10 rounded-md border border-primary/30">
+              <span className="text-sm text-primary">
+                {t("managePrompts.bulk.selected", {
+                  defaultValue: "{{count}} selected",
+                  count: selectedRowKeys.length
+                })}
+              </span>
+              <button
+                onClick={() => triggerBulkExport()}
+                data-testid="prompts-bulk-export"
+                className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10">
+                <Download className="size-3" /> {t("managePrompts.bulk.export", { defaultValue: "Export selected" })}
+              </button>
+              <button
+                onClick={async () => {
+                  if (guardPrivateMode()) return
+                  const ok = await confirmDanger({
+                    title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
+                    content: t("managePrompts.bulk.deleteConfirm", {
+                      defaultValue: "Are you sure you want to delete {{count}} prompts?",
+                      count: selectedRowKeys.length
+                    }),
+                    okText: t("common:delete", { defaultValue: "Delete" }),
+                    cancelText: t("common:cancel", { defaultValue: "Cancel" })
+                  })
+                  if (!ok) return
+                  bulkDeletePrompts(selectedRowKeys as string[])
+                }}
+                disabled={isBulkDeleting}
+                data-testid="prompts-bulk-delete"
+                className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-50">
+                <Trash2 className="size-3" /> {t("managePrompts.bulk.delete", { defaultValue: "Delete selected" })}
+              </button>
+              <button
+                onClick={() => setSelectedRowKeys([])}
+                data-testid="prompts-clear-selection"
+                className="ml-auto text-sm text-text-muted hover:text-text">
+                {t("common:clearSelection", { defaultValue: "Clear selection" })}
+              </button>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {/* Left: Action buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={openCreateDrawer}
+                data-testid="prompts-add"
+                className="inline-flex items-center rounded-md border border-transparent bg-primary px-2 py-2 text-md font-medium leading-4 text-white shadow-sm hover:bg-primaryStrong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50">
+                {t("managePrompts.addBtn")}
+              </button>
+              <button
+                onClick={() => triggerExport()}
+                data-testid="prompts-export"
+                className="inline-flex items-center gap-2 rounded-md border border-border px-2 py-2 text-md font-medium leading-4 text-text hover:bg-surface2">
+                <Download className="size-4" /> {t("managePrompts.export", { defaultValue: "Export" })}
+              </button>
+              {/* Import controls grouped together */}
+              <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
+                <button
+                  onClick={() => {
+                    if (guardPrivateMode()) return
+                    fileInputRef.current?.click()
+                  }}
+                  data-testid="prompts-import"
+                  className="inline-flex items-center gap-2 px-2 py-2 text-md font-medium leading-4 text-text hover:bg-surface2">
+                  <UploadCloud className="size-4" /> {t("managePrompts.import", { defaultValue: "Import" })}
+                </button>
+                <Select
+                  value={importMode}
+                  onChange={(v) => setImportMode(v as any)}
+                  data-testid="prompts-import-mode"
+                  options={[
+                    { label: t("managePrompts.importMode.merge", { defaultValue: "Merge" }), value: "merge" },
+                    { label: t("managePrompts.importMode.replace", { defaultValue: "Replace" }), value: "replace" }
+                  ]}
+                  variant="borderless"
+                  style={{ width: 95 }}
+                  popupMatchSelectWidth={false}
+                />
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json"
+                className="hidden"
+                data-testid="prompts-import-file"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) handleImportFile(file)
+                  e.currentTarget.value = ""
+                }}
+              />
+            </div>
+            {/* Right: Filters */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Tooltip title={t("managePrompts.filterHelp", {
+                defaultValue: "Search matches name, author, details, prompt text, and keywords."
+              })}>
+                <Input
+                  allowClear
+                  placeholder={t("managePrompts.search", { defaultValue: "Search prompts..." })}
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  data-testid="prompts-search"
+                  style={{ width: 220 }}
+                />
+              </Tooltip>
+              <Select
+                value={typeFilter}
+                onChange={(v) => setTypeFilter(v as any)}
+                data-testid="prompts-type-filter"
+                style={{ width: 130 }}
+                options={[
+                  { label: t("managePrompts.filter.all", { defaultValue: "All types" }), value: "all" },
+                  { label: t("managePrompts.filter.system", { defaultValue: "System" }), value: "system" },
+                  { label: t("managePrompts.filter.quick", { defaultValue: "Quick" }), value: "quick" }
+                ]}
+              />
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder={t("managePrompts.tags.placeholder", { defaultValue: "Filter keywords" })}
+                style={{ minWidth: 180 }}
+                value={tagFilter}
+                onChange={(v) => setTagFilter(v)}
+                data-testid="prompts-tag-filter"
+                options={allTags.map((t) => ({ label: t, value: t }))}
+              />
+            </div>
+          </div>
+        </div>
+
+        {status === "pending" && <Skeleton paragraph={{ rows: 8 }} />}
+
+        {status === "success" && Array.isArray(data) && data.length === 0 && (
+          <FeatureEmptyState
+            title={t("settings:managePrompts.emptyTitle", {
+              defaultValue: "No custom prompts yet"
+            })}
+            description={t("settings:managePrompts.emptyDescription", {
+              defaultValue:
+                "Create reusable prompts for recurring tasks, workflows, and team conventions."
+            })}
+            examples={[
+              t("settings:managePrompts.emptyExample1", {
+                defaultValue:
+                  "Save your favorite system prompt for summaries, explanations, or translations."
+              }),
+              t("settings:managePrompts.emptyExample2", {
+                defaultValue:
+                  "Create quick prompts for common actions like drafting emails or refining notes."
+              })
+            ]}
+            primaryActionLabel={t("settings:managePrompts.emptyPrimaryCta", {
+              defaultValue: "Create prompt"
+            })}
+            onPrimaryAction={openCreateDrawer}
+          />
+        )}
+
+        {status === "success" && Array.isArray(data) && data.length > 0 && (
+          <Table
+            data-testid="prompts-table"
+            columns={[
+              {
+                title: "",
+                dataIndex: "favorite",
+                key: "favorite",
+                width: 48,
+                render: (_: any, record: any) => (
+                  <button
+                    onClick={() =>
+                      updatePromptDirect({
+                        id: record.id,
+                        title: record.title,
+                        name: record.name,
+                        content: record.content,
+                        is_system: record.is_system,
+                        keywords: getPromptKeywords(record),
+                        tags: getPromptKeywords(record),
+                        favorite: !record?.favorite
+                      })
+                    }
+                    className="text-warn"
+                    title={record?.favorite ? t("managePrompts.unfavorite", { defaultValue: "Unfavorite" }) : t("managePrompts.favorite", { defaultValue: "Favorite" })}
+                    data-testid={`prompt-favorite-${record.id}`}
+                  >
+                    <Star className={`size-4 ${record?.favorite ? '' : 'opacity-30'}`} />
+                  </button>
+                )
+              },
+              {
+                title: t("managePrompts.columns.title"),
+                dataIndex: "title",
+                key: "title",
+                render: (_: any, record: any) => (
+                  <div className="flex max-w-64 flex-col">
+                    <span className="line-clamp-1 font-medium">
+                      {record?.name || record?.title}
+                    </span>
+                    {record?.author && (
+                      <span className="text-xs text-text-muted ">
+                        {t("managePrompts.form.author.label", {
+                          defaultValue: "Author"
+                        })}
+                        : {record.author}
+                      </span>
+                    )}
+                    {record?.details && (
+                      <span className="text-xs text-text-muted line-clamp-2">
+                        {record.details}
+                      </span>
+                    )}
+                  </div>
+                )
+              },
+              {
+                title: t("managePrompts.columns.prompt"),
+                key: "content",
+                render: (_: any, record: any) => {
+                  const { systemText, userText } = getPromptTexts(record)
+                  return (
+                    <div className="flex max-w-[26rem] flex-col gap-1">
+                      {systemText && (
+                        <div className="flex items-start gap-2">
+                          <Tag color="volcano">
+                            {t("managePrompts.form.systemPrompt.shortLabel", {
+                              defaultValue: "System"
+                            })}
+                          </Tag>
+                          <span className="line-clamp-2">{systemText}</span>
+                        </div>
+                      )}
+                      {userText && (
+                        <div className="flex items-start gap-2">
+                          <Tag color="blue">
+                            {t("managePrompts.form.userPrompt.shortLabel", {
+                              defaultValue: "User"
+                            })}
+                          </Tag>
+                          <span className="line-clamp-2">{userText}</span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                }
+              },
+              {
+                title: t("managePrompts.tags.label", { defaultValue: "Keywords" }),
+                dataIndex: "keywords",
+                key: "keywords",
+                render: (_: any, record: any) => {
+                  const tags = getPromptKeywords(record)
+                  return (
+                    <div className="flex max-w-64 flex-wrap gap-1">
+                      {(tags || []).map((tag: string) => (
+                        <Tag key={tag}>{tag}</Tag>
+                      ))}
+                    </div>
+                  )
+                }
+              },
+              {
+                title: t("managePrompts.columns.type"),
+                key: "type",
+                width: 80,
+                render: (_: any, record: any) => {
+                  const promptType = getPromptType(record)
+                  const hasSystem = promptType === "system" || promptType === "mixed"
+                  const hasQuick = promptType === "quick" || promptType === "mixed"
+                  return (
+                    <div className="flex items-center gap-1">
+                      <Tooltip title={systemPromptLabel}>
+                        <Computer
+                          className={`size-4 ${hasSystem ? "text-orange-500" : "opacity-20"}`}
+                        />
+                      </Tooltip>
+                      <Tooltip title={quickPromptLabel}>
+                        <Zap
+                          className={`size-4 ${hasQuick ? "text-blue-500" : "opacity-20"}`}
+                        />
+                      </Tooltip>
+                    </div>
+                  )
+                }
+              },
+              {
+                title: t("managePrompts.columns.actions"),
+                width: 120,
+                render: (_, record) => (
+                  <PromptActionsMenu
+                    promptId={record.id}
+                    disabled={isFireFoxPrivateMode}
+                    onEdit={() => openEditDrawer(record)}
+                    onDuplicate={() => {
+                      savePromptMutation({
+                        title: `${record.title || record.name} (Copy)`,
+                        name: `${record.name || record.title} (Copy)`,
+                        content: record.content,
+                        is_system: record.is_system,
+                        keywords: getPromptKeywords(record),
+                        tags: getPromptKeywords(record),
+                        favorite: !!record?.favorite,
+                        author: record?.author,
+                        details: record?.details,
+                        system_prompt: record?.system_prompt,
+                        user_prompt: record?.user_prompt
+                      })
+                    }}
+                    onUseInChat={() => {
+                      const { systemText, userText } = getPromptTexts(record)
+                      const hasSystem =
+                        typeof systemText === "string" &&
+                        systemText.trim().length > 0
+                      const hasUser =
+                        typeof userText === "string" &&
+                        userText.trim().length > 0
+
+                      if (hasSystem) {
+                        setInsertPrompt({
+                          id: record.id,
+                          systemText,
+                          userText: hasUser ? userText : undefined
+                        })
+                        return
+                      }
+
+                      const quickContent = userText ?? record?.content
+                      if (quickContent) {
+                        setSelectedQuickPrompt(quickContent)
+                        setSelectedSystemPrompt(undefined)
+                        navigate("/")
+                      }
+                    }}
+                    onDelete={async () => {
+                      const ok = await confirmDanger({
+                        title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
+                        content: t("managePrompts.confirm.delete"),
+                        okText: t("common:delete", { defaultValue: "Delete" }),
+                        cancelText: t("common:cancel", { defaultValue: "Cancel" })
+                      })
+                      if (!ok) return
+                      deletePrompt(record.id)
+                    }}
+                  />
+                )
+              }
+            ]}
+            bordered
+            dataSource={filteredData}
+            rowKey={(record) => record.id}
+            onRow={(record) =>
+              ({
+                "data-testid": `prompt-row-${record.id}`
+              } as React.HTMLAttributes<HTMLTableRowElement>)
+            }
+            rowSelection={{
+              selectedRowKeys,
+              onChange: (keys) => setSelectedRowKeys(keys),
+              getCheckboxProps: () => ({
+                disabled: isFireFoxPrivateMode
+              })
+            }}
+          />
+        )}
+      </div>
+    )
+  }
+
+  function copilotPrompts() {
+    if (!isOnline) {
+      return (
+        <ConnectFeatureBanner
+          title={t("settings:managePrompts.emptyConnectTitle", {
+            defaultValue: "Connect to use Prompts"
+          })}
+          description={t("settings:managePrompts.emptyConnectDescription", {
+            defaultValue:
+              "To manage reusable prompts, first connect to your tldw server."
+          })}
+          examples={[
+            t("settings:managePrompts.emptyConnectExample1", {
+              defaultValue:
+                "Open Settings → tldw server to add your server URL."
+            }),
+            t("settings:managePrompts.emptyConnectExample2", {
+              defaultValue:
+                "Once connected, create custom prompts you can reuse across chats."
+            })
+          ]}
+        />
+      )
+    }
+    return (
+      <div>
+        {copilotStatus === "pending" && <Skeleton paragraph={{ rows: 8 }} />}
+
+        {copilotStatus === "success" && Array.isArray(copilotData) && copilotData.length === 0 && (
+          <FeatureEmptyState
+            title={t("managePrompts.copilotEmptyTitle", {
+              defaultValue: "No Copilot prompts available"
+            })}
+            description={t("managePrompts.copilotEmptyDescription", {
+              defaultValue:
+                "Copilot prompts are predefined templates provided by your tldw server."
+            })}
+            examples={[
+              t("managePrompts.copilotEmptyExample1", {
+                defaultValue:
+                  "Check your server version or configuration if you expect Copilot prompts to be available."
+              }),
+              t("managePrompts.copilotEmptyExample2", {
+                defaultValue:
+                  "After updating your server, reload the extension and return to this tab."
+              })
+            ]}
+            primaryActionLabel={t("settings:healthSummary.diagnostics", {
+              defaultValue: "Open Diagnostics"
+            })}
+            onPrimaryAction={() => navigate("/settings/health")}
+          />
+        )}
+
+        {copilotStatus === "success" && Array.isArray(copilotData) && copilotData.length > 0 && (
+          <Table
+            columns={[
+              {
+                title: t("managePrompts.columns.title"),
+                dataIndex: "key",
+                key: "key",
+                render: (content) => (
+                  <span className="line-clamp-1">
+                    <Tag color={tagColors[content || "default"]}>
+                      {t(`common:copilot.${content}`)}
+                    </Tag>
+                  </span>
+                )
+              },
+              {
+                title: t("managePrompts.columns.prompt"),
+                dataIndex: "prompt",
+                key: "prompt",
+                render: (content) => (
+                  <span className="line-clamp-1">{content}</span>
+                )
+              },
+              {
+                render: (_, record) => (
+                  <div className="flex gap-4">
+                    <Tooltip title={t("managePrompts.tooltip.edit")}>
+                      <button
+                        type="button"
+                        aria-label={t("managePrompts.tooltip.edit")}
+                        onClick={() => {
+                          setEditCopilotId(record.key)
+                          editCopilotForm.setFieldsValue(record)
+                          setOpenCopilotEdit(true)
+                        }}
+                        className="text-text-muted ">
+                        <Pen className="size-4" />
+                      </button>
+                    </Tooltip>
+                  </div>
+                )
+              }
+            ]}
+            bordered
+            dataSource={copilotData}
+            rowKey={(record) => record.key}
+          />
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {(promptLoadFailed || copilotLoadFailed) && (
+        <Alert
+          type="error"
+          showIcon
+          className="mb-4"
+          message={t(
+            "managePrompts.partialLoad",
+            "Some prompt data isn’t available"
+          )}
+          description={
+            loadErrorDescription ||
+            t(
+              "managePrompts.loadErrorHelp",
+              "Check your server connection and refresh to try again."
+            )
+          }
+        />
+      )}
+      <div className="flex flex-col items-start gap-1 mb-6">
+        <Segmented
+          size="large"
+          options={[
+            {
+              label: t("managePrompts.segmented.custom", {
+                defaultValue: "Custom prompts"
+              }),
+              value: "custom"
+            },
+            {
+              label: (
+                <Tooltip title={t("managePrompts.segmented.copilotTooltip", {
+                  defaultValue: "Predefined prompts from your tldw server that help with common tasks"
+                })}>
+                  <span>{t("managePrompts.segmented.copilot", { defaultValue: "Copilot prompts" })}</span>
+                </Tooltip>
+              ),
+              value: "copilot",
+              disabled: !isOnline
+            }
+          ]}
+          data-testid="prompts-segmented"
+          value={selectedSegment}
+          onChange={(value) => {
+            setSelectedSegment(value as "custom" | "copilot")
+          }}
+        />
+        <p className="text-xs text-text-muted ">
+          {selectedSegment === "custom"
+            ? t("managePrompts.segmented.helpCustom", {
+                defaultValue:
+                  "Create and manage reusable prompts you can insert into chat."
+              })
+            : t("managePrompts.segmented.helpCopilot", {
+                defaultValue:
+                  "View and tweak predefined Copilot prompts provided by your server."
+              })}
+        </p>
+      </div>
+      {selectedSegment === "custom" && customPrompts()}
+      {selectedSegment === "copilot" && copilotPrompts()}
+
+      <PromptDrawer
+        open={drawerOpen}
+        onClose={() => {
+          setDrawerOpen(false)
+          setDrawerInitialValues(null)
+        }}
+        mode={drawerMode}
+        initialValues={drawerInitialValues}
+        onSubmit={handleDrawerSubmit}
+        isLoading={drawerMode === "create" ? savePromptLoading : isUpdatingPrompt}
+        allTags={allTags}
+      />
+
+      <Modal
+        title={t("managePrompts.modal.editTitle")}
+        open={openCopilotEdit}
+        onCancel={() => setOpenCopilotEdit(false)}
+        footer={null}>
+        <Form
+          onFinish={(values) =>
+            updateCopilotPrompt({
+              key: editCopilotId,
+              prompt: values.prompt
+            })
+          }
+          layout="vertical"
+          form={editCopilotForm}>
+          <Form.Item
+            name="prompt"
+            label={t("managePrompts.form.prompt.label")}
+            rules={[
+              {
+                required: true,
+                message: t("managePrompts.form.prompt.required")
+              },
+              {
+                validator: (_, value) => {
+                  if (value && value.includes("{text}")) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(
+                    new Error(
+                      t("managePrompts.form.prompt.missingTextPlaceholder")
+                    )
+                  )
+                }
+              }
+            ]}>
+            <Input.TextArea
+              placeholder={t("managePrompts.form.prompt.placeholder")}
+              autoSize={{ minRows: 3, maxRows: 10 }}
+            />
+          </Form.Item>
+
+          <Form.Item>
+            <button
+              disabled={isUpdatingCopilotPrompt}
+              className="inline-flex justify-center w-full text-center mt-4 items-center rounded-md border border-transparent bg-primary px-2 py-2 text-sm font-medium leading-4 text-white shadow-sm hover:bg-primaryStrong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50">
+              {isUpdatingCopilotPrompt
+                ? t("managePrompts.form.btnEdit.saving")
+                : t("managePrompts.form.btnEdit.save")}
+            </button>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={t("option:promptInsert.confirmTitle", {
+          defaultValue: "Use prompt in chat?"
+        })}
+        open={!!insertPrompt}
+        onCancel={() => setInsertPrompt(null)}
+        footer={null}
+        width={520}>
+        <div className="space-y-3">
+          {/* System option */}
+          {insertPrompt?.systemText && (
+            <button
+              type="button"
+              onClick={() => handleInsertChoice("system")}
+              data-testid="prompt-insert-system"
+              className="w-full text-left p-4 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors">
+              <div className="flex items-center gap-2 mb-2">
+                <Computer className="size-5 text-orange-500" />
+                <span className="font-medium">
+                  {t("option:promptInsert.useAsSystem", {
+                    defaultValue: "Use as System Instruction"
+                  })}
+                </span>
+              </div>
+              <p className="text-xs text-text-muted mb-2">
+                {t("option:promptInsert.systemDescription", {
+                  defaultValue: "Sets the AI's behavior and persona for the conversation."
+                })}
+              </p>
+              <div className="bg-surface2 rounded p-2 text-xs line-clamp-3 font-mono text-text-muted">
+                {insertPrompt.systemText}
+              </div>
+            </button>
+          )}
+
+          {/* Quick/User option */}
+          {insertPrompt?.userText && (
+            <button
+              type="button"
+              onClick={() => handleInsertChoice("quick")}
+              data-testid="prompt-insert-quick"
+              className="w-full text-left p-4 rounded-lg border border-border hover:border-primary hover:bg-primary/5 transition-colors">
+              <div className="flex items-center gap-2 mb-2">
+                <Zap className="size-5 text-blue-500" />
+                <span className="font-medium">
+                  {t("option:promptInsert.useAsTemplate", {
+                    defaultValue: "Insert as Message Template"
+                  })}
+                </span>
+              </div>
+              <p className="text-xs text-text-muted mb-2">
+                {t("option:promptInsert.templateDescription", {
+                  defaultValue: "Adds this text to your message composer."
+                })}
+              </p>
+              <div className="bg-surface2 rounded p-2 text-xs line-clamp-3 font-mono text-text-muted">
+                {insertPrompt.userText}
+              </div>
+            </button>
+          )}
+        </div>
+      </Modal>
+    </div>
+  )
+}

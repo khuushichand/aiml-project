@@ -121,10 +121,11 @@ def _normalize_payload(payload: Any) -> Dict[str, Any]:
     if isinstance(payload, str):
         try:
             parsed = json.loads(payload)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             logger.debug(
-                "Failed to parse payload as JSON: {}",
-                payload[:100] if len(payload) > 100 else payload,
+                "Failed to parse payload as JSON (length={}, error={})",
+                len(payload),
+                exc,
             )
             return {}
         return parsed if isinstance(parsed, dict) else {}
@@ -370,6 +371,7 @@ async def list_media_ingest_jobs(
     limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
+    _: None = Depends(check_rate_limit),
     jm: JobManager = Depends(get_job_manager),
 ) -> MediaIngestJobListResponse:
     owner_filter = None if principal.is_admin else str(current_user.id)

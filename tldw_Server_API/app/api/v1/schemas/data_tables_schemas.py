@@ -134,7 +134,7 @@ class DataTableRow(BaseModel):
 class DataTableSource(BaseModel):
     """Source metadata associated with a table."""
 
-    source_type: str
+    source_type: SourceType
     source_id: str
     title: Optional[str] = None
     snapshot: Optional[Any] = None

@@ -30,7 +30,7 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import FileCreateOptions
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
-from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
+from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 from tldw_Server_API.app.core.Jobs.worker_utils import coerce_int as _coerce_int
 from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env as _jobs_manager
 from tldw_Server_API.app.core.exceptions import FileArtifactsJobError
@@ -83,7 +83,7 @@ async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         structured = json.loads(row.structured_json)
-    except Exception as exc:
+    except (json.JSONDecodeError, TypeError) as exc:
         raise FileArtifactsJobError(f"structured_json_invalid:{exc}", retryable=False) from exc
 
     options = FileCreateOptions(

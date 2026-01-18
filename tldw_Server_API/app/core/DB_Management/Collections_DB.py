@@ -638,10 +638,12 @@ class CollectionsDatabase:
             return
 
         existing = self._list_output_template_names()
+        seen: set[str] = set()
         for summary in summaries:
             name = summary.name
-            if name in existing:
+            if name in seen:
                 continue
+            seen.add(name)
             try:
                 record = template_store.load_template(name)
             except Exception as exc:
@@ -649,20 +651,60 @@ class CollectionsDatabase:
                 continue
             fmt = record.format.lower()
             type_ = self._infer_output_template_type(record.name, fmt)
-            metadata_json = json.dumps({"seeded_from": "watchlists_templates"}, ensure_ascii=False)
+            desired_meta = {"seeded_from": "watchlists_templates"}
+            metadata_json = json.dumps(desired_meta, ensure_ascii=False)
+
+            if name not in existing:
+                try:
+                    self.create_output_template(
+                        name=record.name,
+                        type_=type_,
+                        format_=fmt,
+                        body=record.content,
+                        description=record.description,
+                        is_default=False,
+                        metadata_json=metadata_json,
+                    )
+                    existing.add(record.name)
+                except Exception as exc:
+                    logger.debug("collections: failed to seed watchlists template %s: %s", record.name, exc)
+                continue
+
             try:
-                self.create_output_template(
-                    name=record.name,
-                    type_=type_,
-                    format_=fmt,
-                    body=record.content,
-                    description=record.description,
-                    is_default=False,
-                    metadata_json=metadata_json,
-                )
-                existing.add(record.name)
+                current = self.get_output_template_by_name(name)
+            except KeyError:
+                continue
             except Exception as exc:
-                logger.debug("collections: failed to seed watchlists template %s: %s", record.name, exc)
+                logger.debug("collections: failed to lookup watchlists template %s: %s", name, exc)
+                continue
+
+            current_meta: Dict[str, Any] = {}
+            if current.metadata_json:
+                try:
+                    current_meta = json.loads(current.metadata_json)
+                except Exception:
+                    current_meta = {}
+
+            if current_meta.get("seeded_from") != "watchlists_templates":
+                continue
+
+            patch: Dict[str, Any] = {}
+            if current.body != record.content:
+                patch["body"] = record.content
+            if current.description != record.description:
+                patch["description"] = record.description
+            if current.format != fmt:
+                patch["format"] = fmt
+            if current.type != type_:
+                patch["type"] = type_
+            if current_meta.get("seeded_from") != desired_meta["seeded_from"]:
+                patch["metadata_json"] = metadata_json
+
+            if patch:
+                try:
+                    self.update_output_template(current.id, patch)
+                except Exception as exc:
+                    logger.debug("collections: failed to refresh watchlists template %s: %s", name, exc)
 
     # ------------------------
     # Collections Tags helpers
@@ -980,7 +1022,7 @@ class CollectionsDatabase:
         word_count: Optional[int],
         published_at: Optional[str],
         status: Optional[str] = None,
-        favorite: bool = False,
+        favorite: Optional[bool] = None,
         metadata: Optional[Dict[str, Any]] = None,
         media_id: Optional[int] = None,
         job_id: Optional[int] = None,
@@ -1068,7 +1110,10 @@ class CollectionsDatabase:
         def _refresh_derived() -> tuple[Optional[str], Optional[str], int, str]:
             current_canonical = canonical_url or url
             current_domain = domain or self._domain_from_url(current_canonical)
-            current_favorite = 1 if favorite else 0
+            if favorite is None and preserve_existing_on_null and existing_row is not None:
+                current_favorite = int(existing_row.get("favorite") or 0)
+            else:
+                current_favorite = 1 if favorite else 0
             current_status = status or "new"
             return current_canonical, current_domain, current_favorite, current_status
 

@@ -11,6 +11,7 @@ import { apiClient } from '@/lib/api';
 interface ItemRecord {
   id: number;
   content_item_id?: number | null;
+  media_id?: number | null;
   title: string;
   url?: string;
   domain?: string;
@@ -88,14 +89,14 @@ export default function ItemsPage() {
     () => items.filter((item) => item.content_item_id && selectedIds.includes(item.content_item_id)),
     [items, selectedIds]
   );
-  const outputItemIds = useMemo(
+  const outputMediaIds = useMemo(
     () =>
       selectedItems
-        .filter((item) => typeof item.content_item_id === 'number' && item.id !== item.content_item_id)
-        .map((item) => item.id),
+        .map((item) => item.media_id)
+        .filter((id): id is number => typeof id === 'number'),
     [selectedItems]
   );
-  const outputSkippedCount = Math.max(0, selectedItems.length - outputItemIds.length);
+  const outputSkippedCount = Math.max(0, selectedItems.length - outputMediaIds.length);
 
   const parseTags = (value: string): string[] =>
     value
@@ -236,7 +237,7 @@ export default function ItemsPage() {
         show({ title: 'Select a template', variant: 'warning' });
         return;
       }
-      if (outputItemIds.length === 0) {
+      if (outputMediaIds.length === 0) {
         show({ title: 'No selected items are eligible for outputs', description: 'Items must have media IDs.', variant: 'warning' });
         return;
       }
@@ -244,7 +245,7 @@ export default function ItemsPage() {
       try {
         const payload: Record<string, unknown> = {
           template_id: bulkTemplateId,
-          item_ids: outputItemIds,
+          item_ids: outputMediaIds,
         };
         if (bulkOutputTitle.trim()) {
           payload.title = bulkOutputTitle.trim();
@@ -465,7 +466,7 @@ export default function ItemsPage() {
                   placeholder="Weekly briefing"
                 />
                 <div className="text-xs text-gray-500">
-                  Generates an output from {outputItemIds.length} item(s).
+                  Generates an output from {outputMediaIds.length} item(s).
                   {outputSkippedCount > 0 ? ` Skipping ${outputSkippedCount} item(s) without media IDs.` : ''}
                 </div>
               </>
