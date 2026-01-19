@@ -10,6 +10,8 @@
       
       
       
+        <link rel="canonical" href="https://rmusser01.github.io/tldw_server/API-related/API_README/">
+      
       
         <link rel="prev" href="../Endpoints_Feature_Map/">
       
@@ -912,6 +914,8 @@
       
         
       
+        
+      
     
     
     
@@ -1224,6 +1228,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#collections-feeds-apiv1collectionsfeeds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Collections Feeds - /api/v1/collections/feeds
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1426,6 +1441,34 @@
     
   
     Reading List API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Collections_Feeds_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Collections Feeds API
   
 
     
@@ -1799,10 +1842,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_25" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_26" >
         
           
-          <label class="md-nav__link" for="__nav_4_25" id="__nav_4_25_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_26" id="__nav_4_26_label" tabindex="0">
             
   
   
@@ -1820,8 +1863,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_25_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_25">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_26_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_26">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -4684,6 +4727,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#collections-feeds-apiv1collectionsfeeds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Collections Feeds - /api/v1/collections/feeds
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4818,6 +4872,16 @@ See <a href="../API_Design/">API Design</a> for more details. For a quick map of
 <li><code>GET /api/v1/reading/export</code> - JSONL/ZIP export</li>
 </ul>
 <p>See: <a href="../Reading_List_API/">Reading List API</a></p>
+<h4 id="collections-feeds-apiv1collectionsfeeds">Collections Feeds - <code>/api/v1/collections/feeds</code><a class="headerlink" href="#collections-feeds-apiv1collectionsfeeds" title="Permanent link">&para;</a></h4>
+<p>Collections Feeds wraps Watchlists sources/jobs to ingest RSS/Atom into Collections items with <code>origin="feed"</code>.</p>
+<ul>
+<li><code>POST /api/v1/collections/feeds</code> - create a feed subscription</li>
+<li><code>GET /api/v1/collections/feeds</code> - list feed subscriptions</li>
+<li><code>GET /api/v1/collections/feeds/{feed_id}</code> - get a feed subscription</li>
+<li><code>PATCH /api/v1/collections/feeds/{feed_id}</code> - update a feed subscription</li>
+<li><code>DELETE /api/v1/collections/feeds/{feed_id}</code> - delete a feed subscription</li>
+</ul>
+<p>See: <a href="../Collections_Feeds_API/">Collections Feeds API</a></p>
 
 
 

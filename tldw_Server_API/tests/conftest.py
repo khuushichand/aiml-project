@@ -62,6 +62,7 @@ try:
 except Exception:
     pass
 import logging
+import weakref
 # Dump lingering non-daemon threads at exit to avoid silent hangs
 import threading
 import atexit
@@ -76,6 +77,67 @@ except Exception:
     # Best-effort; tracing is optional
     pass
 import pytest
+
+
+_AIOSQLITE_CONNECTIONS: "weakref.WeakSet[object]" = weakref.WeakSet()
+_AIOSQLITE_ORIG_CONNECT = None
+
+
+def _install_aiosqlite_tracking() -> None:
+    global _AIOSQLITE_ORIG_CONNECT
+    if _AIOSQLITE_ORIG_CONNECT is not None:
+        return
+    try:
+        import aiosqlite  # type: ignore
+    except Exception:
+        return
+    _AIOSQLITE_ORIG_CONNECT = aiosqlite.connect
+
+    async def _tracked_connect(*args, **kwargs):
+        conn = await _AIOSQLITE_ORIG_CONNECT(*args, **kwargs)
+        try:
+            _AIOSQLITE_CONNECTIONS.add(conn)
+        except Exception:
+            pass
+        return conn
+
+    try:
+        aiosqlite.connect = _tracked_connect  # type: ignore[assignment]
+        aiosqlite.connect.__wrapped__ = _AIOSQLITE_ORIG_CONNECT  # type: ignore[attr-defined]
+    except Exception:
+        _AIOSQLITE_ORIG_CONNECT = None
+
+
+async def _close_tracked_aiosqlite_connections() -> None:
+    try:
+        import aiosqlite  # type: ignore
+    except Exception:
+        return
+    conns = list(_AIOSQLITE_CONNECTIONS)
+    if not conns:
+        return
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    for conn in conns:
+        try:
+            loop = getattr(conn, "_loop", None)
+            if loop and loop is not current_loop and loop.is_running():
+                try:
+                    future = asyncio.run_coroutine_threadsafe(conn.close(), loop)
+                    await asyncio.wrap_future(future)
+                    continue
+                except Exception:
+                    pass
+            await conn.close()
+        except Exception:
+            try:
+                stop_future = conn.stop()
+                if stop_future is not None:
+                    await asyncio.wrap_future(stop_future)
+            except Exception:
+                pass
 
 
 _AUTH_ENV_BASELINE_KEYS = (
@@ -433,6 +495,7 @@ def pytest_configure(config):  # pragma: no cover - registration only
         config.addinivalue_line("markers", "stt_golden: real-audio STT adapter golden tests (opt-in via TLDW_STT_GOLDEN_ENABLE=1)")
     except Exception:
         pass
+    _install_aiosqlite_tracking()
 
 
 @pytest.fixture(scope="function")
@@ -480,6 +543,20 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
         try:
             from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
             _run_cleanup(_reset_db_pool())
+        except Exception:
+            pass
+        try:
+            from tldw_Server_API.app.core.Scheduler import stop_global_scheduler as _stop_global_scheduler
+            _run_cleanup(_stop_global_scheduler())
+        except Exception:
+            pass
+        try:
+            from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler as _get_wf_scheduler
+            _run_cleanup(_get_wf_scheduler().stop())
+        except Exception:
+            pass
+        try:
+            _run_cleanup(_close_tracked_aiosqlite_connections())
         except Exception:
             pass
         try:

@@ -22,6 +22,7 @@ Notes:
 | `audio` | API-related/Audio_Transcription_API.md |
 | `evaluations` | API-related/Evaluations_API_Unified_Reference.md |
 | `reading` | API-related/Reading_List_API.md |
+| `collections-feeds` | API-related/Collections_Feeds_API.md |
 | `benchmarks` | Coming soon |
 | `characters` | Coming soon |
 | `character-chat-sessions` | Coming soon |

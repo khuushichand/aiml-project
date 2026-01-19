@@ -89,3 +89,15 @@ Reading List supports URL capture, clean text extraction, tagging, import/export
 - `GET /api/v1/reading/export` - JSONL/ZIP export
 
 See: [Reading List API](Reading_List_API.md)
+
+#### Collections Feeds - `/api/v1/collections/feeds`
+
+Collections Feeds wraps Watchlists sources/jobs to ingest RSS/Atom into Collections items with `origin="feed"`.
+
+- `POST /api/v1/collections/feeds` - create a feed subscription
+- `GET /api/v1/collections/feeds` - list feed subscriptions
+- `GET /api/v1/collections/feeds/{feed_id}` - get a feed subscription
+- `PATCH /api/v1/collections/feeds/{feed_id}` - update a feed subscription
+- `DELETE /api/v1/collections/feeds/{feed_id}` - delete a feed subscription
+
+See: [Collections Feeds API](Collections_Feeds_API.md)

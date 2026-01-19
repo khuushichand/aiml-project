@@ -254,6 +254,13 @@ Note: This map focuses on the most important, stable routes. Many modules expose
   "/api/v1/items": [
     {"method": "GET", "path": "", "summary": "Unified items list"}
   ],
+  "/api/v1/collections/feeds": [
+    {"method": "POST", "path": "", "summary": "Create feed subscription"},
+    {"method": "GET",  "path": "", "summary": "List feed subscriptions"},
+    {"method": "GET",  "path": "/{feed_id}", "summary": "Get feed subscription"},
+    {"method": "PATCH","path": "/{feed_id}", "summary": "Update feed subscription"},
+    {"method": "DELETE","path": "/{feed_id}", "summary": "Delete feed subscription"}
+  ],
   "/api/v1/outputs": [
     {"method": "GET",  "path": "", "summary": "List outputs"},
     {"method": "GET",  "path": "/deleted", "summary": "List soft-deleted"},
@@ -394,6 +401,11 @@ Note: This map focuses on the most important, stable routes. Many modules expose
 | /api/v1/scheduler/workflows | POST | /api/v1/scheduler/workflows | Create schedule |
 | /api/v1/scheduler/workflows | GET | /api/v1/scheduler/workflows | List schedules |
 | /api/v1/items | GET | /api/v1/items | Unified items |
+| /api/v1/collections/feeds | POST | /api/v1/collections/feeds | Create feed subscription |
+| /api/v1/collections/feeds | GET | /api/v1/collections/feeds | List feed subscriptions |
+| /api/v1/collections/feeds | GET | /api/v1/collections/feeds/{feed_id} | Get feed subscription |
+| /api/v1/collections/feeds | PATCH | /api/v1/collections/feeds/{feed_id} | Update feed subscription |
+| /api/v1/collections/feeds | DELETE | /api/v1/collections/feeds/{feed_id} | Delete feed subscription |
 | /api/v1/outputs | GET | /api/v1/outputs | List outputs |
 | /api/v1/output-templates | GET | /api/v1/output-templates | List templates |
 | /api/v1/watchlists | POST | /api/v1/watchlists/jobs/{job_id}/run | Run job |

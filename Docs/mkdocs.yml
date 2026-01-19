@@ -90,6 +90,7 @@ nav:
       - AuthNZ API Guide: API-related/AuthNZ-API-Guide.md
       - Notes API: API-related/Notes_API_Documentation.md
       - Reading List API: API-related/Reading_List_API.md
+      - Collections Feeds API: API-related/Collections_Feeds_API.md
       - Chat API Documentation: API-related/Chat_API_Documentation.md
       - Chat Module Integration: API-related/Chat_Module_Integration_Guide.md
       - Chatbook API: API-related/Chatbook_API_Documentation.md

@@ -24,6 +24,23 @@ class CollectionsFeedCreateRequest(BaseModel):
         return value.strip()
 
 
+class CollectionsFeedUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, example="Example Feed")
+    url: Optional[HttpUrl] = Field(default=None, example="https://example.com/feed.xml")
+    tags: Optional[List[str]] = Field(default=None, example=["news", "tech"])
+    schedule_expr: Optional[str] = Field(default=None, description="Cron expression for polling")
+    timezone: Optional[str] = Field(default=None, description="Timezone for schedule (IANA or UTC+/-)")
+    active: Optional[bool] = Field(default=None, description="Whether the feed job is active")
+    settings: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional watchlists source settings (rss/history prefs, limits)",
+    )
+
+    @validator("tags", pre=True, each_item=True)
+    def _strip_tags(cls, value: str) -> str:
+        return value.strip()
+
+
 class CollectionsFeed(BaseModel):
     id: int
     name: str

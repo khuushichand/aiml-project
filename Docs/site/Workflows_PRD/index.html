@@ -10,6 +10,8 @@
       
       
       
+        <link rel="canonical" href="https://rmusser01.github.io/tldw_server/Workflows_PRD/">
+      
       
         <link rel="prev" href="../Overview/Feature_Status/">
       
@@ -752,6 +754,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#human-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Human Steps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#webhooks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -979,6 +992,8 @@
       
         
           
+        
+      
         
       
         
@@ -1412,6 +1427,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../API-related/Collections_Feeds_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Collections Feeds API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../API-related/Chat_API_Documentation/" class="md-nav__link">
         
   
@@ -1765,10 +1808,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_25" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_26" >
         
           
-          <label class="md-nav__link" for="__nav_4_25" id="__nav_4_25_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_26" id="__nav_4_26_label" tabindex="0">
             
   
   
@@ -1786,8 +1829,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_25_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_25">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_26_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_26">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -4594,6 +4637,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#human-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Human Steps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#webhooks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4660,7 +4714,7 @@
 
 
 <h1 id="workflows-prd-curated">Workflows PRD (Curated)<a class="headerlink" href="#workflows-prd-curated" title="Permanent link">&para;</a></h1>
-<p>This document summarizes the Product Requirements for the Workflows module as of v0.1 with forward-looking notes for v0.2. For the full living design, see <code>../Design/Workflows_PRD.md</code>.</p>
+<p>This document summarizes the Product Requirements for the Workflows module as of v0.1 with forward-looking notes for v0.2. For the full living design, see <code>../Product/Workflows_PRD.md</code>.</p>
 <h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Definition CRUD and immutable versions</li>
@@ -4668,12 +4722,14 @@
 <li>Events (HTTP/WS), artifacts (list/manifest/download)</li>
 <li>Webhook lifecycle with signing and DLQ</li>
 <li>SQLite (default) and PostgreSQL (recommended) backends</li>
+<li>Limited fan-out via <code>map</code> step (single-process, bounded concurrency)</li>
 </ul>
 <h3 id="control-flow-routing">Control Flow Routing<a class="headerlink" href="#control-flow-routing" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>branch</code> step: templated condition with <code>true_next</code> / <code>false_next</code> targets (if/else).</li>
 <li>Per-step <code>on_success</code> / <code>on_failure</code> jump targets for linear success/failure splits.</li>
 <li>Adapter-returned <code>{"__next__": "step_id", "__status__": ...}</code> to programmatically choose the next step.</li>
+<li><code>map</code> step: fan-out over a list, run a nested step, and aggregate results.</li>
 </ul>
 <h2 id="validation-modes-artifacts">Validation Modes (Artifacts)<a class="headerlink" href="#validation-modes-artifacts" title="Permanent link">&para;</a></h2>
 <ul>
@@ -4688,6 +4744,11 @@
 <li>Resume → <code>running</code> + <code>run_resumed</code>; continues from current step</li>
 <li>Cancel → sets cancel flag, best-effort terminate subprocesses, <code>run_cancelled</code></li>
 <li>Adapters check <code>ctx.is_cancelled()</code>; control endpoints are idempotent</li>
+</ul>
+<h2 id="human-steps">Human Steps<a class="headerlink" href="#human-steps" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>wait_for_human</code>/<code>wait_for_approval</code> require <code>assigned_to_user_id</code></li>
+<li><code>on_timeout</code> routes to the configured step; if unset, the run fails on timeout</li>
 </ul>
 <h2 id="webhooks">Webhooks<a class="headerlink" href="#webhooks" title="Permanent link">&para;</a></h2>
 <ul>
@@ -4732,7 +4793,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="November 1, 2025 21:36:03 UTC"><span class="timeago" datetime="2025-11-01T21:36:03+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="November 1, 2025 21:36:03 UTC">2025-11-01</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="January 19, 2026 05:23:31 UTC"><span class="timeago" datetime="2026-01-19T05:23:31+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="January 19, 2026 05:23:31 UTC">2026-01-19</span>
   </span>
 
     

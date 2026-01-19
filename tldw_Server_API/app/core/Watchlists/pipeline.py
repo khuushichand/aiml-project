@@ -33,7 +33,7 @@ import asyncio
 import os
 import json
 import inspect
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -136,6 +136,73 @@ def _resolve_collections_origin(
             if isinstance(origin, str) and origin.strip():
                 return origin.strip()
     return default
+
+
+def _maybe_promote_feed_schedule(
+    *,
+    db: WatchlistsDatabase,
+    job,
+    job_output_prefs: Dict[str, Any],
+) -> None:
+    schedule_cfg = job_output_prefs.get("collections_schedule")
+    if not isinstance(schedule_cfg, dict):
+        return
+    if schedule_cfg.get("mode") != "hourly_then_daily":
+        return
+    if schedule_cfg.get("promoted") is True:
+        return
+    daily_expr = str(schedule_cfg.get("daily_expr") or "0 0 * * *").strip()
+    if not daily_expr:
+        return
+    try:
+        promote_after = int(schedule_cfg.get("promote_after_hours", 24) or 24)
+    except Exception:
+        promote_after = 24
+    if promote_after <= 0:
+        promote_after = 24
+    created_raw = schedule_cfg.get("created_at") or getattr(job, "created_at", None)
+    if not created_raw:
+        return
+    try:
+        created_dt = datetime.fromisoformat(str(created_raw))
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return
+    now_utc = datetime.utcnow().replace(tzinfo=timezone.utc)
+    if now_utc < created_dt + timedelta(hours=promote_after):
+        return
+
+    schedule_cfg["promoted"] = True
+    schedule_cfg["promoted_at"] = _utcnow_iso()
+    job_output_prefs["collections_schedule"] = schedule_cfg
+    patch = {"output_prefs_json": json.dumps(job_output_prefs)}
+    if str(job.schedule_expr or "").strip() != daily_expr:
+        patch["schedule_expr"] = daily_expr
+    try:
+        updated = db.update_job(int(job.id), patch)
+    except Exception as exc:
+        logger.debug(f"collections schedule promote failed for job {getattr(job, 'id', '?')}: {exc}")
+        return
+    try:
+        next_run = _compute_next_run(updated.schedule_expr, updated.schedule_timezone)
+        db.set_job_history(job_id=int(updated.id), next_run_at=next_run)
+    except Exception:
+        pass
+    try:
+        if updated.wf_schedule_id:
+            from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
+            svc = get_workflows_scheduler()
+            svc.update(
+                updated.wf_schedule_id,
+                {
+                    "cron": updated.schedule_expr or "* * * * *",
+                    "timezone": _normalize_tz(updated.schedule_timezone) or "UTC",
+                    "enabled": bool(updated.active),
+                },
+            )
+    except Exception as exc:
+        logger.debug(f"collections schedule promote sync failed for job {getattr(job, 'id', '?')}: {exc}")
 
 
 def _select_sources_for_scope(db: WatchlistsDatabase, scope: Dict[str, Any]) -> List[SourceRow]:
@@ -1071,4 +1138,9 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     # Update job history
     next_run = _compute_next_run(job.schedule_expr, job.schedule_timezone)
     db.set_job_history(job_id=job_id, last_run_at=_utcnow_iso(), next_run_at=next_run)
+    try:
+        if isinstance(job_output_prefs, dict):
+            _maybe_promote_feed_schedule(db=db, job=job, job_output_prefs=job_output_prefs)
+    except Exception as exc:
+        logger.debug(f"collections schedule auto-promote failed for job {job_id}: {exc}")
     return {"run_id": run.id, **stats}

@@ -15,9 +15,6 @@
         module.exports = factory()
     } else {
         // Browser globals (root is window)
-        if (!root.lunr) {
-            throw new Error("tinyseg requires lunr to be loaded first.")
-        }
         factory()(root.lunr);
     }
 }(this, function () {
@@ -116,7 +113,7 @@
           var seg = ["B3","B2","B1"];
           var ctype = ["O","O","O"];
           var o = input.split("");
-          for (var i = 0; i < o.length; ++i) {
+          for (i = 0; i < o.length; ++i) {
             seg.push(o[i]);
             ctype.push(this.ctype_(o[i]))
           }
@@ -130,20 +127,20 @@
           var p1 = "U";
           var p2 = "U";
           var p3 = "U";
-          for (var j = 4; j < seg.length - 3; ++j) {
+          for (var i = 4; i < seg.length - 3; ++i) {
             var score = this.BIAS__;
-            var w1 = seg[j-3];
-            var w2 = seg[j-2];
-            var w3 = seg[j-1];
-            var w4 = seg[j];
-            var w5 = seg[j+1];
-            var w6 = seg[j+2];
-            var c1 = ctype[j-3];
-            var c2 = ctype[j-2];
-            var c3 = ctype[j-1];
-            var c4 = ctype[j];
-            var c5 = ctype[j+1];
-            var c6 = ctype[j+2];
+            var w1 = seg[i-3];
+            var w2 = seg[i-2];
+            var w3 = seg[i-1];
+            var w4 = seg[i];
+            var w5 = seg[i+1];
+            var w6 = seg[i+2];
+            var c1 = ctype[i-3];
+            var c2 = ctype[i-2];
+            var c3 = ctype[i-1];
+            var c4 = ctype[i];
+            var c5 = ctype[i+1];
+            var c6 = ctype[i+2];
             score += this.ts_(this.UP1__[p1]);
             score += this.ts_(this.UP2__[p2]);
             score += this.ts_(this.UP3__[p3]);
@@ -196,7 +193,7 @@
             p1 = p2;
             p2 = p3;
             p3 = p;
-            word += seg[j];
+            word += seg[i];
           }
           result.push(word);
 

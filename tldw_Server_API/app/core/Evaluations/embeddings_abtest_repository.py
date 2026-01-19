@@ -360,6 +360,34 @@ class EmbeddingABTestRepository:
                 session.expunge(row)
             return rows
 
+    def find_reusable_arm(
+        self,
+        *,
+        test_id: str,
+        collection_hash: str,
+        created_by: Optional[str],
+    ) -> Optional[EmbeddingABTestArm]:
+        if not collection_hash or not created_by:
+            return None
+        with self._session_factory() as session:
+            stmt = (
+                select(EmbeddingABTestArm)
+                .join(EmbeddingABTest)
+                .where(
+                    EmbeddingABTestArm.collection_hash == collection_hash,
+                    EmbeddingABTestArm.status == "ready",
+                    EmbeddingABTestArm.collection_name.is_not(None),
+                    EmbeddingABTest.test_id != test_id,
+                    EmbeddingABTest.created_by == created_by,
+                )
+                .order_by(EmbeddingABTest.created_at.desc())
+                .limit(1)
+            )
+            row = session.execute(stmt).scalars().first()
+            if row:
+                session.expunge(row)
+            return row
+
     def list_queries(self, test_id: str) -> List[EmbeddingABTestQuery]:
         with self._session_factory() as session:
             stmt = select(EmbeddingABTestQuery).where(EmbeddingABTestQuery.test_id == test_id)
@@ -556,6 +584,22 @@ class EmbeddingsABTestStore:
     def get_abtest_arms(self, test_id: str) -> List[Dict[str, Any]]:
         return [serialize_arm(arm) for arm in self._repo.list_arms(test_id)]
 
+    def find_reusable_abtest_arm(
+        self,
+        *,
+        test_id: str,
+        collection_hash: str,
+        created_by: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        arm = self._repo.find_reusable_arm(
+            test_id=test_id,
+            collection_hash=collection_hash,
+            created_by=created_by,
+        )
+        if not arm:
+            return None
+        return serialize_arm(arm)
+
     def get_abtest_queries(self, test_id: str) -> List[Dict[str, Any]]:
         return [serialize_query(q) for q in self._repo.list_queries(test_id)]
 
@@ -570,7 +614,11 @@ def _sqlite_url_from_path(path: str) -> str:
 
 
 @lru_cache(maxsize=8)
-def get_embeddings_abtest_store(db_path: str) -> EmbeddingsABTestStore:
-    config = RepositoryConfig(db_url=_sqlite_url_from_path(db_path))
+def get_embeddings_abtest_store(db_path_or_url: str) -> EmbeddingsABTestStore:
+    if "://" in db_path_or_url:
+        db_url = db_path_or_url
+    else:
+        db_url = _sqlite_url_from_path(db_path_or_url)
+    config = RepositoryConfig(db_url=db_url)
     repo = EmbeddingABTestRepository.from_config(config)
     return EmbeddingsABTestStore(repo)

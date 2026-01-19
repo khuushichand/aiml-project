@@ -10,6 +10,8 @@
       
       
       
+        <link rel="canonical" href="https://rmusser01.github.io/tldw_server/Env_Vars/">
+      
       
         <link rel="prev" href="../Deployment/Proxy_Overlays/">
       
@@ -910,6 +912,8 @@
       
         
       
+        
+      
     
     
     
@@ -1257,6 +1261,34 @@
     
   
     Reading List API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Collections_Feeds_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Collections Feeds API
   
 
     
@@ -1630,10 +1662,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_25" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_26" >
         
           
-          <label class="md-nav__link" for="__nav_4_25" id="__nav_4_25_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_26" id="__nav_4_26_label" tabindex="0">
             
   
   
@@ -1651,8 +1683,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_25_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_25">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_26_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_26">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -3204,6 +3236,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#chat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chat
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#chatbooks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3241,6 +3284,17 @@
     <span class="md-ellipsis">
       
         Workflows (Auth &amp; Scheduler)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflows-file-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflows (File Access)
       
     </span>
   </a>
@@ -4599,6 +4653,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#chat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chat
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#chatbooks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4636,6 +4701,17 @@
     <span class="md-ellipsis">
       
         Workflows (Auth &amp; Scheduler)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflows-file-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflows (File Access)
       
     </span>
   </a>
@@ -4754,8 +4830,11 @@
 <li><code>JOBS_DB_URL</code>: Postgres DSN for Jobs backend; falls back to SQLite when unset.</li>
 <li><code>JOBS_*</code>: Lease/renew/metrics settings (see repo <code>Env_Vars.md</code>).</li>
 <li>Common toggles include <code>JOBS_WEBHOOKS_*</code>, <code>JOBS_INTEGRITY_SWEEP_*</code>, <code>JOBS_METRICS_*</code>.</li>
-<li><code>MEDIA_INGEST_JOBS_WORKER_ENABLED</code>: Start the in-process media ingest jobs worker on app startup (<code>true|false</code>).</li>
-<li><code>FILES_JOBS_WORKER_ENABLED</code>: Start the in-process file artifacts jobs worker on app startup (<code>true|false</code>, default <code>false</code>); otherwise run <code>python -m tldw_Server_API.app.core.File_Artifacts.jobs_worker</code>.</li>
+<li><code>TLDW_WORKERS_SIDECAR_MODE</code>: When true, skip in-process Jobs workers so you can run them as sidecars (<code>true|false</code>, default <code>false</code>).</li>
+<li><code>MEDIA_INGEST_JOBS_WORKER_ENABLED</code>: Start the in-process media ingest jobs worker on app startup (<code>true|false</code>, default follows route policy for <code>media</code>).</li>
+<li><code>FILES_JOBS_WORKER_ENABLED</code>: Start the in-process file artifacts jobs worker on app startup (<code>true|false</code>, default follows route policy for <code>files</code>); otherwise run <code>python -m tldw_Server_API.app.core.File_Artifacts.jobs_worker</code>.</li>
+<li><code>PROMPT_STUDIO_JOBS_WORKER_ENABLED</code>: Start the in-process Prompt Studio jobs worker on app startup (<code>true|false</code>, default follows route policy for <code>prompt-studio</code>).</li>
+<li><code>PRIVILEGE_SNAPSHOT_WORKER_ENABLED</code>: Start the in-process privilege snapshot jobs worker on app startup (<code>true|false</code>, default follows route policy for <code>privileges</code>).</li>
 <li><code>EMBEDDINGS_JOBS_QUEUE</code>: Queue for embeddings stage jobs (default <code>default</code>).</li>
 <li><code>EMBEDDINGS_ROOT_JOBS_QUEUE</code>: Queue for embeddings root jobs (default <code>low</code> when stage queue is not <code>low</code>).</li>
 <li><code>EMBEDDINGS_JOBS_WORKER_ID</code>: Worker identifier for embeddings jobs (default <code>embeddings-jobs-&lt;pid&gt;</code>).</li>
@@ -4763,16 +4842,29 @@
 </ul>
 <h2 id="data-tables">Data Tables<a class="headerlink" href="#data-tables" title="Permanent link">&para;</a></h2>
 <ul>
+<li><code>DATA_TABLES_JOBS_WORKER_ENABLED</code>: Start the in-process data tables jobs worker on app startup (<code>true|false</code>, default follows route policy for <code>data-tables</code>).</li>
 <li><code>DATA_TABLES_JOBS_QUEUE</code>: Queue for data table generation jobs (default <code>default</code>).</li>
 <li><code>DATA_TABLES_JOBS_WORKER_ID</code>: Worker identifier for data tables jobs (default <code>data-tables-jobs-&lt;pid&gt;</code>).</li>
 <li><code>DATA_TABLES_JOBS_LEASE_SECONDS</code>: Lease duration for data tables jobs (default <code>60</code>).</li>
+<li><code>DATA_TABLES_JOBS_RENEW_JITTER_SECONDS</code>: Lease renew jitter in seconds (default <code>5</code>).</li>
+<li><code>DATA_TABLES_JOBS_RENEW_THRESHOLD_SECONDS</code>: Renew threshold in seconds (default <code>10</code>).</li>
+<li><code>DATA_TABLES_JOBS_BACKOFF_BASE_SECONDS</code>: Base retry backoff in seconds (default <code>2</code>).</li>
+<li><code>DATA_TABLES_JOBS_BACKOFF_MAX_SECONDS</code>: Max retry backoff in seconds (default <code>30</code>).</li>
+<li><code>DATA_TABLES_JOBS_RETRY_BACKOFF_SECONDS</code>: Backoff for retryable errors (default <code>10</code>).</li>
 <li><code>DATA_TABLES_DEFAULT_MAX_ROWS</code>: Default max rows per table when request omits <code>max_rows</code> (default <code>200</code>).</li>
 <li><code>DATA_TABLES_MAX_ROWS</code>: Hard cap on generated rows per table (default <code>2000</code>).</li>
 <li><code>DATA_TABLES_MAX_SOURCE_CHARS</code>: Per-source character cap used when building prompts (default <code>12000</code>).</li>
 <li><code>DATA_TABLES_MAX_TOTAL_SOURCE_CHARS</code>: Aggregate character cap across all sources (default <code>60000</code>).</li>
+<li><code>DATA_TABLES_MAX_SNAPSHOT_CHARS</code>: Per-chunk snapshot text cap for rag_query sources (default <code>8000</code>).</li>
 <li><code>DATA_TABLES_MAX_PROMPT_CHARS</code>: Total prompt size cap (default <code>24000</code>).</li>
+<li><code>DATA_TABLES_CHAT_BATCH_SIZE</code>: Batch size when loading chat messages (default <code>250</code>).</li>
+<li><code>DATA_TABLES_CHAT_MAX_MESSAGES</code>: Maximum chat messages loaded per source (default <code>1500</code>).</li>
 <li><code>DATA_TABLES_LLM_MAX_TOKENS</code>: LLM response token budget for table generation (default <code>2000</code>).</li>
 <li><code>DATA_TABLES_LLM_TEMPERATURE</code>: LLM temperature for table generation (default <code>0.2</code>).</li>
+</ul>
+<h2 id="chat">Chat<a class="headerlink" href="#chat" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>CHAT_STREAM_INCLUDE_METADATA</code>: Include <code>tldw_*</code> IDs in chat SSE streaming chunks (<code>true|false</code>, default <code>true</code>). Set <code>false</code> for strict OpenAI streaming compatibility.</li>
 </ul>
 <h2 id="chatbooks">Chatbooks<a class="headerlink" href="#chatbooks" title="Permanent link">&para;</a></h2>
 <ul>
@@ -4790,7 +4882,7 @@
 </ul>
 <h2 id="audio-quotas-workers">Audio Quotas &amp; Workers<a class="headerlink" href="#audio-quotas-workers" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>AUDIO_JOBS_WORKER_ENABLED</code>: Start the in-process Audio Jobs worker on app startup (<code>true|false</code>).</li>
+<li><code>AUDIO_JOBS_WORKER_ENABLED</code>: Start the in-process Audio Jobs worker on app startup (<code>true|false</code>, default follows route policy for <code>audio-jobs</code>).</li>
 <li><code>AUDIO_JOBS_OWNER_STRICT</code>: Enable owner-aware acquisition heuristic for fair scheduling (<code>true|false</code>).</li>
 <li><code>AUDIO_QUOTA_USE_REDIS</code>: Store active streams/jobs counters in Redis for multi-instance fairness. Defaults to true when <code>REDIS_URL</code> is set.</li>
 <li><code>REDIS_URL</code>: Redis connection string (e.g., <code>redis://localhost:6379</code>).</li>
@@ -4826,6 +4918,13 @@ Notable: <code>ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES</code> lets media-embeddings jo
 <li><code>WORKFLOWS_MINT_VIRTUAL_KEYS</code>: <code>true|false</code> - when enabled, the scheduler mints a short-lived scoped JWT (<code>scope=workflows</code>) per scheduled run and injects it as <code>secrets.jwt</code>.</li>
 <li><code>WORKFLOWS_VIRTUAL_KEY_TTL_MIN</code>: TTL (minutes) for per-run tokens; default <code>15</code>.</li>
 </ul>
+<h2 id="workflows-file-access">Workflows (File Access)<a class="headerlink" href="#workflows-file-access" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>WORKFLOWS_FILE_BASE_DIR</code>: Base directory for workflow <code>file://</code> access. Relative paths resolve from the project root; defaults to the per-user base dir under <code>USER_DB_BASE_DIR</code> (with a <code>Databases/</code> fallback).</li>
+<li><code>WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS</code>: <code>true|false</code> - allow workflow file access outside the per-user base dir, but only under allowlisted base directories (default <code>false</code>).</li>
+<li><code>WORKFLOWS_FILE_ALLOWLIST</code>: Comma-separated list of allowed base directories for unsafe file access; relative paths resolve from the project root.</li>
+<li><code>WORKFLOWS_FILE_ALLOWLIST_&lt;TENANT&gt;</code>: Optional per-tenant override (uppercase, <code>-</code> replaced by <code>_</code>); when set, it replaces the global allowlist for that tenant.</li>
+</ul>
 <h2 id="health-probes-ci-smoke">Health Probes (CI smoke)<a class="headerlink" href="#health-probes-ci-smoke" title="Permanent link">&para;</a></h2>
 <ul>
 <li>The smoke lifecycle script probes health endpoints in this order: <code>/healthz</code>, <code>/api/v1/healthz</code>, <code>/health</code>, <code>/api/v1/health</code>, <code>/ready</code>, <code>/api/v1/health/ready</code>.</li>
@@ -4854,7 +4953,7 @@ Notable: <code>ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES</code> lets media-embeddings jo
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="January 17, 2026 06:32:52 UTC"><span class="timeago" datetime="2026-01-17T06:32:52+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="January 17, 2026 06:32:52 UTC">2026-01-17</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="January 19, 2026 02:45:27 UTC"><span class="timeago" datetime="2026-01-19T02:45:27+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="January 19, 2026 02:45:27 UTC">2026-01-19</span>
   </span>
 
     

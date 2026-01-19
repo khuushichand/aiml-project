@@ -275,6 +275,9 @@ async def build_collections_vector_only(
     )
     chunker = Chunker(config=cconf)
 
+    test_row = db.get_abtest(test_id) or {}
+    created_by = test_row.get("created_by")
+
     # Load corpus content
     corpus_texts: List[Tuple[int, str]] = []  # (media_id, text)
     for mid in config.media_ids:
@@ -308,6 +311,10 @@ async def build_collections_vector_only(
         arm_start = time.monotonic()
         arm_logger.info("Embeddings A/B collection build starting")
         existing = existing_arms.get(i)
+        reuse_arm = None
+        reuse_collection_name = collection_name
+        shared_origin_test_id = None
+
         if (
             config.reuse_existing
             and existing
@@ -317,35 +324,89 @@ async def build_collections_vector_only(
             and _collection_exists(manager, collection_name)
         ):
             # Reuse only within the same test lifecycle (collection name is test-scoped).
-            existing_arm_id = existing.get("arm_id")
-            if existing_arm_id:
-                arm_logger = arm_logger.bind(arm_id=existing_arm_id)
+            reuse_arm = existing
+        elif config.reuse_existing and created_by:
+            reuse_candidate = db.find_reusable_abtest_arm(
+                test_id=test_id,
+                collection_hash=collection_hash,
+                created_by=created_by,
+            )
+            if (
+                reuse_candidate
+                and reuse_candidate.get("collection_hash") == collection_hash
+                and reuse_candidate.get("status") == "ready"
+            ):
+                candidate_name = reuse_candidate.get("collection_name")
+                if candidate_name and _collection_exists(manager, candidate_name):
+                    reuse_arm = reuse_candidate
+                    reuse_collection_name = candidate_name
+                    shared_origin_test_id = reuse_candidate.get("test_id")
+
+        if reuse_arm:
             stats_payload = None
             meta_payload = None
             try:
-                if existing.get("stats_json"):
-                    stats_payload = json.loads(existing.get("stats_json") or "{}")
+                if reuse_arm.get("stats_json"):
+                    stats_payload = json.loads(reuse_arm.get("stats_json") or "{}")
             except Exception:
                 stats_payload = None
             try:
-                if existing.get("metadata_json"):
-                    meta_payload = json.loads(existing.get("metadata_json") or "{}")
+                if reuse_arm.get("metadata_json"):
+                    meta_payload = json.loads(reuse_arm.get("metadata_json") or "{}")
             except Exception:
                 meta_payload = None
-            db.upsert_abtest_arm(
+            if shared_origin_test_id:
+                if meta_payload is None:
+                    meta_payload = {}
+                meta_payload["shared_collection"] = True
+                meta_payload["shared_origin_test_id"] = shared_origin_test_id
+                try:
+                    origin_meta = meta_payload if shared_origin_test_id == test_id else None
+                    if shared_origin_test_id != test_id:
+                        origin_meta = {}
+                        if reuse_arm.get("metadata_json"):
+                            origin_meta = json.loads(reuse_arm.get("metadata_json") or "{}")
+                        shared_with = set(origin_meta.get("shared_with") or [])
+                        shared_with.add(test_id)
+                        origin_meta["shared_collection"] = True
+                        origin_meta["shared_with"] = sorted(shared_with)
+                        origin_stats = None
+                        try:
+                            if reuse_arm.get("stats_json"):
+                                origin_stats = json.loads(reuse_arm.get("stats_json") or "{}")
+                        except Exception:
+                            origin_stats = None
+                        db.upsert_abtest_arm(
+                            test_id=reuse_arm.get("test_id"),
+                            arm_index=int(reuse_arm.get("arm_index") or 0),
+                            provider=reuse_arm.get("provider") or arm.provider,
+                            model_id=reuse_arm.get("model_id") or arm.model,
+                            dimensions=reuse_arm.get("dimensions"),
+                            collection_hash=reuse_arm.get("collection_hash"),
+                            pipeline_hash=reuse_arm.get("pipeline_hash"),
+                            collection_name=reuse_arm.get("collection_name"),
+                            status=reuse_arm.get("status") or "ready",
+                            stats_json=origin_stats,
+                            metadata_json=origin_meta,
+                        )
+                except Exception:
+                    pass
+
+            arm_id = db.upsert_abtest_arm(
                 test_id=test_id,
                 arm_index=i,
                 provider=arm.provider,
                 model_id=arm.model,
-                dimensions=existing.get("dimensions") or arm.dimensions,
+                dimensions=reuse_arm.get("dimensions") or arm.dimensions,
                 collection_hash=collection_hash,
                 pipeline_hash=pipeline_hash,
-                collection_name=collection_name,
+                collection_name=reuse_collection_name,
                 status='ready',
                 stats_json=stats_payload,
                 metadata_json=meta_payload,
             )
-            results.append({"arm_id": existing.get("arm_id"), "collection_name": collection_name})
+            arm_logger = arm_logger.bind(arm_id=arm_id)
+            results.append({"arm_id": arm_id, "collection_name": reuse_collection_name})
             try:
                 record_abtest_arm_build(
                     duration_seconds=time.monotonic() - arm_start,
@@ -519,9 +580,6 @@ async def run_vector_search_and_score(
                 return []
         gt_lookup = {r.get('query_id'): _parse_ids(r.get('ground_truth_ids')) for r in qrows}
     query_vecs_per_arm: Dict[str, List[List[float]]] = {}
-    for mapping in arm_collections:
-        arm_id = mapping["arm_id"]
-        arm = next(a for a in config.arms if arm_id.endswith(str(config.arms.index(a)))) if False else None  # placeholder
     # Use sequential arm order
     query_metadata = {"user_id": str(user_id)}
     for i, arm in enumerate(config.arms):
@@ -530,6 +588,8 @@ async def run_vector_search_and_score(
 
     # Run searches and score
     aggregates: Dict[str, Dict[str, float]] = {}
+    metric_level = config.metric_level or "media"
+    include_media_ids = config.media_ids or None
     for i, mapping in enumerate(arm_collections):
         arm_id = mapping["arm_id"]
         collection_name = mapping["collection_name"]
@@ -542,6 +602,10 @@ async def run_vector_search_and_score(
         for q_idx, qid in enumerate(qids):
             start = time.time()
             ranked: List[str] = []
+            distances: List[List[float]] = [[]]
+            metadatas: List[List[Dict[str, Any]]] = [[]]
+            documents: List[List[str]] = [[]]
+            rerank_scores_out: Optional[List[float]] = None
             if (config.retrieval.search_mode or 'vector') == 'hybrid':
                 try:
                     from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
@@ -552,20 +616,23 @@ async def run_vector_search_and_score(
                         top_k=k,
                         index_namespace=collection_name,
                         user_id=str(user_id),
+                        include_media_ids=include_media_ids,
                     )
-                    ranked = [str(getattr(d.metadata, 'get', lambda k, default=None: None)('media_id', None) or d.metadata.get('media_id') if isinstance(d.metadata, dict) else getattr(d, 'id')) for d in (result.documents or [])]
-                    # Fallback to id if metadata access pattern above fails
-                    ranked = [rid if rid is not None else str(getattr(d, 'id')) for rid, d in zip(ranked, (result.documents or []))]
+                    docs = result.documents or []
+                    for d in docs:
+                        md = d.metadata if isinstance(getattr(d, "metadata", None), dict) else {}
+                        doc_id = getattr(d, "id", None)
+                        ranked.append(str(doc_id) if doc_id is not None else str(md.get("media_id") or ""))
+                        metadatas[0].append(md if isinstance(md, dict) else {})
+                        documents[0].append(str(getattr(d, "content", "")))
+                        score = getattr(d, "score", None)
+                        distances[0].append(1.0 - float(score) if score is not None else 0.0)
                 except Exception as e:
                     logger.error(f"Hybrid pipeline failed for {collection_name}: {e}")
                     continue
             else:
                 qvec = qvecs[q_idx]
                 collection = manager.get_or_create_collection(collection_name)
-                ids: List[List[str]] = [[]]
-                metadatas: List[List[Dict[str, Any]]] = [[]]
-                documents: List[List[str]] = [[]]
-                distances: List[List[float]] = [[]]
                 ranked: List[str] = []
                 try:
                     # Chroma include: valid keys are documents, embeddings, metadatas, distances, uris, data
@@ -584,7 +651,6 @@ async def run_vector_search_and_score(
                     # Fallback: no results but still proceed, so toggle-on rerank can persist baseline scores
                     logger.warning(f"Vector search failed for {collection_name}; proceeding with empty results: {e}")
                 # Optional rerank controlled by toggle
-                rerank_scores_out: Optional[List[float]] = None
                 if getattr(config.retrieval, 're_ranker', None) and bool(getattr(config.retrieval, 'apply_reranker', False)):
                     from tldw_Server_API.app.core.RAG.rag_service.types import Document as RagDocument, DataSource
                     from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import create_reranker, RerankingConfig
@@ -655,12 +721,34 @@ async def run_vector_search_and_score(
                         logger.warning(f"Reranking failed; using original ordering: {e}")
             elapsed = (time.time() - start) * 1000.0
 
+            def _parse_media_id_from_chunk_id(rid: str) -> Optional[str]:
+                if not rid.startswith("mid"):
+                    return None
+                try:
+                    head = rid.split("_", 1)[0]
+                    return head[3:] if head.startswith("mid") else None
+                except Exception:
+                    return None
+
+            ranked_media_ids: List[str] = []
+            if metadatas and metadatas[0]:
+                for idx, rid in enumerate(ranked):
+                    md = metadatas[0][idx] if idx < len(metadatas[0]) else {}
+                    mid = md.get("media_id") if isinstance(md, dict) else None
+                    if mid is None and isinstance(rid, str):
+                        mid = _parse_media_id_from_chunk_id(rid)
+                    ranked_media_ids.append(str(mid) if mid is not None else str(rid))
+            else:
+                ranked_media_ids = [str(_parse_media_id_from_chunk_id(rid) or rid) for rid in ranked]
+
+            ranked_for_metrics = ranked_media_ids if metric_level == "media" else ranked
+
             # Ground truth
             gt_ids = gt_lookup.get(qid, [])
-            per_query_scores["recall"].append(recall_at_k(ranked, gt_ids, k))
-            per_query_scores["mrr"].append(mrr(ranked, gt_ids, k))
-            per_query_scores["ndcg"].append(ndcg(ranked, gt_ids, k))
-            per_query_scores["hit"].append(hit_at_k(ranked, gt_ids, k))
+            per_query_scores["recall"].append(recall_at_k(ranked_for_metrics, gt_ids, k))
+            per_query_scores["mrr"].append(mrr(ranked_for_metrics, gt_ids, k))
+            per_query_scores["ndcg"].append(ndcg(ranked_for_metrics, gt_ids, k))
+            per_query_scores["hit"].append(hit_at_k(ranked_for_metrics, gt_ids, k))
             per_query_scores["latency_ms"].append(elapsed)
 
             # Store individual result row
@@ -783,6 +871,12 @@ def cleanup_abtest_resources(
     for arm in arms:
         cname = arm.get("collection_name")
         if not cname:
+            continue
+        try:
+            meta = json.loads(arm.get("metadata_json") or "{}") if arm.get("metadata_json") else {}
+        except Exception:
+            meta = {}
+        if isinstance(meta, dict) and meta.get("shared_collection"):
             continue
         try:
             manager.delete_collection(cname)

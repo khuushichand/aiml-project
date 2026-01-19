@@ -502,7 +502,44 @@ async def export_embeddings_abtest(
     enforce_heavy_evaluations_admin(principal)
     svc = get_unified_evaluation_service_for_user(current_user.id)
     rows, total = svc.db.list_abtest_results(test_id, limit=100000, offset=0)
+    def _parse_json(value, default):
+        if value is None:
+            return default
+        if isinstance(value, (list, dict)):
+            return value
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return default
+        return parsed if isinstance(parsed, (list, dict)) else default
+
+    def _parse_float_list(value):
+        parsed = _parse_json(value, None)
+        if not isinstance(parsed, list):
+            return None
+        out = []
+        for item in parsed:
+            try:
+                out.append(float(item))
+            except (TypeError, ValueError):
+                continue
+        return out
+
     if format == 'json':
+        normalized_rows = []
+        for r in rows:
+            normalized_rows.append(
+                {
+                    **r,
+                    "ranked_ids": _parse_json(r.get("ranked_ids"), []),
+                    "scores": _parse_json(r.get("scores"), None),
+                    "metrics_json": _parse_json(r.get("metrics_json"), {}),
+                    "ranked_distances": _parse_float_list(r.get("ranked_distances")),
+                    "ranked_metadatas": _parse_json(r.get("ranked_metadatas"), None),
+                    "ranked_documents": _parse_json(r.get("ranked_documents"), None),
+                    "rerank_scores": _parse_float_list(r.get("rerank_scores")),
+                }
+            )
         # Idempotency: record export mapping (best-effort)
         try:
             if idempotency_key:
@@ -519,7 +556,7 @@ async def export_embeddings_abtest(
         headers = {}
         if idempotency_key:
             headers = {"Idempotency-Key": idempotency_key}
-        return Response(content=json.dumps({"test_id": test_id, "total": total, "results": rows}), media_type='application/json', headers=headers)
+        return Response(content=json.dumps({"test_id": test_id, "total": total, "results": normalized_rows}), media_type='application/json', headers=headers)
     # CSV
     import csv
     import io

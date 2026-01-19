@@ -47,6 +47,10 @@ Add an optional override key so RSS sources can land as `origin=feed` without ch
    - `origin_id = src.id`
 6. Embeddings enqueue metadata includes `origin` for downstream traceability.
 
+Default polling cadence:
+- If `schedule_expr` is not provided at subscription time, a default hourly schedule is used.
+- After 24 hours, the schedule auto-promotes to daily (cron `0 0 * * *`) unless manually overridden.
+
 ### Minimal feed subscription model
 Reuse Watchlists sources for subscriptions. A "Collections Feeds" UI/endpoint can create RSS sources with:
 - `source_type="rss"`
@@ -146,4 +150,3 @@ These are useful implementation references for later phases:
 - Atom feed rendering (self/hub links, enclosures, icon) and HTML entry views.
 - WebSub verification flow: hub.challenge, callback validation, signature support.
 - UI patterns for feed settings (title, icon, delete confirmation) and copy-to-clipboard UX.
-

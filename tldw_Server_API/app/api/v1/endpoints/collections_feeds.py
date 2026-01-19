@@ -13,12 +13,15 @@ from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatab
 from tldw_Server_API.app.api.v1.schemas.collections_feeds_schemas import (
     CollectionsFeed,
     CollectionsFeedCreateRequest,
+    CollectionsFeedUpdateRequest,
     CollectionsFeedsListResponse,
 )
 
 
 FEED_ORIGIN = "feed"
 _FEED_JOB_KEYS = ("collections_feed_job_id", "collections_job_id")
+_DEFAULT_HOURLY_CRON = "0 * * * *"
+_DEFAULT_DAILY_CRON = "0 0 * * *"
 
 router = APIRouter(prefix="/collections/feeds", tags=["collections-feeds"])
 
@@ -200,6 +203,67 @@ def _load_job(db: WatchlistsDatabase, settings: Dict[str, Any]):
     job_id = _extract_job_id(settings)
     if not job_id:
         return None
+
+
+def _merge_settings(existing: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+    for key, value in (updates or {}).items():
+        merged[key] = value
+    merged["collections_origin"] = FEED_ORIGIN
+    for key in _FEED_JOB_KEYS:
+        if key in existing:
+            merged[key] = existing.get(key)
+    existing_nested = existing.get("collections") if isinstance(existing.get("collections"), dict) else {}
+    update_nested = merged.get("collections") if isinstance(merged.get("collections"), dict) else {}
+    nested = dict(existing_nested)
+    nested.update(update_nested)
+    if nested:
+        nested["origin"] = FEED_ORIGIN
+        if "job_id" in existing_nested:
+            nested["job_id"] = existing_nested.get("job_id")
+        merged["collections"] = nested
+    return merged
+
+
+def _ensure_collections_schedule(
+    output_prefs: Dict[str, Any],
+    *,
+    mode: str,
+    daily_expr: str,
+    promote_after_hours: int,
+) -> Dict[str, Any]:
+    if not isinstance(output_prefs, dict):
+        output_prefs = {}
+    schedule_cfg = output_prefs.get("collections_schedule")
+    if not isinstance(schedule_cfg, dict):
+        schedule_cfg = {}
+    schedule_cfg["mode"] = mode
+    if mode == "hourly_then_daily":
+        schedule_cfg.setdefault("daily_expr", daily_expr)
+        schedule_cfg.setdefault("promote_after_hours", promote_after_hours)
+        schedule_cfg.setdefault("promoted", False)
+    output_prefs["collections_schedule"] = schedule_cfg
+    return output_prefs
+
+
+def _sync_job_schedule(db: WatchlistsDatabase, job_row, *, current_user: User) -> None:
+    try:
+        if job_row.wf_schedule_id:
+            from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
+            svc = get_workflows_scheduler()
+            svc.update(
+                job_row.wf_schedule_id,
+                {
+                    "cron": job_row.schedule_expr or "* * * * *",
+                    "timezone": _normalize_tz(job_row.schedule_timezone) or "UTC",
+                    "enabled": bool(job_row.active),
+                },
+            )
+            return
+    except Exception as exc:
+        logger.debug(f"Collections feeds schedule update failed: {exc}")
+    if not job_row.wf_schedule_id and job_row.schedule_expr:
+        _register_schedule(db, job_row, current_user=current_user)
     try:
         return db.get_job(job_id)
     except Exception:
@@ -217,6 +281,8 @@ async def create_feed_subscription(
     settings["collections_origin"] = FEED_ORIGIN
     name = payload.name.strip() if isinstance(payload.name, str) and payload.name.strip() else _default_name(str(payload.url))
     tags = [t for t in (payload.tags or []) if t]
+    schedule_expr = payload.schedule_expr or _DEFAULT_HOURLY_CRON
+    schedule_timezone = payload.timezone
     try:
         source = db.create_source(
             name=name,
@@ -232,17 +298,25 @@ async def create_feed_subscription(
         raise HTTPException(status_code=400, detail="feed_create_failed")
 
     try:
+        output_prefs = {"collections_origin": FEED_ORIGIN}
+        if payload.schedule_expr is None:
+            output_prefs = _ensure_collections_schedule(
+                output_prefs,
+                mode="hourly_then_daily",
+                daily_expr=_DEFAULT_DAILY_CRON,
+                promote_after_hours=24,
+            )
         job = db.create_job(
             name=f"Feed: {name}",
             description=f"Collections feed subscription for {source.url}",
             scope_json=json.dumps({"sources": [int(source.id)]}),
-            schedule_expr=payload.schedule_expr,
-            schedule_timezone=payload.timezone,
+            schedule_expr=schedule_expr,
+            schedule_timezone=schedule_timezone,
             active=payload.active,
             max_concurrency=None,
             per_host_delay_ms=None,
             retry_policy_json=json.dumps({}),
-            output_prefs_json=json.dumps({"collections_origin": FEED_ORIGIN}),
+            output_prefs_json=json.dumps(output_prefs),
             job_filters_json=None,
         )
     except Exception as exc:
@@ -317,6 +391,82 @@ async def get_feed_subscription(
     if not _is_feed_source(settings):
         raise HTTPException(status_code=404, detail="feed_not_found")
     job = _load_job(db, settings)
+    return _to_feed_response(source, job_row=job, settings=settings)
+
+
+@router.patch("/{feed_id}", response_model=CollectionsFeed, summary="Update a Collections feed subscription")
+async def update_feed_subscription(
+    feed_id: int = Path(..., ge=1),
+    payload: CollectionsFeedUpdateRequest = Body(...),
+    current_user: User = Depends(get_request_user),
+    db: WatchlistsDatabase = Depends(get_watchlists_db_for_user),
+) -> CollectionsFeed:
+    try:
+        source = db.get_source(feed_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="feed_not_found")
+    settings = _parse_settings(source.settings_json)
+    if not _is_feed_source(settings):
+        raise HTTPException(status_code=404, detail="feed_not_found")
+
+    if payload.settings is not None and isinstance(payload.settings, dict):
+        settings = _merge_settings(settings, payload.settings)
+    settings["collections_origin"] = FEED_ORIGIN
+    patch: Dict[str, Any] = {"settings_json": json.dumps(settings)}
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="feed_name_required")
+        patch["name"] = name
+    if payload.url is not None:
+        patch["url"] = str(payload.url)
+    if payload.active is not None:
+        patch["active"] = payload.active
+    try:
+        source = db.update_source(feed_id, patch)
+    except Exception as exc:
+        logger.error(f"collections_feeds_update_source_failed: {exc}")
+        raise HTTPException(status_code=400, detail="feed_update_failed")
+    if payload.tags is not None:
+        try:
+            db.set_source_tags(feed_id, [t for t in payload.tags if t])
+            source = db.get_source(feed_id)
+        except Exception as exc:
+            logger.error(f"collections_feeds_update_tags_failed: {exc}")
+
+    job = _load_job(db, settings)
+    if job and any(value is not None for value in (payload.schedule_expr, payload.timezone, payload.active)):
+        job_patch: Dict[str, Any] = {}
+        if payload.schedule_expr is not None:
+            job_patch["schedule_expr"] = payload.schedule_expr
+        if payload.timezone is not None:
+            job_patch["schedule_timezone"] = payload.timezone
+        if payload.active is not None:
+            job_patch["active"] = payload.active
+
+        if payload.schedule_expr is not None:
+            try:
+                output_prefs = json.loads(job.output_prefs_json or "{}")
+                output_prefs = _ensure_collections_schedule(
+                    output_prefs,
+                    mode="manual",
+                    daily_expr=_DEFAULT_DAILY_CRON,
+                    promote_after_hours=24,
+                )
+                job_patch["output_prefs_json"] = json.dumps(output_prefs)
+            except Exception:
+                pass
+
+        try:
+            job = db.update_job(int(job.id), job_patch)
+            if any(k in job_patch for k in ("schedule_expr", "schedule_timezone")):
+                next_run = _compute_next_run(job.schedule_expr, job.schedule_timezone)
+                db.set_job_history(int(job.id), next_run_at=next_run)
+                job = db.get_job(int(job.id))
+            _sync_job_schedule(db, job, current_user=current_user)
+        except Exception as exc:
+            logger.error(f"collections_feeds_update_job_failed: {exc}")
+
     return _to_feed_response(source, job_row=job, settings=settings)
 
 
