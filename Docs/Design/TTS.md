@@ -14,21 +14,71 @@ https://www.reddit.com/r/LocalLLaMA/comments/1n8flne/how_can_i_reduce_the_first_
  To reduce it, you’ll need to look at the inference/streaming loop (usually where the decoder pushes tokens into the vocoder). Try adjusting the buffer size or flushing frequency so that the model yields audio frames every few hundred tokens instead of waiting for a long sequence. Look for parameters like chunk_size, frame_stride, or flush_interval in the streaming code. Setting those lower should let you get ~1 second of audio out first, then continue smoothly.
 ```
 
-
-https://github.com/rsxdalv/chatterbox/tree/faster
-
-https://github.com/ekwek1/soprano
-https://github.com/rsxdalv/chatterbox/tree/streaming
-https://github.com/randombk/chatterbox-vllm
-https://generativeai.pub/glm-4-voice-9b-real-time-multilingual-voice-conversation-ai-install-locally-in-minutes-ce2fcd6c8fd8
-https://github.com/KartDriver/mira_converse?tab=readme-ov-file
+https://github.com/resemble-ai/chatterbox
+https://github.com/neuphonic/neutts
+https://github.com/ekwek1/soprano?tab=readme-ov-file#installation
 https://huggingface.co/kyutai
 https://huggingface.co/Echo9Zulu/Kokoro-82M-FP16-OpenVINO
-github.com/wwang1110/kokoro_batch
+https://github.com/OpenBMB/VoxCPM
+https://github.com/jordandare/echo-tts
+https://github.com/nari-labs/dia2
+https://github.com/NVIDIA/personaplex?tab=readme-ov-file
+https://github.com/kyutai-labs/pocket-tts
+https://github.com/supertone-inc/supertonic
+Pocket TTS Voice cloning
+```python
+"""Run voice cloning with local weights."""
+import sys
+sys.path.insert(0, 'pocket-tts')
+
+from pathlib import Path
+import soundfile as sf
+
+from pocket_tts.utils.config import load_config
+from pocket_tts.models.tts_model import TTSModel
+from pocket_tts.default_parameters import (
+    DEFAULT_TEMPERATURE,
+    DEFAULT_LSD_DECODE_STEPS,
+    DEFAULT_NOISE_CLAMP,
+    DEFAULT_EOS_THRESHOLD,
+)
+
+print('Loading config...')
+config = load_config(Path('local_config.yaml'))
+
+print('Loading model with local weights...')
+model = TTSModel._from_pydantic_config_with_weights(
+    config,
+    temp=DEFAULT_TEMPERATURE,
+    lsd_decode_steps=DEFAULT_LSD_DECODE_STEPS,
+    noise_clamp=DEFAULT_NOISE_CLAMP,
+    eos_threshold=DEFAULT_EOS_THRESHOLD,
+)
+
+print('Loading voice from WAV file...')
+voice_state = model.get_state_for_audio_prompt('drank_virtual_encounters_are_now_available_in_the_arena.wav')
+
+print('Generating audio...')
+audio = model.generate_audio(voice_state, 'Hello, this is a test of the voice cloning feature. The quick brown fox jumps over the lazy dog.')
+
+sf.write('output_cloned.wav', audio, 24000)
+print('Done! Saved to output_cloned.wav')
+
+```
+
+https://generativeai.pub/glm-4-voice-9b-real-time-multilingual-voice-conversation-ai-install-locally-in-minutes-ce2fcd6c8fd8
+
+Commercial
+    https://deepgram.com/
+    https://docs.cartesia.ai/get-started/overview
+
+
+
+
 https://github.com/bytedance/MegaTTS3
     https://modelscope.cn/models/ACoderPassBy/MegaTTS-SFT/files
-https://github.com/petermg/Chatterbox-TTS-Extended/tree/main
-https://github.com/kyutai-labs/hibiki
+
+
 https://metis-demo.github.io/#metis-tts
 https://www.reddit.com/r/LocalLLaMA/comments/1n0bhd7/microsoft_vibevoice_tts_opensourced_supports_90/
 https://github.com/Extraltodeus/Quick-slap-tkinter-dia/blob/main/README.md
@@ -55,17 +105,18 @@ https://github.com/marhensa/vibevoice-realtime-openai-api
 
 
 
-https://github.com/OpenBMB/VoxCPM
+Dataset Creation
+    https://github.com/taresh18/TTSizer
+
+
+
 https://huggingface.co/jordand/echo-tts-base
-https://github.com/jordandare/echo-tts
 https://github.com/KevinAHM/echo-tts-api
-https://github.com/nari-labs/dia2
+
 https://huggingface.co/nvidia/audio-flamingo-3-chat
-https://deepgram.com/
-https://docs.cartesia.ai/get-started/overview
-https://github.com/taresh18/TTSizer
+
 https://www.reddit.com/r/LocalLLaMA/comments/1l3c8is/grmrv3_a_set_of_models_for_reliable_grammar/
-https://github.com/dexter-xD/rhythm
+
 https://github.com/Jeremy-Harper/chatterboxPro
 https://kyutai.org/next/stt
 https://huggingface.co/kyutai/stt-2.6b-en
@@ -77,7 +128,7 @@ https://github.com/Shadowfita/parakeet-tdt-0.6b-v2-fastapi
 https://github.com/devnen/Chatterbox-TTS-Server
 https://github.com/PyAV-Org/PyAV
 https://github.com/santinic/audiblez
-https://github.com/nazdridoy/kokoro-tts
+
 https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512
 https://huggingface.co/Aratako/T5Gemma-TTS-2b-2b
 https://github.com/ekwek1/soprano
@@ -147,8 +198,6 @@ https://github.com/zenforic/csm-multi
 https://github.com/isaiahbjork/orpheus-tts-local
 https://github.com/tarun7r/Vocal-Agent
 https://huggingface.co/DavidBrowne17/Muchi
-https://www.reddit.com/r/LocalLLaMA/comments/1jcufi6/improvements_to_kokoro_tts_v10/
-    https://github.com/nazdridoy/kokoro-tts
 https://github.com/davidbrowne17/chatterbox-streaming
 https://webrtchacks.com/the-unofficial-guide-to-openai-realtime-webrtc-api/
 https://github.com/petermg/Chatterbox-TTS-Extended
@@ -303,6 +352,10 @@ GPT-SoviTTS
     https://github.com/cpumaxx/sovits-ff-plugin
     https://github.com/JarodMica/GPT-SoVITS-Package
 Kokoro
+    https://www.reddit.com/r/LocalLLaMA/comments/1jcufi6/improvements_to_kokoro_tts_v10/
+    https://github.com/nazdridoy/kokoro-tts
+    https://github.com/nazdridoy/kokoro-tts
+    https://github.com/wwang1110/kokoro_batch
 
 lina TTS
     https://github.com/theodorblackbird/lina-speech/blob/main/InferenceLina.ipynb

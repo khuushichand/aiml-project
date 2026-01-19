@@ -16,7 +16,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status, Request, Body, Response
 import sqlite3
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from loguru import logger
 from pathlib import Path
 
@@ -29,6 +29,7 @@ from tldw_Server_API.app.api.v1.schemas.workflows import (
     EventResponse,
     WorkflowRunListItem,
     WorkflowRunListResponse,
+    WorkflowRagSearchConfig,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     get_request_user,
@@ -138,6 +139,141 @@ def _safe_jsonschema_detail(exc: Exception) -> str:
     return message
 
 
+def _pydantic_error_detail(exc: ValidationError) -> str:
+    parts: List[str] = []
+    for err in exc.errors():
+        loc = ".".join(str(p) for p in err.get("loc", []) if p is not None)
+        msg = err.get("msg") or "invalid"
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    return "; ".join(parts) or "invalid config"
+
+
+def _rag_search_schema_base() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "sources": {"type": ["array", "string"], "items": {"type": "string"}},
+            "search_mode": {"type": "string", "enum": ["fts", "vector", "hybrid"]},
+            "hybrid_alpha": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "top_k": {"type": "integer", "minimum": 1, "maximum": 100},
+            "min_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "expand_query": {"type": "boolean"},
+            "expansion_strategies": {
+                "type": ["array", "string"],
+                "items": {"type": "string", "enum": ["acronym", "synonym", "domain", "entity"]},
+            },
+            "spell_check": {"type": "boolean"},
+            "enable_cache": {"type": "boolean"},
+            "cache_threshold": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "adaptive_cache": {"type": "boolean"},
+            "cache_ttl": {"type": "integer", "minimum": 0},
+            "enable_table_processing": {"type": "boolean"},
+            "table_method": {"type": "string", "enum": ["markdown", "html", "hybrid"]},
+            "include_sibling_chunks": {"type": "boolean"},
+            "sibling_window": {"type": "integer", "minimum": 0, "maximum": 20},
+            "enable_parent_expansion": {"type": "boolean"},
+            "include_parent_document": {"type": "boolean"},
+            "parent_max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192},
+            "enable_reranking": {"type": "boolean"},
+            "reranking_strategy": {"type": "string", "enum": ["flashrank", "cross_encoder", "hybrid", "none"]},
+            "rerank_top_k": {"type": "integer", "minimum": 1, "maximum": 100},
+            "enable_citations": {"type": "boolean"},
+            "citation_style": {"type": "string", "enum": ["apa", "mla", "chicago", "harvard", "ieee"]},
+            "include_page_numbers": {"type": "boolean"},
+            "enable_chunk_citations": {"type": "boolean"},
+            "enable_generation": {"type": "boolean"},
+            "generation_model": {"type": "string"},
+            "generation_prompt": {"type": "string"},
+            "max_generation_tokens": {"type": "integer", "minimum": 1, "maximum": 8192},
+            "enable_security_filter": {"type": "boolean"},
+            "detect_pii": {"type": "boolean"},
+            "redact_pii": {"type": "boolean"},
+            "sensitivity_level": {"type": "string", "enum": ["public", "internal", "confidential", "restricted"]},
+            "content_filter": {"type": "boolean"},
+            "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+            "highlight_results": {"type": "boolean"},
+            "highlight_query_terms": {"type": "boolean"},
+            "track_cost": {"type": "boolean"},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+
+
+def _validate_rag_search_config(cfg: Dict[str, Any], *, step_id: str) -> None:
+    try:
+        WorkflowRagSearchConfig.model_validate(cfg)
+    except ValidationError as exc:
+        detail = _pydantic_error_detail(exc)
+        raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
+
+
+def _validate_chunking_contract(cfg: Dict[str, Any], *, step_id: str) -> None:
+    if not isinstance(cfg, dict):
+        return
+    chunking = cfg.get("chunking")
+    if not isinstance(chunking, dict):
+        return
+    try:
+        from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
+        methods = {m.value for m in ChunkingMethod}
+    except Exception as exc:
+        logger.debug(f"Workflows chunking validation: unable to load chunker methods: {exc}")
+        return
+
+    def _check_method(value: Any, field: str) -> None:
+        if value is None:
+            return
+        name = str(value).strip()
+        if not name:
+            return
+        if name not in methods:
+            allowed = ", ".join(sorted(methods))
+            raise HTTPException(
+                status_code=422,
+                detail=f"Step '{step_id}' {field} '{name}' is not a supported core_chunking method (allowed: {allowed})",
+            )
+
+    def _check_version(value: Any, field: str) -> None:
+        if value is None:
+            return
+        ver = str(value).strip()
+        if not ver:
+            return
+        if ver != "1.0.0":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Step '{step_id}' {field} must be '1.0.0' when provided",
+            )
+
+    if "name" in chunking:
+        _check_method(chunking.get("name"), "chunking.name")
+        _check_version(chunking.get("version"), "chunking.version")
+    if "strategy" in chunking:
+        strategy = str(chunking.get("strategy") or "").strip()
+        if strategy and strategy != "hierarchical":
+            _check_method(strategy, "chunking.strategy")
+        if strategy == "hierarchical":
+            hierarchical = chunking.get("hierarchical") or {}
+            if hierarchical and not isinstance(hierarchical, dict):
+                raise HTTPException(status_code=422, detail=f"Step '{step_id}' chunking.hierarchical must be an object")
+            levels = hierarchical.get("levels") if isinstance(hierarchical, dict) else None
+            if levels is None:
+                return
+            if not isinstance(levels, list):
+                raise HTTPException(status_code=422, detail=f"Step '{step_id}' chunking.hierarchical.levels must be an array")
+            for idx, level in enumerate(levels):
+                if not isinstance(level, dict):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Step '{step_id}' chunking.hierarchical.levels[{idx}] must be an object",
+                    )
+                _check_method(level.get("name"), f"chunking.hierarchical.levels[{idx}].name")
+                _check_method(level.get("strategy"), f"chunking.hierarchical.levels[{idx}].strategy")
+                _check_version(level.get("version"), f"chunking.hierarchical.levels[{idx}].version")
+
+
 def _classify_db_error(exc: Exception) -> str:
     exc_name = type(exc).__name__
     if isinstance(exc, sqlite3.IntegrityError) or exc_name in {"IntegrityError", "UniqueViolation", "ForeignKeyViolation", "CheckViolation"}:
@@ -231,16 +367,7 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
             "required": ["items", "step"],
             "additionalProperties": True,
         },
-        "rag_search": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "top_k": {"type": "integer", "minimum": 1, "default": 5},
-                "timeout_seconds": {"type": "integer", "minimum": 1, "default": 60},
-            },
-            "required": ["query"],
-            "additionalProperties": True,
-        },
+        "rag_search": _rag_search_schema_base(),
         "webhook": {
             "type": "object",
             "properties": {
@@ -293,11 +420,31 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
         "notify": {"type": "object", "additionalProperties": True},
         "diff_change_detector": {"type": "object", "additionalProperties": True},
         "policy_check": {"type": "object", "additionalProperties": True},
-        "wait_for_human": {"type": "object", "additionalProperties": True},
-        "wait_for_approval": {"type": "object", "additionalProperties": True},
+        "wait_for_human": {
+            "type": "object",
+            "properties": {
+                "instructions": {"type": "string"},
+                "assigned_to_user_id": {"type": ["string", "integer"]},
+                "form_schema": {"type": "object"},
+                "timeout_seconds": {"type": "integer", "minimum": 1},
+            },
+            "required": ["assigned_to_user_id"],
+            "additionalProperties": True,
+        },
+        "wait_for_approval": {
+            "type": "object",
+            "properties": {
+                "instructions": {"type": "string"},
+                "assigned_to_user_id": {"type": ["string", "integer"]},
+                "timeout_seconds": {"type": "integer", "minimum": 1},
+            },
+            "required": ["assigned_to_user_id"],
+            "additionalProperties": True,
+        },
     }
-    for s in steps:
+    for i, s in enumerate(steps):
         t = (s.get("type") or "").strip()
+        sid = str(s.get("id") or f"step_{i+1}")
         if not reg.has(t):
             raise HTTPException(status_code=422, detail=f"Unknown step type: {t}")
         cfg = s.get("config") or {}
@@ -306,7 +453,27 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
         except Exception:
             raise HTTPException(status_code=422, detail="Invalid step config JSON")
         if cfg_bytes > MAX_STEP_CONFIG_BYTES:
-            raise HTTPException(status_code=413, detail=f"Step '{s.get('id','')}' config too large")
+            raise HTTPException(status_code=413, detail=f"Step '{sid}' config too large")
+        if t in {"wait_for_human", "wait_for_approval"}:
+            assigned = cfg.get("assigned_to_user_id")
+            if assigned is None:
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' requires assigned_to_user_id")
+            if isinstance(assigned, str) and not assigned.strip():
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' requires assigned_to_user_id")
+        if t == "rag_search":
+            _validate_rag_search_config(cfg, step_id=sid)
+        if t == "media_ingest":
+            _validate_chunking_contract(cfg, step_id=sid)
+        if t == "map":
+            sub = cfg.get("step") if isinstance(cfg, dict) else None
+            if isinstance(sub, dict):
+                sub_type = str(sub.get("type") or "").strip()
+                sub_cfg = sub.get("config") or {}
+                sub_id = f"{sid}.step"
+                if sub_type == "rag_search":
+                    _validate_rag_search_config(sub_cfg, step_id=sub_id)
+                if sub_type == "media_ingest":
+                    _validate_chunking_contract(sub_cfg, step_id=sub_id)
         # Optional schema validation when jsonschema is available
         if jsonschema is not None:
             schema = step_schemas.get(t)
@@ -316,14 +483,14 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                 except Exception as e:  # pragma: no cover - depends on optional dep
                     logger.debug(
                         "Workflows validation: invalid config for step {}: {} - {}",
-                        s.get("id", t),
+                        sid,
                         type(e).__name__,
                         e,
                     )
                     detail = _safe_jsonschema_detail(e)
                     raise HTTPException(
                         status_code=422,
-                        detail=f"Invalid config for step '{s.get('id', t)}': {detail}",
+                        detail=f"Invalid config for step '{sid}': {detail}",
                     ) from e
 
     # Graph/DAG robustness checks (detect explicit cycles and unknown targets)
@@ -361,6 +528,15 @@ def _validate_dag(defn: Dict[str, Any]) -> None:
                 edges[sid].append(failn)
         except Exception as e:
             logger.debug(f"workflows._validate_dag: on_failure parse error for step {sid}: {e}")
+        # explicit on_timeout (primarily for human steps)
+        try:
+            timeout_next = str(s.get("on_timeout") or "").strip()
+            if timeout_next:
+                if timeout_next not in id_to_idx:
+                    raise HTTPException(status_code=422, detail=f"Step '{sid}' on_timeout points to unknown step '{timeout_next}'")
+                edges[sid].append(timeout_next)
+        except Exception as e:
+            logger.debug(f"workflows._validate_dag: on_timeout parse error for step {sid}: {e}")
         # branch-specific
         try:
             if str(s.get("type") or "").strip() == "branch":
@@ -408,6 +584,15 @@ def _validate_dag(defn: Dict[str, Any]) -> None:
                 # Provide useful diagnostics
                 pretty = " -> ".join(cyc)
                 raise HTTPException(status_code=422, detail=f"Workflow contains an explicit cycle: {pretty}")
+
+
+def _find_step_def(defn: Dict[str, Any], step_id: str) -> Optional[Dict[str, Any]]:
+    steps = defn.get("steps") or []
+    for i, s in enumerate(steps):
+        sid = str(s.get("id") or f"step_{i+1}")
+        if sid == str(step_id):
+            return s
+    return None
 
 
 async def _wait_for_run_completion(
@@ -1002,7 +1187,15 @@ async def run_saved(
                         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_started", {"mode": mode})
                         step_run_id = f"{run_id}:{s0.get('id','s1')}:{int(__import__('time').time()*1000)}"
                         try:
-                            db.create_step_run(step_run_id=step_run_id, run_id=run_id, step_id=s0.get('id','s1'), name=s0.get('name') or s0.get('id','s1'), step_type='prompt', inputs={"config": cfg})
+                            db.create_step_run(
+                                step_run_id=step_run_id,
+                                tenant_id=str(getattr(current_user, "tenant_id", "default")),
+                                run_id=run_id,
+                                step_id=s0.get("id", "s1"),
+                                name=s0.get("name") or s0.get("id", "s1"),
+                                step_type="prompt",
+                                inputs={"config": cfg},
+                            )
                         except Exception:
                             pass
                         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "step_started", {"step_id": s0.get('id','s1'), "type": "prompt"})
@@ -1627,8 +1820,17 @@ async def get_run_events(
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
     is_admin = bool(getattr(current_user, "is_admin", False))
-    if str(run.user_id) != str(current_user.id) and not is_admin:
-        raise HTTPException(status_code=404, detail="Run not found")
+    step_run = db.get_latest_step_run(run_id=run_id, step_id=step_id)
+    if not step_run:
+        raise HTTPException(status_code=404, detail="Step run not found")
+    assigned_to = step_run.get("assigned_to")
+    user_id = str(current_user.id)
+    if not is_admin:
+        if assigned_to:
+            if str(assigned_to) != user_id:
+                raise HTTPException(status_code=404, detail="Run not found")
+        elif str(run.user_id) != user_id:
+            raise HTTPException(status_code=404, detail="Run not found")
     # Normalize types to lower-case for consistency with UI filter chips
     types_norm = [t.strip() for t in (types or []) if str(t).strip()]
     # Cursor token overrides since
@@ -2615,14 +2817,7 @@ async def list_step_types():
             "min_engine_version": "0.1.1",
         },
         "rag_search": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "top_k": {"type": "integer", "minimum": 1, "default": 5},
-                "timeout_seconds": {"type": "integer", "minimum": 1, "default": 60},
-            },
-            "required": ["query"],
-            "additionalProperties": True,
+            **_rag_search_schema_base(),
             "example": {"query": "large language models safety", "top_k": 8},
             "min_engine_version": "0.1.0",
         },
@@ -2814,22 +3009,22 @@ async def list_step_types():
             "type": "object",
             "properties": {
                 "instructions": {"type": "string"},
-                "assigned_to_user_id": {"type": ["string","integer","null"]}
+                "assigned_to_user_id": {"type": ["string","integer"]}
             },
-            "required": [],
+            "required": ["assigned_to_user_id"],
             "additionalProperties": True,
-            "example": {"instructions": "Review the summary and approve.", "assigned_to_user_id": None},
+            "example": {"instructions": "Review the summary and approve.", "assigned_to_user_id": 1},
             "min_engine_version": "0.1.3"
         },
         "wait_for_approval": {
             "type": "object",
             "properties": {
                 "instructions": {"type": "string"},
-                "assigned_to_user_id": {"type": ["string","integer","null"]}
+                "assigned_to_user_id": {"type": ["string","integer"]}
             },
-            "required": [],
+            "required": ["assigned_to_user_id"],
             "additionalProperties": True,
-            "example": {"instructions": "Await approval.", "assigned_to_user_id": None},
+            "example": {"instructions": "Await approval.", "assigned_to_user_id": 1},
             "min_engine_version": "0.1.3"
         },
     }
@@ -3236,11 +3431,22 @@ async def approve_step(
             },
         ) from exc
 
+    # Resolve on_success target if defined
+    next_step_id = None
+    try:
+        definition = json.loads(run.definition_snapshot_json or "{}")
+        step_def = _find_step_def(definition, step_id)
+        next_step_id = str((step_def or {}).get("on_success") or "").strip() or None
+    except Exception:
+        next_step_id = None
     # Resume run from next step
     engine = WorkflowEngine(db)
     # Pass edited fields as last outputs override
     last_outputs = payload.edited_fields or {}
-    asyncio.create_task(engine.continue_run(run_id, after_step_id=step_id, last_outputs=last_outputs))
+    last_outputs.setdefault("decision", "approved")
+    if payload.comment:
+        last_outputs.setdefault("comment", payload.comment)
+    asyncio.create_task(engine.continue_run(run_id, after_step_id=step_id, last_outputs=last_outputs, next_step_id=next_step_id))
     return {"ok": True}
 
 
@@ -3264,8 +3470,24 @@ async def reject_step(
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
     is_admin = bool(getattr(current_user, "is_admin", False))
-    if str(run.user_id) != str(current_user.id) and not is_admin:
-        raise HTTPException(status_code=404, detail="Run not found")
+    step_run = db.get_latest_step_run(run_id=run_id, step_id=step_id)
+    if not step_run:
+        raise HTTPException(status_code=404, detail="Step run not found")
+    assigned_to = step_run.get("assigned_to")
+    user_id = str(current_user.id)
+    if not is_admin:
+        if assigned_to:
+            if str(assigned_to) != user_id:
+                raise HTTPException(status_code=404, detail="Run not found")
+        elif str(run.user_id) != user_id:
+            raise HTTPException(status_code=404, detail="Run not found")
+    failure_next = None
+    try:
+        definition = json.loads(run.definition_snapshot_json or "{}")
+        step_def = _find_step_def(definition, step_id)
+        failure_next = str((step_def or {}).get("on_failure") or "").strip() or None
+    except Exception:
+        failure_next = None
     if db.backend:
         try:
             with db.backend.transaction() as conn:  # type: ignore[union-attr]
@@ -3294,31 +3516,32 @@ async def reject_step(
                             "error_type": type(exc).__name__,
                         },
                     ) from exc
-                try:
-                    db.update_run_status(
-                        run_id,
-                        status="failed",
-                        status_reason="rejected_by_human",
-                        ended_at=_utcnow_iso(),
-                        connection=conn,
-                    )
-                except Exception as exc:
-                    error_category = _classify_db_error(exc)
-                    logger.exception(
-                        "Workflows rejection: failed to mark run rejected for run_id={} step_id={} error_category={}",
-                        run_id,
-                        step_id,
-                        error_category,
-                    )
-                    raise HTTPException(
-                        status_code=500,
-                        detail={
-                            "error": "rejection_failed",
-                            "message": "Failed to mark run as rejected",
-                            "error_category": error_category,
-                            "error_type": type(exc).__name__,
-                        },
-                    ) from exc
+                if not failure_next:
+                    try:
+                        db.update_run_status(
+                            run_id,
+                            status="failed",
+                            status_reason="rejected_by_human",
+                            ended_at=_utcnow_iso(),
+                            connection=conn,
+                        )
+                    except Exception as exc:
+                        error_category = _classify_db_error(exc)
+                        logger.exception(
+                            "Workflows rejection: failed to mark run rejected for run_id={} step_id={} error_category={}",
+                            run_id,
+                            step_id,
+                            error_category,
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail={
+                                "error": "rejection_failed",
+                                "message": "Failed to mark run as rejected",
+                                "error_category": error_category,
+                                "error_type": type(exc).__name__,
+                            },
+                        ) from exc
                 try:
                     db.append_event(
                         str(getattr(current_user, "tenant_id", "default")),
@@ -3388,30 +3611,31 @@ async def reject_step(
                     "error_type": type(exc).__name__,
                 },
             ) from exc
-        try:
-            db.update_run_status(
-                run_id,
-                status="failed",
-                status_reason="rejected_by_human",
-                ended_at=_utcnow_iso(),
-            )
-        except Exception as exc:
-            error_category = _classify_db_error(exc)
-            logger.exception(
-                "Workflows rejection: failed to mark run rejected for run_id={} step_id={} error_category={}",
-                run_id,
-                step_id,
-                error_category,
-            )
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "rejection_failed",
-                    "message": "Failed to mark run as rejected",
-                    "error_category": error_category,
-                    "error_type": type(exc).__name__,
-                },
-            ) from exc
+        if not failure_next:
+            try:
+                db.update_run_status(
+                    run_id,
+                    status="failed",
+                    status_reason="rejected_by_human",
+                    ended_at=_utcnow_iso(),
+                )
+            except Exception as exc:
+                error_category = _classify_db_error(exc)
+                logger.exception(
+                    "Workflows rejection: failed to mark run rejected for run_id={} step_id={} error_category={}",
+                    run_id,
+                    step_id,
+                    error_category,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "rejection_failed",
+                        "message": "Failed to mark run as rejected",
+                        "error_category": error_category,
+                        "error_type": type(exc).__name__,
+                    },
+                ) from exc
         try:
             db.append_event(
                 str(getattr(current_user, "tenant_id", "default")),
@@ -3436,6 +3660,20 @@ async def reject_step(
                     "error_type": type(exc).__name__,
                 },
             ) from exc
+    if failure_next:
+        engine = WorkflowEngine(db)
+        last_outputs = payload.edited_fields or {}
+        last_outputs.setdefault("decision", "rejected")
+        if payload.comment:
+            last_outputs.setdefault("comment", payload.comment)
+        asyncio.create_task(
+            engine.continue_run(
+                run_id,
+                after_step_id=step_id,
+                last_outputs=last_outputs,
+                next_step_id=failure_next,
+            )
+        )
     return {"ok": True}
 
 

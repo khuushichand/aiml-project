@@ -4,6 +4,7 @@ import os
 import socket
 import subprocess
 import shlex
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -118,10 +119,43 @@ def _is_frontend_response(body: Optional[str]) -> bool:
     return "__NEXT_DATA__" in body or 'id="__next"' in body
 
 
-def _wait_for_frontend(base_url: str, timeout: float = 60.0) -> None:
+def _read_log_tail(log_path: Optional[Path], max_bytes: int = 4000) -> str:
+    if not log_path:
+        return ""
+    try:
+        data = log_path.read_bytes()
+    except Exception:
+        return ""
+    if len(data) > max_bytes:
+        data = data[-max_bytes:]
+    return data.decode("utf-8", errors="ignore")
+
+
+def _wait_for_frontend(
+    base_url: str,
+    timeout: float = 60.0,
+    proc: Optional[subprocess.Popen] = None,
+    log_path: Optional[Path] = None,
+) -> None:
     deadline = time.monotonic() + timeout
     last_status: Optional[str] = None
     while time.monotonic() < deadline:
+        if proc and proc.poll() is not None:
+            log_tail = _read_log_tail(log_path)
+            hint = ""
+            if "Unable to acquire lock" in log_tail or "another instance of next dev" in log_tail:
+                hint = (
+                    "Next dev appears to be running already. "
+                    "Stop it or set TLDW_FRONTEND_URL to the running instance."
+                )
+            elif "EADDRINUSE" in log_tail or "address already in use" in log_tail:
+                hint = "Frontend port is already in use; set TLDW_FRONTEND_URL or free the port."
+            message = "Frontend process exited before becoming ready."
+            if hint:
+                message = f"{message} {hint}"
+            if log_tail:
+                message = f"{message}\nLog tail:\n{log_tail}"
+            raise RuntimeError(message)
         response = _fetch_frontend(base_url)
         if _is_frontend_response(response["body"]):
             return
@@ -163,7 +197,17 @@ def _ensure_frontend_running(repo_root: Path, base_url: str, server_url: str, ap
     if command:
         cmd = shlex.split(command)
     else:
-        cmd = ["npm", "run", "dev", "--", "-p", str(port)]
+        cmd = None
+        for candidate in ("npm", "pnpm", "yarn", "bun"):
+            if shutil.which(candidate):
+                if candidate == "bun":
+                    cmd = ["bun", "run", "dev", "--", "-p", str(port)]
+                else:
+                    cmd = [candidate, "run", "dev", "--", "-p", str(port)]
+                break
+        if cmd is None:
+            log_file.close()
+            pytest.skip("npm/pnpm/yarn/bun is not available; start the frontend manually.")
 
     try:
         proc = subprocess.Popen(
@@ -176,9 +220,9 @@ def _ensure_frontend_running(repo_root: Path, base_url: str, server_url: str, ap
         )
     except FileNotFoundError:
         log_file.close()
-        pytest.skip("npm is not available; start the frontend manually.")
+        pytest.skip("Frontend command not found; start the frontend manually.")
     try:
-        _wait_for_frontend(base_url, timeout=120.0)
+        _wait_for_frontend(base_url, timeout=120.0, proc=proc, log_path=log_path)
         yield proc
     finally:
         proc.terminate()
@@ -218,7 +262,7 @@ def server_url() -> str:
         "AUTH_MODE": "single_user",
         "SINGLE_USER_API_KEY": os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID"),
         "CSRF_ENABLED": "true",
-        "TEST_MODE": "true",
+        "TEST_MODE": os.getenv("TEST_MODE", "true"),
         "EPHEMERAL_CLEANUP_ENABLED": "false",
         "CLAIMS_REBUILD_ENABLED": "false",
     }

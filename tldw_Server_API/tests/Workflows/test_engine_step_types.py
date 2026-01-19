@@ -68,7 +68,11 @@ def test_wait_for_approval_then_resume(client_with_wf: TestClient):
         "version": 1,
         "steps": [
             {"id": "l1", "type": "log", "config": {"message": "Start", "level": "info"}},
-            {"id": "w1", "type": "wait_for_approval", "config": {"instructions": "Approve to continue"}},
+            {
+                "id": "w1",
+                "type": "wait_for_approval",
+                "config": {"instructions": "Approve to continue", "assigned_to_user_id": 1},
+            },
             {"id": "l2", "type": "log", "config": {"message": "Approved by {{ inputs.name }}", "level": "info"}},
         ],
     }

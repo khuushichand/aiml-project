@@ -228,6 +228,7 @@ def sqlite_workflows_db(tmp_path: Path) -> Path:
     )
     wf_db.create_step_run(
         step_run_id="wf-step",
+        tenant_id="tenant-wf",
         run_id=run_id,
         step_id="step-1",
         name="Step",

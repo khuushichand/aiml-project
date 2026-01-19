@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -27,7 +28,119 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
 from tldw_Server_API.app.core.Evaluations.metrics_retrieval import (
     recall_at_k, mrr, ndcg, hit_at_k,
 )
+from tldw_Server_API.app.core.Evaluations.embeddings_abtest_metrics import (
+    record_abtest_arm_build,
+    record_abtest_run,
+)
 from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import RerankingStrategy
+
+
+class EmbeddingsABTestRunError(RuntimeError):
+    def __init__(self, message: str, *, retryable: bool = True, backoff_seconds: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        if backoff_seconds is not None:
+            self.backoff_seconds = backoff_seconds
+
+
+class EmbeddingsABTestPolicyError(EmbeddingsABTestRunError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        policy_type: str,
+        status_code: int,
+        details: Optional[Dict[str, object]] = None,
+    ) -> None:
+        super().__init__(message, retryable=False)
+        self.policy_type = policy_type
+        self.status_code = status_code
+        self.details = details or {}
+
+
+def _parse_abtest_quota(raw: object) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        value = int(str(raw).strip())
+    except Exception:
+        return None
+    return value if value > 0 else None
+
+
+def _load_abtest_quota(name: str) -> Optional[int]:
+    raw = os.getenv(name)
+    if raw is None:
+        try:
+            from tldw_Server_API.app.core.config import settings as app_settings
+            raw = app_settings.get(name)
+        except Exception:
+            raw = None
+    return _parse_abtest_quota(raw)
+
+
+def _model_allowed(model: str, allowed_models: List[str]) -> bool:
+    for pat in allowed_models:
+        if pat.endswith("*") and model.startswith(pat[:-1]):
+            return True
+        if model == pat:
+            return True
+    return False
+
+
+def validate_abtest_policy(config: EmbeddingsABTestConfig, *, user: Optional[object] = None) -> None:
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
+            _get_allowed_providers,
+            _get_allowed_models,
+            _should_enforce_policy,
+        )
+    except Exception:
+        _get_allowed_providers = lambda: None
+        _get_allowed_models = lambda: None
+        _should_enforce_policy = lambda _user=None: False
+
+    enforce_policy = bool(_should_enforce_policy(user))
+    allowed_providers = _get_allowed_providers()
+    allowed_models = _get_allowed_models()
+
+    if enforce_policy and allowed_providers is not None:
+        for arm in config.arms:
+            provider = (arm.provider or "").lower()
+            if provider not in allowed_providers:
+                raise EmbeddingsABTestPolicyError(
+                    f"Provider '{arm.provider}' is not allowed",
+                    policy_type="provider",
+                    status_code=403,
+                    details={"provider": arm.provider, "allowed_providers": allowed_providers},
+                )
+
+    if enforce_policy and allowed_models is not None:
+        for arm in config.arms:
+            if not _model_allowed(arm.model, allowed_models):
+                raise EmbeddingsABTestPolicyError(
+                    f"Model '{arm.model}' is not allowed",
+                    policy_type="model",
+                    status_code=403,
+                    details={"model": arm.model, "allowed_models": allowed_models},
+                )
+
+    quotas = {
+        "arms": (len(config.arms), "EVALS_ABTEST_MAX_ARMS"),
+        "queries": (len(config.queries), "EVALS_ABTEST_MAX_QUERIES"),
+        "media_ids": (len(config.media_ids), "EVALS_ABTEST_MAX_MEDIA_IDS"),
+    }
+    for label, (count, env_key) in quotas.items():
+        limit = _load_abtest_quota(env_key)
+        if limit is None:
+            continue
+        if count > limit:
+            raise EmbeddingsABTestPolicyError(
+                f"A/B test exceeds {label} quota ({count} > {limit})",
+                policy_type="quota",
+                status_code=429,
+                details={"quota": env_key, "count": count, "limit": limit},
+            )
 
 
 def _compute_collection_hash(config: EmbeddingsABTestConfig, arm_index: int) -> str:
@@ -186,6 +299,14 @@ async def build_collections_vector_only(
     for i, arm in enumerate(config.arms):
         collection_name = f"user_{user_id}_abtest_{test_id}_arm_{i}"
         collection_hash = _compute_collection_hash(config, i)
+        arm_logger = logger.bind(
+            test_id=test_id,
+            arm_index=i,
+            provider=arm.provider,
+            model=arm.model,
+        )
+        arm_start = time.monotonic()
+        arm_logger.info("Embeddings A/B collection build starting")
         existing = existing_arms.get(i)
         if (
             config.reuse_existing
@@ -196,6 +317,9 @@ async def build_collections_vector_only(
             and _collection_exists(manager, collection_name)
         ):
             # Reuse only within the same test lifecycle (collection name is test-scoped).
+            existing_arm_id = existing.get("arm_id")
+            if existing_arm_id:
+                arm_logger = arm_logger.bind(arm_id=existing_arm_id)
             stats_payload = None
             meta_payload = None
             try:
@@ -222,6 +346,16 @@ async def build_collections_vector_only(
                 metadata_json=meta_payload,
             )
             results.append({"arm_id": existing.get("arm_id"), "collection_name": collection_name})
+            try:
+                record_abtest_arm_build(
+                    duration_seconds=time.monotonic() - arm_start,
+                    status="reused",
+                    provider=arm.provider,
+                    model=arm.model,
+                )
+            except Exception:
+                pass
+            arm_logger.info("Embeddings A/B collection reused")
             continue
 
         arm_id = db.upsert_abtest_arm(
@@ -232,76 +366,118 @@ async def build_collections_vector_only(
             dimensions=arm.dimensions,
             collection_hash=collection_hash,
             pipeline_hash=pipeline_hash,
-            status='preparing',
+            status='building',
         )
+        arm_logger = arm_logger.bind(arm_id=arm_id)
 
         try:
-            if _collection_exists(manager, collection_name):
-                manager.delete_collection(collection_name)
-        except Exception:
-            pass
+            try:
+                if _collection_exists(manager, collection_name):
+                    manager.delete_collection(collection_name)
+            except Exception:
+                pass
 
-        # Chunk entire corpus
-        all_texts: List[str] = []
-        metadatas: List[Dict[str, str]] = []
-        ids: List[str] = []
-        for (mid, text) in corpus_texts:
-            chunks = chunker.chunk_text_with_metadata(
-                text=text,
-                method=config.chunking.method,
-                max_size=config.chunking.size,
-                overlap=config.chunking.overlap,
-            )
-            for idx, ch in enumerate(chunks):
-                all_texts.append(ch.text)
-                ids.append(f"mid{mid}_ch{idx}")
-                md = {
-                    "media_id": str(mid),
-                    "chunk_index": str(idx),
-                    "chunk_start": str(getattr(ch.metadata, 'start_char', idx * (config.chunking.size - config.chunking.overlap))),
-                    "chunk_end": str(getattr(ch.metadata, 'end_char', (idx + 1) * config.chunking.size)),
-                    "embedding_model": arm.model,
-                    "embedding_provider": arm.provider,
-                }
-                md.update(_get_model_revision(arm.provider, arm.model))
-                metadatas.append(md)
+            # Chunk entire corpus
+            all_texts: List[str] = []
+            metadatas: List[Dict[str, str]] = []
+            ids: List[str] = []
+            for (mid, text) in corpus_texts:
+                chunks = chunker.chunk_text_with_metadata(
+                    text=text,
+                    method=config.chunking.method,
+                    max_size=config.chunking.size,
+                    overlap=config.chunking.overlap,
+                )
+                for idx, ch in enumerate(chunks):
+                    all_texts.append(ch.text)
+                    ids.append(f"mid{mid}_ch{idx}")
+                    md = {
+                        "media_id": str(mid),
+                        "chunk_index": str(idx),
+                        "chunk_start": str(getattr(ch.metadata, 'start_char', idx * (config.chunking.size - config.chunking.overlap))),
+                        "chunk_end": str(getattr(ch.metadata, 'end_char', (idx + 1) * config.chunking.size)),
+                        "embedding_model": arm.model,
+                        "embedding_provider": arm.provider,
+                    }
+                    md.update(_get_model_revision(arm.provider, arm.model))
+                    metadatas.append(md)
 
-        # Embed and store
-        user_metadata = {"user_id": str(user_id)}
-        vectors = await _embed_texts(arm.provider, arm.model, all_texts, metadata=user_metadata) if all_texts else []
-        emb_dim = len(vectors[0]) if vectors else (arm.dimensions or 0)
+            # Embed and store
+            user_metadata = {"user_id": str(user_id)}
+            vectors = await _embed_texts(arm.provider, arm.model, all_texts, metadata=user_metadata) if all_texts else []
+            emb_dim = len(vectors[0]) if vectors else (arm.dimensions or 0)
 
-        # store in chroma
-        if vectors:
-            manager.store_in_chroma(
-                texts=all_texts,
-                embeddings=vectors,
-                ids=ids,
-                metadatas=metadatas,
+            # store in chroma
+            if vectors:
+                manager.store_in_chroma(
+                    texts=all_texts,
+                    embeddings=vectors,
+                    ids=ids,
+                    metadatas=metadatas,
+                    collection_name=collection_name,
+                )
+
+            # Update DB with collection info and metadata
+            db.upsert_abtest_arm(
+                test_id=test_id,
+                arm_index=i,
+                provider=arm.provider,
+                model_id=arm.model,
+                dimensions=emb_dim or arm.dimensions,
+                collection_hash=collection_hash,
+                pipeline_hash=pipeline_hash,
                 collection_name=collection_name,
+                status='ready',
+                stats_json={
+                    "chunk_count": len(all_texts),
+                    "embedding_dim": emb_dim,
+                    "doc_count": len(corpus_texts)
+                },
+                metadata_json={"hf_revision": _get_model_revision(arm.provider, arm.model).get("hf_revision"),
+                               "onnx_sha": _get_model_revision(arm.provider, arm.model).get("onnx_sha")},
             )
 
-        # Update DB with collection info and metadata
-        db.upsert_abtest_arm(
-            test_id=test_id,
-            arm_index=i,
-            provider=arm.provider,
-            model_id=arm.model,
-            dimensions=emb_dim or arm.dimensions,
-            collection_hash=collection_hash,
-            pipeline_hash=pipeline_hash,
-            collection_name=collection_name,
-            status='ready',
-            stats_json={
-                "chunk_count": len(all_texts),
-                "embedding_dim": emb_dim,
-                "doc_count": len(corpus_texts)
-            },
-            metadata_json={"hf_revision": _get_model_revision(arm.provider, arm.model).get("hf_revision"),
-                           "onnx_sha": _get_model_revision(arm.provider, arm.model).get("onnx_sha")},
-        )
-
-        results.append({"arm_id": arm_id, "collection_name": collection_name})
+            results.append({"arm_id": arm_id, "collection_name": collection_name})
+            try:
+                record_abtest_arm_build(
+                    duration_seconds=time.monotonic() - arm_start,
+                    status="built",
+                    provider=arm.provider,
+                    model=arm.model,
+                )
+            except Exception:
+                pass
+            arm_logger.info("Embeddings A/B collection build completed")
+        except Exception as exc:
+            try:
+                db.upsert_abtest_arm(
+                    test_id=test_id,
+                    arm_index=i,
+                    provider=arm.provider,
+                    model_id=arm.model,
+                    dimensions=arm.dimensions,
+                    collection_hash=collection_hash,
+                    pipeline_hash=pipeline_hash,
+                    collection_name=collection_name,
+                    status='failed',
+                    stats_json={"error": str(exc)},
+                )
+            except Exception:
+                pass
+            try:
+                record_abtest_arm_build(
+                    duration_seconds=time.monotonic() - arm_start,
+                    status="failed",
+                    provider=arm.provider,
+                    model=arm.model,
+                )
+            except Exception:
+                pass
+            arm_logger.warning(f"Embeddings A/B collection build failed: {exc}")
+            raise EmbeddingsABTestRunError(
+                f"Failed to build collection for arm {arm.provider}/{arm.model}: {exc}",
+                retryable=True,
+            ) from exc
 
     return results
 
@@ -532,13 +708,22 @@ async def run_abtest_full(
     media_db: MediaDatabase,
 ) -> None:
     """Background job that builds collections and executes evaluation, updating DB progress."""
+    run_start = time.monotonic()
+    run_logger = logger.bind(test_id=test_id)
+    run_logger.info("Embeddings A/B test run starting")
     try:
+        validate_abtest_policy(config)
         db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.05}})
         arm_info = await build_collections_vector_only(db, config, test_id, user_id, media_db)
         db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.5}})
         aggregates = await run_vector_search_and_score(db, config, test_id, user_id, arm_info)
         sig = compute_significance(db, test_id, metric='ndcg')
         db.set_abtest_status(test_id, 'completed', stats_json={"aggregates": aggregates, "significance": sig, "progress": {"phase": 1.0}})
+        try:
+            record_abtest_run(duration_seconds=time.monotonic() - run_start, status="completed")
+        except Exception:
+            pass
+        run_logger.info("Embeddings A/B test run completed")
         cleanup = getattr(config, "cleanup_policy", None)
         if cleanup and bool(getattr(cleanup, "on_complete", False)):
             try:
@@ -564,8 +749,20 @@ async def run_abtest_full(
                     )
             except Exception as exc:
                 logger.warning(f"Failed to enqueue cleanup job for A/B test {test_id}: {exc}")
-    except Exception as e:
-        db.set_abtest_status(test_id, 'failed', stats_json={"error": str(e)})
+    except EmbeddingsABTestRunError as exc:
+        try:
+            record_abtest_run(duration_seconds=time.monotonic() - run_start, status="failed")
+        except Exception:
+            pass
+        run_logger.warning(f"Embeddings A/B test run failed: {exc}")
+        raise
+    except Exception as exc:
+        try:
+            record_abtest_run(duration_seconds=time.monotonic() - run_start, status="failed")
+        except Exception:
+            pass
+        run_logger.warning(f"Embeddings A/B test run failed: {exc}")
+        raise EmbeddingsABTestRunError(f"A/B test {test_id} failed: {exc}", retryable=True) from exc
 
 
 def cleanup_abtest_resources(

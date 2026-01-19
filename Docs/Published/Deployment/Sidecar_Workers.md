@@ -3,6 +3,7 @@
 
 Sidecar mode runs Jobs workers as separate processes instead of threads inside the API server.
 This isolates failures, avoids blocking the main event loop, and is recommended when you run multiple Uvicorn workers.
+It also reduces SQLite lock contention by avoiding per-Uvicorn-worker background threads.
 
 Source of truth:
 - `Docs/Deployment/sidecar_workers_manifest.json`

@@ -38,6 +38,8 @@ from tldw_Server_API.app.core.Evaluations.audit_adapter import (
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
     run_abtest_full,
     compute_significance,
+    validate_abtest_policy,
+    EmbeddingsABTestPolicyError,
 )
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     ABTEST_JOBS_DOMAIN,
@@ -87,6 +89,10 @@ async def create_embeddings_abtest(
             cfg.chunking = ABTestChunking(method='sentences', size=200, overlap=20, language=None)
         except Exception:
             pass
+    try:
+        validate_abtest_policy(cfg, user=current_user)
+    except EmbeddingsABTestPolicyError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
     test_id = db.create_abtest(name=payload.name, config=cfg.model_dump(), created_by=user_ctx)
     for idx, arm in enumerate(payload.config.arms):
         db.upsert_abtest_arm(
@@ -153,6 +159,18 @@ async def run_embeddings_abtest(
             cfg.chunking = ABTestChunking(method='sentences', size=200, overlap=20, language=None)
         except Exception:
             pass
+    try:
+        validate_abtest_policy(cfg, user=current_user)
+    except EmbeddingsABTestPolicyError as exc:
+        try:
+            db.set_abtest_status(
+                test_id,
+                'failed',
+                stats_json={"error": str(exc), "policy": exc.details, "status_code": exc.status_code},
+            )
+        except Exception:
+            pass
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
 
     # In testing mode, execute synchronously to make polling deterministic
     testing = False
@@ -173,9 +191,11 @@ async def run_embeddings_abtest(
             eval_id=test_id,
             target_model="embeddings_abtest",
         )
+        run_error: Optional[Exception] = None
         try:
             await run_abtest_full(db, cfg, test_id, str(current_user.id), media_db)
         except Exception as _e:
+            run_error = _e
             try:
                 logger.warning(f"A/B test synchronous run failed: {_e}")
             except Exception:
@@ -185,6 +205,12 @@ async def run_embeddings_abtest(
                 db.record_idempotency("emb_abtest_run", idempotency_key, test_id, user_ctx)
         except Exception:
             pass
+        if run_error is not None:
+            try:
+                db.set_abtest_status(test_id, 'failed', stats_json={"error": str(run_error)})
+            except Exception:
+                pass
+            return EmbeddingsABTestStatusResponse(test_id=test_id, status='failed', progress={"phase": 0.0})
         return EmbeddingsABTestStatusResponse(test_id=test_id, status='completed', progress={"phase": 1.0})
 
     try:

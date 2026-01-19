@@ -10,6 +10,7 @@ Defaults:
 
 Env overrides:
 - `SINGLE_USER_API_KEY=...` (API key for single_user auth; must be >=16 chars)
+- `TEST_MODE=false` (disable server test mode shortcuts)
 - `TLDW_FRONTEND_URL=http://127.0.0.1:8080` (use an existing frontend server)
 - `TLDW_FRONTEND_CMD="npm run dev -- -p 8080"` (custom frontend start command)
 - `PLAYWRIGHT_HEADLESS=0` (run headed)

@@ -184,6 +184,8 @@ def test_workflows_postgres_schema_migration_adds_missing_columns(pg_database_co
 
             for column in ("pid", "pgid", "workdir", "stdout_path", "stderr_path"):
                 assert _column_exists(backend, conn, "workflow_step_runs", column)
+            assert _column_exists(backend, conn, "workflow_step_runs", "tenant_id")
+            assert _column_exists(backend, conn, "workflow_step_runs", "assigned_to")
 
             assert backend.table_exists("workflow_artifacts", connection=conn)
             # Per-run event counters table present

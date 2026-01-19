@@ -50,6 +50,8 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
 )
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
     cleanup_abtest_resources,
+    EmbeddingsABTestPolicyError,
+    EmbeddingsABTestRunError,
     run_abtest_full,
 )
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
@@ -166,8 +168,15 @@ async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
     if not test_id:
         raise EmbeddingsABTestJobError("Missing test_id in job payload", retryable=False)
 
+    job_id = job.get("uuid") or job.get("id")
     owner = job.get("owner_user_id") or payload.get("user_id")
     user_id_str, user_id_int = _normalize_user_id(owner)
+    job_logger = logger.bind(
+        test_id=str(test_id),
+        job_id=str(job_id) if job_id is not None else None,
+        user_id=user_id_str,
+    )
+    job_logger.info(f"Embeddings A/B job starting ({job_type})")
 
     svc = get_unified_evaluation_service_for_user(user_id_int)
     if job_type == ABTEST_JOBS_CLEANUP_TYPE:
@@ -178,6 +187,7 @@ async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
             delete_db=True,
             delete_idempotency=True,
         )
+        job_logger.info("Embeddings A/B cleanup job completed")
         return {"test_id": str(test_id), "cleanup": True}
 
     config_payload = _load_config_from_payload(payload)
@@ -186,8 +196,46 @@ async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
     config = _normalize_config(config_payload)
 
     media_db = _build_media_db(user_id_str)
-    await run_abtest_full(svc.db, config, str(test_id), user_id_str, media_db)
-    return {"test_id": str(test_id), "cleanup": False}
+    try:
+        await run_abtest_full(svc.db, config, str(test_id), user_id_str, media_db)
+        job_logger.info("Embeddings A/B job completed")
+        return {"test_id": str(test_id), "cleanup": False}
+    except Exception as exc:
+        retryable = bool(getattr(exc, "retryable", True))
+        retry_count = _coerce_int(job.get("retry_count"), 0)
+        max_retries = _coerce_int(job.get("max_retries"), 0)
+        will_retry = retryable and retry_count < max_retries
+        error_payload = {"error": str(exc), "retry_count": retry_count, "max_retries": max_retries}
+        if isinstance(exc, EmbeddingsABTestPolicyError):
+            error_payload.update(
+                {
+                    "policy": exc.details,
+                    "policy_type": exc.policy_type,
+                    "status_code": exc.status_code,
+                }
+            )
+        if not will_retry:
+            try:
+                svc.db.set_abtest_status(
+                    str(test_id),
+                    "failed",
+                    stats_json=error_payload,
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                svc.db.set_abtest_status(
+                    str(test_id),
+                    "running",
+                    stats_json={"last_error": str(exc), "retry_count": retry_count + 1, "max_retries": max_retries},
+                )
+            except Exception:
+                pass
+        job_logger.warning(f"Embeddings A/B job failed: {exc} (retryable={retryable}, will_retry={will_retry})")
+        if isinstance(exc, EmbeddingsABTestRunError):
+            raise
+        raise EmbeddingsABTestRunError(str(exc), retryable=retryable) from exc
 
 
 async def run_embeddings_abtest_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:

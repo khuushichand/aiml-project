@@ -9,7 +9,7 @@ Last Updated: 2026-01-12
 **Tests**:
 - Integration: repository CRUD on Postgres (uses existing test fixtures).
 - Unit: repository CRUD on SQLite (ensure no regressions).
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Collection Build Status + Retry Semantics
 **Goal**: Make build/run status transitions explicit and ensure failures propagate to Jobs retries.
@@ -20,7 +20,7 @@ Last Updated: 2026-01-12
 **Tests**:
 - Integration: enqueue -> handler fails -> retry/backoff -> terminal failure path.
 - Unit: status transitions for per-arm build errors.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Governance Enforcement (Allowlists + Quotas)
 **Goal**: Enforce provider allowlists and quotas at API and worker levels.
@@ -31,7 +31,7 @@ Last Updated: 2026-01-12
 **Tests**:
 - Integration: reject disallowed provider during create/run.
 - Integration: quota exceeded blocks run (API + worker).
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Observability Enhancements
 **Goal**: Add A/B-specific metrics and structured logs for collection builds and runs.
@@ -41,7 +41,7 @@ Last Updated: 2026-01-12
 - Metrics are documented in the evaluations observability docs.
 **Tests**:
 - Unit: metrics emitted on build/run success + failure.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Testing Hardening (Property-Based + Export Schema)
 **Goal**: Improve test coverage for invariants and export payload stability.
@@ -52,4 +52,4 @@ Last Updated: 2026-01-12
 **Tests**:
 - Property-based: hashing determinism and sensitivity.
 - Integration: export payload schema contract.
-**Status**: Not Started
+**Status**: Complete

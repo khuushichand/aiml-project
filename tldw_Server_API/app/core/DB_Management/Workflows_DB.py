@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS workflows (
 
 CREATE TABLE IF NOT EXISTS workflow_step_runs (
     step_run_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     step_id TEXT NOT NULL,
     name TEXT,
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS workflow_step_runs (
     outputs_json TEXT,
     error TEXT,
     decision TEXT,
+    assigned_to TEXT,
     approved_by TEXT,
     approved_at TIMESTAMPTZ,
     review_comment TEXT,
@@ -421,7 +423,7 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
-    _CURRENT_SCHEMA_VERSION = 4
+    _CURRENT_SCHEMA_VERSION = 5
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -671,6 +673,7 @@ class WorkflowsDatabase:
             2: self._backend_migrate_to_v2,
             3: self._backend_migrate_to_v3,
             4: self._backend_migrate_to_v4,
+            5: self._backend_migrate_to_v5,
         }
 
     def _backend_migrate_to_v1(self, conn) -> None:
@@ -850,6 +853,35 @@ class WorkflowsDatabase:
         except Exception:
             pass
 
+    def _backend_migrate_to_v5(self, conn) -> None:
+        if not self.backend:
+            return
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        # Add tenant/assignee columns to workflow_step_runs
+        backend.execute(
+            f"ALTER TABLE {ident('workflow_step_runs')} ADD COLUMN IF NOT EXISTS {ident('tenant_id')} TEXT",
+            connection=conn,
+        )
+        backend.execute(
+            f"ALTER TABLE {ident('workflow_step_runs')} ADD COLUMN IF NOT EXISTS {ident('assigned_to')} TEXT",
+            connection=conn,
+        )
+
+        # Best-effort backfill tenant_id from workflow_runs
+        try:
+            backend.execute(
+                f"UPDATE {ident('workflow_step_runs')} AS s "
+                f"SET {ident('tenant_id')} = r.{ident('tenant_id')} "
+                f"FROM {ident('workflow_runs')} AS r "
+                f"WHERE s.{ident('run_id')} = r.{ident('run_id')} "
+                f"AND (s.{ident('tenant_id')} IS NULL OR s.{ident('tenant_id')} = '')",
+                connection=conn,
+            )
+        except Exception:
+            pass
+
     def _initialize_schema_backend(self) -> None:
         if not self.backend:
             return
@@ -942,6 +974,7 @@ class WorkflowsDatabase:
             """
             CREATE TABLE IF NOT EXISTS workflow_step_runs (
                 step_run_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
                 run_id TEXT NOT NULL,
                 step_id TEXT NOT NULL,
                 name TEXT,
@@ -954,6 +987,7 @@ class WorkflowsDatabase:
                 outputs_json TEXT,
                 error TEXT,
                 decision TEXT,
+                assigned_to TEXT,
                 approved_by TEXT,
                 approved_at TEXT,
                 review_comment TEXT,
@@ -1037,6 +1071,8 @@ class WorkflowsDatabase:
             "ALTER TABLE workflow_runs ADD COLUMN tokens_input INTEGER",
             "ALTER TABLE workflow_runs ADD COLUMN tokens_output INTEGER",
             "ALTER TABLE workflow_runs ADD COLUMN cost_usd REAL",
+            "ALTER TABLE workflow_step_runs ADD COLUMN tenant_id TEXT",
+            "ALTER TABLE workflow_step_runs ADD COLUMN assigned_to TEXT",
             "ALTER TABLE workflow_step_runs ADD COLUMN pid INTEGER",
             "ALTER TABLE workflow_step_runs ADD COLUMN pgid INTEGER",
             "ALTER TABLE workflow_step_runs ADD COLUMN workdir TEXT",
@@ -1048,6 +1084,21 @@ class WorkflowsDatabase:
                 self._conn.commit()
             except Exception:
                 pass
+
+        # Backfill step-run tenant_id from workflow_runs when possible
+        try:
+            cur.execute(
+                """
+                UPDATE workflow_step_runs
+                SET tenant_id = (
+                    SELECT tenant_id FROM workflow_runs WHERE workflow_runs.run_id = workflow_step_runs.run_id
+                )
+                WHERE tenant_id IS NULL OR tenant_id = ''
+                """
+            )
+            self._conn.commit()
+        except Exception:
+            pass
 
         # Artifacts table (v0.2)
         cur.execute(
@@ -1710,15 +1761,18 @@ class WorkflowsDatabase:
         self,
         *,
         step_run_id: str,
+        tenant_id: str,
         run_id: str,
         step_id: str,
         name: str,
         step_type: str,
         status: str = "running",
         inputs: Optional[Dict[str, Any]] = None,
+        assigned_to: Optional[str] = None,
     ) -> None:
         params = (
             step_run_id,
+            tenant_id,
             run_id,
             step_id,
             name,
@@ -1726,12 +1780,13 @@ class WorkflowsDatabase:
             status,
             _utcnow_iso(),
             json.dumps(inputs or {}),
+            assigned_to,
         )
 
         query = """
             INSERT INTO workflow_step_runs(
-                step_run_id, run_id, step_id, name, type, status, started_at, inputs_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                step_run_id, tenant_id, run_id, step_id, name, type, status, started_at, inputs_json, assigned_to
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         if self._using_backend():
@@ -1784,6 +1839,28 @@ class WorkflowsDatabase:
                 self._sqlite_retry_commit()
             else:
                 raise
+
+    def get_latest_step_run(self, *, run_id: str, step_id: str) -> Optional[Dict[str, Any]]:
+        """Return the most recent step run for a run/step_id pair."""
+        query = """
+            SELECT * FROM workflow_step_runs
+            WHERE run_id = ? AND step_id = ?
+            ORDER BY started_at DESC
+            LIMIT 1
+        """
+        params = (str(run_id), str(step_id))
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, params, connection=conn)
+            row = self._row_from_result(result)
+            return row.to_dict() if row else None
+
+        conn = self._acquire_sqlite()
+        try:
+            row = conn.cursor().execute(query, params).fetchone()
+            return dict(row) if row else None
+        finally:
+            self._release_sqlite(conn)
 
     def update_step_attempt(self, *, step_run_id: str, attempt: int) -> None:
         """Persist the current attempt count for a step run."""

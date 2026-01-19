@@ -74,3 +74,63 @@ def test_rag_search_with_citations_returns_citations(client_with_wf: TestClient)
     # Citations may be empty but key should exist when enabled
     if out.get("documents"):
         assert "citations" in out or out.get("generated_answer") is not None
+
+
+def test_rag_search_rejects_unknown_fields(client_with_wf: TestClient):
+    client = client_with_wf
+    definition = {
+        "name": "rag-invalid-extra",
+        "version": 1,
+        "steps": [
+            {
+                "id": "s1",
+                "type": "rag_search",
+                "config": {
+                    "query": "test",
+                    "unknown_field": True,
+                },
+            },
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_rag_search_rejects_invalid_bounds(client_with_wf: TestClient):
+    client = client_with_wf
+    definition = {
+        "name": "rag-invalid-bounds",
+        "version": 1,
+        "steps": [
+            {
+                "id": "s1",
+                "type": "rag_search",
+                "config": {
+                    "query": "test",
+                    "top_k": 1000,
+                },
+            },
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_media_ingest_rejects_unknown_chunker(client_with_wf: TestClient):
+    client = client_with_wf
+    definition = {
+        "name": "ingest-invalid-chunker",
+        "version": 1,
+        "steps": [
+            {
+                "id": "s1",
+                "type": "media_ingest",
+                "config": {
+                    "sources": [{"uri": "file:///tmp/does-not-matter.txt"}],
+                    "chunking": {"strategy": "not_a_method"},
+                },
+            },
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422

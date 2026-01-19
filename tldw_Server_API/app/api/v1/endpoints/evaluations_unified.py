@@ -126,11 +126,10 @@ def _normalize_eval_user_id(current_user: User) -> Optional[int]:
 
 async def _get_admin_principal_if_needed(
     request: Request,
-    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> Optional[AuthPrincipal]:
     """Resolve AuthPrincipal only when heavy-eval admin gating is enabled."""
     if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() in {"true", "1", "yes", "on"}:
-        return principal
+        return await get_auth_principal(request)
     return None
 
 

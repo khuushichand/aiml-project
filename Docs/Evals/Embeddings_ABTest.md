@@ -3,6 +3,13 @@
 ## Overview
 A/B testing of embeddings compares two or more embedding models on the same corpus and queries. The module builds per-arm vector collections, runs queries (vector-only or hybrid), computes retrieval metrics, collects latency statistics, and optionally performs reranking and significance testing.
 
+## v2 Delivery Summary
+- Queued execution via Jobs backend with retry/backoff and explicit per-arm build states.
+- Deterministic collection hashing + reuse within a test lifecycle; cleanup removes collections and A/B DB/idempotency rows.
+- Governance enforcement (allowlists + quotas) at API and worker boundaries.
+- Observability via structured logs and Prometheus metrics for arm builds and run durations.
+- Export tooling with stable JSON/CSV schema and contract coverage.
+
 ## Key Capabilities
 - Multiple arms: each defined by `provider`, `model`, optional `dimensions`.
 - Corpus selection: list of media IDs from the user’s Media DB.
@@ -43,6 +50,11 @@ Idempotency:
   - Returns full results (CSV includes `metrics_json`).
 - `GET /api/v1/evaluations/embeddings/abtest/{test_id}/events` (SSE)
   - Streams JSON updates `{ type: 'status', status, stats: { progress: { phase } , aggregates? } }`.
+
+## Persistence Backend
+- Default (SQLite): SQLAlchemy repository (`embeddings_abtest_repository.py`) uses `create_all` at startup; no separate migration framework yet.
+- Postgres: falls back to the legacy Evaluations DB adapter (schema created by the main evaluations DB init).
+- Override with `EVALS_ABTEST_PERSISTENCE` (supported values: `sqlalchemy`, `repo`; any other value forces legacy mode).
 
 ## Config Schema (simplified)
 ```json
@@ -88,6 +100,14 @@ Idempotency:
 
 ## Admin/Heavy Runs
 - Admin gating defaults to ON for heavy runs. Override with env `EVALS_HEAVY_ADMIN_ONLY=false` if needed.
+
+## Governance (Allowlists + Quotas)
+- A/B arms respect the embedding allowlists (`ALLOWED_EMBEDDING_PROVIDERS`, `ALLOWED_EMBEDDING_MODELS`) when policy enforcement is enabled (`EMBEDDINGS_ENFORCE_POLICY`, optional `EMBEDDINGS_ENFORCE_POLICY_STRICT`).
+- Quotas can be enforced with:
+  - `EVALS_ABTEST_MAX_ARMS`
+  - `EVALS_ABTEST_MAX_QUERIES`
+  - `EVALS_ABTEST_MAX_MEDIA_IDS`
+- Allowlist violations return HTTP 403; quota violations return HTTP 429. Worker runs fail fast with a non-retryable policy error.
 
 ## Storage & Audit
 - Per-arm collections stored under user namespace: `user_{user_id}_abtest_{test_id}_arm_{i}`

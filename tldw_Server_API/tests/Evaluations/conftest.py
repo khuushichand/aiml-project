@@ -245,13 +245,18 @@ def mock_rate_limiter(monkeypatch):
 # ============================================================================
 
 @pytest_asyncio.fixture(scope="function")
-async def webhook_receiver_server():
+async def webhook_receiver_server(monkeypatch):
     """Start a real local HTTP server to receive webhooks.
 
     Returns a dict with 'url' and 'received' list of captured requests.
     """
     # Ensure webhook delivery path awaits completions during tests
-    os.environ["TEST_MODE"] = "true"
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+    monkeypatch.setenv("WORKFLOWS_EGRESS_ALLOWED_PORTS", "*")
+    monkeypatch.setenv("WORKFLOWS_EGRESS_ALLOWLIST", "127.0.0.1,localhost")
+    monkeypatch.delenv("EGRESS_DENYLIST", raising=False)
+    monkeypatch.delenv("WORKFLOWS_EGRESS_DENYLIST", raising=False)
     app = web.Application()
     received = []
 
@@ -312,11 +317,16 @@ async def webhook_receiver_server():
 
 
 @pytest_asyncio.fixture(scope="function")
-async def flaky_webhook_receiver_server():
+async def flaky_webhook_receiver_server(monkeypatch):
     """Local webhook receiver that fails the first two attempts (500), then succeeds.
 
     Useful for testing retry logic without mocks.
     """
+    monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+    monkeypatch.setenv("WORKFLOWS_EGRESS_ALLOWED_PORTS", "*")
+    monkeypatch.setenv("WORKFLOWS_EGRESS_ALLOWLIST", "127.0.0.1,localhost")
+    monkeypatch.delenv("EGRESS_DENYLIST", raising=False)
+    monkeypatch.delenv("WORKFLOWS_EGRESS_DENYLIST", raising=False)
     app = web.Application()
     received = []
     call_count = {"n": 0}

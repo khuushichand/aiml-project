@@ -114,6 +114,7 @@ def test_workflow_definition_and_run_roundtrip(workflows_dual_backend_db):
     step_run_id = f"{run_id}:step-1"
     db.create_step_run(
         step_run_id=step_run_id,
+        tenant_id="tenant-1",
         run_id=run_id,
         step_id="step-1",
         name="Echo",

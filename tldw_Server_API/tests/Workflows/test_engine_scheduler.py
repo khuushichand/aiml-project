@@ -98,7 +98,7 @@ def test_waiting_run_keeps_secrets_and_releases_slot(workflows_db: WorkflowsData
             {
                 "id": "wait",
                 "type": "wait_for_human",
-                "config": {},
+                "config": {"assigned_to_user_id": "user"},
                 "on_success": "next",
             },
             {"id": "next", "type": "log", "config": {"message": "done"}},
@@ -135,7 +135,7 @@ def test_continue_run_clears_secrets(workflows_db: WorkflowsDatabase):
             {
                 "id": "wait",
                 "type": "wait_for_human",
-                "config": {},
+                "config": {"assigned_to_user_id": "user"},
                 "on_success": "next",
             },
             {"id": "next", "type": "log", "config": {"message": "finished"}},

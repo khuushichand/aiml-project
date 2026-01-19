@@ -4,6 +4,9 @@
 - **Objective**: Deliver fully managed embeddings A/B testing with reusable collections, queued execution, governance controls, and comprehensive observability to compare embedding configurations at scale.
 - **Primary Outcome**: Allow admins and evaluation engineers to design, run, inspect, and export embedding experiments confidently, with automated cleanup and metrics.
 
+## Status
+- Complete (v2 scope delivered; see `Docs/Plans/IMPLEMENTATION_PLAN_embeddings_abtest_v2_remaining.md`).
+
 ## Scope (v2)
 1. Formalize persistence (SQLAlchemy adapter or documented alternative) with migrations and tests; restore implementation roadmap documentation.
 2. Enable collection builders to reuse existing corpora via deterministic hashing, run in background queues, and support failure retries.
