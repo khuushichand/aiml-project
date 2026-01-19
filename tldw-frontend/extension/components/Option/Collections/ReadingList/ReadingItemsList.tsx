@@ -238,7 +238,11 @@ export const ReadingItemsList: React.FC = () => {
     try {
       await api.deleteReadingItem(deleteTargetId, { hard: true })
       removeItem(deleteTargetId)
-      await clearReadingProgress(deleteTargetId)
+      try {
+        await clearReadingProgress(deleteTargetId)
+      } catch (err) {
+        console.warn("Failed to clear reading progress", err)
+      }
       setProgressById((prev) => {
         const { [deleteTargetId]: _, ...rest } = prev
         return rest

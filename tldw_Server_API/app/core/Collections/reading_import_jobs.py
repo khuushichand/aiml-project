@@ -136,11 +136,13 @@ async def handle_reading_import_job(job: Dict[str, Any]) -> Dict[str, Any]:
     payload = _parse_payload(job.get("payload"))
     user_id = _resolve_user_id(job, payload)
     file_token = payload.get("file_token") or payload.get("file_path")
+    if not file_token:
+        raise ReadingImportJobError("reading_import_missing_file", retryable=False)
     source = (payload.get("source") or "auto").strip().lower()
     merge_tags = _coerce_bool(payload.get("merge_tags"), True)
     filename = payload.get("filename")
 
-    import_path = resolve_reading_import_file(user_id, str(file_token or ""))
+    import_path = resolve_reading_import_file(user_id, str(file_token))
     raw_bytes = b""
     try:
         raw_bytes = import_path.read_bytes()

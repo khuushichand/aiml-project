@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
 
 CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
+CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at);
     CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq);
 
 -- Ensure uniqueness of per-run event sequence
@@ -182,9 +183,11 @@ def _utcnow_iso() -> str:
 
 def _workflows_idempotency_ttl_hours() -> int:
     """Return idempotency TTL in hours for workflow runs."""
+    raw = os.getenv("WORKFLOWS_IDEMPOTENCY_TTL_HOURS", "24")
     try:
-        ttl = int(os.getenv("WORKFLOWS_IDEMPOTENCY_TTL_HOURS", "24"))
-    except Exception:
+        ttl = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid WORKFLOWS_IDEMPOTENCY_TTL_HOURS=%r; defaulting to 24", raw)
         ttl = 24
     return max(1, ttl)
 
@@ -432,7 +435,7 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
-    _CURRENT_SCHEMA_VERSION = 5
+    _CURRENT_SCHEMA_VERSION = 6
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -683,6 +686,7 @@ class WorkflowsDatabase:
             3: self._backend_migrate_to_v3,
             4: self._backend_migrate_to_v4,
             5: self._backend_migrate_to_v5,
+            6: self._backend_migrate_to_v6,
         }
 
     def _backend_migrate_to_v1(self, conn) -> None:
@@ -891,6 +895,21 @@ class WorkflowsDatabase:
         except Exception:
             pass
 
+    def _backend_migrate_to_v6(self, conn) -> None:
+        if not self.backend:
+            return
+        backend = self.backend
+        ident = backend.escape_identifier
+        try:
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_idempotency_lookup')} "
+                f"ON {ident('workflow_runs')} ({ident('tenant_id')}, {ident('user_id')}, "
+                f"{ident('idempotency_key')}, {ident('created_at')})",
+                connection=conn,
+            )
+        except Exception:
+            pass
+
     def _initialize_schema_backend(self) -> None:
         if not self.backend:
             return
@@ -1034,6 +1053,9 @@ class WorkflowsDatabase:
         # Indices
         cur.execute("CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at)"
+        )
         # Partial indexes for frequently accessed statuses (supported on modern SQLite)
         try:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_running ON workflow_runs(status) WHERE status = 'running'")
@@ -1982,12 +2004,14 @@ class WorkflowsDatabase:
             if isinstance(raw, (bytes, bytearray)):
                 try:
                     outputs = json.loads(raw.decode("utf-8"))
-                except Exception:
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    logger.debug("Skipping malformed outputs_json for run_id=%s", run_id)
                     continue
             elif isinstance(raw, str):
                 try:
                     outputs = json.loads(raw)
-                except Exception:
+                except json.JSONDecodeError:
+                    logger.debug("Skipping malformed outputs_json for run_id=%s", run_id)
                     continue
             if not isinstance(outputs, dict):
                 continue
@@ -2033,7 +2057,8 @@ class WorkflowsDatabase:
         query = "SELECT * FROM workflow_runs WHERE tenant_id = ? AND user_id = ? AND idempotency_key = ?"
         if cutoff_iso:
             query += " AND created_at >= ?"
-            params = params + (cutoff_iso,)
+            params = (*params, cutoff_iso)
+        query += " ORDER BY created_at DESC, run_id DESC LIMIT 1"
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
                 result = self._execute_backend(query, params, connection=conn)

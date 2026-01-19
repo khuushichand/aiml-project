@@ -15,6 +15,11 @@ from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.Slides.slides_db import SlidesDatabase
+from tldw_Server_API.app.core.Slides.slides_export import SlidesExportError, SlidesExportInputError
+
+_SAMPLE_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAn8B9XgU1b0AAAAASUVORK5CYII="
+)
 
 
 def _build_assets(tmp_path):
@@ -27,6 +32,42 @@ def _build_assets(tmp_path):
     (assets_dir / "theme" / "black.css").write_text("/* theme */", encoding="utf-8")
     (assets_dir / "LICENSE.revealjs.txt").write_text("license", encoding="utf-8")
     return assets_dir
+
+
+def _write_templates(tmp_path):
+    templates = {
+        "templates": [
+            {
+                "id": "template-1",
+                "name": "Template One",
+                "theme": "white",
+                "marp_theme": "gaia",
+                "settings": {"controls": False, "progress": False},
+                "default_slides": [
+                    {
+                        "order": 0,
+                        "layout": "title",
+                        "title": "Template Title",
+                        "content": "",
+                        "speaker_notes": None,
+                        "metadata": {},
+                    },
+                    {
+                        "order": 1,
+                        "layout": "content",
+                        "title": "Template Slide",
+                        "content": "- Item 1\n- Item 2",
+                        "speaker_notes": None,
+                        "metadata": {},
+                    },
+                ],
+                "custom_css": ".reveal { font-size: 36px; }",
+            }
+        ]
+    }
+    path = tmp_path / "templates.json"
+    path.write_text(json.dumps(templates), encoding="utf-8")
+    return path
 
 
 class FakeNotesDB:
@@ -253,7 +294,7 @@ _TOO_LARGE_CASES = [
         "client": "slides_client_with_sources",
         "path": "/api/v1/slides/generate/from-media",
         "payload": {
-            "media_id": "1",
+            "media_id": 1,
             "title_hint": "Big Media",
             "theme": "black",
             "max_source_chars": 10,
@@ -300,6 +341,26 @@ def test_slides_create_and_export_json(slides_client):
     assert exported["id"] == presentation_id
 
 
+def test_slides_create_rejects_invalid_image(slides_client):
+    payload = {
+        "title": "Deck",
+        "theme": "black",
+        "slides": [
+            {
+                "order": 0,
+                "layout": "content",
+                "title": "Slide",
+                "content": "",
+                "speaker_notes": None,
+                "metadata": {"images": [{"mime": "image/png", "data_b64": "not-base64"}]},
+            }
+        ],
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "image_data_b64_invalid"
+
+
 def test_slides_export_reveal(slides_client, tmp_path, monkeypatch):
     assets_dir = _build_assets(tmp_path)
     monkeypatch.setenv("SLIDES_REVEALJS_ASSETS_DIR", str(assets_dir))
@@ -309,7 +370,24 @@ def test_slides_export_reveal(slides_client, tmp_path, monkeypatch):
         "theme": "black",
         "settings": {"controls": True},
         "slides": [
-            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+            {
+                "order": 0,
+                "layout": "title",
+                "title": "Deck",
+                "content": "",
+                "speaker_notes": None,
+                "metadata": {
+                    "images": [
+                        {
+                            "mime": "image/png",
+                            "data_b64": _SAMPLE_PNG_B64,
+                            "alt": "Logo",
+                            "width": 16,
+                            "height": 16,
+                        }
+                    ]
+                },
+            },
         ],
         "custom_css": None,
     }
@@ -320,6 +398,9 @@ def test_slides_export_reveal(slides_client, tmp_path, monkeypatch):
     assert export_resp.headers["content-type"].startswith("application/zip")
     with zipfile.ZipFile(io.BytesIO(export_resp.content)) as zf:
         assert "index.html" in zf.namelist()
+        index_html = zf.read("index.html").decode("utf-8")
+        assert "data:image/png;base64," in index_html
+        assert "alt=\"Logo\"" in index_html
 
 
 def test_slides_export_markdown_marp_override(slides_client):
@@ -341,6 +422,204 @@ def test_slides_export_markdown_marp_override(slides_client):
     assert export_resp.status_code == 200
     assert "theme: gaia" in export_resp.text
 
+
+def test_slides_export_pdf(slides_client, monkeypatch):
+    captured = {}
+
+    def _stub_export(**kwargs):
+        captured["options"] = kwargs.get("pdf_options")
+        return b"%PDF-1.4\n%stub"
+
+    monkeypatch.setattr("tldw_Server_API.app.api.v1.endpoints.slides.export_presentation_pdf", _stub_export)
+    payload = {
+        "title": "Deck",
+        "description": None,
+        "theme": "black",
+        "settings": {"controls": True},
+        "slides": [
+            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+        ],
+        "custom_css": None,
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    presentation_id = resp.json()["id"]
+    export_resp = slides_client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/export?format=pdf&pdf_format=Letter&pdf_landscape=true&pdf_margin_top=0.2in"
+    )
+    assert export_resp.status_code == 200
+    assert export_resp.headers["content-type"].startswith("application/pdf")
+    assert export_resp.content.startswith(b"%PDF")
+    options = captured.get("options") or {}
+    assert options.get("format") == "Letter"
+    assert options.get("landscape") is True
+    assert (options.get("margin") or {}).get("top") == "0.2in"
+
+
+def test_slides_export_pdf_input_error(slides_client, monkeypatch):
+    def _stub_export(**kwargs):
+        raise SlidesExportInputError("pdf_format_invalid")
+
+    monkeypatch.setattr("tldw_Server_API.app.api.v1.endpoints.slides.export_presentation_pdf", _stub_export)
+    payload = {
+        "title": "Deck",
+        "description": None,
+        "theme": "black",
+        "settings": {"controls": True},
+        "slides": [
+            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+        ],
+        "custom_css": None,
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    presentation_id = resp.json()["id"]
+    export_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/export?format=pdf")
+    assert export_resp.status_code == 422
+    assert export_resp.json()["detail"] == "pdf_format_invalid"
+
+
+def test_slides_export_pdf_failure(slides_client, monkeypatch):
+    def _stub_export(**kwargs):
+        raise SlidesExportError("pdf_render_failed")
+
+    monkeypatch.setattr("tldw_Server_API.app.api.v1.endpoints.slides.export_presentation_pdf", _stub_export)
+    payload = {
+        "title": "Deck",
+        "description": None,
+        "theme": "black",
+        "settings": {"controls": True},
+        "slides": [
+            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+        ],
+        "custom_css": None,
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    presentation_id = resp.json()["id"]
+    export_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/export?format=pdf")
+    assert export_resp.status_code == 500
+    assert export_resp.json()["detail"] == "pdf_render_failed"
+
+
+def test_slides_templates_list_and_get(slides_client, tmp_path, monkeypatch):
+    templates_path = _write_templates(tmp_path)
+    monkeypatch.setenv("SLIDES_TEMPLATES_PATH", str(templates_path))
+    list_resp = slides_client.get("/api/v1/slides/templates")
+    assert list_resp.status_code == 200
+    data = list_resp.json()
+    assert data["templates"][0]["id"] == "template-1"
+
+    get_resp = slides_client.get("/api/v1/slides/templates/template-1")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["name"] == "Template One"
+
+
+def test_slides_create_with_template_defaults(slides_client, tmp_path, monkeypatch):
+    templates_path = _write_templates(tmp_path)
+    monkeypatch.setenv("SLIDES_TEMPLATES_PATH", str(templates_path))
+    resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "Deck",
+            "template_id": "template-1",
+        },
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["theme"] == "white"
+    assert data["marp_theme"] == "gaia"
+    assert data["template_id"] == "template-1"
+    assert data["custom_css"] == ".reveal { font-size: 36px; }"
+    assert data["slides"][0]["title"] == "Template Title"
+
+
+def test_slides_generate_with_template_defaults(slides_client, tmp_path, monkeypatch):
+    templates_path = _write_templates(tmp_path)
+    monkeypatch.setenv("SLIDES_TEMPLATES_PATH", str(templates_path))
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.slides_generator.perform_chat_api_call",
+        _build_llm_stub("Generated Deck"),
+    )
+    resp = slides_client.post(
+        "/api/v1/slides/generate",
+        json={
+            "title_hint": "Generated Deck",
+            "prompt": "Summarize key findings.",
+            "template_id": "template-1",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["theme"] == "white"
+    assert data["marp_theme"] == "gaia"
+    assert data["template_id"] == "template-1"
+    assert data["custom_css"] == ".reveal { font-size: 36px; }"
+
+
+def test_slides_reorder(slides_client):
+    payload = {
+        "title": "Deck",
+        "description": None,
+        "theme": "black",
+        "settings": {"controls": True},
+        "slides": [
+            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+            {"order": 1, "layout": "content", "title": "Slide", "content": "- A\n- B", "speaker_notes": None, "metadata": {}},
+        ],
+        "custom_css": None,
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 201
+    presentation_id = resp.json()["id"]
+    etag = resp.headers["ETag"]
+    reorder_resp = slides_client.post(
+        f"/api/v1/slides/presentations/{presentation_id}/reorder",
+        json={"order": [1, 0]},
+        headers={"If-Match": etag},
+    )
+    assert reorder_resp.status_code == 200
+    reordered = reorder_resp.json()
+    assert reordered["slides"][0]["title"] == "Slide"
+
+
+def test_slides_versions_and_restore(slides_client):
+    payload = {
+        "title": "Deck",
+        "description": None,
+        "theme": "black",
+        "settings": {"controls": True},
+        "slides": [
+            {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
+        ],
+        "custom_css": None,
+    }
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 201
+    presentation_id = resp.json()["id"]
+    etag = resp.headers["ETag"]
+
+    update_resp = slides_client.patch(
+        f"/api/v1/slides/presentations/{presentation_id}",
+        json={"title": "Updated"},
+        headers={"If-Match": etag},
+    )
+    assert update_resp.status_code == 200
+    new_etag = update_resp.headers["ETag"]
+
+    versions_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/versions")
+    assert versions_resp.status_code == 200
+    versions_data = versions_resp.json()
+    assert versions_data["total"] == 2
+    assert versions_data["versions"][0]["version"] == 2
+
+    version_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/versions/1")
+    assert version_resp.status_code == 200
+    assert version_resp.json()["title"] == "Deck"
+
+    restore_resp = slides_client.post(
+        f"/api/v1/slides/presentations/{presentation_id}/versions/1/restore",
+        headers={"If-Match": new_etag},
+    )
+    assert restore_resp.status_code == 200
+    assert restore_resp.json()["title"] == "Deck"
 
 def test_slides_generate_from_prompt_uses_stubbed_llm(slides_client, monkeypatch):
     monkeypatch.setattr(
@@ -446,7 +725,7 @@ def test_slides_generate_from_media_uses_stubbed_llm(slides_client_with_sources,
     resp = client.post(
         "/api/v1/slides/generate/from-media",
         json={
-            "media_id": "1",
+            "media_id": 1,
             "title_hint": "Media Deck",
             "theme": "black",
         },
@@ -495,7 +774,7 @@ def test_slides_generate_from_media_missing_media(slides_client_with_sources):
     resp = client.post(
         "/api/v1/slides/generate/from-media",
         json={
-            "media_id": "1",
+            "media_id": 1,
             "title_hint": "Media Deck",
             "theme": "black",
         },
@@ -513,7 +792,7 @@ def test_slides_generate_from_media_missing_transcript(slides_client_with_source
     resp = client.post(
         "/api/v1/slides/generate/from-media",
         json={
-            "media_id": "1",
+            "media_id": 1,
             "title_hint": "Media Deck",
             "theme": "black",
         },
@@ -571,7 +850,6 @@ def test_slides_generate_invalid_media_id(slides_client):
         },
     )
     assert resp.status_code == 422
-    assert resp.json()["detail"] == "media_id_invalid"
 
 
 def test_slides_generate_invalid_rag_query(slides_client):

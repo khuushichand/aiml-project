@@ -1528,6 +1528,26 @@ async def process_batch_media(
                                 pre_check_query,
                                 (identifier_for_check, model_for_check, source_hash),
                             )
+                            existing_record = cursor.fetchone()
+                            if not existing_record:
+                                pre_check_query = """
+                                    SELECT m.id
+                                    FROM Media m
+                                    JOIN DocumentVersions dv ON dv.media_id = m.id
+                                    WHERE m.url = ?
+                                      AND m.transcription_model = ?
+                                      AND m.is_trash = 0
+                                      AND m.deleted = 0
+                                      AND dv.deleted = 0
+                                      AND dv.safe_metadata LIKE ?
+                                    LIMIT 1
+                                """
+                                hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
+                                cursor = temp_db_for_check.execute_query(
+                                    pre_check_query,
+                                    (identifier_for_check, model_for_check, hash_fragment),
+                                )
+                                existing_record = cursor.fetchone()
                         else:
                             pre_check_query = """
                                 SELECT m.id
@@ -1546,7 +1566,7 @@ async def process_batch_media(
                                 pre_check_query,
                                 (identifier_for_check, model_for_check, hash_fragment),
                             )
-                        existing_record = cursor.fetchone()
+                            existing_record = cursor.fetchone()
                     finally:
                         temp_db_for_check.close_connection()
 

@@ -23,6 +23,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 from .types import Document, DataSource
+from .utils import get_float_env as _get_float_env
 
 
 class RerankingStrategy(Enum):
@@ -1511,9 +1512,3 @@ class TwoTierReranker(BaseReranker):
 
         return out
 
-
-def _get_float_env(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except Exception:
-        return float(default)

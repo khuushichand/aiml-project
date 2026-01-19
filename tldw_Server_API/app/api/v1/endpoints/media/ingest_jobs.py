@@ -195,7 +195,7 @@ async def submit_media_ingest_jobs(
     files: Optional[List[UploadFile]] = File(None, description="Optional media uploads"),
     current_user: User = Depends(get_request_user),
     jm: JobManager = Depends(get_job_manager),
-    request: Request = None,
+    request: Optional[Request] = None,
 ) -> SubmitMediaIngestJobsResponse:
     rid = ensure_request_id(request) if request is not None else None
     tp = ensure_traceparent(request) if request is not None else ""
@@ -343,6 +343,7 @@ async def submit_media_ingest_jobs(
     response_model=MediaIngestJobStatus,
     summary="Get media ingest job status",
     tags=["Media Ingestion Jobs"],
+    dependencies=[Depends(check_rate_limit)],
 )
 async def get_media_ingest_job(
     job_id: int,
@@ -422,6 +423,7 @@ async def list_media_ingest_jobs(
     response_model=CancelMediaIngestJobResponse,
     summary="Cancel a media ingest job",
     tags=["Media Ingestion Jobs"],
+    dependencies=[Depends(check_rate_limit)],
 )
 async def cancel_media_ingest_job(
     job_id: int,

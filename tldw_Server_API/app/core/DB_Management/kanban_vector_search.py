@@ -77,11 +77,13 @@ def get_kanban_collection_name(user_id: str) -> str:
 
 
 def _jobs_queue() -> str:
+    """Return the configured embeddings stage queue name."""
     queue = (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip()
     return queue or "default"
 
 
 def _root_jobs_queue(stage_queue: str) -> str:
+    """Select the root jobs queue, defaulting to low priority when stages aren't low."""
     root_queue = (os.getenv("EMBEDDINGS_ROOT_JOBS_QUEUE") or "").strip()
     if root_queue:
         return root_queue
@@ -89,6 +91,7 @@ def _root_jobs_queue(stage_queue: str) -> str:
 
 
 def _jobs_manager() -> JobManager:
+    """Create a JobManager using the configured Jobs DB when available."""
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
     if not db_url:
         return JobManager()
@@ -97,6 +100,7 @@ def _jobs_manager() -> JobManager:
 
 
 def _map_priority(priority: int) -> int:
+    """Map a 0-100 style priority to the 1-10 scale used by the jobs system."""
     try:
         val = int(priority)
     except (TypeError, ValueError):
@@ -106,6 +110,7 @@ def _map_priority(priority: int) -> int:
 
 
 def _extract_embedding_settings(embedding_config: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+    """Pull provider/model identifiers from a user embedding configuration."""
     if not isinstance(embedding_config, dict):
         return None, None
     model = (
@@ -302,6 +307,12 @@ class KanbanVectorSearch:
                 max_retries=0,
             )
             root_uuid = str(root_job.get("uuid") or "")
+            if not root_uuid:
+                logger.warning(
+                    f"KanbanVectorSearch.index_card: missing root job uuid for card {card_id} "
+                    f"(user {self.user_id})"
+                )
+                return False
             stage_payload = dict(payload)
             stage_payload["root_job_uuid"] = root_uuid
             stage_payload["parent_job_uuid"] = root_uuid
@@ -333,10 +344,13 @@ class KanbanVectorSearch:
         """
         if not self.available:
             return False
+        manager = self._manager
+        if manager is None:
+            return False
 
         try:
             doc_id = f"card_{card_id}"
-            collection = self._manager.get_or_create_collection(self._collection_name)
+            collection = manager.get_or_create_collection(self._collection_name)
             collection.delete(ids=[doc_id])
 
             logger.debug(f"Removed card {card_id} from index for user {self.user_id}")
@@ -352,7 +366,7 @@ class KanbanVectorSearch:
         board_id: Optional[int] = None,
         priority: Optional[str] = None,
         limit: int = 20,
-        ) -> List[Dict[str, Any]]:
+    ) -> List[Dict[str, Any]]:
         """
         Search cards using vector similarity.
 
@@ -372,6 +386,9 @@ class KanbanVectorSearch:
         """
         if not self.available:
             return []
+        manager = self._manager
+        if manager is None:
+            return []
 
         try:
             # Build where filter
@@ -384,7 +401,7 @@ class KanbanVectorSearch:
                     where_filter["priority"] = priority
 
             # Use the manager's vector search
-            results = self._manager.vector_search(
+            results = manager.vector_search(
                 query=query,
                 collection_name=self._collection_name,
                 k=limit,

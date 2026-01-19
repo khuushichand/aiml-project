@@ -16,8 +16,8 @@
 **Tests**: `python -m pytest tldw_Server_API/tests/Slides/test_slides_api.py -q` (smoke for changes)
 **Status**: Complete
 
-## Stage 4: Streaming Generation (Optional)
-**Goal**: Stream slide generation output while still persisting the final presentation.
+## Stage 4: Streaming Generation (Future, Optional)
+**Goal**: Stream slide generation output while still persisting the final presentation (deferred to a future phase).
 **Success Criteria**: Streaming endpoint available with clear protocol and unit/integration coverage.
 **Tests**: TBD (streaming test)
 **Status**: Not Started

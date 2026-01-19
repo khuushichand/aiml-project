@@ -67,7 +67,7 @@ export const MathJax3 = () => {
             loadScript( url, function() {
                 // Reprocess equations in slides when they turn visible
                 deck.addEventListener( 'slidechanged', function( event ) {
-                    MathJax.typeset();
+                    MathJax.typeset([event.currentSlide]);
                 } );
             } );
 

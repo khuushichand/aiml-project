@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Button,
   Drawer,
@@ -27,6 +27,7 @@ import {
   StickyNote,
   X
 } from "lucide-react"
+import DOMPurify from "dompurify"
 import { useTranslation } from "react-i18next"
 import { useCollectionsStore } from "@/store/collections"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
@@ -197,15 +198,6 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     }
   }, [highlightEditorOpen, currentItem?.id, fetchItemHighlights])
 
-  const handleClose = useCallback(() => {
-    flushProgressSave()
-    closeItemDetail()
-    setEditingNotes(false)
-    setNotesDirty(false)
-    setNotesSaveError(null)
-    setNotesSaving(false)
-  }, [closeItemDetail, flushProgressSave])
-
   const handleStartEditingNotes = useCallback(() => {
     setEditingNotes(true)
     setNotesSaveError(null)
@@ -304,6 +296,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   }, [api, currentItem, notesValue, setCurrentItem, updateItemInList, t])
 
   const handleCancelNotes = useCallback(() => {
+    notesSaveTokenRef.current += 1
     setEditingNotes(false)
     setNotesValue(currentItem?.notes || "")
     setNotesDirty(false)
@@ -437,6 +430,15 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       void persistProgress(lastProgressRef.current)
     }
   }, [persistProgress])
+
+  const handleClose = useCallback(() => {
+    flushProgressSave()
+    closeItemDetail()
+    setEditingNotes(false)
+    setNotesDirty(false)
+    setNotesSaveError(null)
+    setNotesSaving(false)
+  }, [closeItemDetail, flushProgressSave])
 
   const handleContentScroll = useCallback(() => {
     if (activeTabKey !== "content") return
@@ -676,6 +678,11 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     })
   }
 
+  const sanitizedHtml = useMemo(() => {
+    if (!currentItem?.clean_html) return ""
+    return DOMPurify.sanitize(currentItem.clean_html, { USE_PROFILES: { html: true } })
+  }, [currentItem?.clean_html])
+
   const tabItems: TabsProps["items"] = [
     {
       key: "content",
@@ -693,7 +700,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
               onMouseUp={captureSelection}
               onKeyUp={captureSelection}
               onTouchEnd={captureSelection}
-              dangerouslySetInnerHTML={{ __html: currentItem.clean_html }}
+              dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
             />
           ) : currentItem?.text ? (
             <pre

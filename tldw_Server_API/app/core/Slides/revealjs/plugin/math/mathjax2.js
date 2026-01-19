@@ -36,7 +36,7 @@ export const MathJax2 = () => {
 		script.onload = finish;
 
 		// IE
-		script.onreadystatechange = () => {
+		script.onreadystatechange = function() {
 			if ( this.readyState === 'loaded' ) {
 				finish();
 			}

@@ -26,7 +26,7 @@ from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQu
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 
 from .types import Document, DataSource
-from .utils import normalize_scores as _normalize_scores
+from .utils import get_float_env as _get_float_env, normalize_scores as _normalize_scores
 from .vector_stores import (
     VectorStoreFactory,
     VectorStoreConfig,
@@ -53,16 +53,6 @@ def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
     if "-" in text and " " not in text:
         return f"\"{text}\""
     return text
-
-
-def _get_float_env(key: str, default: float) -> float:
-    value = os.getenv(key)
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except ValueError:
-        return default
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -1423,27 +1413,15 @@ class KanbanDBRetriever(BaseRetriever):
         super().__init__(db_path, config, db_adapter=kanban_db)
         self._owns_db = False
         self.kanban_db = kanban_db
-        self.user_id = self._resolve_user_id(user_id, self.db_path)
+        self.user_id = self._resolve_user_id(user_id)
         if self.kanban_db is None and self.db_path is not None:
             self.kanban_db = KanbanDB(db_path=str(self.db_path), user_id=self.user_id)
             self._owns_db = True
 
     @staticmethod
-    def _resolve_user_id(user_id: Optional[str], db_path: Optional[str]) -> str:
+    def _resolve_user_id(user_id: Optional[str]) -> str:
         raw = str(user_id).strip() if user_id is not None else ""
-        derived = KanbanDBRetriever._derive_user_id_from_path(db_path)
-        if derived:
-            return derived
         return raw or "0"
-
-    @staticmethod
-    def _derive_user_id_from_path(db_path: Optional[str]) -> Optional[str]:
-        if not db_path or "://" in str(db_path):
-            return None
-        try:
-            return Path(str(db_path)).resolve().parent.name
-        except Exception:
-            return None
 
     def _get_db(self) -> KanbanDB:
         if self.kanban_db is None:
@@ -1461,7 +1439,6 @@ class KanbanDBRetriever(BaseRetriever):
         label_ids: Optional[List[int]] = None,
         priority: Optional[str] = None,
         include_archived: bool = False,
-        **kwargs,
     ) -> List[Document]:
         if not query or not str(query).strip():
             return []
@@ -1607,7 +1584,7 @@ class KanbanDBRetriever(BaseRetriever):
         }
         combined: List[Dict[str, Any]] = []
         seen: set[int] = set()
-        for idx, card in enumerate(fts_cards):
+        for _idx, card in enumerate(fts_cards):
             card_id = card["id"]
             if card_id in seen:
                 continue
@@ -1685,8 +1662,8 @@ class KanbanDBRetriever(BaseRetriever):
         if self._owns_db and self.kanban_db is not None:
             try:
                 self.kanban_db.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"KanbanDBRetriever close error: {exc}")
             finally:
                 self.kanban_db = None
                 self._owns_db = False

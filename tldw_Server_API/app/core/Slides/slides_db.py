@@ -40,6 +40,7 @@ class PresentationRow:
     description: Optional[str]
     theme: str
     marp_theme: Optional[str]
+    template_id: Optional[str]
     settings: Optional[str]
     slides: str
     slides_text: str
@@ -52,6 +53,15 @@ class PresentationRow:
     deleted: int
     client_id: str
     version: int
+
+
+@dataclass
+class PresentationVersionRow:
+    presentation_id: str
+    version: int
+    payload_json: str
+    created_at: str
+    client_id: str
 
 
 class SlidesDatabase:
@@ -90,6 +100,7 @@ class SlidesDatabase:
                     description TEXT,
                     theme TEXT DEFAULT 'black',
                     marp_theme TEXT,
+                    template_id TEXT,
                     settings TEXT,
                     slides TEXT NOT NULL,
                     slides_text TEXT NOT NULL,
@@ -106,6 +117,22 @@ class SlidesDatabase:
 
                 CREATE INDEX IF NOT EXISTS idx_presentations_deleted ON presentations(deleted);
                 CREATE INDEX IF NOT EXISTS idx_presentations_created ON presentations(created_at);
+
+                CREATE TABLE IF NOT EXISTS presentations_versions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    presentation_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    client_id TEXT NOT NULL
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_presentations_versions_unique
+                    ON presentations_versions(presentation_id, version);
+                CREATE INDEX IF NOT EXISTS idx_presentations_versions_pid
+                    ON presentations_versions(presentation_id);
+                CREATE INDEX IF NOT EXISTS idx_presentations_versions_created
+                    ON presentations_versions(created_at);
 
                 CREATE VIRTUAL TABLE IF NOT EXISTS presentations_fts USING fts5(
                     title,
@@ -148,6 +175,7 @@ class SlidesDatabase:
                 """
             )
             self._ensure_marp_theme_column(conn)
+            self._ensure_template_id_column(conn)
             conn.commit()
             self._schema_init_paths.add(self._db_path_str)
         except sqlite3.Error as exc:
@@ -215,6 +243,65 @@ class SlidesDatabase:
             return
         conn.execute("ALTER TABLE presentations ADD COLUMN marp_theme TEXT")
 
+    @staticmethod
+    def _ensure_template_id_column(conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(presentations)").fetchall()
+        if any(col["name"] == "template_id" for col in columns):
+            return
+        conn.execute("ALTER TABLE presentations ADD COLUMN template_id TEXT")
+
+    @staticmethod
+    def _fetch_presentation_by_id(
+        conn: sqlite3.Connection, presentation_id: str, include_deleted: bool
+    ) -> PresentationRow:
+        query = "SELECT * FROM presentations WHERE id = ?"
+        params: List[Any] = [presentation_id]
+        if not include_deleted:
+            query += " AND deleted = 0"
+        row = conn.execute(query, tuple(params)).fetchone()
+        if not row:
+            raise KeyError("presentation_not_found")
+        return PresentationRow(**dict(row))
+
+    @staticmethod
+    def _build_version_payload(row: PresentationRow) -> Dict[str, Any]:
+        return {
+            "id": row.id,
+            "title": row.title,
+            "description": row.description,
+            "theme": row.theme,
+            "marp_theme": row.marp_theme,
+            "template_id": row.template_id,
+            "settings": row.settings,
+            "slides": row.slides,
+            "custom_css": row.custom_css,
+            "source_type": row.source_type,
+            "source_ref": row.source_ref,
+            "source_query": row.source_query,
+            "created_at": row.created_at,
+            "last_modified": row.last_modified,
+            "deleted": int(row.deleted or 0),
+            "client_id": row.client_id,
+            "version": int(row.version),
+        }
+
+    def _insert_version_snapshot(self, conn: sqlite3.Connection, row: PresentationRow) -> None:
+        payload_json = json.dumps(self._build_version_payload(row), ensure_ascii=True)
+        conn.execute(
+            """
+            INSERT INTO presentations_versions (
+                presentation_id, version, payload_json, created_at, client_id
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                row.id,
+                int(row.version),
+                payload_json,
+                row.last_modified,
+                row.client_id,
+            ),
+        )
+
     def create_presentation(
         self,
         *,
@@ -224,6 +311,7 @@ class SlidesDatabase:
         theme: str,
         marp_theme: Optional[str],
         settings: Optional[str],
+        template_id: Optional[str] = None,
         slides: str,
         slides_text: str,
         source_type: Optional[str],
@@ -240,10 +328,10 @@ class SlidesDatabase:
                 conn.execute(
                     """
                     INSERT INTO presentations (
-                        id, title, description, theme, marp_theme, settings, slides, slides_text,
+                        id, title, description, theme, marp_theme, template_id, settings, slides, slides_text,
                         source_type, source_ref, source_query, custom_css,
                         created_at, last_modified, deleted, client_id, version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
                     """,
                     (
                         pres_id,
@@ -251,6 +339,7 @@ class SlidesDatabase:
                         description,
                         theme,
                         marp_theme,
+                        template_id,
                         settings,
                         slides,
                         slides_text,
@@ -263,28 +352,23 @@ class SlidesDatabase:
                         self.client_id,
                     ),
                 )
+                row = self._fetch_presentation_by_id(conn, pres_id, include_deleted=True)
+                self._insert_version_snapshot(conn, row)
             self._insert_sync_log(
                 entity_uuid=pres_id,
                 operation="create",
                 version=1,
                 payload={"title": title, "theme": theme},
             )
-            return self.get_presentation_by_id(pres_id, include_deleted=True)
+            return row
         except sqlite3.IntegrityError as exc:
             if "UNIQUE" in str(exc).upper() or "PRIMARY" in str(exc).upper():
                 raise ConflictError("presentation already exists", entity="presentations", identifier=pres_id) from exc
             raise SlidesDatabaseError(f"Failed to create presentation: {exc}") from exc
 
     def get_presentation_by_id(self, presentation_id: str, *, include_deleted: bool = False) -> PresentationRow:
-        query = "SELECT * FROM presentations WHERE id = ?"
-        params: List[Any] = [presentation_id]
-        if not include_deleted:
-            query += " AND deleted = 0"
         conn = self.get_connection()
-        row = conn.execute(query, tuple(params)).fetchone()
-        if not row:
-            raise KeyError("presentation_not_found")
-        return PresentationRow(**dict(row))
+        return self._fetch_presentation_by_id(conn, presentation_id, include_deleted)
 
     def list_presentations(
         self,
@@ -362,6 +446,7 @@ class SlidesDatabase:
             "description",
             "theme",
             "marp_theme",
+            "template_id",
             "settings",
             "slides",
             "slides_text",
@@ -392,13 +477,61 @@ class SlidesDatabase:
                 if not existing:
                     raise KeyError("presentation_not_found")
                 raise ConflictError("version_conflict", entity="presentations", identifier=presentation_id)
+            row = self._fetch_presentation_by_id(conn, presentation_id, include_deleted=True)
+            self._insert_version_snapshot(conn, row)
         self._insert_sync_log(
             entity_uuid=presentation_id,
             operation=operation,
             version=next_version,
             payload={"fields": list(update_fields.keys())},
         )
-        return self.get_presentation_by_id(presentation_id, include_deleted=True)
+        return row
+
+    def list_presentation_versions(
+        self,
+        *,
+        presentation_id: str,
+        limit: int,
+        offset: int,
+    ) -> Tuple[List[PresentationVersionRow], int]:
+        if limit < 1:
+            raise InputError("limit must be >= 1")
+        conn = self.get_connection()
+        rows = conn.execute(
+            """
+            SELECT presentation_id, version, payload_json, created_at, client_id
+            FROM presentations_versions
+            WHERE presentation_id = ?
+            ORDER BY version DESC
+            LIMIT ? OFFSET ?
+            """,
+            (presentation_id, limit, offset),
+        ).fetchall()
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM presentations_versions WHERE presentation_id = ?",
+            (presentation_id,),
+        ).fetchone()
+        total = int(count_row["cnt"]) if count_row else 0
+        return [PresentationVersionRow(**dict(row)) for row in rows], total
+
+    def get_presentation_version(
+        self,
+        *,
+        presentation_id: str,
+        version: int,
+    ) -> PresentationVersionRow:
+        conn = self.get_connection()
+        row = conn.execute(
+            """
+            SELECT presentation_id, version, payload_json, created_at, client_id
+            FROM presentations_versions
+            WHERE presentation_id = ? AND version = ?
+            """,
+            (presentation_id, version),
+        ).fetchone()
+        if not row:
+            raise KeyError("presentation_version_not_found")
+        return PresentationVersionRow(**dict(row))
 
     def soft_delete_presentation(self, presentation_id: str, expected_version: int) -> PresentationRow:
         return self.update_presentation(

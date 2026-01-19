@@ -3,7 +3,8 @@ import importlib
 import json
 import os
 import shutil
-from datetime import datetime, timezone
+from typing import Optional
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -15,11 +16,13 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.Collections.reading_digest_jobs import (
     READING_DIGEST_DOMAIN,
     READING_DIGEST_JOB_TYPE,
+    _score_suggestion_candidate,
     handle_reading_digest_job,
     reading_digest_queue,
 )
 from tldw_Server_API.app.services.reading_digest_scheduler import _ReadingDigestScheduler
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.config import settings
@@ -77,6 +80,66 @@ def _run_digest_job(job_id: int) -> None:
         jm.complete_job(job_id, result=result, enforce=False)
 
     asyncio.run(_runner())
+
+
+def _make_content_item_row(
+    item_id: int,
+    *,
+    status: str,
+    tags: list[str],
+    favorite: bool,
+    updated_at: str,
+    created_at: Optional[str] = None,
+) -> ContentItemRow:
+    return ContentItemRow(
+        id=item_id,
+        user_id="222",
+        origin="reading",
+        origin_type=None,
+        origin_id=None,
+        url="https://example.com",
+        canonical_url="https://example.com",
+        domain="example.com",
+        title=f"Item {item_id}",
+        summary=None,
+        notes=None,
+        content_hash=None,
+        word_count=1200,
+        published_at=None,
+        status=status,
+        favorite=favorite,
+        metadata_json=None,
+        media_id=None,
+        job_id=None,
+        run_id=None,
+        source_id=None,
+        read_at=None,
+        created_at=created_at or updated_at,
+        updated_at=updated_at,
+        tags=tags,
+    )
+
+
+def test_reading_digest_suggestion_scoring():
+    now = datetime(2026, 1, 20, 8, 0, tzinfo=timezone.utc)
+    recent = _make_content_item_row(
+        1,
+        status="reading",
+        tags=["ai"],
+        favorite=True,
+        updated_at=now.isoformat(),
+    )
+    old = _make_content_item_row(
+        2,
+        status="saved",
+        tags=[],
+        favorite=False,
+        updated_at=(now - timedelta(days=45)).isoformat(),
+    )
+    score_recent, reasons = _score_suggestion_candidate(recent, {"ai"}, now)
+    score_old, _ = _score_suggestion_candidate(old, {"ai"}, now)
+    assert score_recent > score_old
+    assert "favorite" in reasons
 
 
 def test_reading_digest_schedule_crud(client_with_user):
@@ -156,6 +219,94 @@ def test_reading_digest_job_creates_output(client_with_user):
     assert meta.get("schedule_id") == schedule_id
     output_path = DatabasePaths.get_user_outputs_dir(222) / row.storage_path
     assert output_path.exists()
+
+
+def test_reading_digest_job_includes_suggestions(client_with_user):
+    client = client_with_user
+    digest_a = client.post(
+        "/api/v1/reading/save",
+        json={"url": "https://example.com/a", "title": "Digest A", "tags": ["ai"], "status": "saved"},
+    ).json()
+    digest_b = client.post(
+        "/api/v1/reading/save",
+        json={"url": "https://example.com/b", "title": "Digest B", "tags": ["ai"], "status": "saved"},
+    ).json()
+    assert digest_a["id"] != digest_b["id"]
+
+    suggestion_a = client.post(
+        "/api/v1/reading/save",
+        json={"url": "https://example.com/c", "title": "Suggestion A", "tags": ["ai"], "status": "reading"},
+    ).json()
+    suggestion_b = client.post(
+        "/api/v1/reading/save",
+        json={"url": "https://example.com/d", "title": "Suggestion B", "tags": ["ai"], "status": "reading"},
+    ).json()
+    suggestion_c = client.post(
+        "/api/v1/reading/save",
+        json={"url": "https://example.com/e", "title": "Suggestion C", "tags": ["misc"], "status": "reading"},
+    ).json()
+
+    db = CollectionsDatabase.for_user(user_id=222)
+    template = db.create_output_template(
+        name="Digest Suggestions Template",
+        type_="newsletter_markdown",
+        format_="md",
+        body=(
+            "# {{ title }}\n\n"
+            "Items:\n"
+            "{% for item in items %}- {{ item.title }}\n{% endfor %}\n\n"
+            "Suggestions:\n"
+            "{% for item in suggestions %}- {{ item.title }}\n{% endfor %}\n"
+        ),
+        description=None,
+        is_default=False,
+    )
+
+    schedule_id = "digest_suggestions"
+    db.create_reading_digest_schedule(
+        id=schedule_id,
+        tenant_id="default",
+        name="Digest Suggestions",
+        cron="0 8 * * *",
+        timezone="UTC",
+        enabled=True,
+        require_online=False,
+        filters={
+            "status": ["saved"],
+            "tags": ["ai"],
+            "limit": 10,
+            "suggestions": {"enabled": True, "limit": 2, "status": ["reading"]},
+        },
+        template_id=template.id,
+        template_name=None,
+        format="md",
+        retention_days=7,
+    )
+
+    jm = JobManager()
+    job = jm.create_job(
+        domain=READING_DIGEST_DOMAIN,
+        queue=reading_digest_queue(),
+        job_type=READING_DIGEST_JOB_TYPE,
+        payload={"schedule_id": schedule_id, "user_id": 222},
+        owner_user_id=222,
+    )
+    _run_digest_job(job["id"])
+
+    outputs, total = db.list_output_artifacts(type_="reading_digest", limit=10, offset=0)
+    assert total == 1
+    row = outputs[0]
+    meta = json.loads(row.metadata_json or "{}")
+    assert meta.get("suggestions_count") == 2
+    assert set(meta.get("suggestions_item_ids") or []) == {suggestion_a["id"], suggestion_b["id"]}
+    assert meta.get("suggestions_config", {}).get("enabled") is True
+
+    output_path = DatabasePaths.get_user_outputs_dir(222) / row.storage_path
+    content = output_path.read_text(encoding="utf-8")
+    assert "Suggestions:" in content
+    assert suggestion_a["title"] in content
+    assert suggestion_b["title"] in content
+    assert suggestion_c["title"] not in content
 
 
 def test_reading_digest_scheduler_claims_single_enqueue(client_with_user):

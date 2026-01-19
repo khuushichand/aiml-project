@@ -30,13 +30,12 @@ const Plugin = () => {
 		}
 		else {
 			speakerWindow = window.open( 'about:blank', 'reveal.js - Notes', 'width=1100,height=700' );
-			speakerWindow.marked = marked;
-			speakerWindow.document.write( speakerViewHTML );
-
 			if( !speakerWindow ) {
 				alert( 'Speaker view popup failed to open. Please make sure popups are allowed and reopen the speaker view.' );
 				return;
 			}
+			speakerWindow.marked = marked;
+			speakerWindow.document.write( speakerViewHTML );
 
 			connect();
 		}

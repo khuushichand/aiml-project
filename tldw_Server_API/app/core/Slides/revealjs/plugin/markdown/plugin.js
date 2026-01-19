@@ -8,7 +8,7 @@ import { marked } from 'marked';
 
 const DEFAULT_SLIDE_SEPARATOR = '\r?\n---\r?\n',
 	  DEFAULT_VERTICAL_SEPARATOR = null,
-	  DEFAULT_NOTES_SEPARATOR = '^\s*notes?:',
+	  DEFAULT_NOTES_SEPARATOR = '^\\s*notes?:',
 	  DEFAULT_ELEMENT_ATTRIBUTES_SEPARATOR = '\\\.element\\\s*?(.+?)$',
 	  DEFAULT_SLIDE_ATTRIBUTES_SEPARATOR = '\\\.slide:\\\s*?(\\\S.+?)$';
 
@@ -79,7 +79,7 @@ const Plugin = () => {
 			if( /data\-(markdown|separator|vertical|notes)/gi.test( name ) ) continue;
 
 			if( value ) {
-				result.push( name + '="' + value + '"' );
+				result.push( name + '="' + value.replace( /"/g, '&quot;' ) + '"' );
 			}
 			else {
 				result.push( name );
@@ -148,8 +148,6 @@ const Plugin = () => {
 
 		// iterate until all blocks between separators are stacked up
 		while( matches = separatorRegex.exec( markdown ) ) {
-			const notes = null;
-
 			// determine direction (horizontal by default)
 			isHorizontal = horizontalSeparatorRegex.test( matches[0] );
 
@@ -211,14 +209,14 @@ const Plugin = () => {
 
 			const externalPromises = [];
 
-			[].slice.call( scope.querySelectorAll( 'section[data-markdown]:not([data-markdown-parsed])') ).forEach( function( section, i ) {
+			[].slice.call( scope.querySelectorAll( 'section[data-markdown]:not([data-markdown-parsed])') ).forEach( function( section ) {
 
 				if( section.getAttribute( 'data-markdown' ).length ) {
 
 					externalPromises.push( loadExternalMarkdown( section ).then(
 
 						// Finished loading external file
-						function( xhr, url ) {
+						function( { xhr } ) {
 							section.outerHTML = slidify( xhr.responseText, {
 								separator: section.getAttribute( 'data-separator' ),
 								verticalSeparator: section.getAttribute( 'data-separator-vertical' ),
@@ -228,7 +226,7 @@ const Plugin = () => {
 						},
 
 						// Failed to load markdown
-						function( xhr, url ) {
+						function( { xhr, url } ) {
 							section.outerHTML = '<section data-state="alert">' +
 								'ERROR: The attempt to fetch ' + url + ' failed with HTTP status ' + xhr.status + '.' +
 								'Check your browser\'s JavaScript console for more details.' +
@@ -277,12 +275,12 @@ const Plugin = () => {
 					// file protocol yields status code 0 (useful for local debug, mobile applications etc.)
 					if ( ( xhr.status >= 200 && xhr.status < 300 ) || xhr.status === 0 ) {
 
-						resolve( xhr, url );
+						resolve( { xhr: xhr, url: url } );
 
 					}
 					else {
 
-						reject( xhr, url );
+						reject( { xhr: xhr, url: url } );
 
 					}
 				}
@@ -295,7 +293,7 @@ const Plugin = () => {
 			}
 			catch ( e ) {
 				console.warn( 'Failed to get the Markdown file ' + url + '. Make sure that the presentation and the file are served by a HTTP server and the file can be found there. ' + e );
-				resolve( xhr, url );
+				reject( { xhr: xhr, url: url } );
 			}
 
 		} );
@@ -357,7 +355,7 @@ const Plugin = () => {
 					}
 				}
 				let parentSection = section;
-				if( childElement.nodeName ===  "section" ) {
+				if( childElement.tagName === "SECTION" ) {
 					parentSection = childElement ;
 					previousParentElement = childElement ;
 				}

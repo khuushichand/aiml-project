@@ -314,6 +314,11 @@ const Plugin = {
 	 */
 	deserializeHighlightSteps: function( highlightSteps ) {
 
+		// Handle null/undefined/empty input
+		if( !highlightSteps ) {
+			return [];
+		}
+
 		// Remove whitespace
 		highlightSteps = highlightSteps.replace( /\s/g, '' );
 
@@ -401,14 +406,14 @@ function betterTrim(snippetEl) {
 		var lines = input.split('\n');
 
 		// Trim line-breaks from the beginning
-		for (var i = 0; i < lines.length; i++) {
+		for (let i = 0; i < lines.length; i++) {
 			if (lines[i].trim() === '') {
 				lines.splice(i--, 1);
 			} else break;
 		}
 
 		// Trim line-breaks from the end
-		for (var i = lines.length-1; i >= 0; i--) {
+		for (let i = lines.length-1; i >= 0; i--) {
 			if (lines[i].trim() === '') {
 				lines.splice(i, 1);
 			} else break;

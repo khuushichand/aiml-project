@@ -135,10 +135,18 @@ const Plugin = () => {
 		var matchRegex = "";
 		var matchingSlides = [];
 
+		function escapeRegExp(input) {
+			return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		}
+
 		this.setRegex = function(input)
 		{
-			input = input.trim();
-			matchRegex = new RegExp("(" + input + ")","i");
+			var trimmed = (input || "").trim();
+			if( !trimmed ) {
+				matchRegex = null;
+				return;
+			}
+			matchRegex = new RegExp("(" + escapeRegExp(trimmed) + ")", "i");
 		}
 
 		this.getRegex = function()
@@ -154,7 +162,7 @@ const Plugin = () => {
 			if(skipTags.test(node.nodeName)) return;
 
 			if(node.hasChildNodes()) {
-				for(var i=0; i < node.childNodes.length; i++)
+				for(let i=0; i < node.childNodes.length; i++)
 					this.hiliteWords(node.childNodes[i]);
 			}
 			if(node.nodeType == 3) { // NODE_TEXT
@@ -169,7 +177,7 @@ const Plugin = () => {
 					var slideIndex = deck.getIndices(secnode);
 					var slidelen = matchingSlides.length;
 					var alreadyAdded = false;
-					for (var i=0; i < slidelen; i++) {
+					for (let i=0; i < slidelen; i++) {
 						if ( (matchingSlides[i].h === slideIndex.h) && (matchingSlides[i].v === slideIndex.v) ) {
 							alreadyAdded = true;
 						}

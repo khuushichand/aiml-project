@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ title }}</title>
+  </head>
+  <body>
+    <h1>{{ title }}</h1>
+    <p>Generated at: {{ generated_at }}</p>
+    <h2>Digest items</h2>
+    <ol>
+      {% for item in items %}
+      <li>
+        <a href="{{ item.url }}">{{ item.title }}</a>{% if item.summary %} - {{ item.summary }}{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% if suggestions %}
+    <h2>Suggested reads</h2>
+    <ol>
+      {% for item in suggestions %}
+      <li>
+        <a href="{{ item.url }}">{{ item.title }}</a>{% if item.summary %} - {{ item.summary }}{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+  </body>
+</html>

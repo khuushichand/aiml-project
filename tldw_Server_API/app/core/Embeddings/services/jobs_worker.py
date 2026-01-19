@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import _kanban_card_indexable
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_media_db_path,
@@ -644,8 +645,11 @@ async def _handle_storage_job(
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id], media_id=int(media_id))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            f"Failed to invalidate RAG caches after embeddings storage "
+            f"(user_id={user_id}, media_id={media_id}): {exc}"
+        )
 
     result = {
         "embedding_count": len(embeddings),
@@ -670,7 +674,7 @@ async def _handle_content_job(
     chunk_overlap: int,
     root_uuid: Optional[str],
 ) -> Dict[str, Any]:
-    if payload.get("collection_name") or payload.get("document_id"):
+    if payload.get("collection_name") and payload.get("document_id"):
         return await _handle_custom_content_job(
             job=job,
             payload=payload,
@@ -720,8 +724,11 @@ async def _handle_content_job(
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id], media_id=int(media_id))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            f"Failed to invalidate RAG caches after content embeddings "
+            f"(user_id={user_id}, media_id={media_id}): {exc}"
+        )
 
     payload_result = {
         "embedding_count": result.get("embedding_count"),
@@ -743,6 +750,8 @@ async def _handle_custom_content_job(
     embedding_provider: str,
     root_uuid: Optional[str],
 ) -> Dict[str, Any]:
+    """Generate embeddings for a single custom content payload and store in Chroma."""
+    del job, media_id  # kept for signature compatibility; intentionally unused
     raw_content = payload.get("content") or payload.get("text")
     if not raw_content or not str(raw_content).strip():
         raise EmbeddingsJobError("Missing content for content_embeddings job", retryable=False)
@@ -829,8 +838,8 @@ async def _handle_custom_content_job(
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(f"Failed to invalidate RAG caches for custom content (user={user_id}): {exc}")
 
     result = {
         "embedding_count": len(embeddings_list),
@@ -840,41 +849,6 @@ async def _handle_custom_content_job(
     }
     _update_root_job(root_uuid, status="completed", result=result)
     return result
-
-
-def _kanban_card_indexable(
-    *,
-    user_id: str,
-    card_id: int,
-    expected_version: Optional[Any] = None,
-) -> bool:
-    try:
-        from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
-
-        db_path = DatabasePaths.get_kanban_db_path(user_id)
-        db = KanbanDB(db_path=str(db_path), user_id=str(user_id))
-        try:
-            card = db.get_card(card_id, include_deleted=True)
-            if not card:
-                return False
-            if card.get("deleted") or card.get("archived"):
-                return False
-            if expected_version is not None:
-                try:
-                    expected_version = int(expected_version)
-                except (TypeError, ValueError):
-                    expected_version = None
-            if expected_version is not None and int(card.get("version") or 0) != expected_version:
-                return False
-            return True
-        finally:
-            try:
-                db.close()
-            except Exception:
-                pass
-    except Exception as exc:
-        logger.warning(f"Kanban card indexability check failed: {exc}")
-        return False
 
 
 async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:

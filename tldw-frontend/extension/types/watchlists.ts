@@ -133,6 +133,7 @@ export interface JobOutputPrefs {
   deliveries?: JobOutputDeliveries
   ingest?: Record<string, unknown>
   template_name?: string
+  /** @deprecated Use retention.default_seconds instead. */
   retention_days?: number
   delivery_config?: {
     email_recipients?: string[]

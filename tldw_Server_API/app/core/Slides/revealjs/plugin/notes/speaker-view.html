@@ -393,7 +393,13 @@
 					clearTimeout( connectionTimeout );
 					connectionStatus.style.display = 'none';
 
-					var data = JSON.parse( event.data );
+					let data;
+					try {
+						data = typeof event.data === 'string' ? JSON.parse( event.data ) : event.data;
+					}
+					catch ( error ) {
+						return;
+					}
 
 					// The overview mode is only useful to the reveal.js instance
 					// where navigation occurs so we don't sync it
@@ -408,8 +414,11 @@
 							handleStateMessage( data );
 						}
 						else if( data.type === 'return' ) {
-							pendingCalls[data.callId](data.result);
-							delete pendingCalls[data.callId];
+							const pending = pendingCalls[data.callId];
+							if( pending ) {
+								pending( data.result );
+								delete pendingCalls[data.callId];
+							}
 						}
 					}
 					// Messages sent by the reveal.js inside of the current slide preview
@@ -494,10 +503,10 @@
 						notes.classList.remove( 'hidden' );
 						notesValue.style.whiteSpace = data.whitespace;
 						if( data.markdown ) {
-							notesValue.innerHTML = marked( data.notes );
+							notesValue.innerHTML = DOMPurify.sanitize( marked( data.notes ) );
 						}
 						else {
-							notesValue.innerHTML = data.notes;
+							notesValue.textContent = data.notes;
 						}
 					}
 					else {
@@ -634,8 +643,8 @@
 							}
 							var slidesUnderMinimum = timings.filter( function(x) { return (x < minTimePerSlide) } ).length
 							if ( slidesUnderMinimum ) {
-								message = "The pacing time for " + slidesUnderMinimum + " slide(s) is under the configured minimum of " + minTimePerSlide + " seconds. Check the data-timing attribute on individual slides, or consider increasing the totalTime or minimumTimePerSlide configuration options (or removing some slides).";
-								alert(message);
+								const message = "The pacing time for " + slidesUnderMinimum + " slide(s) is under the configured minimum of " + minTimePerSlide + " seconds. Check the data-timing attribute on individual slides, or consider increasing the totalTime or minimumTimePerSlide configuration options (or removing some slides).";
+								alert( message );
 							}
 							callback( timings );
 						} );

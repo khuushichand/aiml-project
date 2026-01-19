@@ -70,8 +70,10 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
         if (newStatus === "read" || newStatus === "archived") {
           try {
             await clearReadingProgress(item.id)
-          } catch {}
-          onProgressCleared?.(item.id)
+            onProgressCleared?.(item.id)
+          } catch (err) {
+            console.warn("Failed to clear reading progress", err)
+          }
         }
       } catch (error: any) {
         message.error(error?.message || "Failed to update status")

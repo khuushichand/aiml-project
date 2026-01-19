@@ -6,6 +6,8 @@ import io
 import json
 import os
 import re
+import shutil
+import tempfile
 import zipfile
 from html import escape
 from pathlib import Path
@@ -25,7 +27,17 @@ try:
 except Exception as exc:  # pragma: no cover - markdown is a declared dependency
     raise RuntimeError("markdown package is required for slides export") from exc
 
+try:
+    from playwright.sync_api import Error as PlaywrightError  # type: ignore
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError  # type: ignore
+    from playwright.sync_api import sync_playwright  # type: ignore
+except Exception:  # pragma: no cover - playwright is an optional dependency
+    sync_playwright = None
+    PlaywrightError = Exception  # type: ignore
+    PlaywrightTimeoutError = TimeoutError  # type: ignore
+
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Slides.slides_images import SlidesImageError, validate_images_payload
 
 
 class SlidesExportError(Exception):
@@ -151,6 +163,16 @@ _ALLOWED_CSS_PROPERTIES = [
     "width",
 ]
 
+_PDF_FORMAT_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_PDF_DIMENSION_RE = re.compile(r"^\d+(\.\d+)?(px|in|cm|mm)$")
+_PDF_MARGIN_RE = re.compile(r"^\d+(\.\d+)?(px|in|cm|mm)?$")
+
+_DEFAULT_PDF_FORMAT = "A4"
+_DEFAULT_PDF_MARGIN = "0.4in"
+_DEFAULT_PDF_TIMEOUT_SECONDS = 60
+_DEFAULT_PDF_MAX_SLIDES = 200
+_DEFAULT_PDF_MAX_HTML_BYTES = 25 * 1024 * 1024
+
 
 def _get_slide_value(slide: Any, key: str, default: Any = None) -> Any:
     if isinstance(slide, dict):
@@ -160,6 +182,178 @@ def _get_slide_value(slide: Any, key: str, default: Any = None) -> Any:
 
 def _sorted_slides(slides: Iterable[Any]) -> List[Any]:
     return sorted(list(slides), key=lambda s: int(_get_slide_value(s, "order", 0)))
+
+
+def _env_str(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = str(raw).strip()
+    return value or default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning("slides export: invalid %s value %r", name, raw)
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    logger.warning("slides export: invalid %s value %r", name, raw)
+    return default
+
+
+def _normalize_pdf_dimension(value: Any, *, key: str) -> str:
+    if not isinstance(value, str):
+        raise SlidesExportInputError(f"pdf_{key}_invalid")
+    cleaned = value.strip()
+    if not cleaned or not _PDF_DIMENSION_RE.match(cleaned):
+        raise SlidesExportInputError(f"pdf_{key}_invalid")
+    return cleaned
+
+
+def _normalize_pdf_margin_value(value: Any, *, key: str, default_value: str, default_unit: str = "in") -> str:
+    if value is None:
+        value = default_value
+    if isinstance(value, (int, float)):
+        return f"{value}{default_unit}"
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            cleaned = default_value
+        if not _PDF_MARGIN_RE.match(cleaned):
+            raise SlidesExportInputError(f"pdf_margin_{key}_invalid")
+        if cleaned[-1].isdigit():
+            return f"{cleaned}{default_unit}"
+        return cleaned
+    raise SlidesExportInputError(f"pdf_margin_{key}_invalid")
+
+
+def _normalize_pdf_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    opts = options or {}
+    if not isinstance(opts, dict):
+        raise SlidesExportInputError("pdf_options_invalid")
+
+    width = opts.get("width")
+    height = opts.get("height")
+    pdf_format = opts.get("format")
+    landscape = opts.get("landscape")
+    margin_opts = opts.get("margin") or {}
+
+    if margin_opts and not isinstance(margin_opts, dict):
+        raise SlidesExportInputError("pdf_margin_invalid")
+
+    pdf_options: Dict[str, Any] = {}
+    if width is not None or height is not None:
+        if width is None or height is None:
+            raise SlidesExportInputError("pdf_width_height_required")
+        pdf_options["width"] = _normalize_pdf_dimension(width, key="width")
+        pdf_options["height"] = _normalize_pdf_dimension(height, key="height")
+    else:
+        if pdf_format is None or not str(pdf_format).strip():
+            pdf_format = _env_str("SLIDES_PDF_FORMAT", _DEFAULT_PDF_FORMAT)
+        pdf_format = str(pdf_format).strip()
+        if not _PDF_FORMAT_RE.match(pdf_format):
+            raise SlidesExportInputError("pdf_format_invalid")
+        pdf_options["format"] = pdf_format
+
+    margin_defaults = {
+        "top": _env_str("SLIDES_PDF_MARGIN_TOP", _DEFAULT_PDF_MARGIN),
+        "bottom": _env_str("SLIDES_PDF_MARGIN_BOTTOM", _DEFAULT_PDF_MARGIN),
+        "left": _env_str("SLIDES_PDF_MARGIN_LEFT", _DEFAULT_PDF_MARGIN),
+        "right": _env_str("SLIDES_PDF_MARGIN_RIGHT", _DEFAULT_PDF_MARGIN),
+    }
+    pdf_options["margin"] = {
+        "top": _normalize_pdf_margin_value(margin_opts.get("top"), key="top", default_value=margin_defaults["top"]),
+        "bottom": _normalize_pdf_margin_value(
+            margin_opts.get("bottom"), key="bottom", default_value=margin_defaults["bottom"]
+        ),
+        "left": _normalize_pdf_margin_value(margin_opts.get("left"), key="left", default_value=margin_defaults["left"]),
+        "right": _normalize_pdf_margin_value(
+            margin_opts.get("right"), key="right", default_value=margin_defaults["right"]
+        ),
+    }
+    if landscape is None:
+        landscape = _env_bool("SLIDES_PDF_LANDSCAPE", False)
+    pdf_options["landscape"] = bool(landscape)
+    pdf_options["print_background"] = bool(opts.get("print_background", True))
+    return pdf_options
+
+
+def _resolve_pdf_timeout_ms() -> int:
+    seconds = _env_int("SLIDES_PDF_TIMEOUT_SECONDS", _DEFAULT_PDF_TIMEOUT_SECONDS)
+    if seconds <= 0:
+        seconds = _DEFAULT_PDF_TIMEOUT_SECONDS
+    return seconds * 1000
+
+
+def _resolve_pdf_limits() -> tuple[int, int]:
+    max_slides = _env_int("SLIDES_PDF_MAX_SLIDES", _DEFAULT_PDF_MAX_SLIDES)
+    if max_slides < 0:
+        max_slides = _DEFAULT_PDF_MAX_SLIDES
+    max_bytes = _env_int("SLIDES_PDF_MAX_HTML_BYTES", _DEFAULT_PDF_MAX_HTML_BYTES)
+    if max_bytes <= 0:
+        max_bytes = _DEFAULT_PDF_MAX_HTML_BYTES
+    return max_slides, max_bytes
+
+
+def _extract_images(slide: Any) -> List[Dict[str, Any]]:
+    metadata = _get_slide_value(slide, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        return []
+    images = metadata.get("images")
+    if images is None:
+        return []
+    try:
+        return validate_images_payload(images)
+    except SlidesImageError as exc:
+        raise SlidesExportInputError(exc.code) from exc
+
+
+def _escape_markdown_alt(text: str) -> str:
+    value = text.replace("\\", "\\\\")
+    value = value.replace("[", "\\[").replace("]", "\\]")
+    return value
+
+
+def _render_image_html(image: Dict[str, Any]) -> str:
+    alt = escape(str(image.get("alt") or ""))
+    attrs = f' alt="{alt}"'
+    width = image.get("width")
+    if isinstance(width, int):
+        attrs += f' width="{width}"'
+    height = image.get("height")
+    if isinstance(height, int):
+        attrs += f' height="{height}"'
+    src = f"data:{image['mime']};base64,{image['data_b64']}"
+    return f"<img src=\"{src}\"{attrs} />"
+
+
+def _render_images_html(images: List[Dict[str, Any]]) -> str:
+    if not images:
+        return ""
+    rendered = "\n".join(_render_image_html(image) for image in images)
+    return f"<div class=\"slide-images\">\n{rendered}\n</div>"
+
+
+def _render_image_markdown(image: Dict[str, Any]) -> str:
+    alt = str(image.get("alt") or "")
+    alt = _escape_markdown_alt(alt.replace("\r", " ").replace("\n", " ").strip())
+    src = f"data:{image['mime']};base64,{image['data_b64']}"
+    return f"![{alt}]({src})"
 
 
 def _sanitize_markdown(markdown_text: str) -> str:
@@ -257,15 +451,18 @@ def _render_sections(slides: Iterable[Any]) -> str:
         title = _get_slide_value(slide, "title")
         content = _get_slide_value(slide, "content", "")
         notes = _get_slide_value(slide, "speaker_notes")
+        images = _extract_images(slide)
+        images_html = _render_images_html(images)
 
         title_html = f"<h2>{escape(str(title))}</h2>" if title else ""
         content_html = _sanitize_markdown(str(content or "")) if content else ""
+        body_html = f"{content_html}{images_html}" if content_html or images_html else ""
         notes_html = f"<aside class=\"notes\">{escape(str(notes))}</aside>" if notes else ""
 
         section = (
             f"      <section data-layout=\"{layout}\">\n"
             f"        {title_html}\n"
-            f"        <div class=\"content\">{content_html}</div>\n"
+            f"        <div class=\"content\">{body_html}</div>\n"
             f"        {notes_html}\n"
             f"      </section>"
         )
@@ -375,6 +572,7 @@ def export_presentation_markdown(
         slide_title = _get_slide_value(slide, "title")
         content = _get_slide_value(slide, "content", "")
         notes = _get_slide_value(slide, "speaker_notes")
+        images = _extract_images(slide)
         if layout in {"title", "section"} and slide_title:
             header = "# " if layout == "title" else "## "
             lines.append(f"{header}{slide_title}")
@@ -384,6 +582,9 @@ def export_presentation_markdown(
             lines.append("")
         if content:
             lines.append(str(content))
+            lines.append("")
+        for image in images:
+            lines.append(_render_image_markdown(image))
             lines.append("")
         if notes:
             lines.append("<!--")
@@ -397,6 +598,84 @@ def export_presentation_markdown(
     if lines and lines[-1] == "---":
         lines.pop()
     return "\n".join(lines).strip() + "\n"
+
+
+def export_presentation_pdf(
+    *,
+    title: str,
+    slides: Iterable[Any],
+    theme: str,
+    settings: Optional[Dict[str, Any]],
+    custom_css: Optional[str],
+    assets_dir: Optional[Path | str] = None,
+    pdf_options: Optional[Dict[str, Any]] = None,
+) -> bytes:
+    slides_list = list(slides)
+    max_slides, max_html_bytes = _resolve_pdf_limits()
+    if max_slides and len(slides_list) > max_slides:
+        raise SlidesExportInputError("pdf_slides_too_many")
+
+    resolved_assets = _resolve_assets_dir(assets_dir)
+    _validate_reveal_assets(resolved_assets, theme)
+    settings_json = json.dumps(settings or {}, ensure_ascii=True)
+    sanitized_css = _sanitize_custom_css(custom_css)
+    index_html = _render_index_html(
+        title=title,
+        slides=slides_list,
+        theme=theme,
+        settings_json=settings_json,
+        include_custom_css=bool(sanitized_css),
+    )
+    if max_html_bytes and len(index_html.encode("utf-8")) > max_html_bytes:
+        raise SlidesExportInputError("pdf_html_too_large")
+
+    if sync_playwright is None:
+        raise SlidesExportError("playwright_unavailable")
+
+    pdf_settings = _normalize_pdf_options(pdf_options)
+    timeout_ms = _resolve_pdf_timeout_ms()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir)
+        assets_target = base_dir / "assets" / "reveal"
+        assets_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(resolved_assets, assets_target, dirs_exist_ok=True)
+
+        (base_dir / "index.html").write_text(index_html, encoding="utf-8")
+        if sanitized_css:
+            (base_dir / "assets" / "custom.css").write_text(sanitized_css, encoding="utf-8")
+
+        pdf_url = (base_dir / "index.html").resolve().as_uri() + "?print-pdf"
+
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page()
+                    page.set_default_timeout(timeout_ms)
+                    page.goto(pdf_url, wait_until="load", timeout=timeout_ms)
+                    try:
+                        page.emulate_media(media="print")
+                    except PlaywrightError:
+                        logger.debug("slides export: emulate_media not supported by playwright")
+                    try:
+                        page.wait_for_function(
+                            "window.Reveal && window.Reveal.isReady && window.Reveal.isReady()",
+                            timeout=timeout_ms,
+                        )
+                    except PlaywrightTimeoutError:
+                        logger.warning("slides export: reveal did not signal ready before timeout")
+                    pdf_bytes = page.pdf(timeout=timeout_ms, **pdf_settings)
+                finally:
+                    browser.close()
+        except PlaywrightTimeoutError as exc:
+            raise SlidesExportError("pdf_timeout") from exc
+        except PlaywrightError as exc:
+            raise SlidesExportError("pdf_render_failed") from exc
+        except Exception as exc:
+            raise SlidesExportError("pdf_render_failed") from exc
+
+    return pdf_bytes
 
 
 def export_presentation_json(payload: Dict[str, Any]) -> str:

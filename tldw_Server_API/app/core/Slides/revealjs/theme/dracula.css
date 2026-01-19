@@ -45,6 +45,10 @@ section.has-light-background, section.has-light-background h1, section.has-light
   --r-selection-color: #fff;
   --r-overlay-element-bg-color: 240, 240, 240;
   --r-overlay-element-fg-color: 0, 0, 0;
+  --r-bold-color: #FFB86C;
+  --r-italic-color: #F1FA8C;
+  --r-inline-code-color: #50FA7B;
+  --r-list-bullet-color: #8BE9FD;
 }
 
 .reveal-viewport {
@@ -364,13 +368,6 @@ section.has-light-background, section.has-light-background h1, section.has-light
     background-color: var(--r-background-color);
   }
 }
-:root {
-  --r-bold-color: #FFB86C;
-  --r-italic-color: #F1FA8C;
-  --r-inline-code-color: #50FA7B;
-  --r-list-bullet-color: #8BE9FD;
-}
-
 .reveal strong, .reveal b {
   color: var(--r-bold-color);
 }

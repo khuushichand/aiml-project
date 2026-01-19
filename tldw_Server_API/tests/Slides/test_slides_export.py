@@ -6,8 +6,13 @@ import pytest
 from tldw_Server_API.app.core.Slides.slides_export import (
     SlidesAssetsMissingError,
     SlidesExportInputError,
+    _normalize_pdf_options,
     export_presentation_bundle,
     export_presentation_markdown,
+)
+
+_SAMPLE_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAn8B9XgU1b0AAAAASUVORK5CYII="
 )
 
 
@@ -26,8 +31,32 @@ def _build_assets(tmp_path):
 def test_export_bundle_includes_assets(tmp_path):
     assets_dir = _build_assets(tmp_path)
     slides = [
-        {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
-        {"order": 1, "layout": "content", "title": "Slide", "content": "Hello", "speaker_notes": "Notes", "metadata": {}},
+        {
+            "order": 0,
+            "layout": "title",
+            "title": "Deck",
+            "content": "",
+            "speaker_notes": None,
+            "metadata": {},
+        },
+        {
+            "order": 1,
+            "layout": "content",
+            "title": "Slide",
+            "content": "Hello",
+            "speaker_notes": "Notes",
+            "metadata": {
+                "images": [
+                    {
+                        "mime": "image/png",
+                        "data_b64": _SAMPLE_PNG_B64,
+                        "alt": "Logo",
+                        "width": 64,
+                        "height": 64,
+                    }
+                ]
+            },
+        },
     ]
     bundle = export_presentation_bundle(
         title="Deck",
@@ -48,6 +77,8 @@ def test_export_bundle_includes_assets(tmp_path):
         assert "assets/custom.css" in names
         index_html = zf.read("index.html").decode("utf-8")
         assert "assets/custom.css" in index_html
+        assert "data:image/png;base64," in index_html
+        assert "alt=\"Logo\"" in index_html
 
 
 def test_export_bundle_missing_assets(tmp_path):
@@ -92,3 +123,51 @@ def test_export_markdown_marp_override():
     ]
     md = export_presentation_markdown(title="Deck", slides=slides, theme="black", marp_theme="gaia")
     assert "theme: gaia" in md
+
+
+def test_export_markdown_includes_images():
+    slides = [
+        {
+            "order": 0,
+            "layout": "content",
+            "title": "Slide",
+            "content": "Hello",
+            "speaker_notes": None,
+            "metadata": {
+                "images": [
+                    {
+                        "mime": "image/png",
+                        "data_b64": _SAMPLE_PNG_B64,
+                        "alt": "Logo",
+                    }
+                ]
+            },
+        },
+    ]
+    md = export_presentation_markdown(title="Deck", slides=slides, theme="black")
+    assert "![Logo](data:image/png;base64," in md
+
+
+def test_export_markdown_rejects_invalid_image():
+    slides = [
+        {
+            "order": 0,
+            "layout": "content",
+            "title": "Slide",
+            "content": "Hello",
+            "speaker_notes": None,
+            "metadata": {"images": [{"mime": "image/png", "data_b64": "not-base64"}]},
+        },
+    ]
+    with pytest.raises(SlidesExportInputError):
+        export_presentation_markdown(title="Deck", slides=slides, theme="black")
+
+
+def test_normalize_pdf_options_requires_width_height():
+    with pytest.raises(SlidesExportInputError):
+        _normalize_pdf_options({"width": "10in"})
+
+
+def test_normalize_pdf_options_rejects_invalid_format():
+    with pytest.raises(SlidesExportInputError):
+        _normalize_pdf_options({"format": "!!bad!!"})

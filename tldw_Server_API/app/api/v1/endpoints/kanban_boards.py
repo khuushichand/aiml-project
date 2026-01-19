@@ -60,6 +60,7 @@ def _export_board_data(
     include_archived: bool,
     include_deleted: bool,
 ) -> BoardExportResponse:
+    """Build a board export response with archive/delete options applied."""
     export_data = db.export_board(
         board_id=board_id,
         include_archived=include_archived,

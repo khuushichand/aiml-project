@@ -365,7 +365,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 14  # Schema v14 adds chat topic metadata + clusters + flashcard backlinks
+    _CURRENT_SCHEMA_VERSION = 15  # Schema v15 adds Writing Playground persistence tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -424,6 +424,8 @@ class CharactersRAGDB:
         ("quizzes", "id"),
         ("quiz_questions", "id"),
         ("quiz_attempts", "id"),
+        ("writing_templates", "id"),
+        ("writing_themes", "id"),
     )
 
     _FULL_SCHEMA_SQL_V4 = """
@@ -1874,6 +1876,242 @@ UPDATE db_schema_version
    AND version < 14;
 """
 
+    # --- Migration: V14 -> V15 (Writing Playground persistence) ---
+    _MIGRATION_SQL_V14_TO_V15 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 15 - Writing Playground persistence (2026-02-10)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS writing_sessions(
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  version_parent_id TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_writing_sessions_deleted ON writing_sessions(deleted);
+CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified);
+CREATE INDEX IF NOT EXISTS idx_writing_sessions_name ON writing_sessions(name);
+
+CREATE TABLE IF NOT EXISTS writing_templates(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  payload_json TEXT NOT NULL,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  version_parent_id TEXT,
+  is_default BOOLEAN NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_writing_templates_deleted ON writing_templates(deleted);
+CREATE INDEX IF NOT EXISTS idx_writing_templates_last_modified ON writing_templates(last_modified);
+
+CREATE TABLE IF NOT EXISTS writing_themes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  class_name TEXT,
+  css TEXT,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  version_parent_id TEXT,
+  is_default BOOLEAN NOT NULL DEFAULT 0,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted);
+CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified);
+CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index);
+
+DROP TRIGGER IF EXISTS writing_sessions_sync_create;
+DROP TRIGGER IF EXISTS writing_sessions_sync_update;
+DROP TRIGGER IF EXISTS writing_sessions_sync_delete;
+DROP TRIGGER IF EXISTS writing_sessions_sync_undelete;
+
+CREATE TRIGGER writing_sessions_sync_create
+AFTER INSERT ON writing_sessions BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_sessions',NEW.id,'create',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_sessions_sync_update
+AFTER UPDATE ON writing_sessions
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.name IS NOT NEW.name OR
+     OLD.payload_json IS NOT NEW.payload_json OR
+     OLD.schema_version IS NOT NEW.schema_version OR
+     OLD.version_parent_id IS NOT NEW.version_parent_id OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_sessions',NEW.id,'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_sessions_sync_delete
+AFTER UPDATE ON writing_sessions
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_sessions',NEW.id,'delete',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER writing_sessions_sync_undelete
+AFTER UPDATE ON writing_sessions
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_sessions',NEW.id,'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+DROP TRIGGER IF EXISTS writing_templates_sync_create;
+DROP TRIGGER IF EXISTS writing_templates_sync_update;
+DROP TRIGGER IF EXISTS writing_templates_sync_delete;
+DROP TRIGGER IF EXISTS writing_templates_sync_undelete;
+
+CREATE TRIGGER writing_templates_sync_create
+AFTER INSERT ON writing_templates BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_templates',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_templates_sync_update
+AFTER UPDATE ON writing_templates
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.name IS NOT NEW.name OR
+     OLD.payload_json IS NOT NEW.payload_json OR
+     OLD.schema_version IS NOT NEW.schema_version OR
+     OLD.version_parent_id IS NOT NEW.version_parent_id OR
+     OLD.is_default IS NOT NEW.is_default OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_templates',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_templates_sync_delete
+AFTER UPDATE ON writing_templates
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_templates',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER writing_templates_sync_undelete
+AFTER UPDATE ON writing_templates
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_templates',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'payload_json',NEW.payload_json,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+DROP TRIGGER IF EXISTS writing_themes_sync_create;
+DROP TRIGGER IF EXISTS writing_themes_sync_update;
+DROP TRIGGER IF EXISTS writing_themes_sync_delete;
+DROP TRIGGER IF EXISTS writing_themes_sync_undelete;
+
+CREATE TRIGGER writing_themes_sync_create
+AFTER INSERT ON writing_themes BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_themes',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'class_name',NEW.class_name,'css',NEW.css,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'order_index',NEW.order_index,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_themes_sync_update
+AFTER UPDATE ON writing_themes
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.name IS NOT NEW.name OR
+     OLD.class_name IS NOT NEW.class_name OR
+     OLD.css IS NOT NEW.css OR
+     OLD.schema_version IS NOT NEW.schema_version OR
+     OLD.version_parent_id IS NOT NEW.version_parent_id OR
+     OLD.is_default IS NOT NEW.is_default OR
+     OLD.order_index IS NOT NEW.order_index OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_themes',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'class_name',NEW.class_name,'css',NEW.css,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'order_index',NEW.order_index,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER writing_themes_sync_delete
+AFTER UPDATE ON writing_themes
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_themes',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER writing_themes_sync_undelete
+AFTER UPDATE ON writing_themes
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('writing_themes',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'name',NEW.name,'class_name',NEW.class_name,'css',NEW.css,
+                     'schema_version',NEW.schema_version,'version_parent_id',NEW.version_parent_id,
+                     'is_default',NEW.is_default,'order_index',NEW.order_index,
+                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+UPDATE db_schema_version
+   SET version = 15
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 15;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -2864,6 +3102,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V13->V14: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V14 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v14_to_v15(self, conn: sqlite3.Connection):
+        """Migrates schema from V14 to V15 (Writing Playground persistence)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V14 to V15 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V14_TO_V15)
+            final_version = self._get_db_version(conn)
+            if final_version != 15:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V14->V15 failed version check. Expected 15, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V15 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V14->V15 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V14->V15 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V14->V15: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V15 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -2984,6 +3242,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         )
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_deleted ON writing_sessions(deleted)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_templates_last_modified ON writing_templates(last_modified)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_templates_deleted ON writing_templates(deleted)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)")
                     except sqlite3.Error:
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
@@ -3027,6 +3292,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 14 and current_db_version == 13:
                         self._migrate_from_v13_to_v14(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 15 and current_db_version == 14:
+                        self._migrate_from_v14_to_v15(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -3041,6 +3309,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_deleted ON writing_sessions(deleted)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_templates_last_modified ON writing_templates(last_modified)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_templates_deleted ON writing_templates(deleted)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)")
                 except sqlite3.Error:
                     pass
                 # Example for future migrations:
@@ -3150,8 +3425,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         if target_version >= 14 and current_db_version == 13:
                             self._migrate_from_v13_to_v14(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 15 and current_db_version == 14:
+                            self._migrate_from_v14_to_v15(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 13 and target_version >= 14:
                         self._migrate_from_v13_to_v14(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 15 and current_db_version == 14:
+                            self._migrate_from_v14_to_v15(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 14 and target_version >= 15:
+                        self._migrate_from_v14_to_v15(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
@@ -3168,6 +3452,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 14 and current_db_version == 13:
                     self._migrate_from_v13_to_v14(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 15 and current_db_version == 14:
+                    self._migrate_from_v14_to_v15(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -3265,6 +3552,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 14:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V13_TO_V14, conn, expected_version=14)
                 current_version = 14
+            if current_version < 15:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V14_TO_V15, conn, expected_version=15)
+                current_version = 15
 
             if current_version > target_version:
                 raise SchemaError(
@@ -3328,6 +3618,34 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     self.backend.execute(
                         "CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_sessions_deleted ON writing_sessions(deleted)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_templates_last_modified ON writing_templates(last_modified)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_templates_deleted ON writing_templates(deleted)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)",
                         connection=conn,
                     )
                 except Exception:
@@ -9358,6 +9676,359 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return False
             return str(user_answer).strip().lower() == str(correct).strip().lower()
         return False
+
+    # --- Writing Playground Methods ---
+    def _normalize_writing_name(self, name: str, entity_label: str) -> str:
+        if not name or not str(name).strip():
+            raise InputError(f"{entity_label} name cannot be empty.")
+        return str(name).strip()
+
+    def _serialize_writing_payload(self, payload: Dict[str, Any], entity_label: str) -> str:
+        if payload is None:
+            raise InputError(f"{entity_label} payload cannot be None.")
+        try:
+            return json.dumps(payload, ensure_ascii=True)
+        except (TypeError, ValueError) as exc:
+            raise InputError(f"{entity_label} payload must be JSON-serializable.") from exc
+
+    def add_writing_session(
+        self,
+        name: str,
+        payload: Dict[str, Any],
+        *,
+        schema_version: int = 1,
+        session_id: Optional[str] = None,
+        version_parent_id: Optional[str] = None,
+    ) -> str:
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise InputError("Session schema_version must be an integer >= 1.")
+        session_name = self._normalize_writing_name(name, "Session")
+        payload_json = self._serialize_writing_payload(payload, "Session")
+        final_id = session_id or self._generate_uuid()
+        now = self._get_current_utc_timestamp_iso()
+        query = (
+            "INSERT INTO writing_sessions "
+            "(id, name, payload_json, schema_version, version_parent_id, created_at, last_modified, deleted, client_id, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        version_parent_id = self._normalize_nullable_text(version_parent_id)
+        if self.backend_type == BackendType.POSTGRESQL:
+            params = (
+                final_id,
+                session_name,
+                payload_json,
+                schema_version,
+                version_parent_id,
+                now,
+                now,
+                False,
+                self.client_id,
+                1,
+            )
+        else:
+            params = (
+                final_id,
+                session_name,
+                payload_json,
+                schema_version,
+                version_parent_id,
+                now,
+                now,
+                0,
+                self.client_id,
+                1,
+            )
+        try:
+            with self.transaction() as conn:
+                conn.execute(query, params)
+                logger.info("Added writing session '%s' with ID: %s.", session_name, final_id)
+                return final_id
+        except sqlite3.IntegrityError as e:
+            msg = str(e).lower()
+            if "unique constraint failed: writing_sessions.id" in msg:
+                raise ConflictError(
+                    f"Session with ID '{final_id}' already exists.",
+                    entity="writing_sessions",
+                    entity_id=final_id,
+                ) from e
+            raise CharactersRAGDBError(f"Database integrity error adding writing session: {e}") from e
+        except BackendDatabaseError as exc:
+            msg = str(exc).lower()
+            if "duplicate key" in msg or "unique constraint" in msg:
+                raise ConflictError(
+                    f"Session with ID '{final_id}' already exists.",
+                    entity="writing_sessions",
+                    entity_id=final_id,
+                ) from exc
+            raise CharactersRAGDBError(f"Backend error adding writing session: {exc}") from exc
+
+    def get_writing_session(self, session_id: str, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        deleted_clause = "" if include_deleted else "AND deleted = 0"
+        query = f"SELECT * FROM writing_sessions WHERE id = ? {deleted_clause}"
+        try:
+            cursor = self.execute_query(query, (session_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            item = self._deserialize_row_fields(row, ["payload_json"])
+            if not item:
+                return None
+            item["payload"] = item.pop("payload_json", None)
+            return item
+        except CharactersRAGDBError:
+            raise
+
+    def list_writing_sessions(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        query = (
+            "SELECT id, name, last_modified, version "
+            "FROM writing_sessions WHERE deleted = 0 "
+            "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+        )
+        try:
+            cursor = self.execute_query(query, (limit, offset))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error listing writing sessions: {exc}")
+            raise
+
+    def count_writing_sessions(self) -> int:
+        query = "SELECT COUNT(*) AS cnt FROM writing_sessions WHERE deleted = 0"
+        try:
+            cursor = self.execute_query(query)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error counting writing sessions: {exc}")
+            raise
+
+    def update_writing_session(
+        self,
+        session_id: str,
+        update_data: Dict[str, Any],
+        expected_version: int,
+    ) -> bool | None:
+        allowed_fields = ["name", "payload_json", "schema_version", "version_parent_id"]
+        return self._update_generic_item(
+            "writing_sessions",
+            session_id,
+            update_data,
+            expected_version,
+            allowed_fields,
+            pk_col_name="id",
+        )
+
+    def soft_delete_writing_session(self, session_id: str, expected_version: int) -> bool | None:
+        return self._soft_delete_generic_item("writing_sessions", session_id, expected_version, pk_col_name="id")
+
+    def clone_writing_session(self, session_id: str, *, name: Optional[str] = None) -> Dict[str, Any]:
+        existing = self.get_writing_session(session_id)
+        if not existing:
+            raise ConflictError("Writing session not found.", entity="writing_sessions", entity_id=session_id)
+        clone_name = self._normalize_writing_name(name or f"{existing['name']} (copy)", "Session")
+        payload = existing.get("payload") or {}
+        schema_version = int(existing.get("schema_version") or 1)
+        new_id = self.add_writing_session(
+            name=clone_name,
+            payload=payload,
+            schema_version=schema_version,
+            version_parent_id=session_id,
+        )
+        cloned = self.get_writing_session(new_id)
+        if not cloned:
+            raise CharactersRAGDBError("Cloned session not found after creation.")
+        return cloned
+
+    def add_writing_template(
+        self,
+        name: str,
+        payload: Dict[str, Any],
+        *,
+        schema_version: int = 1,
+        version_parent_id: Optional[str] = None,
+        is_default: bool = False,
+    ) -> Optional[int]:
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise InputError("Template schema_version must be an integer >= 1.")
+        template_name = self._normalize_writing_name(name, "Template")
+        payload_json = self._serialize_writing_payload(payload, "Template")
+        item_data = {
+            "payload_json": payload_json,
+            "schema_version": schema_version,
+            "version_parent_id": self._normalize_nullable_text(version_parent_id),
+            "is_default": bool(is_default),
+        }
+        other_fields_map = {
+            "payload_json": "payload_json",
+            "schema_version": "schema_version",
+            "version_parent_id": "version_parent_id",
+            "is_default": "is_default",
+        }
+        return self._add_generic_item("writing_templates", "name", item_data, template_name, other_fields_map)
+
+    def get_writing_template_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        template_name = self._normalize_writing_name(name, "Template")
+        row = self._get_generic_item_by_unique_text("writing_templates", "name", template_name)
+        if not row:
+            return None
+        item = dict(row)
+        payload_json = item.get("payload_json")
+        if isinstance(payload_json, str):
+            try:
+                item["payload"] = json.loads(payload_json)
+            except json.JSONDecodeError:
+                item["payload"] = None
+        else:
+            item["payload"] = None
+        item.pop("payload_json", None)
+        return item
+
+    def list_writing_templates(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        query = (
+            "SELECT * FROM writing_templates WHERE deleted = 0 "
+            "ORDER BY name ASC LIMIT ? OFFSET ?"
+        )
+        try:
+            cursor = self.execute_query(query, (limit, offset))
+            items = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                payload_json = item.get("payload_json")
+                if isinstance(payload_json, str):
+                    try:
+                        item["payload"] = json.loads(payload_json)
+                    except json.JSONDecodeError:
+                        item["payload"] = None
+                else:
+                    item["payload"] = None
+                item.pop("payload_json", None)
+                items.append(item)
+            return items
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error listing writing templates: {exc}")
+            raise
+
+    def count_writing_templates(self) -> int:
+        query = "SELECT COUNT(*) AS cnt FROM writing_templates WHERE deleted = 0"
+        try:
+            cursor = self.execute_query(query)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error counting writing templates: {exc}")
+            raise
+
+    def update_writing_template(
+        self,
+        name: str,
+        update_data: Dict[str, Any],
+        expected_version: int,
+    ) -> bool | None:
+        template_name = self._normalize_writing_name(name, "Template")
+        allowed_fields = ["name", "payload_json", "schema_version", "version_parent_id", "is_default"]
+        return self._update_generic_item(
+            "writing_templates",
+            template_name,
+            update_data,
+            expected_version,
+            allowed_fields,
+            pk_col_name="name",
+            unique_col_name_in_data="name",
+        )
+
+    def soft_delete_writing_template(self, name: str, expected_version: int) -> bool | None:
+        template_name = self._normalize_writing_name(name, "Template")
+        return self._soft_delete_generic_item("writing_templates", template_name, expected_version, pk_col_name="name")
+
+    def add_writing_theme(
+        self,
+        name: str,
+        *,
+        class_name: Optional[str] = None,
+        css: Optional[str] = None,
+        schema_version: int = 1,
+        version_parent_id: Optional[str] = None,
+        is_default: bool = False,
+        order_index: int = 0,
+    ) -> Optional[int]:
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise InputError("Theme schema_version must be an integer >= 1.")
+        theme_name = self._normalize_writing_name(name, "Theme")
+        if order_index is None:
+            order_index = 0
+        item_data = {
+            "class_name": self._normalize_nullable_text(class_name),
+            "css": css,
+            "schema_version": schema_version,
+            "version_parent_id": self._normalize_nullable_text(version_parent_id),
+            "is_default": bool(is_default),
+            "order_index": int(order_index),
+        }
+        other_fields_map = {
+            "class_name": "class_name",
+            "css": "css",
+            "schema_version": "schema_version",
+            "version_parent_id": "version_parent_id",
+            "is_default": "is_default",
+            "order_index": "order_index",
+        }
+        return self._add_generic_item("writing_themes", "name", item_data, theme_name, other_fields_map)
+
+    def get_writing_theme_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        theme_name = self._normalize_writing_name(name, "Theme")
+        row = self._get_generic_item_by_unique_text("writing_themes", "name", theme_name)
+        return dict(row) if row else None
+
+    def list_writing_themes(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        query = (
+            "SELECT * FROM writing_themes WHERE deleted = 0 "
+            "ORDER BY order_index ASC, name ASC LIMIT ? OFFSET ?"
+        )
+        try:
+            cursor = self.execute_query(query, (limit, offset))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error listing writing themes: {exc}")
+            raise
+
+    def count_writing_themes(self) -> int:
+        query = "SELECT COUNT(*) AS cnt FROM writing_themes WHERE deleted = 0"
+        try:
+            cursor = self.execute_query(query)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error counting writing themes: {exc}")
+            raise
+
+    def update_writing_theme(
+        self,
+        name: str,
+        update_data: Dict[str, Any],
+        expected_version: int,
+    ) -> bool | None:
+        theme_name = self._normalize_writing_name(name, "Theme")
+        allowed_fields = [
+            "name",
+            "class_name",
+            "css",
+            "schema_version",
+            "version_parent_id",
+            "is_default",
+            "order_index",
+        ]
+        return self._update_generic_item(
+            "writing_themes",
+            theme_name,
+            update_data,
+            expected_version,
+            allowed_fields,
+            pk_col_name="name",
+            unique_col_name_in_data="name",
+        )
+
+    def soft_delete_writing_theme(self, name: str, expected_version: int) -> bool | None:
+        theme_name = self._normalize_writing_name(name, "Theme")
+        return self._soft_delete_generic_item("writing_themes", theme_name, expected_version, pk_col_name="name")
 
     # --- Sync Log Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None,

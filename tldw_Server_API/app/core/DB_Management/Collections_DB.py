@@ -2242,6 +2242,29 @@ class CollectionsDatabase:
         format: str,
         retention_days: Optional[int],
     ) -> ReadingDigestScheduleRow:
+        """Create a reading digest schedule for the current user.
+
+        Params:
+            id: Schedule identifier to persist.
+            tenant_id: Tenant identifier.
+            name: Optional display name.
+            cron: Cron expression.
+            timezone: Optional IANA timezone.
+            enabled: Whether the schedule is active.
+            require_online: Whether runs require online status.
+            filters: Filter payload stored as JSON.
+            template_id: Optional output template id.
+            template_name: Optional output template name.
+            format: Output format ("md" or "html").
+            retention_days: Optional retention window in days.
+
+        Returns:
+            Newly created schedule row.
+
+        Raises:
+            DatabaseError: Insert or lookup failure.
+            KeyError: Schedule not found after insert.
+        """
         now = _utcnow_iso()
         enabled_flag = self._coerce_bool_flag(enabled, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
         online_flag = self._coerce_bool_flag(require_online, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
@@ -2275,6 +2298,19 @@ class CollectionsDatabase:
         return self.get_reading_digest_schedule(id)
 
     def update_reading_digest_schedule(self, schedule_id: str, patch: Dict[str, Any]) -> ReadingDigestScheduleRow:
+        """Update a reading digest schedule for the current user.
+
+        Params:
+            schedule_id: Schedule identifier to update.
+            patch: Fields to update (filters, schedule fields, or history columns).
+
+        Returns:
+            Updated schedule row.
+
+        Raises:
+            KeyError: Schedule not found.
+            DatabaseError: Update or lookup failure.
+        """
         if not patch:
             return self.get_reading_digest_schedule(schedule_id)
         fields = []
@@ -2313,11 +2349,34 @@ class CollectionsDatabase:
         return self.get_reading_digest_schedule(schedule_id)
 
     def delete_reading_digest_schedule(self, schedule_id: str) -> bool:
+        """Delete a reading digest schedule for the current user.
+
+        Params:
+            schedule_id: Schedule identifier to delete.
+
+        Returns:
+            True when a row was deleted, otherwise False.
+
+        Raises:
+            DatabaseError: Delete failure.
+        """
         q = "DELETE FROM reading_digest_schedules WHERE id = ? AND user_id = ?"
         res = self.backend.execute(q, (schedule_id, self.user_id))
         return res.rowcount > 0
 
     def get_reading_digest_schedule(self, schedule_id: str) -> ReadingDigestScheduleRow:
+        """Fetch a reading digest schedule for the current user.
+
+        Params:
+            schedule_id: Schedule identifier to retrieve.
+
+        Returns:
+            Schedule row.
+
+        Raises:
+            KeyError: Schedule not found.
+            DatabaseError: Query failure.
+        """
         q = "SELECT * FROM reading_digest_schedules WHERE id = ? AND user_id = ?"
         row = self.backend.execute(q, (schedule_id, self.user_id)).first
         if not row:
@@ -2331,6 +2390,19 @@ class CollectionsDatabase:
         limit: int = 50,
         offset: int = 0,
     ) -> Tuple[List[ReadingDigestScheduleRow], int]:
+        """List reading digest schedules for the current user and tenant.
+
+        Params:
+            tenant_id: Tenant identifier to filter schedules.
+            limit: Maximum number of rows to return.
+            offset: Starting offset for pagination.
+
+        Returns:
+            Tuple of (schedule rows, total count).
+
+        Raises:
+            DatabaseError: Query failure.
+        """
         where = "user_id = ? AND tenant_id = ?"
         params: List[Any] = [self.user_id, tenant_id]
         count_q = f"SELECT COUNT(*) AS cnt FROM reading_digest_schedules WHERE {where}"
@@ -2350,6 +2422,21 @@ class CollectionsDatabase:
         next_run_at: Optional[str] = None,
         last_status: Optional[str] = None,
     ) -> None:
+        """Update reading digest schedule history fields for the current user.
+
+        Params:
+            schedule_id: Schedule identifier to update.
+            last_run_at: ISO timestamp of last run (optional).
+            next_run_at: ISO timestamp of next scheduled run (optional).
+            last_status: Last run status string (optional).
+
+        Returns:
+            None.
+
+        Raises:
+            KeyError: Schedule not found.
+            DatabaseError: Update failure.
+        """
         update: Dict[str, Any] = {}
         if last_run_at is not None:
             update["last_run_at"] = last_run_at
@@ -2371,6 +2458,22 @@ class CollectionsDatabase:
         last_status: Optional[str],
         disallow_statuses: Optional[tuple[str, ...]] = None,
     ) -> bool:
+        """Attempt to claim a schedule run by updating run timestamps/status.
+
+        Params:
+            schedule_id: Schedule identifier to claim.
+            expected_next_run_at: Required current next_run_at for optimistic claim.
+            next_run_at: New next_run_at timestamp to set.
+            last_run_at: Last run timestamp to set.
+            last_status: Last run status to set.
+            disallow_statuses: Status values that block the claim.
+
+        Returns:
+            True if the schedule was updated (claim succeeded), otherwise False.
+
+        Raises:
+            DatabaseError: Update failure.
+        """
         fields = ["next_run_at = ?", "last_run_at = ?", "last_status = ?"]
         params: list[Any] = [next_run_at, last_run_at, last_status, schedule_id, self.user_id]
         status_clause = ""

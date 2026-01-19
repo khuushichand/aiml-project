@@ -149,14 +149,35 @@ def _pydantic_error_detail(exc: ValidationError) -> str:
     return "; ".join(parts) or "invalid config"
 
 
+def _find_api_key_path(value: Any, path: str = "") -> Optional[str]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            next_path = f"{path}.{key}" if path else str(key)
+            if key == "api_key":
+                return next_path
+            found = _find_api_key_path(child, next_path)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            next_path = f"{path}[{idx}]"
+            found = _find_api_key_path(child, next_path)
+            if found:
+                return found
+    return None
+
+
 def _llm_step_schema_base() -> Dict[str, Any]:
     return {
         "type": "object",
+        "description": (
+            "LLM step config. Provide provider API keys via runtime secret refs; "
+            "api_key is not stored in workflow definitions."
+        ),
         "properties": {
             "provider": {"type": "string"},
             "api_provider": {"type": "string"},
             "api_endpoint": {"type": "string"},
-            "api_key": {"type": "string"},
             "model": {"type": "string"},
             "model_id": {"type": "string"},
             "prompt": {"type": "string"},
@@ -366,6 +387,12 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
     size = len(json.dumps(defn, separators=(",", ":")))
     if size > MAX_DEFINITION_BYTES:
         raise HTTPException(status_code=413, detail="Workflow definition too large")
+    api_key_path = _find_api_key_path(defn)
+    if api_key_path:
+        raise HTTPException(
+            status_code=422,
+            detail=f"api_key not allowed in workflow definitions at '{api_key_path}'; use runtime secret refs",
+        )
     # steps
     steps = defn.get("steps") or []
     if not isinstance(steps, list):
@@ -1380,7 +1407,7 @@ async def run_saved(
         if run and not getattr(run, "status", None):
             run.status = "queued"
     except Exception as exc:
-        logger.debug(f"workflows: audit log failed for run_id={run_id}: {exc}")
+        logger.debug(f"workflows: status normalization failed for run_id={run_id}: {exc}")
     try:
         _logger.debug(f"Workflows endpoint: post-submit status={run.status if run else 'missing'} run_id={run_id}")
     except Exception as e:

@@ -1,19 +1,24 @@
 # Presentations / Slides Module Design
 
 ## Summary
-- Implement a per-user Slides database and API surface for CRUD, generation, and export.
-- Reveal.js ZIP is the primary export format; Markdown (Marp) and JSON are supported.
+- Implement a per-user Slides database and API surface for CRUD, generation, export, and version history.
+- Reveal.js ZIP is the primary export format; Markdown (Marp), JSON, and PDF are supported.
 - Generation uses existing LLM adapters and per-user data sources (chat, notes, RAG, media).
 
 ## Storage
 - Per-user database: `Databases/user_databases/{user_id}/Slides.db`.
-- Tables: `presentations`, `presentations_fts`, `sync_log`.
+- Tables: `presentations`, `presentations_fts`, `presentations_versions`, `sync_log`.
 - `slides` stores JSON array of slide objects; `slides_text` is app-maintained for FTS.
+- `presentations_versions` stores immutable snapshots keyed by presentation_id + version.
+- `presentations.template_id` stores the optional template used at create/generate time.
 
 ## API
 - CRUD routes under `/api/v1/slides/presentations`.
 - Generation routes under `/api/v1/slides/generate`.
 - Export route under `/api/v1/slides/presentations/{id}/export`.
+- Reorder route under `/api/v1/slides/presentations/{id}/reorder`.
+- Version routes under `/api/v1/slides/presentations/{id}/versions` (list/get/restore).
+- Template routes under `/api/v1/slides/templates` (list/get).
 - ETag/If-Match required for mutating operations.
 
 ## Export

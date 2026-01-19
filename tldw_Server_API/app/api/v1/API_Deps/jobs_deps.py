@@ -32,11 +32,13 @@ _job_manager_lock = threading.Lock()
 
 
 def _build_job_manager(db_url: str) -> JobManager:
+    """Create a JobManager instance for the resolved jobs DB URL."""
     backend = "postgres" if db_url.startswith("postgres") else None
     return JobManager(backend=backend, db_url=db_url or None)
 
 
 def _normalize_jobs_db_url(db_url: str) -> str:
+    """Normalize JOBS_DB_URL and fall back to in-memory on invalid schemes."""
     if db_url and not (db_url.startswith("postgres") or db_url.startswith("sqlite")):
         logger.warning("Unexpected JOBS_DB_URL scheme; defaulting to in-memory jobs backend.")
         return ""

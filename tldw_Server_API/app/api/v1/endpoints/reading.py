@@ -12,6 +12,11 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, 
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 
+try:
+    import bleach  # type: ignore
+except Exception:  # pragma: no cover - optional dependency fallback
+    bleach = None
+
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
@@ -75,6 +80,36 @@ from tldw_Server_API.app.services.reading_digest_scheduler import get_reading_di
 
 READING_ARCHIVE_MAX_BYTES = int(os.getenv("READING_ARCHIVE_MAX_BYTES", str(5 * 1024 * 1024)))
 READING_ARCHIVE_RETENTION_DAYS = int(os.getenv("READING_ARCHIVE_RETENTION_DAYS", "30") or "30")
+
+_ARCHIVE_ALLOWED_TAGS = [
+    "a",
+    "blockquote",
+    "br",
+    "code",
+    "div",
+    "em",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "i",
+    "img",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "span",
+    "strong",
+    "ul",
+]
+_ARCHIVE_ALLOWED_ATTRS = {
+    "a": ["href", "title", "rel", "target"],
+    "img": ["src", "alt", "title", "width", "height"],
+}
+_ARCHIVE_ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
 
 
 router = APIRouter(prefix="/reading", tags=["reading"])
@@ -260,7 +295,7 @@ def _validate_cron_or_422(cron: str, timezone_str: Optional[str]) -> None:
                 "Invalid cron or timezone. Timezone must be an IANA name. "
                 f"Details: {exc}"
             ),
-        )
+        ) from exc
 
 
 def _resolve_archive_retention(payload: ReadingArchiveCreateRequest) -> Optional[str]:
@@ -277,6 +312,19 @@ def _resolve_archive_retention(payload: ReadingArchiveCreateRequest) -> Optional
     return (datetime.now(tz=timezone.utc) + timedelta(days=days)).isoformat()
 
 
+def _sanitize_archive_html(value: str) -> str:
+    if bleach is None:
+        return html.escape(value)
+    return bleach.clean(
+        value,
+        tags=_ARCHIVE_ALLOWED_TAGS,
+        attributes=_ARCHIVE_ALLOWED_ATTRS,
+        protocols=_ARCHIVE_ALLOWED_PROTOCOLS,
+        strip=True,
+        strip_comments=True,
+    )
+
+
 def _render_archive_html(
     *,
     title: str,
@@ -287,7 +335,7 @@ def _render_archive_html(
     safe_title = html.escape(title or "Untitled")
     safe_url = html.escape(url or "")
     if body_html:
-        content_html = body_html
+        content_html = _sanitize_archive_html(body_html)
     else:
         content_html = f"<pre>{html.escape(body_text or '')}</pre>"
     header = f"<h1>{safe_title}</h1>"

@@ -229,6 +229,26 @@ Request:
 }
 ```
 
+Optional suggestions block:
+```
+{
+  "filters": {
+    "status": ["saved"],
+    "tags": ["ai"],
+    "limit": 50,
+    "suggestions": {
+      "enabled": true,
+      "limit": 5,
+      "status": ["saved", "reading"],
+      "exclude_tags": ["ignore"],
+      "max_age_days": 90,
+      "include_read": false,
+      "include_archived": false
+    }
+  }
+}
+```
+
 Response:
 ```
 { "id": "5a6f0e9d3d1b4b2f8c3d5a9c7b1a2e3f" }
@@ -260,6 +280,38 @@ Response:
 ]
 ```
 
+### Digest suggestions (optional)
+
+If `filters.suggestions.enabled` is true, the digest job adds a `suggestions` list to the template context.
+
+Fields:
+- `enabled`: turn suggestions on/off.
+- `limit`: max suggestions (default 5).
+- `status`: candidate statuses (default `["saved", "reading"]`).
+- `exclude_tags`: tags to exclude from suggestions.
+- `max_age_days`: drop items older than N days.
+- `include_read`: allow `read` items even if status list excludes them.
+- `include_archived`: allow `archived` items even if status list excludes them.
+
+### Digest template context
+
+The output template receives:
+- `items`: digest items.
+- `item_count`: number of digest items.
+- `filters`: the schedule filters.
+- `suggestions`: suggestion items (optional).
+- `suggestions_meta`: `{count, scores, reasons}` keyed by item id (optional).
+
+Sample template snippet:
+```
+{% if suggestions %}
+## Suggested reads
+{% for item in suggestions %}
+- {{ item.title }} ({{ item.url }})
+{% endfor %}
+{% endif %}
+```
+
 ### List digest outputs
 
 `GET /api/v1/reading/digests/outputs`
@@ -283,6 +335,9 @@ Response:
   "offset": 0
 }
 ```
+
+Notes:
+- Output metadata includes `suggestions_count`, `suggestions_item_ids`, and `suggestions_config` when enabled.
 
 ## Import Jobs
 

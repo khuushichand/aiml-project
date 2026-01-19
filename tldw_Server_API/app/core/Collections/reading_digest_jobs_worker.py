@@ -24,6 +24,11 @@ from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env as 
 
 
 async def run_reading_digest_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+    """Run the reading digest jobs worker loop.
+
+    Args:
+        stop_event: Optional asyncio.Event used to request graceful shutdown.
+    """
     worker_id = (os.getenv("READING_DIGEST_JOBS_WORKER_ID") or f"reading-digest-{os.getpid()}").strip()
     queue = reading_digest_queue()
     lease_seconds = _coerce_int(os.getenv("READING_DIGEST_JOBS_LEASE_SECONDS") or os.getenv("JOBS_LEASE_SECONDS"), 60)

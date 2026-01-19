@@ -1,13 +1,19 @@
 /*!
  * reveal.js Zoom plugin
  */
+var revealElement = null;
+var mouseDownHandler = null;
+
 const Plugin = {
 
 	id: 'zoom',
 
 	init: function( reveal ) {
 
-		reveal.getRevealElement().addEventListener( 'mousedown', function( event ) {
+		zoom.attach();
+
+		revealElement = reveal.getRevealElement();
+		mouseDownHandler = function( event ) {
 			var defaultModifier = /Linux/.test( window.navigator.platform ) ? 'ctrl' : 'alt';
 
 			var modifier = ( reveal.getConfig().zoomKey ? reveal.getConfig().zoomKey : defaultModifier ) + 'Key';
@@ -23,12 +29,21 @@ const Plugin = {
 					pan: false
 				});
 			}
-		} );
+		};
+
+		revealElement.addEventListener( 'mousedown', mouseDownHandler );
 
 	},
 
 	destroy: () => {
 
+		if( revealElement && mouseDownHandler ) {
+			revealElement.removeEventListener( 'mousedown', mouseDownHandler );
+		}
+		revealElement = null;
+		mouseDownHandler = null;
+
+		zoom.detach();
 		zoom.reset();
 
 	}
@@ -65,20 +80,38 @@ var zoom = (function(){
 		document.body.style.transition = 'transform 0.8s ease';
 	}
 
-	// Zoom out if the user hits escape
-	document.addEventListener( 'keyup', function( event ) {
+	// Event listeners are attached/detached so the plugin can be cleaned up.
+	var eventHandlersAttached = false;
+	var onKeyup = function( event ) {
 		if( level !== 1 && event.keyCode === 27 ) {
 			zoom.out();
 		}
-	} );
-
-	// Monitor mouse movement for panning
-	document.addEventListener( 'mousemove', function( event ) {
+	};
+	var onMousemove = function( event ) {
 		if( level !== 1 ) {
 			mouseX = event.clientX;
 			mouseY = event.clientY;
 		}
-	} );
+	};
+	function attachEventHandlers() {
+		if( eventHandlersAttached ) {
+			return;
+		}
+		document.addEventListener( 'keyup', onKeyup );
+		document.addEventListener( 'mousemove', onMousemove );
+		eventHandlersAttached = true;
+	}
+	function detachEventHandlers() {
+		if( !eventHandlersAttached ) {
+			return;
+		}
+		document.removeEventListener( 'keyup', onKeyup );
+		document.removeEventListener( 'mousemove', onMousemove );
+		eventHandlersAttached = false;
+	}
+
+	// Attach keyup/mousemove handlers for escape + panning.
+	attachEventHandlers();
 
 	/**
 	 * Applies the CSS required to zoom in, prefers the use of CSS3
@@ -255,6 +288,8 @@ var zoom = (function(){
 		// Alias
 		magnify: function( options ) { this.to( options ) },
 		reset: function() { this.out() },
+		attach: function() { attachEventHandlers(); },
+		detach: function() { detachEventHandlers(); },
 
 		zoomLevel: function() {
 			return level;

@@ -68,13 +68,22 @@ class ReadingImportResponse(BaseModel):
     skipped: int
     errors: List[str] = Field(default_factory=list)
 
+ReadingImportJobState = Literal[
+    "queued",
+    "processing",
+    "completed",
+    "failed",
+    "cancelled",
+    "quarantined",
+]
+
 
 class ReadingImportJobResponse(BaseModel):
     """Response payload for a newly created reading import job."""
 
     job_id: int
     job_uuid: Optional[str] = None
-    status: str
+    status: ReadingImportJobState
 
 
 class ReadingImportJobStatus(BaseModel):
@@ -82,7 +91,7 @@ class ReadingImportJobStatus(BaseModel):
 
     job_id: int
     job_uuid: Optional[str] = None
-    status: str
+    status: ReadingImportJobState
     created_at: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
@@ -99,6 +108,32 @@ class ReadingImportJobsListResponse(BaseModel):
     offset: Optional[int] = None
 
 
+class ReadingDigestSuggestionsConfig(BaseModel):
+    enabled: bool = False
+    limit: Optional[int] = Field(default=None, ge=1, le=200)
+    status: Optional[List[Literal["saved", "reading", "read", "archived"]]] = None
+    exclude_tags: Optional[List[str]] = None
+    max_age_days: Optional[int] = Field(default=None, ge=1, le=3650)
+    include_read: bool = False
+    include_archived: bool = False
+
+    @validator("status", pre=True)
+    def _coerce_suggestions_status(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @validator("exclude_tags", pre=True)
+    def _coerce_exclude_tags(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @validator("exclude_tags", pre=True, each_item=True)
+    def _strip_exclude_tags(cls, value: str) -> str:
+        return value.strip()
+
+
 class ReadingDigestScheduleFilters(BaseModel):
     status: Optional[List[Literal["saved", "reading", "read", "archived"]]] = None
     tags: Optional[List[str]] = None
@@ -112,6 +147,7 @@ class ReadingDigestScheduleFilters(BaseModel):
         description="updated_desc|updated_asc|created_desc|created_asc|title_asc|title_desc|relevance",
     )
     limit: Optional[int] = Field(default=None, ge=1, le=500)
+    suggestions: Optional[ReadingDigestSuggestionsConfig] = None
 
     @validator("status", pre=True)
     def _coerce_status_list(cls, value: Any) -> Any:
@@ -142,7 +178,13 @@ class ReadingDigestScheduleCreateRequest(BaseModel):
     format: Literal["md", "html"] = Field(default="md")
     template_id: Optional[int] = None
     template_name: Optional[str] = None
-    retention_days: Optional[int] = Field(default=None, ge=0, le=3650)
+    retention_days: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=3650,
+        deprecated=True,
+        description="Deprecated. Use retention.default_seconds instead.",
+    )
     filters: Optional[ReadingDigestScheduleFilters] = None
 
 
@@ -155,7 +197,13 @@ class ReadingDigestScheduleUpdateRequest(BaseModel):
     format: Optional[Literal["md", "html"]] = None
     template_id: Optional[int] = None
     template_name: Optional[str] = None
-    retention_days: Optional[int] = Field(default=None, ge=0, le=3650)
+    retention_days: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=3650,
+        deprecated=True,
+        description="Deprecated. Use retention.default_seconds instead.",
+    )
     filters: Optional[ReadingDigestScheduleFilters] = None
 
 
@@ -169,7 +217,11 @@ class ReadingDigestScheduleResponse(BaseModel):
     format: Literal["md", "html"]
     template_id: Optional[int] = None
     template_name: Optional[str] = None
-    retention_days: Optional[int] = None
+    retention_days: Optional[int] = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated. Use retention.default_seconds instead.",
+    )
     filters: Optional[ReadingDigestScheduleFilters] = None
     last_run_at: Optional[str] = None
     next_run_at: Optional[str] = None

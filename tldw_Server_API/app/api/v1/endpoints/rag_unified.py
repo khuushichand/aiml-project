@@ -93,15 +93,18 @@ def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optio
         elif request_user_id:
             user_id = request_user_id
     except Exception:
+        logger.debug("Failed to resolve user_id for kanban DB path", exc_info=True)
         user_id = request_user_id
     if user_id is None:
         try:
             user_id = DatabasePaths.get_single_user_id()
         except Exception:
+            logger.debug("Failed to resolve single-user ID for kanban DB path", exc_info=True)
             return None
     try:
         return str(DatabasePaths.get_kanban_db_path(user_id))
     except Exception:
+        logger.debug("Failed to resolve kanban DB path", exc_info=True)
         return None
 
 

@@ -36,7 +36,7 @@ async def main() -> None:
         await sdk.run(handler=handle_reading_import_job)
     except asyncio.CancelledError:
         raise
-    except Exception:  # noqa: BLE001 - log and re-raise unexpected worker failures
+    except Exception:
         logger.exception(f"Reading import worker crashed: queue={queue} worker_id={worker_id}")
         raise
 

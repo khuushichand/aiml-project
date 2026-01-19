@@ -1076,6 +1076,8 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
     # Quizzes Endpoint (ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.quizzes import router as quizzes_router
+    # Writing Playground Endpoint (ChaChaNotes)
+    from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
 
     # LLM Providers Endpoint
     from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
@@ -3571,6 +3573,7 @@ OPENAPI_TAGS = [
         },
     },
     {"name": "notes", "description": "Notes and knowledge management."},
+    {"name": "writing", "description": "Writing Playground sessions, templates, themes, and token utilities."},
     {
         "name": "data-tables",
         "description": "Data table generation jobs and CRUD.",
@@ -4962,6 +4965,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"])
     except Exception as _quiz_min_err:
         logger.debug(f"Skipping quizzes router in minimal test app: {_quiz_min_err}")
+    # Writing Playground endpoints (ChaChaNotes-backed) for integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
+
+        app.include_router(writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"])
+    except Exception as _writing_min_err:
+        logger.debug(f"Skipping writing router in minimal test app: {_writing_min_err}")
     # Metrics endpoints (/api/v1/metrics/text)
     try:
         from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -5470,6 +5480,9 @@ else:
     )
     _include_if_enabled(
         "quizzes", quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"], default_stable=True
+    )
+    _include_if_enabled(
+        "writing", writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"], default_stable=True
     )
     from tldw_Server_API.app.api.v1.endpoints.personalization import (
         router as personalization_router,

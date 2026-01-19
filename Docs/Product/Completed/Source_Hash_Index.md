@@ -19,6 +19,15 @@ falling back to the legacy `safe_metadata` search for older rows.
   by `Media.source_hash`. If the column is missing or a row lacks a value,
   fall back to the legacy `safe_metadata` `LIKE` filter.
 
+## Status
+- Implemented in schema/index and migration/ensure paths (SQLite/Postgres),
+  ingestion persistence, and pre-checks.
+- Pre-check now falls back to `safe_metadata` when `Media.source_hash` is
+  NULL/absent for legacy rows.
+- Remaining gap: no automatic backfill to populate `Media.source_hash`
+  for existing rows; fallback is best-effort and depends on historical
+  `safe_metadata` containing `source_hash`.
+
 ## Migration/Compatibility
 - Update base schema for new databases.
 - Add an ensure/migration step for existing SQLite/Postgres DBs.

@@ -717,9 +717,60 @@ If a Reveal.js theme is not in the table, default to `default` unless `marp_them
 - Integration tests
 - Error handling refinement
 
-### Future Phases
-- Image embedding support
-- PDF export (headless browser)
-- Presentation templates
-- Slide reordering UI support
-- Version history
+### Phase 5: Authoring & Rich Export (Backend Only)
+
+**Image Embedding Support**
+- Stage 1: Schema + validation
+  - Define `slides[].metadata.images[]` entries with `id`, `mime`, `data_b64` or `asset_ref`, `alt`, `width`, `height`.
+  - Validate MIME, size caps, and per-slide image count; include alt text in `slides_text`.
+- Stage 2: Storage model
+  - Choose inline base64 (small) vs file-backed assets under per-user outputs.
+  - Add DB migration if a separate assets table is introduced; enforce cleanup rules.
+- Stage 3: Export integration
+  - Reveal.js: emit `<img>` tags (data URLs or bundled assets).
+  - Markdown: emit `![alt](data:...)` or asset paths.
+  - JSON export includes image metadata; add unit tests.
+
+**PDF Export (Headless Browser)**
+- Stage 1: Export pipeline
+  - Add `format=pdf` support to export endpoint.
+  - Render Reveal.js HTML to PDF via headless browser (Playwright or Chromium).
+- Stage 2: Asset + layout control
+  - Ensure local Reveal.js assets and custom CSS are embedded.
+  - Expose PDF options (page size, landscape, margins) via query or config.
+- Stage 3: Reliability + limits
+  - Add timeouts, memory caps, and failure fallbacks.
+  - Integration tests for PDF output and error paths.
+
+**Presentation Templates**
+- Stage 1: Template model
+  - Define template schema: `id`, `name`, `theme`, `marp_theme`, `settings`, `default_slides`, `custom_css`.
+  - Store templates as JSON in repo or per-user DB table.
+- Stage 2: API + selection
+  - Endpoints to list/get templates; optional create/update/delete for admin-only.
+  - Allow create/generate requests to reference `template_id`.
+- Stage 3: Generation + export wiring
+  - Inject template hints into LLM prompt.
+  - Ensure exports apply template CSS/settings consistently.
+  - Add unit/integration tests for template application.
+
+**Slide Reordering (API)**
+- Stage 1: Reorder endpoint
+  - Add `POST /presentations/{id}/reorder` accepting ordered slide indices or IDs.
+  - Require `If-Match` and update `slides` + `slides_text`.
+- Stage 2: Validation + normalization
+  - Enforce unique order and normalize to 0..n-1.
+  - Ensure optimistic locking and version bump behavior.
+- Stage 3: Tests
+  - Unit tests for reorder validation; integration test for ETag behavior.
+
+**Version History**
+- Stage 1: Storage
+  - Add `presentations_versions` table with `presentation_id`, `version`, `payload_json`, `created_at`.
+  - Write snapshots on create/update/restore/delete.
+- Stage 2: API
+  - Endpoints to list versions, fetch a version, and restore a version as new.
+  - Keep restore creating a new current version.
+- Stage 3: Retention
+  - Add retention policy and optional pruning job.
+  - Tests for restore correctness and retention enforcement.

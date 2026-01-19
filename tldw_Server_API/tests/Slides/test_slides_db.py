@@ -37,6 +37,29 @@ def test_slides_db_create_and_get(tmp_path):
     db.close_connection()
 
 
+def test_slides_db_template_id(tmp_path):
+    db_path = tmp_path / "Slides.db"
+    db = SlidesDatabase(db_path=db_path, client_id="tester")
+    row = db.create_presentation(
+        presentation_id=None,
+        title="Deck",
+        description=None,
+        theme="black",
+        marp_theme=None,
+        settings=None,
+        template_id="clean-dark",
+        slides=_sample_slides(),
+        slides_text="Deck Intro A B",
+        source_type="manual",
+        source_ref=None,
+        source_query=None,
+        custom_css=None,
+    )
+    fetched = db.get_presentation_by_id(row.id)
+    assert fetched.template_id == "clean-dark"
+    db.close_connection()
+
+
 def test_slides_db_update_conflict(tmp_path):
     db_path = tmp_path / "Slides.db"
     db = SlidesDatabase(db_path=db_path, client_id="tester")
@@ -115,4 +138,37 @@ def test_slides_db_soft_delete_restore(tmp_path):
     assert total == 0
     restored = db.restore_presentation(row.id, expected_version=deleted.version)
     assert restored.deleted == 0
+    db.close_connection()
+
+
+def test_slides_db_version_snapshots(tmp_path):
+    db_path = tmp_path / "Slides.db"
+    db = SlidesDatabase(db_path=db_path, client_id="tester")
+    row = db.create_presentation(
+        presentation_id=None,
+        title="Deck",
+        description=None,
+        theme="black",
+        marp_theme=None,
+        settings=None,
+        slides=_sample_slides(),
+        slides_text="Deck Intro A B",
+        source_type="manual",
+        source_ref=None,
+        source_query=None,
+        custom_css=None,
+    )
+    versions, total = db.list_presentation_versions(presentation_id=row.id, limit=10, offset=0)
+    assert total == 1
+    payload = json.loads(versions[0].payload_json)
+    assert payload["title"] == "Deck"
+
+    updated = db.update_presentation(
+        presentation_id=row.id,
+        update_fields={"title": "Updated"},
+        expected_version=row.version,
+    )
+    versions, total = db.list_presentation_versions(presentation_id=row.id, limit=10, offset=0)
+    assert total == 2
+    assert versions[0].version == updated.version
     db.close_connection()

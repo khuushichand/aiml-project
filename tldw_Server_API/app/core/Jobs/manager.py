@@ -7,7 +7,7 @@ import time
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone as _tz
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, Iterable
+from typing import Any, ClassVar, Dict, Iterable, List, Optional, Tuple, Union
 import re
 import hashlib
 
@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.exceptions import BadRequestError
 
 
 def _parse_dt(v: Any) -> Optional[datetime]:
+    """Parse a datetime from common storage formats."""
     if v is None:
         return None
     if isinstance(v, datetime):
@@ -167,7 +168,7 @@ class JobManager:
 
     # Standard queues across domains
     STANDARD_QUEUES = ("default", "high", "low")
-    DOMAIN_ALLOWED_QUEUES = {
+    DOMAIN_ALLOWED_QUEUES: ClassVar[Dict[str, Tuple[str, ...]]] = {
         "reading": ("reading-digest",),
     }
 

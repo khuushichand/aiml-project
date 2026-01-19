@@ -103,6 +103,40 @@ def _get_int_setting(key: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _kanban_card_indexable(
+    *,
+    user_id: str,
+    card_id: int,
+    expected_version: Optional[Any] = None,
+) -> bool:
+    """Return True when a card exists, is not deleted/archived, and matches the expected version."""
+    try:
+        db_path = DatabasePaths.get_kanban_db_path(user_id)
+        db = KanbanDB(db_path=str(db_path), user_id=str(user_id))
+        try:
+            card = db.get_card(card_id, include_deleted=True)
+            if not card:
+                return False
+            if card.get("deleted") or card.get("archived"):
+                return False
+            if expected_version is not None:
+                try:
+                    expected_version = int(expected_version)
+                except (TypeError, ValueError):
+                    expected_version = None
+            if expected_version is not None and int(card.get("version") or 0) != expected_version:
+                return False
+            return True
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.warning(f"Kanban card indexability check failed: {exc}")
+        return False
+
+
 # --- SQLite Connection Helpers ---
 class _KanbanMemoryConnection(sqlite3.Connection):
     """SQLite connection that keeps :memory: databases alive across operations."""
@@ -3132,6 +3166,8 @@ END;
         limit: int = 50,
         offset: int = 0,
     ) -> Tuple[List[Dict[str, Any]], int]:
+        if limit < 1 or offset < 0:
+            raise InputError("limit must be positive and offset must be non-negative")
         conditions = ["board_id = ?"]
         params: List[Any] = [board_id]
 
@@ -4728,6 +4764,8 @@ END;
         Returns:
             Tuple of (comments list, total count).
         """
+        if limit < 1 or offset < 0:
+            raise InputError("limit must be positive and offset must be non-negative")
         with self._lock:
             conn = self._connect()
             try:
