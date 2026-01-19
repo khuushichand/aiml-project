@@ -75,7 +75,8 @@ async def try_get_slides_db_for_user(
         return None
     except Exception as exc:
         logger.exception(
-            "Unexpected Slides DB init failure for user {}",
+            "Unexpected Slides DB init failure for user {}: {}",
             getattr(current_user, "id", None),
+            exc,
         )
         return None

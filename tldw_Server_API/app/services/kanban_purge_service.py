@@ -49,7 +49,7 @@ def _enumerate_user_ids() -> list[int]:
 def _purge_for_user(user_id: int, grace_days: int) -> dict:
     """Purge soft-deleted kanban items for a user and return counts."""
     db_path = DatabasePaths.get_kanban_db_path(user_id)
-    db = KanbanDB(db_path=str(db_path), user_id=str(user_id), client_id=str(user_id))
+    db = KanbanDB(db_path=str(db_path), user_id=str(user_id))
     try:
         return db.purge_deleted_items(days_old=grace_days)
     finally:

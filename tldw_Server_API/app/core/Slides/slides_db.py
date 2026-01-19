@@ -297,11 +297,16 @@ class SlidesDatabase:
     ) -> Tuple[List[PresentationRow], int]:
         if limit < 1:
             raise InputError("limit must be >= 1")
-        sort_column = sort_column if sort_column in {"created_at", "last_modified", "title"} else "created_at"
-        sort_direction = "DESC" if sort_direction.upper() == "DESC" else "ASC"
+        allowed_columns = {
+            "created_at": "created_at",
+            "last_modified": "last_modified",
+            "title": "title",
+        }
+        safe_column = allowed_columns.get(sort_column, "created_at")
+        safe_direction = "DESC" if sort_direction.upper() == "DESC" else "ASC"
         where = "" if include_deleted else "WHERE deleted = 0"
         query = (
-            f"SELECT * FROM presentations {where} ORDER BY {sort_column} {sort_direction} LIMIT ? OFFSET ?"
+            f"SELECT * FROM presentations {where} ORDER BY {safe_column} {safe_direction} LIMIT ? OFFSET ?"
         )
         count_query = f"SELECT COUNT(*) AS cnt FROM presentations {where}"
         conn = self.get_connection()

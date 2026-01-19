@@ -264,7 +264,7 @@ class WorkflowEngine:
             definition_type = type(definition).__name__
             definition_keys = list(definition.keys()) if isinstance(definition, dict) else None
             logger.debug(
-                "WorkflowEngine: continue_run context enrichment failed "
+                "WorkflowEngine: failed to extract workflow metadata or MCP policy "
                 "run_id={} definition_type={} definition_keys={} error={}",
                 run_id,
                 definition_type,
@@ -697,7 +697,7 @@ class WorkflowEngine:
             definition_type = type(definition).__name__
             definition_keys = list(definition.keys()) if isinstance(definition, dict) else None
             logger.debug(
-                "WorkflowEngine: continue_run context enrichment failed "
+                "WorkflowEngine: failed to extract workflow metadata or MCP policy "
                 "run_id={} definition_type={} definition_keys={} error={}",
                 run_id,
                 definition_type,

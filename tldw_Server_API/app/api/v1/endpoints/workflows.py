@@ -2892,7 +2892,14 @@ async def list_step_types():
         },
         "llm": {
             **_llm_step_schema_base(),
-            "example": {"provider": "openai", "model": "gpt-4o-mini", "prompt": "Summarize {{ inputs.topic }}"},
+            "example": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "prompt": "Summarize {{ inputs.topic }}",
+                "system": "You are a concise assistant.",
+                "seed": 42,
+                "max_completion_tokens": 256,
+            },
             "min_engine_version": "0.1.1",
         },
         "branch": {

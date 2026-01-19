@@ -1,3 +1,5 @@
+"""Workflow step adapters for executing registered workflow steps."""
+
 from __future__ import annotations
 
 import asyncio
@@ -637,8 +639,8 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                             try:
                                 if callable(context.get("append_event")):
                                     context["append_event"]("llm_stream", {"delta": chunk})
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"LLM stream event dispatch failed: {e}")
                     continue
             # Fallback: treat as plain text chunk
             text += raw
@@ -1305,7 +1307,7 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
         user_id_int = user_id
 
     db_path = DatabasePaths.get_kanban_db_path(user_id_int)
-    db = KanbanDB(db_path=str(db_path), user_id=user_id, client_id=user_id)
+    db = KanbanDB(db_path=str(db_path), user_id=user_id)
 
     try:
         if action == "board.list":

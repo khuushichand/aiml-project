@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import os
 from typing import Any, Dict, Optional, Set
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -228,7 +228,8 @@ class _ReadingDigestScheduler:
             logger.warning("Reading digest scheduler could not determine run slot for %s", schedule_id)
             return
 
-        next_dt = trigger.get_next_fire_time(scheduled_dt, now)
+        now_for_next = max(now, scheduled_dt + timedelta(seconds=1))
+        next_dt = trigger.get_next_fire_time(scheduled_dt, now_for_next)
         next_iso = next_dt.isoformat() if next_dt else None
         claimed = False
         try:
@@ -238,6 +239,7 @@ class _ReadingDigestScheduler:
                 next_run_at=next_iso,
                 last_run_at=datetime.now(timezone.utc).isoformat(),
                 last_status="pending",
+                disallow_statuses=("pending", "queued", "running"),
             )
         except Exception as exc:
             logger.debug("Reading digest scheduler claim failed for %s: %s", schedule_id, exc)

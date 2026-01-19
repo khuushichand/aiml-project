@@ -2288,7 +2288,18 @@ class CollectionsDatabase:
         if "require_online" in patch:
             fields.append("require_online = ?")
             params.append(self._coerce_bool_flag(patch.get("require_online"), postgres=self.backend.backend_type == BackendType.POSTGRESQL))
-        for key in ("name", "cron", "timezone", "template_id", "template_name", "format", "retention_days"):
+        for key in (
+            "name",
+            "cron",
+            "timezone",
+            "template_id",
+            "template_name",
+            "format",
+            "retention_days",
+            "last_run_at",
+            "next_run_at",
+            "last_status",
+        ):
             if key in patch:
                 fields.append(f"{key} = ?")
                 params.append(patch.get(key))
@@ -2358,17 +2369,30 @@ class CollectionsDatabase:
         next_run_at: Optional[str],
         last_run_at: Optional[str],
         last_status: Optional[str],
+        disallow_statuses: Optional[tuple[str, ...]] = None,
     ) -> bool:
         fields = ["next_run_at = ?", "last_run_at = ?", "last_status = ?"]
         params: list[Any] = [next_run_at, last_run_at, last_status, schedule_id, self.user_id]
+        status_clause = ""
+        status_params: list[Any] = []
+        if disallow_statuses:
+            placeholders = ", ".join(["?"] * len(disallow_statuses))
+            status_clause = f" AND (last_status IS NULL OR last_status NOT IN ({placeholders}))"
+            status_params.extend(disallow_statuses)
         if expected_next_run_at is None:
-            q = f"UPDATE reading_digest_schedules SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND next_run_at IS NULL"
+            q = (
+                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "
+                "WHERE id = ? AND user_id = ? AND next_run_at IS NULL"
+                f"{status_clause}"
+            )
         else:
             q = (
                 f"UPDATE reading_digest_schedules SET {', '.join(fields)} "
                 "WHERE id = ? AND user_id = ? AND next_run_at = ?"
+                f"{status_clause}"
             )
             params.append(expected_next_run_at)
+        params.extend(status_params)
         res = self.backend.execute(q, tuple(params))
         return res.rowcount > 0
 

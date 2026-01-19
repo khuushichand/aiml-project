@@ -852,7 +852,7 @@ def _kanban_card_indexable(
         from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 
         db_path = DatabasePaths.get_kanban_db_path(user_id)
-        db = KanbanDB(db_path=str(db_path), user_id=str(user_id), client_id=str(user_id))
+        db = KanbanDB(db_path=str(db_path), user_id=str(user_id))
         try:
             card = db.get_card(card_id, include_deleted=True)
             if not card:

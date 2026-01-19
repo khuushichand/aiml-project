@@ -19,7 +19,12 @@ from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 #
 # Local Imports
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.db_path_utils import (
+    DatabasePaths,
+    _normalize_user_db_base_dir,
+)
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from .tts_exceptions import (
     TTSError,
@@ -295,15 +300,29 @@ class VoiceManager:
 
         Uses DatabasePaths to resolve `<USER_DB_BASE_DIR>/<user_id>/voices`.
         """
-        voices_dir = DatabasePaths.get_user_voices_dir(user_id)
         sample_root = DEFAULT_NEUTTS_VOICE_PATH.parent.resolve()
+        env_user_db_base = os.getenv("USER_DB_BASE_DIR")
+        settings_user_db_base = settings.get("USER_DB_BASE_DIR")
+        test_context = bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
+        if test_context and env_user_db_base:
+            user_db_base = env_user_db_base
+        else:
+            user_db_base = settings_user_db_base or env_user_db_base
+        if user_db_base:
+            base_dir = _normalize_user_db_base_dir(Path(user_db_base))
+        else:
+            if test_context:
+                base_dir = (Path.cwd() / "Databases" / "user_databases").resolve()
+            else:
+                base_dir = (_REPO_ROOT / "Databases" / "user_databases").resolve()
+        candidate_dir = (base_dir / str(user_id) / DatabasePaths.VOICES_SUBDIR).resolve()
         try:
-            voices_dir.resolve().relative_to(sample_root)
+            candidate_dir.relative_to(sample_root)
         except ValueError:
-            return voices_dir
+            return DatabasePaths.get_user_voices_dir(user_id)
         fallback_base = (_REPO_ROOT / "Databases" / "user_databases").resolve()
         logger.warning(
-            "Voices directory resolved under Sample_Voices; falling back to %s",
+            "Voices directory resolved under Sample_Voices; falling back to {}",
             fallback_base,
         )
         return DatabasePaths.get_user_voices_dir(

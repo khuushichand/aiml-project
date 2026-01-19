@@ -156,3 +156,146 @@ def test_reading_digest_job_creates_output(client_with_user):
     assert meta.get("schedule_id") == schedule_id
     output_path = DatabasePaths.get_user_outputs_dir(222) / row.storage_path
     assert output_path.exists()
+
+
+def test_reading_digest_scheduler_claims_single_enqueue(client_with_user):
+    db = CollectionsDatabase.for_user(user_id=222)
+    schedule_id = "digest_claim"
+    db.create_reading_digest_schedule(
+        id=schedule_id,
+        tenant_id="default",
+        name="Claim Digest",
+        cron="*/5 * * * *",
+        timezone="UTC",
+        enabled=True,
+        require_online=False,
+        filters={"status": ["saved"], "limit": 10},
+        template_id=None,
+        template_name=None,
+        format="md",
+        retention_days=7,
+    )
+    tz = ZoneInfo("UTC")
+    trigger = CronTrigger.from_crontab("*/5 * * * *", timezone=tz)
+    scheduled_dt = trigger.get_next_fire_time(None, datetime.now(tz))
+    assert scheduled_dt is not None
+    db.set_reading_digest_history(schedule_id, next_run_at=scheduled_dt.isoformat())
+
+    async def _runner() -> None:
+        sched_a = _ReadingDigestScheduler()
+        sched_b = _ReadingDigestScheduler()
+        await asyncio.gather(
+            sched_a._run_schedule(schedule_id, user_id=222),
+            sched_b._run_schedule(schedule_id, user_id=222),
+        )
+
+    asyncio.run(_runner())
+
+    jm = JobManager()
+    jobs = jm.list_jobs(domain=READING_DIGEST_DOMAIN, job_type=READING_DIGEST_JOB_TYPE)
+    assert len(jobs) == 1
+    updated = db.get_reading_digest_schedule(schedule_id)
+    assert updated.next_run_at is not None
+    updated_dt = datetime.fromisoformat(updated.next_run_at)
+    if updated_dt.tzinfo is None:
+        updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+    if scheduled_dt.tzinfo is None:
+        scheduled_dt = scheduled_dt.replace(tzinfo=timezone.utc)
+    assert updated_dt > scheduled_dt
+
+
+@pytest.mark.parametrize(
+    ("tz_name", "cron"),
+    [
+        ("UTC", "0 8 * * *"),
+        ("America/New_York", "0 8 * * *"),
+    ],
+)
+def test_reading_digest_next_run_at_timezone(client_with_user, tz_name, cron):
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        pytest.skip(f"Timezone {tz_name} not available in test environment")
+    db = CollectionsDatabase.for_user(user_id=222)
+    schedule_id = f"digest_tz_{tz_name.replace('/', '_')}"
+    db.create_reading_digest_schedule(
+        id=schedule_id,
+        tenant_id="default",
+        name="TZ Digest",
+        cron=cron,
+        timezone=tz_name,
+        enabled=True,
+        require_online=False,
+        filters={"status": ["saved"], "limit": 5},
+        template_id=None,
+        template_name=None,
+        format="md",
+        retention_days=7,
+    )
+    trigger = CronTrigger.from_crontab(cron, timezone=tz)
+    scheduled_dt = trigger.get_next_fire_time(None, datetime.now(tz))
+    assert scheduled_dt is not None
+    db.set_reading_digest_history(schedule_id, next_run_at=scheduled_dt.isoformat())
+
+    async def _runner() -> None:
+        sched = _ReadingDigestScheduler()
+        await sched._run_schedule(schedule_id, user_id=222)
+
+    asyncio.run(_runner())
+
+    updated = db.get_reading_digest_schedule(schedule_id)
+    assert updated.next_run_at is not None
+    updated_dt = datetime.fromisoformat(updated.next_run_at)
+    if updated_dt.tzinfo is None:
+        pytest.fail("next_run_at missing timezone info")
+    if tz_name != "UTC":
+        assert updated_dt.utcoffset() is not None
+        assert updated_dt.utcoffset().total_seconds() != 0
+    assert updated_dt > scheduled_dt
+
+
+def test_reading_digest_scheduler_skips_disabled_after_claim(client_with_user, monkeypatch):
+    db = CollectionsDatabase.for_user(user_id=222)
+    schedule_id = "digest_disable_after_claim"
+    db.create_reading_digest_schedule(
+        id=schedule_id,
+        tenant_id="default",
+        name="Disable Digest",
+        cron="*/15 * * * *",
+        timezone="UTC",
+        enabled=True,
+        require_online=False,
+        filters={"status": ["saved"], "limit": 5},
+        template_id=None,
+        template_name=None,
+        format="md",
+        retention_days=7,
+    )
+    tz = ZoneInfo("UTC")
+    trigger = CronTrigger.from_crontab("*/15 * * * *", timezone=tz)
+    scheduled_dt = trigger.get_next_fire_time(None, datetime.now(tz))
+    assert scheduled_dt is not None
+    db.set_reading_digest_history(schedule_id, next_run_at=scheduled_dt.isoformat())
+
+    original_claim = CollectionsDatabase.try_claim_reading_digest_run
+
+    def _patched_claim(self, schedule_id: str, **kwargs):
+        ok = original_claim(self, schedule_id, **kwargs)
+        if ok:
+            self.update_reading_digest_schedule(schedule_id, {"enabled": False})
+        return ok
+
+    monkeypatch.setattr(CollectionsDatabase, "try_claim_reading_digest_run", _patched_claim)
+
+    async def _runner() -> None:
+        sched = _ReadingDigestScheduler()
+        await sched._run_schedule(schedule_id, user_id=222)
+
+    asyncio.run(_runner())
+
+    jm = JobManager()
+    jobs = jm.list_jobs(domain=READING_DIGEST_DOMAIN, job_type=READING_DIGEST_JOB_TYPE)
+    assert jobs == []
+    updated = db.get_reading_digest_schedule(schedule_id)
+    assert updated.enabled is False
+    assert updated.last_status == "skipped_disabled"

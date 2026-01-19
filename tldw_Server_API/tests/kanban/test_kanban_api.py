@@ -259,7 +259,7 @@ def test_card_crud(client_with_kanban_db):
 def test_activity_endpoints_filters(client_with_kanban_db):
     """Verify activity endpoint filtering behavior."""
 
-    client, _ = client_with_kanban_db
+    client, _db = client_with_kanban_db
 
     board = client.post(
         "/api/v1/kanban/boards",

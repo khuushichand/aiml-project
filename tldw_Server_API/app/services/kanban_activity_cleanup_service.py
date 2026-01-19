@@ -48,7 +48,7 @@ def _enumerate_user_ids() -> list[int]:
 def _cleanup_for_user(user_id: int) -> int:
     """Run cleanup for a single user's kanban activities."""
     db_path = DatabasePaths.get_kanban_db_path(user_id)
-    db = KanbanDB(db_path=str(db_path), user_id=str(user_id), client_id=str(user_id))
+    db = KanbanDB(db_path=str(db_path), user_id=str(user_id))
     try:
         return db.cleanup_old_activities()
     finally:
