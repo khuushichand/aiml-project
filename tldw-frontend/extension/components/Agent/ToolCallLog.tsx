@@ -355,7 +355,7 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
               aria-expanded={onToggleExpand ? isExpanded : undefined}
               aria-label={`${getToolDisplayName(entry.toolCall.function.name)} - ${getStatusLabel(entry.status, t)}`}
               disabled={!onToggleExpand}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-surface"
+              className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors ${onToggleExpand ? "hover:bg-surface cursor-pointer" : "cursor-default"}`}
             >
               {/* Expand/collapse toggle */}
               {onToggleExpand && (
@@ -365,7 +365,7 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
               )}
 
               {/* Status indicator with accessible label */}
-              <span className="flex items-center gap-1" aria-label={`Status: ${getStatusLabel(entry.status, t)}`}>
+              <span className="flex items-center gap-1" role="status">
                 <StatusIcon status={entry.status} />
                 <span className={`text-xs ${getStatusColor(entry.status)}`}>
                   {getStatusLabel(entry.status, t)}

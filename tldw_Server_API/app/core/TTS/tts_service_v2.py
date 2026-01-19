@@ -501,6 +501,7 @@ class TTSServiceV2:
         provider_overrides: Optional[Dict[str, Any]] = None,
         voice_to_voice_start: Optional[float] = None,
         voice_to_voice_route: str = "audio.speech",
+        user_id: Optional[int] = None,
     ) -> AsyncGenerator[bytes, None]:
         """
         Generate speech from text using the best available provider.
@@ -535,6 +536,8 @@ class TTSServiceV2:
                         provider_hint = getattr(provider_enum, "value", str(provider_enum)).lower()
             except Exception:
                 provider_hint = None
+
+        await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
 
         # Validate the request first
         try:
@@ -990,6 +993,55 @@ class TTSServiceV2:
         setattr(tts_request, "model", getattr(request, "model", None))
 
         return tts_request
+
+    async def _apply_custom_voice_reference(
+        self,
+        request: TTSRequest,
+        user_id: Optional[int],
+        provider_hint: Optional[str],
+    ) -> None:
+        """Populate voice_reference and provider artifacts for custom: voices."""
+        if not user_id:
+            return
+        voice_id = request.voice or ""
+        if not isinstance(voice_id, str) or not voice_id.startswith("custom:"):
+            return
+        raw_id = voice_id.split("custom:", 1)[-1].strip()
+        if not raw_id:
+            return
+        try:
+            from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager, VoiceProcessingError
+
+            voice_manager = get_voice_manager()
+            if request.voice_reference is None:
+                request.voice_reference = await voice_manager.load_voice_reference_audio(user_id, raw_id)
+
+            metadata = await voice_manager.load_reference_metadata(user_id, raw_id)
+            extras = request.extra_params or {}
+            if not isinstance(extras, dict):
+                extras = {}
+
+            ref_text_keys = ("reference_text", "ref_text", "voice_reference_text")
+            has_ref_text = any(extras.get(key) for key in ref_text_keys)
+
+            if metadata:
+                provider_key = (provider_hint or "").lower()
+                artifacts = metadata.provider_artifacts.get(provider_key) if provider_key else None
+                if artifacts:
+                    if "ref_codes" not in extras and artifacts.get("ref_codes") is not None:
+                        extras["ref_codes"] = artifacts.get("ref_codes")
+                    if not has_ref_text:
+                        extras["reference_text"] = (
+                            artifacts.get("reference_text") or metadata.reference_text
+                        )
+                elif not has_ref_text and metadata.reference_text:
+                    extras["reference_text"] = metadata.reference_text
+
+            request.extra_params = extras
+        except VoiceProcessingError as e:
+            logger.warning(f"Custom voice resolution failed for {raw_id}: {e}")
+        except Exception as e:
+            logger.warning(f"Custom voice resolution error for {raw_id}: {e}")
 
     async def _get_adapter(
         self,

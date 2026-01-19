@@ -12,7 +12,7 @@ test("login via settings saves config", async ({ page }) => {
   })
 
   await page.goto("/login", { waitUntil: "domcontentloaded" })
-  await page.waitForURL(/\\/settings\\/tldw/)
+  await page.waitForURL(/\/settings\/tldw/)
 
   const serverInput = page.getByLabel(/server url/i)
   await serverInput.waitFor({ state: "visible" })

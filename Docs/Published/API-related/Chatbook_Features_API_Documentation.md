@@ -3,6 +3,11 @@
 ## Overview
 This document describes the current, implemented API surface for Chatbook-adjacent features in the multi-user API: Chat Dictionaries, World Books (lorebooks), Document Generator, and Chatbooks (import/export). It reflects the code as of v0.1.0 in `tldw_Server_API` and corrects any previously published mismatches.
 
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; background jobs (export/import, document generator) may have additional concurrency limits.
+
 Notes on conventions used here:
 - Base API prefix is `/api/v1`.
 - Authentication uses either `X-API-KEY` (single-user) or `Authorization: Bearer <JWT>` (multi-user).
@@ -13,8 +18,8 @@ Notes on conventions used here:
 1. [Chat Dictionary API](#chat-dictionary-api)
 2. [World Book Manager API](#world-book-manager-api)
 3. [Chat Tools (Slash Commands)](#chat-tools-slash-commands)
-3. [Document Generator API](#document-generator-api)
-4. [Chatbooks Import/Export API](#chatbooks-importexport-api)
+4. [Document Generator API](#document-generator-api)
+5. [Chatbooks Import/Export API](#chatbooks-importexport-api)
 
 ---
 
@@ -115,9 +120,11 @@ Response body:
 POST `/api/v1/chat/dictionaries/{dictionary_id}/entries`
 
 Notes:
+- `type` must be `literal` or `regex`.
 - `probability` is a float in [0.0, 1.0].
-- `type` is `literal` or `regex`.
+- `case_sensitive` applies to literal matching.
 - `max_replacements` of 0 means “unlimited”.
+- `timed_effects` supports `{ sticky, cooldown, delay }` in seconds (optional).
 
 Request body:
 ```json
@@ -486,6 +493,17 @@ Response body:
 }
 ```
 
+#### 2. Attach World Book to Character
+POST `/api/v1/characters/{character_id}/world-books`
+
+Body:
+```json
+{ "world_book_id": 10, "enabled": true, "priority": 100 }
+```
+
+#### 3. Detach World Book from Character
+DELETE `/api/v1/characters/{character_id}/world-books/{world_book_id}`
+
 #### 11. Search Entries
 Not implemented. (Planned)
 
@@ -595,6 +613,21 @@ GET `/api/v1/chat/documents/{document_id}`
 
 #### 3. List Documents
 GET `/api/v1/chat/documents`
+
+#### 4. Delete Document
+DELETE `/api/v1/chat/documents/{document_id}`
+
+#### 5. Get Generation Job Status
+GET `/api/v1/chat/documents/jobs/{job_id}`
+
+#### 6. Cancel Generation Job
+DELETE `/api/v1/chat/documents/jobs/{job_id}`
+
+#### 7. Save Prompt Configuration
+POST `/api/v1/chat/documents/prompts`
+
+#### 8. Get Prompt Configuration
+GET `/api/v1/chat/documents/prompts/{document_type}`
 
 Query parameters:
 - `conversation_id` (integer, optional)
@@ -956,5 +989,5 @@ Response body:
 ```
 
 Notes:
-- The `commands` list is filtered per-user based on AuthNZ/RBAC and deployment configuration. Commands whose backing providers are not configured (e.g., `weather` without a weather provider/API key) may be omitted entirely or returned but respond with a configurable “unavailable” message.
+- The `commands` list is filtered per-user based on AuthNZ/RBAC and deployment configuration. Commands whose backing providers are not configured (e.g., `weather` without a weather provider/API key) may be omitted entirely or returned but respond with a configurable “unavailable” message when invoked.
 - Clients should treat `GET /api/v1/chat/commands` as the per-session source of truth and avoid caching the list long-term, since RBAC or configuration changes can add or remove commands at any time.

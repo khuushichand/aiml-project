@@ -63,20 +63,37 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tldw-worker-chatbooks.service
 ```
 
-Timers are optional. They periodically attempt to start the worker if it is not running.
-Most installs should enable the `.service` units and skip the `.timer` units.
+Timers are optional. They trigger a one-time start shortly after boot or when the
+timer is enabled, which can be useful if you prefer enabling timers instead of
+services directly. Most installs should enable the `.service` units and skip the
+`.timer` units.
 
 ## Option D: launchd (macOS)
 
 Example plists are in `Docs/Deployment/launchd/`.
 Copy to `~/Library/LaunchAgents` (per-user) or `/Library/LaunchDaemons` (system-wide),
-update the paths, then load them.
+update the paths, and adjust `UserName`/`GroupName` as needed (LaunchDaemons should use
+a dedicated service account; LaunchAgents should remove those keys or set them to your login user),
+then load them.
 
 ```bash
 mkdir -p ~/Library/LaunchAgents
 cp Docs/Deployment/launchd/com.tldw.worker.chatbooks.plist ~/Library/LaunchAgents/
+
+# Ensure launchd log directory exists and is writable by the service user.
+# For LaunchAgents, set SERVICE_USER/GROUP to your login user.
+SERVICE_USER="${SERVICE_USER:-tldw}"
+SERVICE_GROUP="${SERVICE_GROUP:-tldw}"
+sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0755 /opt/tldw_server/logs/launchd
+
+# Modern macOS (10.11+)
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tldw.worker.chatbooks.plist
+
+# Legacy (deprecated)
 launchctl load -w ~/Library/LaunchAgents/com.tldw.worker.chatbooks.plist
 ```
 
-Ensure the log directory exists (default `/opt/tldw_server/logs/launchd`).
+Confirm the log directory is writable (default `/opt/tldw_server/logs/launchd`).
+Launchd writes `StandardOutPath` and `StandardErrorPath` to this directory, so missing
+or non-writable paths will prevent the job from starting.
 Use `launchctl list | grep tldw.worker` to confirm the worker is running.

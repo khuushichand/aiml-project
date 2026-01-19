@@ -7,9 +7,13 @@ import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import { fetchChatModels } from "@/services/tldw-server"
 import { useMessageOption } from "~/hooks/useMessageOption"
-import { getProviderDisplayName } from "@/utils/provider-registry"
 import { ProviderIcons } from "./ProviderIcon"
 import { IconButton } from "./IconButton"
+import {
+  buildGroupLabelNode,
+  getModelGroupKey,
+  normalizeProvider
+} from "./model-select-utils"
 
 type Props = {
   iconClassName?: string
@@ -27,64 +31,49 @@ export const ModelSelectOption: React.FC<Props> = ({ iconClassName = "size-5" })
     queryFn: () => fetchChatModels({ returnEmpty: false })
   })
 
+  const handleModelClick = React.useCallback(
+    (model: string) => {
+      setSelectedModel((prev) => (prev === model ? null : model))
+    },
+    [setSelectedModel]
+  )
+
   const groupedItems = React.useMemo(() => {
     const groups = new Map<string, MenuItem[]>()
-    const localProviders = new Set(["lmstudio", "llamafile", "ollama", "ollama2", "llamacpp", "vllm", "custom"]) // group as "custom"
     for (const d of data || []) {
-      const providerRaw = (d.provider || "other").toLowerCase()
-      const groupKey =
-        providerRaw === "chrome"
-          ? "default"
-          : (localProviders.has(providerRaw) ? "custom" : providerRaw)
+      const normalizedProvider = normalizeProvider(d.provider)
+      const groupKey = getModelGroupKey(normalizedProvider)
       const labelNode = (
         <div className="w-52 gap-2 text-sm truncate inline-flex items-center leading-5">
           <div>
             {d.avatar ? (
               <Avatar src={d.avatar} alt={d.name} size="small" />
             ) : (
-              <ProviderIcons provider={d?.provider} className="h-4 w-4 text-text-subtle" />
+              <ProviderIcons provider={normalizedProvider} className="h-4 w-4 text-text-subtle" />
             )}
           </div>
           {d?.nickname || d.model}
         </div>
       )
       const item: MenuItem = {
-        key: d.name,
+        key: d.model,
         label: labelNode,
-        onClick: () => {
-          if (selectedModel === d.model) {
-            setSelectedModel(null)
-          } else {
-            setSelectedModel(d.model)
-          }
-        }
+        onClick: () => handleModelClick(d.model)
       }
       if (!groups.has(groupKey)) groups.set(groupKey, [])
       groups.get(groupKey)!.push(item)
     }
     const items: MenuItem[] = []
     for (const [groupKey, children] of groups) {
-      const labelText =
-        groupKey === "default"
-          ? "Default"
-          : groupKey === "custom"
-            ? "Custom"
-            : getProviderDisplayName(groupKey)
-      const iconKey = groupKey === "default" ? "chrome" : groupKey
       items.push({
         type: "group",
         key: `group-${groupKey}`,
-        label: (
-          <div className="flex items-center gap-1.5 text-xs leading-4 font-medium uppercase tracking-wider text-text-subtle">
-            <ProviderIcons provider={iconKey} className="h-3 w-3" />
-            <span>{labelText}</span>
-          </div>
-        ),
+        label: buildGroupLabelNode(groupKey),
         children
       })
     }
     return items
-  }, [data, selectedModel, setSelectedModel])
+  }, [data, handleModelClick])
 
   const hasModels = (data?.length ?? 0) > 0
   const showLoadingState = isLoading && !hasModels

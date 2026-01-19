@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { Avatar, Dropdown, Tooltip } from "antd"
-import { LucideBrain } from "lucide-react"
+import type { MenuProps } from "antd"
+import { Loader2, LucideBrain } from "lucide-react"
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
@@ -9,39 +10,53 @@ import { useMessage } from "@/hooks/useMessage"
 import { getProviderDisplayName } from "@/utils/provider-registry"
 import { ProviderIcons } from "./ProviderIcon"
 import { IconButton } from "./IconButton"
+import {
+  buildGroupLabelNode,
+  getModelGroupKey,
+  normalizeProvider
+} from "./model-select-utils"
 
 type Props = {
   iconClassName?: string
   showSelectedName?: boolean
 }
 
+type MenuItem = NonNullable<MenuProps["items"]>[number]
+
+type ChatModel = {
+  model: string
+  nickname?: string
+  provider?: string
+  details?: {
+    capabilities?: string[]
+  }
+  avatar?: string
+  name?: string
+}
+
 export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSelectedName = false}) => {
   const { t } = useTranslation("common")
   const { setSelectedModel, selectedModel } = useMessage()
   const [menuDensity] = useStorage("menuDensity", "comfortable")
-  const { data } = useQuery({
+  const { data, isLoading, isError } = useQuery<ChatModel[]>({
     queryKey: ["getAllModelsForSelect"],
-    queryFn: async () => {
-      const models = await fetchChatModels({ returnEmpty: false })
-      return models
-    }
+    queryFn: () => fetchChatModels({ returnEmpty: false })
   })
 
+  const hasModels = (data?.length ?? 0) > 0
+  const showLoadingState = isLoading && !hasModels
+  const showErrorState = isError && !hasModels
+  const showEmptyState = !hasModels && !showLoadingState && !showErrorState
+
   const groupedItems = React.useMemo(() => {
-    const groups = new Map<string, any[]>()
-    const localProviders = new Set(["lmstudio", "llamafile", "ollama", "ollama2", "llamacpp", "vllm", "custom"]) // group as "custom"
+    const groups = new Map<string, MenuItem[]>()
     for (const d of data || []) {
-      const normalizedProvider =
-        typeof d.provider === "string" && d.provider.trim()
-          ? d.provider.trim()
-          : "other"
-      const providerRaw = normalizedProvider.toLowerCase()
-      const groupKey = providerRaw === 'chrome' ? 'default' : (localProviders.has(providerRaw) ? 'custom' : providerRaw)
+      const normalizedProvider = normalizeProvider(d.provider)
+      const groupKey = getModelGroupKey(normalizedProvider)
       const providerLabel = getProviderDisplayName(normalizedProvider)
       const modelLabel = d.nickname || d.model
-      const details: any = d.details || {}
-      const caps: string[] = Array.isArray(details.capabilities)
-        ? details.capabilities
+      const caps = Array.isArray(d.details?.capabilities)
+        ? d.details.capabilities
         : []
       const hasVision = caps.includes("vision")
       const hasTools = caps.includes("tools")
@@ -82,7 +97,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
           </div>
         </div>
       )
-      const item = {
+      const item: MenuItem = {
         key: d.model,
         label: labelNode,
         onClick: () => {
@@ -97,24 +112,12 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
       groups.get(groupKey)!.push(item)
     }
     // Build grouped menu items
-    const items: any[] = []
+    const items: MenuItem[] = []
     for (const [groupKey, children] of groups) {
-      const labelText =
-        groupKey === "default"
-          ? "Default"
-          : groupKey === "custom"
-            ? "Custom"
-            : getProviderDisplayName(groupKey)
-      const iconKey = groupKey === "default" ? "chrome" : groupKey
       items.push({
         type: 'group',
         key: `group-${groupKey}`,
-        label: (
-          <div className="flex items-center gap-1.5 text-xs leading-4 font-medium uppercase tracking-wider text-text-subtle">
-            <ProviderIcons provider={iconKey} className="h-3 w-3" />
-            <span>{labelText}</span>
-          </div>
-        ),
+        label: buildGroupLabelNode(groupKey),
         children
       })
     }
@@ -132,45 +135,70 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
     return shortName.length > 20 ? shortName.substring(0, 18) + '…' : shortName
   }, [selectedModel, data])
 
+  const statusLabel = showLoadingState
+    ? t("loadingModels", "Loading models...")
+    : showErrorState
+      ? t("failedToLoadModels", "Unable to load models")
+      : showEmptyState
+        ? t("noModelsAvailable", "No models available")
+        : null
+
+  const tooltipTitle = statusLabel
+    ? statusLabel
+    : selectedModel
+      ? `${t("modelSelect.tooltip", "Changes model for next message")}: ${selectedModel}`
+      : t("modelSelect.tooltip", "Changes model for next message")
+
+  const buttonLabel = statusLabel ?? t("selectAModel", "Select a model")
+  const button = (
+    <Tooltip title={tooltipTitle}>
+      <IconButton
+        ariaLabel={buttonLabel as string}
+        hasPopup={hasModels ? "menu" : undefined}
+        dataTestId="chat-model-select"
+        className="px-2 text-text-muted"
+        disabled={showLoadingState || showErrorState || showEmptyState}>
+        {showLoadingState ? (
+          <Loader2 className={`${iconClassName} animate-spin`} />
+        ) : (
+          <LucideBrain className={iconClassName} />
+        )}
+        {statusLabel ? (
+          <span className="ml-1.5 max-w-[160px] truncate text-xs font-medium text-text-muted">
+            {statusLabel}
+          </span>
+        ) : showSelectedName && selectedModelDisplay ? (
+          <span className="ml-1.5 max-w-[120px] truncate text-xs font-medium text-text">
+            {selectedModelDisplay}
+          </span>
+        ) : (
+          <span className="ml-1 hidden sm:inline text-xs">
+            {t("modelSelect.label", "Model")}
+          </span>
+        )}
+      </IconButton>
+    </Tooltip>
+  )
+
   return (
     <>
-      {data && data.length > 0 && (
+      {hasModels ? (
         <Dropdown
           menu={{
             items: groupedItems,
             style: {
               maxHeight: 500,
-              overflowY: "scroll"
+              overflowY: "auto"
             },
             className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
             activeKey: selectedModel ?? undefined
           }}
           placement={"topLeft"}
           trigger={["click"]}>
-          <Tooltip
-            title={
-              selectedModel
-                ? `${t("modelSelect.tooltip", "Changes model for next message")}: ${selectedModel}`
-                : t("modelSelect.tooltip", "Changes model for next message")
-            }>
-            <IconButton
-              ariaLabel={t("selectAModel") as string}
-              hasPopup="menu"
-              dataTestId="chat-model-select"
-              className="px-2 text-text-muted">
-              <LucideBrain className={iconClassName} />
-              {showSelectedName && selectedModelDisplay ? (
-                <span className="ml-1.5 max-w-[120px] truncate text-xs font-medium text-text">
-                  {selectedModelDisplay}
-                </span>
-              ) : (
-                <span className="ml-1 hidden sm:inline text-xs">
-                  {t("modelSelect.label", "Model")}
-                </span>
-              )}
-            </IconButton>
-          </Tooltip>
+          {button}
         </Dropdown>
+      ) : (
+        button
       )}
     </>
   )

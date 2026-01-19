@@ -51,8 +51,9 @@ headers = {
     # "X-API-KEY": API_KEY,
     # For multi-user mode:
     # "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json",
+    "Content-Type": "application/json"
 }
+
 payload = {
     "input": "Transform this text into embeddings",
     "model": "text-embedding-3-small",
@@ -74,7 +75,7 @@ print(f"Embedding dimensions: {len(embeddings)}")
 // Create embeddings
 const response = await fetch('http://localhost:8000/api/v1/embeddings', {
     method: 'POST',
-headers: {
+    headers: {
         // For single-user mode: 'X-API-KEY': YOUR_API_KEY
         // For multi-user mode:  'Authorization': 'Bearer YOUR_JWT'
         'Content-Type': 'application/json'
@@ -242,20 +243,12 @@ Check service health status.
 ```
 Note: When the embeddings implementation is unavailable (e.g., optional dependencies not installed), this endpoint responds with HTTP 503 and `status: "degraded"`.
 
-### Admin & Management (admin-only in multi-user; single-user acts as admin)
-
-- `GET /api/v1/embeddings/providers-config` - List configured providers/models
-- `GET /api/v1/embeddings/models` - List available models
-- `GET /api/v1/embeddings/models/{model_id}` - Model metadata
-- `POST /api/v1/embeddings/models/warmup` - Preload a model
-- `POST /api/v1/embeddings/models/download` - Prepare/download a model
-- `GET /api/v1/embeddings/circuit-breakers` - Check provider breaker states
-- `POST /api/v1/embeddings/circuit-breakers/{provider}/reset` - Reset a breaker
-- `GET /api/v1/embeddings/metrics` - Embeddings metrics summary
-
 ### Media Embeddings API (Chunk and store document vectors)
 
 Use the media-specific endpoints to generate and persist embeddings for an ingested media item’s text content.
+If a media type can legitimately have no text (e.g., audio/video without transcripts), set
+`allow_zero_embeddings_media_types` in `Config_Files/config.txt` (or `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES`) so
+jobs complete successfully with `embedding_count=0` instead of failing.
 
 #### Start Embedding for a Media Item
 ```http
@@ -378,7 +371,7 @@ Response headers:
 - `X-Embeddings-Fallback-From`: the originally requested provider if fallback was used
 - `X-Embeddings-Dimensions-Policy`: dimension policy applied when `dimensions` is set (`reduce`, `pad`, or `ignore`)
 
-## Providers & Models {#providers--models}
+## Providers & Models
 
 ### Available Providers
 
@@ -433,28 +426,6 @@ def select_provider(requirements):
 
     # Default balanced option
     return "openai", "text-embedding-3-small"
-```
-
-## Rate Limits & Quotas {#rate-limits--quotas}
-
-The embeddings endpoint participates in the global rate limiter configured via AuthNZ. Defaults (typical):
-- Enabled: true (`RATE_LIMIT_ENABLED`)
-- Requests/minute: 60 (`RATE_LIMIT_PER_MINUTE`)
-- Burst: 10 (`RATE_LIMIT_BURST`)
-
-Notes
-- In single-user mode, the API key is treated as admin; adjust your reverse proxy limits as needed.
-- Per-provider/model throttling can be layered on top of global limits at the proxy or client.
-
-Client handling example (JS):
-```js
-async function withBackoff(fn, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    const res = await fn();
-    if (res.status !== 429) return res;
-    await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
-  }
-}
 ```
 
 ## Error Handling
@@ -1199,7 +1170,7 @@ except (HTTPError, URLError):
 
 For more information:
 - [Developer Notes](../Code_Documentation/Embeddings-Documentation.md)
-- API Reference (local): http://127.0.0.1:8000/docs
+- [API Reference](https://api.tldw.example.com/docs)
 > Note (Auth): In single-user mode you must use `X-API-KEY: <API_KEY>`. Including `Authorization: Bearer <...>` is optional, but the `X-API-KEY` header is required. In multi-user mode, use `Authorization: Bearer <JWT>`.
 
 Alt cURL (single-user X-API-KEY):

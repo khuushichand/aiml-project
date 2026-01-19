@@ -31,7 +31,7 @@ Top navigation groups features into tabs. Notable areas include:
 - MCP: Model Context Protocol utilities.
 - LLM Inference: llama.cpp helpers and reranking.
 - Evaluations: unified evaluation flows and metrics.
-- Admin/Config/LLM/Health/Sync/Maintenance: server status, metrics, backups, cleanup, claims, and provider configuration. Admin Data Ops backups are available via `/api/v1/admin/backups`; a full bundle export/import workflow is planned (see `Docs/Product/DB_Exports_SQLite_PRD.md`).
+- Admin/Config/LLM/Health/Sync/Maintenance: server status, metrics, backups, cleanup, claims, and provider configuration.
 
 ## Common Tasks
 
@@ -70,52 +70,13 @@ Top navigation groups features into tabs. Notable areas include:
 
 - Bring Your Own Keys (BYOK)
   - Multi-user only: store per-user provider keys and optional org/team shared keys.
-  - See `User_Guides/BYOK_User_Guide.md` for setup, endpoints, and policies.
+  - See `Docs/User_Guides/BYOK_User_Guide.md` for setup, endpoints, and policies.
 
 ## Tips
 
 - Provider keys can be set in `.env` or `tldw_Server_API/Config_Files/config.txt`.
 - The WebUI sends either `X-API-KEY` (single-user) or `Authorization: Bearer` (multi-user) automatically.
 - The API docs at `/docs` include an Authorize button; you can try endpoints directly.
-
-## Default LLM Provider
-
-Set which provider the Chat API uses when a request does not specify one.
-
-- Config file (preferred): edit `tldw_Server_API/Config_Files/config.txt` under `[API]`:
-  ```ini
-  [API]
-  default_api = openai     # e.g., openai | anthropic | groq | mistral | ollama | vllm
-  openai_model = gpt-4o-mini
-  ```
-
-- Environment variable (fallback when no config default):
-  ```bash
-  export DEFAULT_LLM_PROVIDER=openai
-  # restart the server after changing env vars
-  ```
-
-- RAG-only defaults (optional):
-  ```ini
-  [RAG]
-  default_llm_provider = openai
-  ```
-
-Verify and override:
-- `GET /api/v1/llm/providers` returns `default_provider` from your config.
-- Chat without specifying provider will use the default:
-  ```bash
-  curl -X POST "http://127.0.0.1:8000/api/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -H "X-API-KEY: CHANGE_ME" \
-    -d '{
-          "model": "gpt-4o-mini",
-          "messages": [{"role": "user", "content": "Hello"}]
-        }'
-  ```
-- Override per request either by:
-  - Adding `"api_provider": "anthropic"` alongside the model, or
-  - Using a provider-prefixed model: `"model": "anthropic/claude-3-5-sonnet"`.
 
 ## Troubleshooting
 

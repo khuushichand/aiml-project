@@ -8,6 +8,7 @@ This guide walks you through a secure, production-ready first deployment of tldw
 Related documents
 - Reverse proxy examples (Nginx/Traefik): `Docs/Deployment/Reverse_Proxy_Examples.md`
 - Postgres migration: `Docs/Deployment/Postgres_Migration_Guide.md`
+- Sidecar workers (systemd/launchd): `Docs/Deployment/Sidecar_Workers.md`
 - Metrics and Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
 - Environment variables reference: `Env_Vars.md`
 - General installation (local/dev): `Docs/Published/User_Guides/Installation-Setup-Guide.md`

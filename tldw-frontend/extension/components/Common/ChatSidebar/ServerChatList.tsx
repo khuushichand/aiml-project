@@ -302,8 +302,13 @@ export function ServerChatList({
         }
       }
 
-      await queueDataTablesPrefill({ kind: "chat", source })
-      openExtensionUrl("/options.html#/data-tables")
+      try {
+        await queueDataTablesPrefill({ kind: "chat", source })
+      } catch (error) {
+        console.error("[ServerChatList] Failed to prefill data table source:", error)
+      } finally {
+        openExtensionUrl("/options.html#/data-tables")
+      }
     },
     []
   )

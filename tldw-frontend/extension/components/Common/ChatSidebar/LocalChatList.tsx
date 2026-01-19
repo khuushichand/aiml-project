@@ -39,7 +39,6 @@ import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { IconButton } from "@/components/Common/IconButton"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { useStoreChatModelSettings } from "@/store/model"
-import { useFolderActions } from "@/store/folder"
 import { useLoadLocalConversation } from "@/hooks/useLoadLocalConversation"
 import { cn } from "@/libs/utils"
 
@@ -159,8 +158,8 @@ export function LocalChatList({
           }
         }
 
-        const now = new Date()
-        const today = new Date(now.setHours(0, 0, 0, 0))
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
         const yesterday = new Date(today)
         yesterday.setDate(yesterday.getDate() - 1)
         const lastWeek = new Date(today)
@@ -288,13 +287,11 @@ export function LocalChatList({
           title: t("common:undo.chatDeleted", "Chat deleted"),
           description: t("common:undo.chatDeletedDesc", "\"{{title}}\" was removed", { title: chatTitle }),
           onUndo: async () => {
-            if (chatData) {
-              await restoreChat(chatData)
-              queryClient.invalidateQueries({ queryKey: ["fetchChatHistory"] })
-              // If this was the active chat, reload it
-              if (wasActive) {
-                loadLocalConversation(chatData.historyInfo.id)
-              }
+            await restoreChat(chatData)
+            queryClient.invalidateQueries({ queryKey: ["fetchChatHistory"] })
+            // If this was the active chat, reload it
+            if (wasActive) {
+              loadLocalConversation(chatData.historyInfo.id)
             }
           }
         })
@@ -504,6 +501,7 @@ export function LocalChatList({
                 <button
                   onClick={() => handleDeleteHistoriesByRange(group.label)}
                   className="p-1 rounded hover:bg-surface2"
+                  aria-label={`Delete group ${group.label}`}
                 >
                   {deleteRangeLoading && deleteGroup === group.label ? (
                     <Spin size="small" />

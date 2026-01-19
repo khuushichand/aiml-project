@@ -10,6 +10,16 @@ from typing import Iterable, Sequence
 
 @dataclass(frozen=True)
 class Worker:
+    """Represents a sidecar worker definition from the manifest.
+
+    Attributes:
+        key: Unique identifier used in configuration.
+        slug: URL/filename-safe identifier.
+        label: Human-readable description.
+        module: Python module path for the worker entrypoint.
+        optional: Whether this worker is optional in default deployments.
+    """
+
     key: str
     slug: str
     label: str
@@ -44,6 +54,9 @@ GENERATED_NOTICE = (
     "Docs/Deployment/Sidecar_Workers.template.md."
 )
 
+LAUNCHD_SERVICE_USER = "tldw"
+LAUNCHD_SERVICE_GROUP = "tldw"
+
 
 SYSTEMD_SERVICE_TEMPLATE = """# {notice}
 [Unit]
@@ -74,7 +87,7 @@ Description=Ensure tldw worker ({slug}) is running
 
 [Timer]
 OnBootSec=30s
-OnUnitActiveSec=5m
+OnStartupSec=30s
 Unit=tldw-worker-{slug}.service
 Persistent=true
 
@@ -106,6 +119,12 @@ LAUNCHD_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>UserName</key>
+  <string>{launchd_user}</string>
+  <key>GroupName</key>
+  <string>{launchd_group}</string>
   <key>StandardOutPath</key>
   <string>/opt/tldw_server/logs/launchd/{slug}.log</string>
   <key>StandardErrorPath</key>
@@ -284,6 +303,8 @@ def main() -> int:
                     notice=GENERATED_NOTICE,
                     slug=worker.slug,
                     module=worker.module,
+                    launchd_user=LAUNCHD_SERVICE_USER,
+                    launchd_group=LAUNCHD_SERVICE_GROUP,
                 ),
             )
 

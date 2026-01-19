@@ -121,7 +121,7 @@ Needs explicit decision
 ## Extension-only platform features to replace
 Background/service worker
 - `src/entries/background.ts`, `src/entries/shared/background-init.ts`
-- Replaces: context menus, commands, action badge, alarms, runtime messaging, openapi drift check.
+- Replaces: context menus, commands, action badge, alarms, runtime messaging, OpenAPI drift check.
 - Web replacement: in-app command palette/actions, scheduled server-side jobs or client timers, direct API calls.
 
 Content scripts + page capture

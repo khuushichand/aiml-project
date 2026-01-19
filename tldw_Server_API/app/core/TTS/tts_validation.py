@@ -196,6 +196,7 @@ class TTSInputValidator:
         "dia": 30000,
         "chatterbox": 10000,
         "vibevoice": 15000,
+        "neutts": 5000,
         "index_tts": 4000,
         "supertonic": 15000,
         "supertonic2": 15000,
@@ -211,6 +212,7 @@ class TTSInputValidator:
         "dia": {"en"},
         "chatterbox": {"en"},
         "vibevoice": {"en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh", "ar", "hi"},
+        "neutts": {"en", "en-us", "en-gb"},
         "index_tts": {"en", "zh"},
         "supertonic": {"en"},
         "supertonic2": {"en", "ko", "es", "pt", "fr"},
@@ -225,6 +227,7 @@ class TTSInputValidator:
         "dia": {AudioFormat.MP3, AudioFormat.WAV},
         "chatterbox": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS},
         "vibevoice": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS},
+        "neutts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM},
         "index_tts": {AudioFormat.MP3, AudioFormat.WAV},
         "supertonic": {AudioFormat.MP3, AudioFormat.WAV},
         "supertonic2": {AudioFormat.MP3, AudioFormat.WAV},
@@ -448,6 +451,20 @@ class TTSInputValidator:
     def _validate_voice(self, voice: str, provider: Optional[str] = None):
         """Validate voice selection"""
         normalized_provider = (provider or "").lower()
+
+        if voice and str(voice).startswith("custom:"):
+            custom_id = str(voice).split(":", 1)[1]
+            if not custom_id or not re.match(r'^[a-zA-Z0-9_-]+$', custom_id):
+                raise TTSVoiceNotFoundError(
+                    f"Invalid custom voice name format: {voice}",
+                    provider=provider
+                )
+            if len(custom_id) > 200:
+                raise TTSVoiceNotFoundError(
+                    "Custom voice name too long",
+                    provider=provider
+                )
+            return
 
         # For unknown/third-party providers, avoid over-constraining opaque
         # voice identifiers. Adapters are expected to perform any provider-

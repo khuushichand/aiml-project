@@ -1,4 +1,4 @@
-# Reverse Proxy Examples (Nginx, Traefik, Caddy)
+# Reverse Proxy Examples (Nginx & Traefik)
 
 This guide shows example configurations for running tldw_server behind a reverse proxy with TLS and WebSocket support.
 
@@ -152,42 +152,6 @@ services:
       - "443:443"
 ```
 
-## Caddy
-
-Caddy provides automatic HTTPS via ACME and a simple reverse proxy configuration. See sample at `Samples/Caddy/Caddyfile`.
-
-Minimal example:
-
-```caddyfile
-your.domain.com {
-  encode zstd gzip
-  reverse_proxy localhost:8000 {
-    transport http {
-      read_timeout  3600s
-      write_timeout 3600s
-      dial_timeout   60s
-    }
-  }
-  tls you@example.com
-}
-```
-
-Docker Compose variant
-- Use `docker-compose.proxy.yml` together with the base file to run Caddy and the app:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
-```
-- The Caddyfile used in Compose is at `Samples/Caddy/Caddyfile.compose` (proxies to `app:8000`).
-
-Nginx Compose variant
-- Use `docker-compose.proxy-nginx.yml` together with the base file to run Nginx and the app:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.proxy-nginx.yml up -d
-```
-- The Nginx config used in Compose is at `Samples/Nginx/nginx.conf` (proxies to `app:8000`). Ensure certificate paths and `server_name` are set for your domain.
-
 ## CORS
 
 In production, restrict CORS to trusted origins. You can set via environment (comma-separated list or JSON array):
@@ -199,13 +163,6 @@ export ALLOWED_ORIGINS='["https://your.domain.com", "https://admin.your.domain.c
 ```
 
 This overrides the default origins configured in `tldw_Server_API/app/core/config.py`.
-
-Browser extensions (streaming)
-- If a browser extension needs to call the API (including `text/event-stream` for SSE), add the extension origin to `ALLOWED_ORIGINS`:
-  ```bash
-  export ALLOWED_ORIGINS='["https://your.domain.com", "chrome-extension://abcd1234efgh5678"]'
-  ```
-  The server exposes `X-Request-ID`, `traceparent`, and `X-Trace-Id` headers for correlation; these are made available to the browser via CORS `expose_headers`.
 
 ## Security reminders
 - Run the app as non-root (Dockerfile.prod already does this).

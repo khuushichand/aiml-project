@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react"
+import React, { useState } from "react"
 import { Globe, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { translateMessage } from "@/i18n/translateMessage"
@@ -13,7 +13,7 @@ export interface DocumentChipDocument {
   favIconUrl?: string
 }
 
-interface DocumentChipProps {
+export interface DocumentChipProps {
   document: DocumentChipDocument
   variant?: DocumentChipVariant
   onRemove?: (id: number) => void
@@ -31,10 +31,10 @@ export const DocumentChip: React.FC<DocumentChipProps> = ({
   className
 }) => {
   const { t } = useTranslation("option")
-  const [imgError, setImgError] = useState(false)
-  useEffect(() => {
-    setImgError(false)
-  }, [document.favIconUrl, document.id])
+  const imageUrl = document.favIconUrl
+  const imageKey = `${document.id ?? "unknown"}:${imageUrl ?? ""}`
+  const [imgErrorKey, setImgErrorKey] = useState<string | null>(null)
+  const showImage = Boolean(imageUrl) && imgErrorKey !== imageKey
   const isCompact = variant === "compact"
   const canRemove =
     typeof onRemove === "function" && typeof document.id === "number"
@@ -64,12 +64,12 @@ export const DocumentChip: React.FC<DocumentChipProps> = ({
       className={containerClasses}>
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <div className="flex-shrink-0">
-          {document.favIconUrl && !imgError ? (
+          {showImage ? (
             <img
-              src={document.favIconUrl}
+              src={imageUrl}
               alt=""
               className={`${iconSizeClass} rounded`}
-              onError={() => setImgError(true)}
+              onError={() => setImgErrorKey(imageKey)}
             />
           ) : (
             <Globe className={`${iconSizeClass} ${iconColorClass}`} />

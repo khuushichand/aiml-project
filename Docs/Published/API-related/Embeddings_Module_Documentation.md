@@ -30,7 +30,7 @@ The Embeddings Module provides a unified interface for generating text embedding
 
 ### Current Version
 - Production System: `embeddings_v5_production_enhanced.py` (circuit breaker, caching, metrics)
-- Future System: Worker-based scale-out architecture (implemented under `/app/core/Embeddings/`, not yet exposed via API routes)
+- Future System: Worker-based scale-out architecture (implemented under `/app/core/Embeddings/` and exposed via `/api/v1/media` job endpoints like `POST /media/{media_id}/embeddings`, `POST /media/embeddings/batch`, `GET /media/embeddings/jobs`, `GET /media/embeddings/jobs/{job_id}`, `GET /media/{media_id}/embeddings/status`)
 
 ---
 
@@ -87,6 +87,7 @@ app/core/Embeddings/
 ├── rate_limiter.py                    # Per-user rate limiting
 ├── embeddings_config.yaml             # Configuration file
 ├── jobs_adapter.py                    # Core Jobs adapter for embeddings jobs
+├── worker_config.py                   # Legacy config (unused; retained for reference)
 ├── services/
 │   └── redis_worker.py                # Redis Streams worker for embeddings stages
 └── Embeddings_Server/
@@ -398,7 +399,7 @@ Response headers for observability:
 
 ---
 
-## Performance & Scaling {#performance--scaling}
+## Performance & Scaling
 
 ### Caching Strategy
 
@@ -452,7 +453,7 @@ max_connections = 20
 
 ---
 
-## Monitoring & Observability {#monitoring--observability}
+## Monitoring & Observability
 
 ### Prometheus Metrics
 

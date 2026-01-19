@@ -52,6 +52,10 @@ JWT-based authentication with user management:
 - **Features**: User registration, roles, permissions; API key CRUD endpoints are not yet public
 - **Use Case**: Team deployments, production environments
 
+Signing algorithms:
+- Default HS256 with `JWT_SECRET_KEY`.
+- Recommended RS256 with `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` for multi-service deployments.
+
 ## API Endpoints
 
 ### Authentication Endpoints
@@ -102,10 +106,16 @@ POST /api/v1/auth/refresh
 ```json
 {
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+  "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
   "token_type": "bearer",
   "expires_in": 1800
 }
 ```
+
+Notes:
+- In multi-user mode, refresh ties to the server-side session. If the session is missing or revoked, refresh fails with 401.
+- When `ROTATE_REFRESH_TOKENS=true` (default), the endpoint returns a new refresh token and invalidates the previous one for the session. Clients must persist the returned refresh token for subsequent refreshes.
+- Tokens optionally include `iss` and `aud` claims when configured. See Authentication Setup for `JWT_ISSUER` and `JWT_AUDIENCE`.
 
 #### Logout
 ```http
@@ -207,12 +217,6 @@ Authorization: Bearer your-jwt-token
 ### API Key Management (Status)
 
 Public API endpoints for API key CRUD (list/create/rotate/revoke) are not yet exposed. In single-user mode, use the `X-API-KEY` header (key printed at startup). In multi-user mode, authenticate via JWT using the login and refresh endpoints above.
-
-#### API key enforcement guidelines
-
-- **IP allowlists** - API keys can be restricted to a specific set of client IP addresses by setting `allowed_ips` when the key is created (admin CLI/DB helpers). When an allowlist is present the request **must** include a resolvable client IP; requests without an IP are rejected instead of silently skipping the check. Make sure your reverse proxy forwards the original client IP (for example via `X-Forwarded-For`) and that the ASGI server is configured to trust it.
-- **Missing IP metadata** - If your deployment strips client IP information, either disable the allowlist for that key or fix the proxy configuration. The server now treats a missing IP as a hard failure for allowlisted keys.
-- **Audit logging** - Enable `API_KEY_AUDIT_LOG_USAGE` in AuthNZ settings to capture lightweight “used” events each time a key validates. This is helpful when you begin enforcing allowlists or other restrictions.
 
 ### Session Management
 
@@ -368,11 +372,12 @@ from urllib.request import Request, urlopen
 
 # Set up headers with API key
 headers = {'X-API-KEY': 'your-api-key-here'}
+timeout_seconds = 10  # seconds
 
 # Make request
 params = urlencode({'query': 'test'})
 req = Request(f'http://localhost:8000/api/v1/media/search?{params}', headers=headers, method='GET')
-with urlopen(req) as resp:
+with urlopen(req, timeout=timeout_seconds) as resp:
     data = json.loads(resp.read().decode('utf-8'))
 ```
 
@@ -381,15 +386,28 @@ with urlopen(req) as resp:
 import json
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from datetime import datetime, timedelta
+import socket
 
 class TLDWClient:
-    def __init__(self, base_url='http://localhost:8000'):
+    def __init__(self, base_url='http://localhost:8000', timeout=10):
         self.base_url = base_url
         self.access_token = None
         self.refresh_token = None
         self.token_expires = None
+        self.timeout = timeout  # seconds
+
+    def _parse_auth_response(self, body, required_fields):
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as err:
+            raise RuntimeError("Auth response was not valid JSON.") from err
+
+        missing = [field for field in required_fields if field not in data]
+        if missing:
+            raise RuntimeError(f"Auth response missing fields: {', '.join(missing)}")
+        return data
 
     def login(self, username, password):
         """Login and store tokens"""
@@ -400,8 +418,16 @@ class TLDWClient:
             headers={'Content-Type': 'application/x-www-form-urlencoded'},
             method='POST',
         )
-        with urlopen(req) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
+        try:
+            with urlopen(req, timeout=self.timeout) as resp:
+                body = resp.read().decode('utf-8')
+        except HTTPError as err:
+            detail = err.read().decode('utf-8')
+            raise RuntimeError(f'Login failed ({err.code}): {detail}') from err
+        except (URLError, socket.timeout) as err:
+            raise RuntimeError(f'Login request failed: {err}') from err
+
+        data = self._parse_auth_response(body, ('access_token', 'refresh_token', 'expires_in'))
         self.access_token = data['access_token']
         self.refresh_token = data['refresh_token']
         self.token_expires = datetime.now() + timedelta(seconds=data['expires_in'])
@@ -410,6 +436,8 @@ class TLDWClient:
 
     def refresh_access_token(self):
         """Refresh the access token"""
+        if not self.refresh_token:
+            raise RuntimeError('No refresh token available; please login again.')
         payload = json.dumps({'refresh_token': self.refresh_token}).encode('utf-8')
         req = Request(
             f'{self.base_url}/api/v1/auth/refresh',
@@ -417,8 +445,16 @@ class TLDWClient:
             headers={'Content-Type': 'application/json'},
             method='POST',
         )
-        with urlopen(req) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
+        try:
+            with urlopen(req, timeout=self.timeout) as resp:
+                body = resp.read().decode('utf-8')
+        except HTTPError as err:
+            detail = err.read().decode('utf-8')
+            raise RuntimeError(f'Refresh failed ({err.code}): {detail}') from err
+        except (URLError, socket.timeout) as err:
+            raise RuntimeError(f'Refresh request failed: {err}') from err
+
+        data = self._parse_auth_response(body, ('access_token', 'expires_in'))
         self.access_token = data['access_token']
         self.token_expires = datetime.now() + timedelta(seconds=data['expires_in'])
 
@@ -426,7 +462,14 @@ class TLDWClient:
         """Make authenticated request with automatic token refresh"""
         # Check if token needs refresh
         if self.token_expires and datetime.now() >= self.token_expires:
-            self.refresh_access_token()
+            try:
+                self.refresh_access_token()
+            except HTTPError as refresh_err:
+                if refresh_err.code == 401:
+                    raise RuntimeError(
+                        'Refresh token expired; please login again.'
+                    ) from refresh_err
+                raise
 
         url = f'{self.base_url}/api/v1{endpoint}'
         params = kwargs.pop('params', None)
@@ -443,14 +486,21 @@ class TLDWClient:
 
         req = Request(url, data=data, headers=headers, method=method)
         try:
-            with urlopen(req) as resp:
+            with urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode('utf-8'))
         except HTTPError as err:
             if err.code == 401:
-                self.refresh_access_token()
+                try:
+                    self.refresh_access_token()
+                except HTTPError as refresh_err:
+                    if refresh_err.code == 401:
+                        raise RuntimeError(
+                            'Refresh token expired; please login again.'
+                        ) from refresh_err
+                    raise
                 headers['Authorization'] = f'Bearer {self.access_token}'
                 req = Request(url, data=data, headers=headers, method=method)
-                with urlopen(req) as resp:
+                with urlopen(req, timeout=self.timeout) as resp:
                     return json.loads(resp.read().decode('utf-8'))
             raise
 
@@ -482,8 +532,8 @@ curl -X POST \
 ```bash
 # Login and save tokens
 response=$(curl -X POST \
-     -H "Content-Type: application/json" \
-     -d '{"username": "user@example.com", "password": "password"}' \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -d 'username=user@example.com&password=password' \
      http://localhost:8000/api/v1/auth/login)
 
 # Extract token (requires jq)
@@ -765,6 +815,6 @@ Import this collection for testing:
 
 ## Support
 
-- **Documentation**: See [Authentication Setup](../User_Guides/Authentication_Setup.md)
+- **Documentation**: See [AuthNZ Developer Guide](../Development/AuthNZ-Developer-Guide.md)
 - **Issues**: Report at [GitHub Issues](https://github.com/rmusser01/tldw_server/issues)
 - **Security**: Report security issues privately to the maintainers

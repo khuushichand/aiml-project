@@ -108,6 +108,7 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
           setActive(null)
         }
       } catch {
+        console.error("[OmniSearchBar] Search failed")
         if (latestRequestId.current === requestId) {
           setResponse(null)
           setOpen(false)
@@ -281,6 +282,7 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
             "option:header.omniSearchPlaceholder",
             "Search screens, chats, media, notes…"
           )}
+          aria-label={t("common:search", "Search")}
           className="w-full rounded-md border border-border bg-surface py-1.5 pl-9 pr-12 text-sm text-text shadow-sm outline-none ring-0 placeholder:text-text-subtle focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus"
         />
         {/* Keyboard shortcut hint or loading indicator */}

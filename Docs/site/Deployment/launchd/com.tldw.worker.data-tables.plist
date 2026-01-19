@@ -22,6 +22,10 @@
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>UserName</key>
+  <string>tldw</string>
+  <key>GroupName</key>
+  <string>tldw</string>
   <key>StandardOutPath</key>
   <string>/opt/tldw_server/logs/launchd/data-tables.log</string>
   <key>StandardErrorPath</key>

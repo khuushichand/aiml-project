@@ -87,7 +87,7 @@ type Props = {
   onRegenerate: () => void
   onEditFormSubmit: (value: string, isSend: boolean) => void
   isProcessing: boolean
-  webSearch?: {}
+  webSearch?: boolean
   isSearchingInternet?: boolean
   sources?: any[]
   hideEditAndRegenerate?: boolean
@@ -396,7 +396,9 @@ export const PlaygroundMessage = (props: Props) => {
     }
     setSavingKnowledge(makeFlashcard ? "flashcard" : "note")
     try {
-      await tldwClient.initialize().catch(() => null)
+      await tldwClient.initialize().catch((err) => {
+        console.warn("tldwClient initialization failed:", err)
+      })
       await tldwClient.saveChatKnowledge({
         conversation_id: props.serverChatId,
         message_id: props.serverMessageId,
@@ -425,8 +427,7 @@ export const PlaygroundMessage = (props: Props) => {
       !props.isStreaming &&
       !props.isProcessing &&
       props.message.trim().length > 0 &&
-      !errorPayload &&
-      !ttsActionDisabled
+      !errorPayload
     ) {
       await copyToClipboard({
         text: props.message,
@@ -449,7 +450,9 @@ export const PlaygroundMessage = (props: Props) => {
     props.totalMessages,
     props.isStreaming,
     props.isProcessing,
-    props.message
+    props.message,
+    copyAsFormattedText,
+    trackCopy
   ])
 
   const userTextClass = React.useMemo(
@@ -470,6 +473,11 @@ export const PlaygroundMessage = (props: Props) => {
         assistantTextSize ?? "md"
       ),
     [assistantTextColor, assistantTextFont, assistantTextSize]
+  )
+
+  const validImages = React.useMemo(
+    () => props.images?.filter((img) => img.length > 0) ?? [],
+    [props.images]
   )
 
   const chatTextClass = props.isBot ? assistantTextClass : userTextClass
@@ -601,12 +609,11 @@ export const PlaygroundMessage = (props: Props) => {
       !props.isStreaming &&
       !props.isProcessing &&
       props.message.trim().length > 0 &&
-      !errorPayload
+      !errorPayload &&
+      !ttsActionDisabled
     ) {
-      let messageToSpeak = props.message
-
       speak({
-        utterance: messageToSpeak
+        utterance: props.message
       })
     }
   }, [
@@ -913,22 +920,19 @@ export const PlaygroundMessage = (props: Props) => {
             )}
           </div>
           {/* images if available */}
-          {props.images &&
-            props.images.filter((img) => img.length > 0).length > 0 && (
-              <div>
-                {props.images
-                  .filter((image) => image.length > 0)
-                  .map((image, index) => (
-                    <Image
-                      key={index}
-                      src={image}
-                      alt="Uploaded Image"
-                      width={180}
-                      className="rounded-md relative"
-                    />
-                  ))}
-              </div>
-            )}
+          {validImages.length > 0 && (
+            <div>
+              {validImages.map((image, index) => (
+                <Image
+                  key={index}
+                  src={image}
+                  alt="Uploaded Image"
+                  width={180}
+                  className="rounded-md relative"
+                />
+              ))}
+            </div>
+          )}
 
           {showInlineActions && (
             <MessageActionsBar

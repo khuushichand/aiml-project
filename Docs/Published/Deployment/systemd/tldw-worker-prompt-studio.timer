@@ -4,7 +4,7 @@ Description=Ensure tldw worker (prompt-studio) is running
 
 [Timer]
 OnBootSec=30s
-OnUnitActiveSec=5m
+OnStartupSec=30s
 Unit=tldw-worker-prompt-studio.service
 Persistent=true
 

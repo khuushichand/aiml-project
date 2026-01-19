@@ -88,7 +88,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   const callbackRef = useRef(onWorkspaceChange)
   useEffect(() => {
     callbackRef.current = onWorkspaceChange
-  })
+  }, [onWorkspaceChange])
 
   // Notify parent of workspace change
   useEffect(() => {
@@ -144,8 +144,19 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
 
     setIsValidating(true)
     try {
+      const trimmedPath = newPath.trim()
+      const existingPath = (workspaces || []).find(
+        (workspace) => workspace.path.toLowerCase() === trimmedPath.toLowerCase()
+      )
+      if (existingPath) {
+        message.warning(
+          t("pathAlreadyExists", "This path is already added as a workspace")
+        )
+        return
+      }
+
       // Validate path via native agent
-      const result = await nativeClient.setWorkspace(newPath.trim())
+      const result = await nativeClient.setWorkspace(trimmedPath)
       if (!result.ok) {
         message.error(result.error || t("invalidPath", "Invalid path"))
         return
@@ -156,11 +167,11 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
       const generatedId = globalThis.crypto?.randomUUID?.() ?? fallbackId
       const workspace: Workspace = {
         id: generatedId,
-        name: newName.trim() || (newPath.split(/[/\\]/).pop() || t("workspace", "Workspace")),
-        path: newPath.trim()
+        name: newName.trim() || (trimmedPath.split(/[/\\]/).pop() || t("workspace", "Workspace")),
+        path: trimmedPath
       }
 
-      setWorkspaces([...(workspaces || []), workspace])
+      setWorkspaces((prev) => [...(prev || []), workspace])
       setSelectedId(workspace.id)
       setShowAddModal(false)
       setNewPath("")
@@ -180,7 +191,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   // Handle removing workspace
   const handleRemove = (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    setWorkspaces((workspaces || []).filter(w => w.id !== id))
+    setWorkspaces((prev) => (prev || []).filter(w => w.id !== id))
     if (selectedId === id) {
       setSelectedId(null)
     }

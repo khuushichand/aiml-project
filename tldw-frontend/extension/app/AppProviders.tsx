@@ -44,11 +44,11 @@ export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
 
   useEffect(() => {
     if (typeof document === "undefined") return
-    if (!i18n.resolvedLanguage) return
-    document.documentElement.lang = i18n.resolvedLanguage
-    document.documentElement.dir = i18n.dir(i18n.resolvedLanguage)
-    setDirection(i18n.dir(i18n.resolvedLanguage))
-  }, [i18n, i18n.resolvedLanguage])
+    const language = i18n.resolvedLanguage || i18n.language
+    document.documentElement.lang = language
+    document.documentElement.dir = i18n.dir(language)
+    setDirection(i18n.dir(language))
+  }, [i18n, i18n.resolvedLanguage, i18n.language])
 
   return (
     <StyleProvider hashPriority="high">

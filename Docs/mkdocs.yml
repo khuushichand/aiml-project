@@ -35,7 +35,8 @@ theme:
 plugins:
   - search
   - git-revision-date-localized:
-      enable_git_follow: true
+      enable_git_follow: false
+      strict: false
       fallback_to_build_date: true
       enable_creation_date: true
       type: timeago

@@ -22,7 +22,7 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 ## 2) Install dependencies
 
-Prefer pyproject-based installs with extras:
+Prefer installing via the project’s pyproject extras:
 
 ```bash
 # Core server
@@ -35,7 +35,7 @@ pip install -e .
 ```
 
 Notes:
-- Some optional features (OCR backends, GPU variants) have extra steps noted in their docs.
+- Some optional features (OCR backends, GPU variants) have extra steps noted in their respective docs.
 - Ensure FFmpeg is installed via your OS package manager (e.g., `brew install ffmpeg`, `apt-get install ffmpeg`).
 
 ## 3) Configure authentication
@@ -222,13 +222,13 @@ Notes:
 - Local providers do not auto-download unless you set `TTS_AUTO_DOWNLOAD=1`.
 - Use `GET /api/v1/audio/voices/catalog` to list available voices.
 
-More detail: [Docs/Published/User_Guides/TTS_Getting_Started.md](TTS_Getting_Started.md).
+More detail: [Docs/User_Guides/TTS_Getting_Started.md](TTS_Getting_Started.md).
 
 ## 7) Optional: Speech-to-Text (STT)
 
 For STT setup and testing, use the dedicated guide and API reference:
-- [Getting-Started-STT_and_TTS.md](../../Getting-Started-STT_and_TTS.md)
-- [Docs/Published/API-related/Audio_Transcription_API.md](../API-related/Audio_Transcription_API.md)
+- [Docs/Getting-Started-STT_and_TTS.md](../Getting-Started-STT_and_TTS.md)
+- [Docs/API-related/Audio_Transcription_API.md](../API-related/Audio_Transcription_API.md)
 
 Quick STT verification:
 
@@ -281,6 +281,31 @@ Notes:
 ## Next Steps
 
 - Read the User Guide for common tasks: `User_Guide.md`
-- Set a default LLM provider: see "Default LLM Provider" in `User_Guide.md`
 - Configure providers and test chat/embeddings via the WebUI and `/docs`
 - See Production Hardening and Multi-User Deployment guides for production use
+
+## Optional: Tokenizer strategy (Chat Dictionaries & World Books)
+
+The server estimates tokens when enforcing budgets in Chat Dictionary and World Book processing. You can adjust this strategy at runtime:
+
+- `GET /api/v1/config/tokenizer` → view current mode (`whitespace` or `char_approx`) and divisor
+- `PUT /api/v1/config/tokenizer` → update mode and divisor (in-memory; not persisted)
+
+Example:
+```
+GET /api/v1/config/tokenizer
+{
+  "mode": "whitespace",
+  "divisor": 4
+}
+
+PUT /api/v1/config/tokenizer
+{
+  "mode": "char_approx",
+  "divisor": 4
+}
+```
+
+To set defaults, you can also add environment or config values:
+- `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`
+- `TOKEN_CHAR_APPROX_DIVISOR`: integer (default `4`)

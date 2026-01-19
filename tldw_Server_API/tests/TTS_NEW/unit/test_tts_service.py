@@ -357,7 +357,6 @@ class TestMetricsCollection:
         service = TTSServiceV2(factory=factory)
         service.factory = factory
         service._factory = factory
-
         # Stub metrics and internal helpers
         service.metrics = MagicMock()
         service._record_tts_metrics = MagicMock()
@@ -392,6 +391,53 @@ class TestMetricsCollection:
         kwargs = failure_calls[0].kwargs
         assert kwargs["provider"] == "openai"
         assert "No audio data returned" in (kwargs.get("error") or "")
+
+
+@pytest.mark.unit
+async def test_custom_voice_resolution_injects_reference(tts_service, monkeypatch):
+    from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
+    from tldw_Server_API.app.core.TTS.voice_manager import VoiceReferenceMetadata
+
+    class _FakeVoiceManager:
+        async def load_voice_reference_audio(self, user_id, voice_id):
+            assert user_id == 1
+            assert voice_id == "voice-1"
+            return b"audio-bytes"
+
+        async def load_reference_metadata(self, user_id, voice_id):
+            return VoiceReferenceMetadata(
+                voice_id=voice_id,
+                reference_text="stored text",
+                provider_artifacts={
+                    "neutts": {
+                        "ref_codes": [1, 2, 3],
+                        "reference_text": "stored text",
+                    }
+                },
+            )
+
+    def _fake_get_voice_manager():
+        return _FakeVoiceManager()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
+        _fake_get_voice_manager,
+        raising=True,
+    )
+
+    req = OpenAISpeechRequest(
+        model="neutts-air",
+        input="hello",
+        voice="custom:voice-1",
+        response_format="mp3",
+        stream=False,
+    )
+    tts_request = tts_service._convert_request(req)
+    await tts_service._apply_custom_voice_reference(tts_request, user_id=1, provider_hint="neutts")
+
+    assert tts_request.voice_reference == b"audio-bytes"
+    assert tts_request.extra_params.get("ref_codes") == [1, 2, 3]
+    assert tts_request.extra_params.get("reference_text") == "stored text"
 
 # ========================================================================
 # Caching Tests

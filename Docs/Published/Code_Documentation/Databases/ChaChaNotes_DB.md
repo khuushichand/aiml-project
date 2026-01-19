@@ -203,7 +203,7 @@ Certain columns store structured data as JSON strings:
 
 ```python
 class CharactersRAGDB:
-    def __init__(self, db_path: Union[str, Path], client_id: str)
+    def __init__(self, db_path: Union[str, Path], client_id: str, *, backend=None, config=None)
 ```
 Initializes the database connection and schema.
 
@@ -220,7 +220,7 @@ Initializes the database connection and schema.
 ```python
     def get_connection(self) -> sqlite3.Connection
 ```
-Returns the thread-local SQLite connection. Manages opening or reopening if necessary.
+Returns the active connection (SQLite returns a raw `sqlite3.Connection`; non-SQLite backends use a lightweight wrapper).
 
 *   **Returns:** `sqlite3.Connection` - The active connection for the current thread.
 *   **Raises:** `CharactersRAGDBError` if connection fails.
@@ -266,7 +266,7 @@ Executes a SQL query multiple times with different parameter sets.
 ```python
     def transaction(self) -> 'TransactionContextManager'
 ```
-Returns a context manager for database transactions.
+Returns a context manager for database transactions (leverages native backend transactions when available).
 
 *   **Usage:**
     ```python

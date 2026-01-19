@@ -480,6 +480,7 @@ components:
           type: object
           additionalProperties:
             type: array
+            maxItems: 1000
             items:
               type: string
           example:
@@ -509,6 +510,7 @@ components:
           example: ["backup", "weekly"]
         categories:
           type: array
+          maxItems: 20
           items:
             type: string
           example: ["work", "research"]
@@ -523,6 +525,7 @@ components:
           type: object
           additionalProperties:
             type: array
+            maxItems: 1000
             items:
               type: string
         conflict_resolution:
@@ -703,6 +706,7 @@ components:
                   type: integer
                 continuations:
                   type: array
+                  maxItems: 100
                   items:
                     type: object
                     required:

@@ -53,16 +53,24 @@ interface DiffViewerProps {
   showLineNumbers?: boolean
 }
 
-/**
- * Parse a unified diff string into structured FileDiff objects
- */
-let parseDiffCounter = 0
+const hashDiffText = (value: string): string => {
+  let hash = 5381
+  for (let i = 0; i < value.length; i++) {
+    hash = Math.imul(hash, 33) ^ value.charCodeAt(i)
+  }
+  return (hash >>> 0).toString(36)
+}
 
 export function parseDiff(diffText: string, idPrefix?: string): FileDiff[] {
-  const resolvedPrefix = idPrefix || `diff-${parseDiffCounter++}`
-  const prefix = resolvedPrefix ? `${resolvedPrefix}-` : ""
+  const resolvedPrefix = idPrefix && idPrefix.trim()
+    ? idPrefix
+    : `diff-${hashDiffText(diffText)}`
+  const prefix = `${resolvedPrefix}-`
   const files: FileDiff[] = []
   const lines = diffText.split("\n")
+  if (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop()
+  }
   let currentFile: FileDiff | null = null
   let currentHunk: DiffHunk | null = null
   let oldLineNum = 0
@@ -181,8 +189,14 @@ export function parseDiff(diffText: string, idPrefix?: string): FileDiff[] {
           oldLineNum: oldLineNum++,
           newLineNum: newLineNum++
         })
+      } else if (line === "") {
+        currentHunk.lines.push({
+          type: "context",
+          content: "",
+          oldLineNum: oldLineNum++,
+          newLineNum: newLineNum++
+        })
       }
-      // Ignore truly empty lines (e.g., trailing newlines or malformed input).
     }
   }
 
@@ -521,9 +535,7 @@ export const DiffViewer: FC<DiffViewerProps> = ({
                       {/* Diff lines */}
                       <div className={`overflow-x-auto font-mono text-sm ${!isSelected ? "opacity-50" : ""}`}>
                         {hunk.lines.filter(l => l.type !== "header").map((line, idx) => {
-                          const lineKey = line.oldLineNum != null || line.newLineNum != null
-                            ? `${line.type}-${line.oldLineNum ?? "n"}-${line.newLineNum ?? "n"}`
-                            : `${line.type}-${idx}`
+                          const lineKey = `${hunk.id}-${idx}`
 
                           return (
                             <div

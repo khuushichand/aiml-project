@@ -116,8 +116,12 @@ function parseAnsiColors(text: string): { text: string; className: string }[] {
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
-  const minutes = Math.floor(ms / 60000)
-  const seconds = ((ms % 60000) / 1000).toFixed(0)
+  let minutes = Math.floor(ms / 60000)
+  let seconds = Math.round((ms % 60000) / 1000)
+  if (seconds === 60) {
+    minutes += 1
+    seconds = 0
+  }
   return `${minutes}m ${seconds}s`
 }
 
@@ -210,8 +214,9 @@ const ExecutionOutput: FC<{
       // eslint-disable-next-line no-console
       console.error("[TerminalOutput] Clipboard write failed, attempting fallback", err)
 
+      let textarea: HTMLTextAreaElement | null = null
       try {
-        const textarea = document.createElement("textarea")
+        textarea = document.createElement("textarea")
         textarea.value = output
         textarea.style.position = "fixed"
         textarea.style.opacity = "0"
@@ -220,7 +225,6 @@ const ExecutionOutput: FC<{
         textarea.focus()
         textarea.select()
         const ok = document.execCommand("copy")
-        document.body.removeChild(textarea)
 
         if (ok) {
           setCopied(true)
@@ -234,6 +238,10 @@ const ExecutionOutput: FC<{
       } catch (fallbackErr) {
         // eslint-disable-next-line no-console
         console.error("[TerminalOutput] Fallback copy failed", fallbackErr)
+      } finally {
+        if (textarea?.parentNode) {
+          document.body.removeChild(textarea)
+        }
       }
 
       setCopied(false)
@@ -373,8 +381,11 @@ export const TerminalOutput: FC<TerminalOutputProps> = ({
 
   // Auto-scroll to bottom
   useEffect(() => {
-    if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    const el = scrollRef.current
+    if (!autoScroll || !el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 32
+    if (nearBottom) {
+      el.scrollTop = el.scrollHeight
     }
   }, [executions, autoScroll])
 

@@ -24,6 +24,8 @@ OUT_PATH = REPO_ROOT / "Env_Vars.md"
 ENV_PATTERNS = [
     re.compile(r"getenv\(\s*['\"]([A-Z0-9_]+)['\"]"),
     re.compile(r"os\.environ\.get\(\s*['\"]([A-Z0-9_]+)['\"]"),
+    re.compile(r"['\"](EVALS_ABTEST_[A-Z0-9_]+)['\"]"),
+    re.compile(r"['\"](EVALUATIONS_ABTEST_[A-Z0-9_]+)['\"]"),
 ]
 
 
@@ -34,6 +36,7 @@ GROUPS = [
     ("Database & Storage", ("DATABASE_", "USER_DB_BASE_DIR", "USERS_DB_ENABLED", "CONTENT_DB_", "TLDW_DB_", "TLDW_SQLITE_", "CHROMADB_")),
     ("Jobs / Workers", ("JOBS_", "TLDW_JOBS_")),
     ("Workflows", ("WORKFLOWS_",)),
+    ("EVALS_ABTEST", ("EVALS_ABTEST_", "EVALUATIONS_ABTEST_")),
     ("Embeddings", ("EMBEDDINGS_", "EMB_")),
     ("RAG", ("RAG_",)),
     ("Chat & Providers", ("CHAT_", "DEFAULT_LLM_PROVIDER", "OPENAI_", "ANTHROPIC_", "COHERE_", "GROQ_", "GOOGLE_", "MISTRAL_", "QWEN_", "LLAMA_", "OLLAMA_", "VLLM_", "HUGGINGFACE_", "HF_")),

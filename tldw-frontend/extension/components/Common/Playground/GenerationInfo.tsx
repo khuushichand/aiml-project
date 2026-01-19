@@ -24,6 +24,8 @@ const formatDuration = (nanoseconds?: number) => {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
+const EXCLUDED_KEYS = new Set(["model", "context", "response"])
+
 export const GenerationInfo = ({ generationInfo }: Props) => {
   if (!generationInfo) return null
 
@@ -50,14 +52,16 @@ export const GenerationInfo = ({ generationInfo }: Props) => {
     <div className="p-2 w-full">
       <div className="flex flex-col gap-2">
         {Object.entries(metricsToDisplay)
-          .filter(([key]) => key !== "model")
+          .filter(([key]) => !EXCLUDED_KEYS.has(key))
           .map(([key, value]) => (
             <div key={key} className="flex flex-wrap justify-between">
               <div className="font-medium text-xs">{key}</div>
               <div className="font-medium text-xs break-all">
                 {key.includes("duration") && isFiniteNumber(value)
                   ? formatDuration(value)
-                  : String(value)}
+                  : typeof value === "object" && value !== null
+                    ? JSON.stringify(value)
+                    : String(value)}
               </div>
             </div>
           ))}

@@ -20,15 +20,17 @@ Notes:
 | `providers` (`llm`) | API-related/Providers_API_Documentation.md |
 | `chunking-templates` | API-related/Chunking_Templates_API_Documentation.md |
 | `audio` | API-related/Audio_Transcription_API.md |
+| `audio-jobs` | API-related/Audio_Jobs_API.md |
+| `Media Ingestion Jobs` | API-related/Media_Ingest_Jobs_API.md |
 | `evaluations` | API-related/Evaluations_API_Unified_Reference.md |
 | `reading` | API-related/Reading_List_API.md |
 | `collections-feeds` | API-related/Collections_Feeds_API.md |
 | `benchmarks` | Coming soon |
-| `characters` | Coming soon |
-| `character-chat-sessions` | Coming soon |
-| `character-messages` | Coming soon |
+| `characters` | CHARACTER_CHAT_API_DOCUMENTATION.md |
+| `character-chat-sessions` | API-related/Character_Chat_Sessions_API.md |
+| `character-messages` | API-related/Character_Messages_API.md |
 | `flashcards` | Coming soon |
-| `mcp-unified` | Coming soon |
+| `mcp-unified` | MCP/Unified/Developer_Guide.md |
 | `workflows` | Coming soon |
 
 If you spot a mismatch between tags and docs, please open an issue or PR.

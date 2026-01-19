@@ -99,6 +99,7 @@ if [[ "${UVICORN_RELOAD}" == "true" ]]; then
 fi
 if [[ -n "${UVICORN_EXTRA_ARGS}" ]]; then
   # shellcheck disable=SC2206
+  # Note: arguments containing spaces are not supported; split into separate args.
   extra_args=( ${UVICORN_EXTRA_ARGS} )
   server_cmd+=( "${extra_args[@]}" )
 fi

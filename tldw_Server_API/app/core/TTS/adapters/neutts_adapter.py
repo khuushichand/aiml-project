@@ -1,4 +1,4 @@
-"""NeuTTS Air adapter
+"""NeuTTS adapter (Air/Nano)
 
 Integrates the NeuTTS Air text-to-speech model (on-device, voice cloning)
 into the unified TTS adapter framework. Supports:
@@ -43,7 +43,7 @@ from ..utils import parse_bool
 
 
 class NeuTTSAdapter(TTSAdapter):
-    """Adapter for NeuTTS Air provider."""
+    """Adapter for NeuTTS provider (Air/Nano)."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config=config)
@@ -159,6 +159,27 @@ class NeuTTSAdapter(TTSAdapter):
             logger.error(f"NeuTTS request validation failed: {e}")
             raise
 
+        if request.stream:
+            if not self._supports_streaming:
+                raise TTSGenerationError(
+                    "NeuTTS streaming requires a GGUF backbone (llama-cpp)",
+                    provider=self.provider_name,
+                )
+            if request.format == AudioFormat.WAV:
+                raise TTSValidationError(
+                    "NeuTTS streaming does not support WAV output. Use PCM or disable streaming.",
+                    provider=self.provider_name,
+                    details={"format": request.format.value},
+                )
+            return TTSResponse(
+                audio_stream=self.generate_stream(request),
+                format=request.format,
+                sample_rate=self.sample_rate,
+                text_processed=request.text,
+                provider=self.provider_name,
+                model=self.backbone_repo,
+            )
+
         # Resolve reference inputs
         ref_text = None
         extras = request.extra_params or {}
@@ -250,6 +271,12 @@ class NeuTTSAdapter(TTSAdapter):
             raise TTSGenerationError(
                 "NeuTTS streaming requires a GGUF backbone (llama-cpp)",
                 provider=self.provider_name,
+            )
+        if request.format == AudioFormat.WAV:
+            raise TTSValidationError(
+                "NeuTTS streaming does not support WAV output. Use PCM or disable streaming.",
+                provider=self.provider_name,
+                details={"format": request.format.value},
             )
 
         # Validate request

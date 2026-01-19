@@ -45,6 +45,8 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     OpenAITranscriptionRequest,
     OpenAITranscriptionResponse,
     OpenAITranslationRequest,
+    VoiceEncodeRequest,
+    VoiceEncodeResponse,
     TranscriptSegmentationRequest,
     TranscriptSegmentationResponse,
     SpeechChatRequest,
@@ -761,6 +763,7 @@ async def create_speech(
             provider_overrides=tts_overrides,
             voice_to_voice_start=voice_to_voice_start,
             voice_to_voice_route="audio.speech",
+            user_id=user_id_int,
         )
     except Exception as exc:
         _raise_for_tts_error(exc)
@@ -3996,6 +3999,10 @@ async def upload_voice(
     name: str = Form(..., description="Name for the voice"),
     description: Optional[str] = Form(None, description="Description of the voice"),
     provider: str = Form(default="vibevoice", description="Target TTS provider"),
+    reference_text: Optional[str] = Form(
+        default=None,
+        description="Optional transcript of the reference audio for cloning providers",
+    ),
     current_user: User = Depends(get_request_user),
 ):
     """
@@ -4005,6 +4012,7 @@ async def upload_voice(
     - VibeVoice: Any duration (1-shot cloning)
     - Higgs: 3-10 seconds recommended
     - Chatterbox: 5-20 seconds recommended
+    - NeuTTS: 3-15 seconds recommended (reference text required for encoding)
 
     The voice will be processed and optimized for the specified provider.
     """
@@ -4024,7 +4032,12 @@ async def upload_voice(
         file_content = await file.read()
 
         # Create upload request
-        upload_request = VoiceUploadRequest(name=name, description=description, provider=provider)
+        upload_request = VoiceUploadRequest(
+            name=name,
+            description=description,
+            provider=provider,
+            reference_text=reference_text,
+        )
 
         # Process upload
         result = await voice_manager.upload_voice(
@@ -4053,6 +4066,43 @@ async def upload_voice(
     except Exception as e:
         logger.error(f"Voice upload error: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload voice sample")
+
+
+@router.post("/voices/encode", summary="Encode stored voice reference for a provider")
+async def encode_voice_reference(
+    payload: VoiceEncodeRequest,
+    current_user: User = Depends(get_request_user),
+):
+    """
+    Encode provider-specific artifacts for a stored voice reference.
+
+    This stores artifacts (e.g., NeuTTS ref_codes) alongside the uploaded voice
+    so callers can use `custom:{voice_id}` without re-uploading reference audio.
+    """
+    try:
+        from tldw_Server_API.app.core.TTS.voice_manager import (
+            get_voice_manager,
+            VoiceProcessingError,
+        )
+
+        voice_manager = get_voice_manager()
+        result = await voice_manager.encode_voice_reference(
+            user_id=current_user.id,
+            voice_id=payload.voice_id,
+            provider=payload.provider,
+            reference_text=payload.reference_text,
+            force=payload.force,
+        )
+        return VoiceEncodeResponse(**result.model_dump())
+    except VoiceProcessingError as e:
+        logger.warning(f"Voice encoding failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        logger.error(f"Voice encode error: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to encode voice reference")
 
 
 @router.get("/voices", summary="List user's custom voices")
@@ -4173,7 +4223,12 @@ async def preview_voice(
             model=voice.provider, input=text, voice=f"custom:{voice_id}", response_format="mp3", stream=True
         )
 
-        audio_stream = tts_service.generate_speech(preview_request, provider=None, fallback=True)
+        audio_stream = tts_service.generate_speech(
+            preview_request,
+            provider=None,
+            fallback=True,
+            user_id=current_user.id,
+        )
 
         return StreamingResponse(
             audio_stream,

@@ -4,6 +4,13 @@
 
 The Chatbook API provides functionality for exporting and importing collections of content (conversations, notes, characters, etc.) in a portable archive format. This enables users to backup, share, and migrate their data between instances or users.
 
+Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
+
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; export/import run as background jobs and may be constrained by per-user concurrency.
+
 ## Table of Contents
 
 1. [Introduction](#introduction)
@@ -37,6 +44,26 @@ A Chatbook is a portable archive format (`.chatbook` file) that contains:
 - **Job Management**: Track progress of export/import operations
 - **Security**: File validation, size limits, and path traversal protection
 - **User Isolation**: Content is automatically scoped to authenticated users
+
+### Request Flow (ASCII)
+
+```text
+Export (sync)
+  Client → POST /api/v1/chatbooks/export (async_mode=false)
+         → Validate + Quotas → Service writes manifest+files → ZIP → ExportJob completed
+         ← 200 { job_id, download_url }
+
+Export (async)
+  Client → POST /api/v1/chatbooks/export (async_mode=true)
+         → ExportJob pending → enqueue core Jobs (domain=chatbooks) or Prompt Studio
+         ← 200 { job_id }
+  Worker → process → write ZIP → update job (download_url, expires_at, status)
+
+Import (sync/async)
+  Client → POST /api/v1/chatbooks/import (multipart)
+         → Save temp → Validate ZIP → Secure extract → Import selections
+         ← Sync: { success, imported_items, warnings } or Async: { job_id }
+```
 
 ## Authentication
 
@@ -157,7 +184,7 @@ Supported options (as query parameters or structured by clients that map to quer
 ```json
 {
   "manifest": {
-    "version": "1.0",
+    "version": "1.0.0",
     "name": "My Chatbook",
     "description": "Research collection",
     "author": "Jane Doe",
@@ -178,6 +205,11 @@ Supported options (as query parameters or structured by clients that map to quer
 **Description**: Download a completed export.
 
 **Response**: Binary file stream (application/zip)
+
+Signed URLs (optional):
+- If `CHATBOOKS_SIGNED_URLS=true` and `CHATBOOKS_SIGNING_SECRET` is set, the download link is signed and requires query params `exp` (Unix timestamp) and `token` (HMAC SHA256 of `"{job_id}:{exp}"`).
+- If `CHATBOOKS_ENFORCE_EXPIRY=true`, the server enforces job-level `expires_at` and returns `410` when expired.
+- Invalid or missing signature returns `403`; an expired `exp` parameter returns `410`.
 
 ### 5. List Export Jobs
 
@@ -279,13 +311,13 @@ Supported options (as query parameters or structured by clients that map to quer
 
 **Endpoint**: `POST /api/v1/chatbooks/cleanup`
 
-**Description**: Remove expired export files to free storage. Scheduled cleanup runs via the Chatbooks worker; use this endpoint to trigger a manual sweep.
+**Description**: Remove expired export files to free storage.
+Scheduled cleanup runs via the Chatbooks worker; use this endpoint to trigger a manual sweep.
 
 **Response**:
 ```json
 {
-  "deleted_count": 5,
-  "message": "Deleted 5 expired export files"
+  "deleted_count": 5
 }
 ```
 
@@ -325,13 +357,6 @@ Lightweight liveness check for the Chatbooks subsystem.
 - generated_document
 ```
 
-### Manifest Schema
-
-- Chatbook archives include a versioned manifest (`version`) that describes exported content, relationships, and provenance.
-- The canonical JSON Schema for manifest version `1.0` lives in the repository at `Docs/Schemas/chatbooks_manifest_v1.json` and aligns with the Chatbooks PRD (`Docs/Product/Chatbooks_PRD.md`).
-- Client integrations that need strict validation can reference this schema in addition to the OpenAPI document (`API-related/chatbook_openapi.yaml`).
-- Manifest metadata includes per content-type bundling limits (`metadata.binary_limits`) and continuation tokens for resumable evaluation exports (`truncation.evaluations.continuations`).
-
 ### ConflictResolution Enum
 ```
 - skip: Skip items that already exist
@@ -359,6 +384,10 @@ Lightweight liveness check for the Chatbooks subsystem.
 - failed: Error occurred
 - cancelled: Manually stopped
 ```
+
+### Manifest Metadata (selected fields)
+- `metadata.binary_limits`: Per content-type max bundled bytes applied during export.
+- `truncation.evaluations.continuations`: Continuation tokens for resumable evaluation exports.
 
 ## Error Handling
 
@@ -406,7 +435,6 @@ Per-user limits enforced at the endpoint level:
 - Download: 20/minute
 
 List/status endpoints may be subject to global API rate limits but have no dedicated per-route limiter. Exceeded limits return HTTP 429.
-Exceeded limits return HTTP 429.
 
 ## Code Examples
 
@@ -664,5 +692,26 @@ When upgrading from the single-user version to multi-user with authentication:
 
 ---
 
-*Last updated: 2025-10-08*
+*Last updated: 2025-12-29*
 *API Version: 1.0.0*
+## Configuration
+
+Environment variables controlling Chatbooks job backends and downloads:
+
+- `CHATBOOKS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).
+- `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` to start the Chatbooks worker.
+- Deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE` (ignored; legacy backend removed).
+
+Signed downloads:
+- `CHATBOOKS_SIGNED_URLS=true|false` - enable HMAC-signed download URLs.
+- `CHATBOOKS_SIGNING_SECRET` - shared secret for signing.
+- `CHATBOOKS_ENFORCE_EXPIRY=true|false` - enforce job `expires_at`.
+- `CHATBOOKS_URL_TTL_SECONDS` - default expiry TTL for generated links.
+
+Retention and cleanup:
+- `CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS` - retention window for completed exports before expiry (default `24`).
+- `CHATBOOKS_CLEANUP_INTERVAL_SEC` - scheduled cleanup cadence in seconds (set to `0` to disable scheduling).
+
+Export limits:
+- `CHATBOOKS_EVAL_EXPORT_MAX_ROWS` - max rows exported per evaluation run (default `200`).
+- `CHATBOOKS_BINARY_LIMITS_MB` - JSON map of content type to max bundled size in MB (for example, `{"media": 0, "conversations": 10, "generated_docs": 25}`).

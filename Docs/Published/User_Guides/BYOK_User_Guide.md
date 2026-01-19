@@ -21,7 +21,7 @@ python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"
 
 BYOK respects an allowlist at both write time and runtime:
 
-- If a provider is not allowlisted, new BYOK keys are rejected and stored keys are ignored at runtime.
+- If a provider is **not** allowlisted, new BYOK keys are rejected and stored keys are ignored at runtime.
 - Server default keys still apply when BYOK is disallowed.
 - `/api/v1/users/keys` shows stored-but-disallowed providers as `source=disabled`.
 

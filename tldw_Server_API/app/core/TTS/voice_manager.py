@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 #
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from .tts_exceptions import (
     TTSError,
     TTSInvalidInputError,
@@ -60,6 +61,13 @@ PROVIDER_REQUIREMENTS = {
         "duration": {"min": 1, "max": 30},
         "sample_rate": 44100,
         "convert_to": "mp3"
+    },
+    "neutts": {
+        "formats": [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".opus"],
+        "max_size_mb": 20,
+        "duration": {"min": 3, "max": 15},
+        "sample_rate": 16000,
+        "convert_to": "wav"
     }
 }
 
@@ -71,12 +79,24 @@ VOICE_RATE_LIMITS = {
     "max_voices_per_user": 50
 }
 
+DEFAULT_NEUTTS_VOICE_ID = "default"
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_NEUTTS_VOICE_PATH = (
+    _REPO_ROOT / "Helper_Scripts" / "Audio" / "Sample_Voices" / "Sample_Voice_1.mp3"
+)
+DEFAULT_NEUTTS_VOICE_TEXT_PATH = DEFAULT_NEUTTS_VOICE_PATH.with_suffix(".txt")
+
 
 class VoiceUploadRequest(BaseModel):
     """Request model for voice upload"""
     name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     provider: str = Field(default="vibevoice")
+    reference_text: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description="Optional transcript of the reference audio for cloning providers.",
+    )
 
     @field_validator('name')
     @classmethod
@@ -112,6 +132,27 @@ class VoiceUploadResponse(BaseModel):
     provider_compatible: bool
     warnings: List[str] = []
     info: str = ""
+
+
+class VoiceReferenceMetadata(BaseModel):
+    """Stored metadata and provider artifacts for a voice reference."""
+    voice_id: str
+    reference_text: Optional[str] = None
+    provider_artifacts: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    def touch(self) -> None:
+        self.updated_at = datetime.utcnow()
+
+
+class VoiceEncodeResult(BaseModel):
+    """Result of encoding provider-specific artifacts for a stored voice."""
+    voice_id: str
+    provider: str
+    cached: bool = False
+    ref_codes_len: Optional[int] = None
+    reference_text: Optional[str] = None
 
 
 class VoiceProcessingError(TTSError):
@@ -256,6 +297,181 @@ class VoiceManager:
         """
         return DatabasePaths.get_user_voices_dir(user_id)
 
+    def get_user_voice_metadata_path(self, user_id: int, voice_id: str) -> Path:
+        """Get the metadata path for a stored voice reference."""
+        voices_path = self.get_user_voices_path(user_id)
+        metadata_dir = voices_path / "metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        return metadata_dir / f"{voice_id}.json"
+
+    async def load_reference_metadata(
+        self, user_id: int, voice_id: str
+    ) -> Optional[VoiceReferenceMetadata]:
+        """Load stored reference metadata if it exists."""
+        path = self.get_user_voice_metadata_path(user_id, voice_id)
+        if not path.exists():
+            return None
+        try:
+            async with aiofiles.open(path, "r") as f:
+                raw = await f.read()
+            data = json.loads(raw)
+            return VoiceReferenceMetadata(**data)
+        except Exception as e:
+            logger.warning(f"Failed to read voice metadata {path}: {e}")
+            return None
+
+    async def save_reference_metadata(
+        self, user_id: int, metadata: VoiceReferenceMetadata
+    ) -> None:
+        """Persist reference metadata for a voice."""
+        metadata.touch()
+        path = self.get_user_voice_metadata_path(user_id, metadata.voice_id)
+        try:
+            payload = model_dump_compat(metadata)
+            async with aiofiles.open(path, "w") as f:
+                await f.write(json.dumps(payload, ensure_ascii=True, indent=2, default=str))
+        except Exception as e:
+            logger.warning(f"Failed to write voice metadata {path}: {e}")
+
+    async def ensure_default_voice(self, user_id: int) -> Optional[VoiceInfo]:
+        """Ensure the bundled default NeuTTS voice exists for a user."""
+        existing = await self.registry.get_voice(user_id, DEFAULT_NEUTTS_VOICE_ID)
+        if existing:
+            return existing
+
+        voices_path = self.get_user_voices_path(user_id)
+        processed_path = voices_path / "processed"
+        for ext in sorted(VoiceFileValidator.ALLOWED_EXTENSIONS):
+            candidate = processed_path / f"{DEFAULT_NEUTTS_VOICE_ID}{ext}"
+            if candidate.exists():
+                voice_info = await self._build_voice_info_from_file(
+                    voice_id=DEFAULT_NEUTTS_VOICE_ID,
+                    name="Default",
+                    description="Bundled NeuTTS default voice",
+                    provider="neutts",
+                    voices_path=voices_path,
+                    audio_path=candidate,
+                )
+                await self.registry.register_voice(user_id, voice_info)
+                return voice_info
+
+        if not DEFAULT_NEUTTS_VOICE_PATH.exists():
+            logger.debug(
+                f"Default NeuTTS voice not found at {DEFAULT_NEUTTS_VOICE_PATH}"
+            )
+            return None
+
+        try:
+            processed_file = await self._process_for_provider(
+                DEFAULT_NEUTTS_VOICE_PATH,
+                processed_path / f"{DEFAULT_NEUTTS_VOICE_ID}.wav",
+                "neutts",
+            )
+            voice_info = await self._build_voice_info_from_file(
+                voice_id=DEFAULT_NEUTTS_VOICE_ID,
+                name="Default",
+                description="Bundled NeuTTS default voice",
+                provider="neutts",
+                voices_path=voices_path,
+                audio_path=processed_file,
+            )
+            await self.registry.register_voice(user_id, voice_info)
+
+            reference_text = None
+            if DEFAULT_NEUTTS_VOICE_TEXT_PATH.exists():
+                try:
+                    async with aiofiles.open(DEFAULT_NEUTTS_VOICE_TEXT_PATH, "r") as f:
+                        reference_text = (await f.read()).strip() or None
+                except Exception as e:
+                    logger.warning(f"Failed to read default voice reference text: {e}")
+
+            if reference_text:
+                metadata = VoiceReferenceMetadata(
+                    voice_id=DEFAULT_NEUTTS_VOICE_ID,
+                    reference_text=reference_text,
+                )
+                await self.save_reference_metadata(user_id, metadata)
+                try:
+                    await self.encode_voice_reference(
+                        user_id=user_id,
+                        voice_id=DEFAULT_NEUTTS_VOICE_ID,
+                        provider="neutts",
+                        reference_text=reference_text,
+                        force=False,
+                    )
+                except VoiceProcessingError as e:
+                    logger.warning(f"Default NeuTTS auto-encode failed: {e}")
+
+            return voice_info
+        except Exception as e:
+            logger.warning(f"Failed to register default NeuTTS voice: {e}")
+            return None
+
+    async def _build_voice_info_from_file(
+        self,
+        *,
+        voice_id: str,
+        name: str,
+        description: Optional[str],
+        provider: str,
+        voices_path: Path,
+        audio_path: Path,
+    ) -> VoiceInfo:
+        duration = await self._get_audio_duration(audio_path)
+        provider_reqs = PROVIDER_REQUIREMENTS.get(provider, {})
+        try:
+            with open(audio_path, "rb") as f:
+                file_hash = hashlib.sha256(f.read()).hexdigest()
+        except Exception:
+            file_hash = ""
+        return VoiceInfo(
+            voice_id=voice_id,
+            name=name,
+            description=description,
+            file_path=str(audio_path.relative_to(voices_path)),
+            format=audio_path.suffix[1:],
+            duration=duration,
+            sample_rate=provider_reqs.get("sample_rate"),
+            size_bytes=audio_path.stat().st_size,
+            provider=provider,
+            created_at=datetime.utcnow(),
+            file_hash=file_hash,
+        )
+
+    async def _get_voice_info(self, user_id: int, voice_id: str) -> Optional[VoiceInfo]:
+        voice = await self.registry.get_voice(user_id, voice_id)
+        if voice:
+            return voice
+        # Populate registry from disk if needed
+        await self.list_user_voices(user_id)
+        return await self.registry.get_voice(user_id, voice_id)
+
+    async def _get_voice_audio_path(self, user_id: int, voice_id: str) -> Path:
+        voice_info = await self._get_voice_info(user_id, voice_id)
+        if not voice_info:
+            raise VoiceProcessingError(f"Voice not found: {voice_id}")
+        voices_path = self.get_user_voices_path(user_id)
+        audio_path = (voices_path / voice_info.file_path).resolve()
+        try:
+            audio_path.relative_to(voices_path.resolve())
+        except Exception as e:
+            raise VoiceProcessingError(f"Invalid voice path for {voice_id}: {e}") from e
+        if not audio_path.exists():
+            raise VoiceProcessingError(f"Voice file missing for {voice_id}")
+        return audio_path
+
+    async def load_voice_reference_audio(self, user_id: int, voice_id: str) -> bytes:
+        """Load stored voice reference audio bytes."""
+        if voice_id == DEFAULT_NEUTTS_VOICE_ID:
+            await self.ensure_default_voice(user_id)
+        audio_path = await self._get_voice_audio_path(user_id, voice_id)
+        try:
+            async with aiofiles.open(audio_path, "rb") as f:
+                return await f.read()
+        except Exception as e:
+            logger.error(f"Failed to read voice audio for {voice_id}: {e}")
+            raise VoiceProcessingError(f"Failed to read voice audio for {voice_id}") from e
+
     async def check_rate_limits(self, user_id: int) -> Tuple[bool, str]:
         """Check if user is within rate limits"""
         now = datetime.utcnow()
@@ -382,6 +598,25 @@ class VoiceManager:
             # Register voice
             await self.registry.register_voice(user_id, voice_info)
 
+            # Store optional reference metadata
+            if request.reference_text:
+                metadata = VoiceReferenceMetadata(
+                    voice_id=voice_id,
+                    reference_text=request.reference_text.strip() or None,
+                )
+                await self.save_reference_metadata(user_id, metadata)
+                if (request.provider or "").strip().lower() == "neutts":
+                    try:
+                        await self.encode_voice_reference(
+                            user_id=user_id,
+                            voice_id=voice_id,
+                            provider="neutts",
+                            reference_text=metadata.reference_text,
+                            force=False,
+                        )
+                    except VoiceProcessingError as e:
+                        warnings.append(f"NeuTTS auto-encode failed: {e}")
+
             # Update upload count
             self.user_upload_counts[user_id].append(datetime.utcnow())
 
@@ -409,6 +644,82 @@ class VoiceManager:
                 upload_path.unlink()
             logger.error(f"Failed to upload voice: {e}")
             raise VoiceProcessingError(f"Failed to process voice upload: {str(e)}")
+
+    async def encode_voice_reference(
+        self,
+        user_id: int,
+        voice_id: str,
+        provider: str,
+        reference_text: Optional[str] = None,
+        force: bool = False,
+    ) -> VoiceEncodeResult:
+        """Encode provider-specific artifacts for a stored voice reference."""
+        provider_key = (provider or "").strip().lower()
+        if not provider_key:
+            raise VoiceProcessingError("Provider is required for voice encoding")
+
+        metadata = await self.load_reference_metadata(user_id, voice_id)
+        if metadata is None:
+            metadata = VoiceReferenceMetadata(voice_id=voice_id)
+
+        if reference_text:
+            metadata.reference_text = reference_text.strip() or None
+
+        existing = metadata.provider_artifacts.get(provider_key)
+        if existing and not force:
+            ref_codes = existing.get("ref_codes")
+            return VoiceEncodeResult(
+                voice_id=voice_id,
+                provider=provider_key,
+                cached=True,
+                ref_codes_len=len(ref_codes) if isinstance(ref_codes, list) else None,
+                reference_text=existing.get("reference_text") or metadata.reference_text,
+            )
+
+        audio_path = await self._get_voice_audio_path(user_id, voice_id)
+
+        if provider_key == "neutts":
+            ref_text = metadata.reference_text
+            if not ref_text:
+                raise VoiceProcessingError("reference_text is required to encode NeuTTS ref_codes")
+            ref_codes = await self._encode_neutts_reference(audio_path)
+            metadata.provider_artifacts[provider_key] = {
+                "ref_codes": ref_codes,
+                "reference_text": ref_text,
+            }
+            await self.save_reference_metadata(user_id, metadata)
+            return VoiceEncodeResult(
+                voice_id=voice_id,
+                provider=provider_key,
+                cached=False,
+                ref_codes_len=len(ref_codes),
+                reference_text=ref_text,
+            )
+
+        raise VoiceProcessingError(f"Provider not supported for encoding: {provider_key}")
+
+    async def _encode_neutts_reference(self, audio_path: Path) -> List[int]:
+        """Encode NeuTTS reference codes from a stored audio file."""
+        try:
+            from tldw_Server_API.app.core.TTS.adapters.neutts_adapter import NeuTTSAdapter
+            from tldw_Server_API.app.core.TTS.tts_config import get_tts_config_manager
+
+            manager = get_tts_config_manager()
+            provider_cfg = manager.get_provider_config("neutts")
+            cfg = model_dump_compat(provider_cfg) if provider_cfg is not None else {}
+            adapter = NeuTTSAdapter(config=cfg)
+            await adapter.ensure_initialized()
+            codes = adapter._engine.encode_reference(str(audio_path))  # type: ignore[attr-defined]
+            if hasattr(codes, "tolist"):
+                codes = codes.tolist()
+            if not isinstance(codes, (list, tuple)):
+                raise VoiceProcessingError("NeuTTS encoder returned invalid ref_codes")
+            return [int(x) for x in codes]
+        except VoiceProcessingError:
+            raise
+        except Exception as e:
+            logger.error(f"NeuTTS reference encoding failed: {e}")
+            raise VoiceProcessingError(f"Failed to encode NeuTTS reference: {e}") from e
 
     async def _get_audio_duration(self, file_path: Path) -> float:
         """Get audio file duration using ffprobe (non-blocking)."""
@@ -511,6 +822,7 @@ class VoiceManager:
 
     async def list_user_voices(self, user_id: int) -> List[VoiceInfo]:
         """List all voices for a user"""
+        await self.ensure_default_voice(user_id)
         # Get from registry
         voices = await self.registry.list_voices(user_id)
 

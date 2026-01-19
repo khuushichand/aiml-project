@@ -100,7 +100,9 @@ export function CommandPalette({
   useShortcut({
     key: "Escape",
     modifiers: [],
-    action: () => setOpen(false),
+    action: () => {
+      if (open) setOpen(false)
+    },
     description: "Close command palette",
     allowInInput: true,
   })
@@ -376,7 +378,8 @@ export function CommandPalette({
     previousFocusRef.current = document.activeElement as HTMLElement | null
     setQuery("")
     setSelectedIndex(0)
-    setTimeout(() => inputRef.current?.focus(), 0)
+    const timerId = setTimeout(() => inputRef.current?.focus(), 0)
+    return () => clearTimeout(timerId)
   }, [open])
 
   // Scroll selected item into view

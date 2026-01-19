@@ -293,7 +293,7 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
             type="primary"
             icon={<Check className="size-3.5" />}
             onClick={() => onApprove(allIds)}
-            className="border-success bg-success hover:bg-success"
+            className="border-success bg-success hover:bg-success/90"
           >
             {t("approveAll", "Approve All")}
           </Button>

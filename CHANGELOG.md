@@ -5,7 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
-## [Unreleased]
+## [0.1.16] 2026-01-X
+
+### Added
+- File Artifacts System: Comprehensive implementation of file artifact management with support for multiple export formats (iCalendar, Markdown tables, HTML tables, XLSX, data tables) including export lifecycle management, garbage collection, and validation
+- Data Tables Module: Complete backend implementation with LLM-based table generation, async job workers, database schema (tables, columns, rows, sources), REST API endpoints, and export functionality
+- Media Ingestion Cancellation: Added cancellation support across audio and video processing pipelines with subprocess monitoring and graceful error handling
+- Content Import Preservation: Enhanced database layer to preserve existing metadata during reimport operations with preserve_existing_on_null parameter and improved full-text search with fallback candidates
+- File Adapter Registry: Dynamic adapter management system supporting multiple file types with validation, normalization, and export capabilities
+- Presentation Templates: New Reveal.js slide templates and CSS styling for presentation generation with bundle export support
+- API Enhancements: New endpoints for file artifacts management, data table generation/export/management, and media ingest job listing with async job tracking
+- Comprehensive Test Coverage: Integration and unit tests for file artifacts, data tables, media ingestion cancellation, and database operations
+- NeuTTS Support
+- TTS voice registry
+
+### Changed
+
+### Removed
+
+### Fixed
+
+
+## [0.1.16] - 2026-01-17 / Broken Bugs
 
 ### Added
 - Jobs Postgres RLS policy setup now supports `JOBS_PG_RLS_DEBUG` for policy output and `JOBS_PG_RLS_ROLE` role overrides.
@@ -23,6 +44,8 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 - Jobs RLS debug output now reports distinct settings fields without clobbering values.
+- Fixing of 200+ bugs
+
 
 ## [0.1.15] - 2026-01-10
 

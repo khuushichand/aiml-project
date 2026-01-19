@@ -16,6 +16,7 @@ import { Highlight } from "prism-react-renderer"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useArtifactsStore } from "@/store/artifacts"
 import { normalizeLanguage, resolveTheme, safeLanguage } from "@/utils/code-theme"
+import { copyToClipboard } from "@/utils/clipboard"
 // import Mermaid from "./Mermaid"
 
 interface Props {
@@ -24,10 +25,28 @@ interface Props {
   blockIndex?: number
 }
 
+const MAX_CODEBLOCK_STATE_ENTRIES = 200
+
+const setBoundedStateEntry = (
+  map: Map<string, boolean>,
+  key: string,
+  value: boolean
+) => {
+  if (map.has(key)) {
+    map.delete(key)
+  }
+  map.set(key, value)
+  while (map.size > MAX_CODEBLOCK_STATE_ENTRIES) {
+    const oldestKey = map.keys().next().value
+    if (oldestKey === undefined) return
+    map.delete(oldestKey)
+  }
+}
+
 export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   const [isBtnPressed, setIsBtnPressed] = useState(false)
   const [previewValue, setPreviewValue] = useState(value)
-  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const normalizedLanguage = normalizeLanguage(language)
   const lines = value ? value.split(/\r?\n/) : []
   const totalLines = lines.length
@@ -116,12 +135,16 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     if (typeof stored === "boolean") return stored
     return isLong
   })
-  const handleCopy = () => {
-    navigator.clipboard.writeText(value)
-    setIsBtnPressed(true)
-    setTimeout(() => {
-      setIsBtnPressed(false)
-    }, 4000)
+  const handleCopy = async () => {
+    try {
+      await copyToClipboard({ text: value, formatted: false })
+      setIsBtnPressed(true)
+      setTimeout(() => {
+        setIsBtnPressed(false)
+      }, 4000)
+    } catch (error) {
+      console.error("[CodeBlock] Failed to copy to clipboard:", error)
+    }
   }
 
   const isPreviewable = ["html", "svg", "xml"].includes(
@@ -163,11 +186,11 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   }
 
   useEffect(() => {
-    previewStateMap.set(keyRef.current, showPreview)
+    setBoundedStateEntry(previewStateMap, keyRef.current, showPreview)
   }, [showPreview, previewStateMap, keyRef])
 
   useEffect(() => {
-    collapsedStateMap.set(keyRef.current, collapsed)
+    setBoundedStateEntry(collapsedStateMap, keyRef.current, collapsed)
   }, [collapsed, collapsedStateMap, keyRef])
 
   useEffect(() => {
@@ -232,7 +255,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
       },
       { auto: true }
     )
-    autoOpenStateMap.set(artifactId, true)
+    setBoundedStateEntry(autoOpenStateMap, artifactId, true)
   }, [
     artifactId,
     artifactAutoThreshold,
@@ -259,7 +282,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
       kind: artifactKind,
       lineCount: totalLines
     })
-    autoOpenStateMap.set(artifactId, true)
+    setBoundedStateEntry(autoOpenStateMap, artifactId, true)
   }
 
   return (
@@ -333,6 +356,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
               <Tooltip title={t("downloadCode")}>
                 <button
                   onClick={handleDownload}
+                  aria-label={t("downloadCode", "Download code")}
                   className="flex gap-1.5 items-center rounded bg-none p-1 text-xs text-text-muted hover:bg-surface2 hover:text-text focus:outline-none">
                   <DownloadIcon className="size-4" />
                 </button>
@@ -340,6 +364,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
               <Tooltip title={t("copyToClipboard")}>
                 <button
                   onClick={handleCopy}
+                  aria-label={t("copyToClipboard", "Copy code to clipboard")}
                   className="flex gap-1.5 items-center rounded bg-none p-1 text-xs text-text-muted hover:bg-surface2 hover:text-text focus:outline-none">
                   {!isBtnPressed ? (
                     <CopyIcon className="size-4" />

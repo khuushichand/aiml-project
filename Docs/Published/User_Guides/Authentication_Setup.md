@@ -10,8 +10,9 @@ For personal use, the simplest setup:
 # 1. Copy the authentication template
 cp .env.authnz.template .env
 
-# 2. Generate a secure API key
-python -c "import secrets; print('SINGLE_USER_API_KEY=' + secrets.token_urlsafe(32))"
+# 2. Generate a secure API key (new format)
+python -m tldw_Server_API.app.core.AuthNZ.initialize
+# Choose "Generate secure keys" and copy SINGLE_USER_API_KEY
 
 # 3. Add the generated key to your .env file
 # Edit .env and replace SINGLE_USER_API_KEY value
@@ -19,7 +20,7 @@ python -c "import secrets; print('SINGLE_USER_API_KEY=' + secrets.token_urlsafe(
 # 4. Set AUTH_MODE to single_user in .env
 AUTH_MODE=single_user
 
-# 5. Initialize the authentication system
+# 5. Initialize the authentication system (if you haven't already)
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 
 # 6. Start the server - your API key will be displayed in the console
@@ -38,10 +39,6 @@ Use this API key in all requests:
 curl -H "X-API-KEY: your-api-key" http://localhost:8000/api/v1/media/search
 ```
 
-Note on tokens in single-user mode
-- Login endpoints are disabled/hidden; there are no JWTs. Authenticate with the `X-API-KEY` header only.
-- Bearer tokens are ignored in single-user mode. Some OpenAI-compatible clients send `Authorization: Bearer ...` - set the same value in `X-API-KEY` to authenticate.
-
 ## Multi-User Setup (Team/Production)
 
 For team deployments with user management:
@@ -58,8 +55,7 @@ python -c "from cryptography.fernet import Fernet; print('SESSION_ENCRYPTION_KEY
 #    - Set AUTH_MODE=multi_user
 #    - Add generated JWT_SECRET_KEY
 #    - Add generated SESSION_ENCRYPTION_KEY
-#      (the server will persist this to Config_Files/session_encryption.key with 0600 permissions;
-#       if you manage the file manually, keep it owner-readable only)
+#      (the server writes Config_Files/session_encryption.key with 0600 permissions; keep manual copies owner-readable only)
 #    - Configure database settings
 
 # 4. Initialize and create admin user
@@ -94,6 +90,13 @@ Key settings in `.env`:
 | `SINGLE_USER_API_KEY` | API key for single-user mode | Required for single-user |
 | `ENABLE_REGISTRATION` | Allow new user registration | `false` |
 | `DATABASE_URL` | User database location | `sqlite:///./Databases/users.db` |
+| `ROTATE_REFRESH_TOKENS` | Rotate refresh tokens on use | `true` |
+| `JWT_ISSUER` | Expected JWT `iss` claim (optional) | unset |
+| `JWT_AUDIENCE` | Expected JWT `aud` claim (optional) | unset |
+| `JWT_PRIVATE_KEY` | PEM-encoded private key (RS256/ES256) | unset |
+| `JWT_PUBLIC_KEY` | PEM-encoded public key (RS256/ES256) | unset |
+| `PII_REDACT_LOGS` | Redact usernames/IPs in auth logs | `false` |
+| `CSRF_BIND_TO_USER` | Bind CSRF token to user context (HMAC) | `false` |
 
 ### Single-User API Key (How to obtain)
 
@@ -140,6 +143,14 @@ Key settings in `.env`:
 4. **Rotate keys periodically** - Use the API key rotation feature
 5. **Monitor authentication failures** - Check logs for attacks
 6. See the Production Hardening Checklist: `./Production_Hardening_Checklist.md`
+
+JWT hardening (recommended):
+- Set `JWT_ISSUER` to a stable service identifier (e.g., `tldw_server`).
+- Set `JWT_AUDIENCE` to the intended audience (e.g., `tldw_api`).
+- Clients should include the returned refresh token after each `/auth/refresh` when `ROTATE_REFRESH_TOKENS=true`.
+- For multi-service deployments, prefer `RS256` and set `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY`.
+
+Rotation guidance: see `Docs/Operations/JWT_Rotation_Runbook.md`.
 
 ### Security Controls (env)
 

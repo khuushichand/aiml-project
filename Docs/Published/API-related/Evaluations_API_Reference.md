@@ -7,11 +7,11 @@ The Evaluations API provides comprehensive capabilities for assessing the qualit
 **Base URL**: `http://localhost:8000`
 **API Version**: `v1`
 **API Prefix**: `/api/v1`
-**Authentication**: Bearer token required (see Authentication section)
+**Authentication**: See Authentication section
 
 ## Authentication
 
-All API requests require authentication. In single-user mode, you can use either `X-API-KEY` or a Bearer token. In multi-user mode, use JWT Bearer tokens.
+All API requests require authentication. In single-user mode use `X-API-KEY` or a Bearer token; in multi-user use JWT Bearer tokens.
 
 ### Single-User Mode (Development)
 ```http
@@ -426,7 +426,7 @@ Cancels a running evaluation.
 ---
 
 #### Stream Run Progress
-Not currently available on the unified router. Use polling via `GET /api/v1/evaluations/runs/{run_id}` for status updates.
+Not currently available on the unified router. Poll `GET /api/v1/evaluations/runs/{run_id}` for status updates.
 
 ---
 
@@ -746,13 +746,11 @@ All error responses follow a consistent format:
 
 ## Rate Limits
 
-Rate limits (unified router defaults):
+Rate limits (route-specific for evaluations):
 - Standard evaluation requests: 60 requests/minute
-- Run creation and run status: 10 requests/minute
+- Run operations: 10 requests/minute
 - Batch operations: 5 requests/minute
 - Burst protection: 10 requests/second
-
-These route-specific limits apply to evaluation operations. Some management endpoints may rely on global limits configured by the app.
 
 ## Webhooks
 
@@ -784,9 +782,10 @@ When `webhook_url` is provided in a run request, the following payload is sent u
 
 ## Code Examples
 
-> ⚠️ Generate a strong API key and set it via `SINGLE_USER_API_KEY` before running these examples:
+> ⚠️ Generate a strong API key (new format) and set it via `SINGLE_USER_API_KEY` before running these examples:
 > ```bash
-> export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+> python -m tldw_Server_API.app.core.AuthNZ.initialize
+> # Copy SINGLE_USER_API_KEY into your environment
 > ```
 > Replace `YOUR_API_KEY` below with that value (or load it from your environment at runtime).
 
@@ -962,8 +961,6 @@ groq_model = mixtral-8x7b-32768
 - HuggingFace
 - OpenRouter
 - Local models (via Ollama, llama.cpp, etc.)
- - Moonshot
- - Z.AI
 
 ## Important Notes
 

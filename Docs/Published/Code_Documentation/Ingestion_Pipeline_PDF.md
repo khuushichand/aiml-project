@@ -66,7 +66,8 @@ print(res["status"], len(res.get("chunks") or []))
 
 ## Endpoint Integration
 
-- `POST /api/v1/media/process-pdfs` (media.py) uses the async wrapper `process_pdf_task`.
+- `POST /api/v1/media/process-pdfs` (modular endpoint in `endpoints/media/process_pdfs.py`) uses the async wrapper `process_pdf_task` and batch orchestration helpers in `core.Ingestion_Media_Processing.pipeline`.
+- Persistent PDF ingestion via `POST /api/v1/media/add` uses the shared `process_document_like_item(...)` helper in `core.Ingestion_Media_Processing.persistence`, which dispatches to `process_pdf_task` and then calls `persist_doc_item_and_children(...)` to write results to the Media DB.
 
 Notes:
 - URL downloads are restricted to `.pdf` files. URLs without a `.pdf` suffix are still accepted if the final redirected response provides either a `Content-Disposition` filename ending in `.pdf` or `Content-Type: application/pdf`. Otherwise, the URL is rejected.

@@ -39,22 +39,21 @@ To disable LLM usage logging entirely:
 LLM_USAGE_ENABLED=false
 ```
 
-Privacy notes:
-- `PII_REDACT_LOGS=true` hashes IPs in middleware and removes User-Agent; use this for production privacy.
-- `USAGE_LOG_DISABLE_META=true` stores `{}` in `usage_log.meta` regardless of `PII_REDACT_LOGS`.
-
 ## What Gets Logged
 
-- `usage_log` (HTTP): timestamp, user_id, key_id, endpoint (method:path), status, latency_ms, bytes, meta (IP, UA).
-  - Note: No external telemetry; data stays local. If desired, redact IP/UA at the log layer by policy (see privacy notes).
+- `usage_log` (HTTP): timestamp, user_id, key_id, endpoint (method:path), status, latency_ms,
+  - `bytes` (bytes_out) and `bytes_in` when available,
+  - `meta` (IP, UA; can be disabled or hashed),
+  - `request_id` for tracing.
+  - Note: No external telemetry; data stays local. If desired, redact or hash IP/UA at the log layer by policy.
 
 - `llm_usage_log` (LLM): timestamp, user_id, key_id, endpoint, operation (chat|embeddings|...), provider, model, status, latency_ms, tokens and cost fields, `estimated` flag, `request_id`.
-  - Costs are computed from a pricing catalog with safe defaults, and can be overridden via `PRICING_OVERRIDES` or `tldw_Server_API/Config_Files/model_pricing.json`.
+  - Costs are computed from a pricing catalog with safe defaults, and can be overridden via `PRICING_OVERRIDES` or `Config_Files/model_pricing.json`.
 
 ## Aggregation
 
-- HTTP: `usage_aggregator` populates `usage_daily` by user and day. It starts automatically at app startup if `USAGE_LOG_ENABLED` is true (unless disabled via `DISABLE_USAGE_AGGREGATOR`).
-- LLM: `llm_usage_aggregator` aggregates into `llm_usage_daily`. Background aggregation runs if `LLM_USAGE_AGGREGATOR_ENABLED=true` (unless disabled via `DISABLE_LLM_USAGE_AGGREGATOR`).
+- HTTP: `usage_aggregator` populates `usage_daily` by user and day. It is started automatically at app startup if `USAGE_LOG_ENABLED` is true.
+- LLM: `llm_usage_aggregator` aggregates into `llm_usage_daily`. Background aggregation runs if `LLM_USAGE_AGGREGATOR_ENABLED=true`.
 
 Manual triggers (Admin API):
 
@@ -90,7 +89,6 @@ Indexes are created on usage tables for performance:
 - In production, set sensible retention to keep DB size in check.
 - Keep pricing overrides current for accurate cost tracking.
 - Ensure admin endpoints are restricted (they are under `require_admin`).
-- Forward a stable `X-Request-ID` from clients to simplify correlating rows across logs.
 
 ## Troubleshooting
 

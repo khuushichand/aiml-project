@@ -16,6 +16,11 @@ Authentication follows the server’s AuthNZ mode:
 - Multi-user mode: include `Authorization: Bearer <JWT>` header
 All endpoints require authentication; some endpoints are admin-only and enforce additional checks.
 
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Standard limits apply; batching and large inputs consume more TPM and may be rate-limited.
+
 ## Key Concepts
 
 ### What are Embeddings?
@@ -124,6 +129,16 @@ Response headers (when applicable):
 - `X-Embeddings-Provider`: actual provider used
 - `X-Embeddings-Fallback-From`: original provider if fallback occurred
 - `X-Embeddings-Dimensions-Policy`: the dimension policy applied (`reduce`, `pad`, `ignore`)
+
+- `X-RateLimit-Limit`, `X-RateLimit-Remaining`: present when quota metadata is available
+
+Notes:
+- Numeric vector outputs are L2-normalized; base64-encoded outputs are not normalized (raw bytes of a float32 array, optionally reduced to requested `dimensions`).
+- Provider selection can be forced via the `x-provider` header or by using `provider:model` in `model`. If neither is supplied, the server auto-detects from model name (HuggingFace-style IDs imply `huggingface`) or defaults to `openai`.
+
+Provider fallback behavior:
+- If the `x-provider` header is set, fallback to other providers is disabled by default. To allow fallback even when `x-provider` is present, set `EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER=true`.
+- Otherwise, a configurable fallback chain is used (OpenAI → HF → ONNX → local_api by default) with model-ID mapping between providers when configured.
 
 ### 2. Batch Embeddings
 
@@ -236,7 +251,19 @@ Example response:
 }
 ```
 
-### 8. Collections (ChromaDB)
+- HyDE status: when configured, the response includes a `hyde` object with provider/model and weights.
+
+### 8. Tenant Quotas
+
+- Endpoint: `GET /api/v1/embeddings/tenant/quotas`
+- Returns current per-tenant RPS limits when enabled (`EMBEDDINGS_TENANT_RPS > 0`).
+
+Example response:
+```json
+{ "limit_rps": 20, "remaining": 7 }
+```
+
+### 9. Collections (ChromaDB)
 
 Manage per-user ChromaDB collections associated with embeddings.
 
@@ -257,7 +284,7 @@ Manage per-user ChromaDB collections associated with embeddings.
   - GET `/api/v1/embeddings/collections/{collection_name}/stats`
   - Response 200: `{ "name": "my_collection", "count": 123, "embedding_dimension": 1536, "metadata": {...} }`
 
-### 9. Circuit Breakers (admin)
+### 10. Circuit Breakers (admin)
 
 - Get circuit breaker status (all providers)
   - GET `/api/v1/embeddings/circuit-breakers`
@@ -267,7 +294,38 @@ Manage per-user ChromaDB collections associated with embeddings.
   - POST `/api/v1/embeddings/circuit-breakers/{provider}/reset`
   - Admin only; returns a confirmation message
 
-### 10. Model Warmup/Download (admin)
+### 11. Model Warmup/Download (admin)
+
+### 12. One-shot Vector Compaction (admin)
+
+- Endpoint: `POST /api/v1/embeddings/compactor/run`
+- Body: `{ "user_id": "<optional>", "media_db_path": "<optional override>" }`
+- Runs a compaction pass that removes soft-deleted vectors from the user’s vector store; returns collections touched.
+
+### 13. Orchestrator Monitoring (admin)
+
+- SSE live summary: `GET /api/v1/embeddings/orchestrator/events` (Server-Sent Events)
+- Polling summary: `GET /api/v1/embeddings/orchestrator/summary`
+- Contents include queue depths, DLQ depths, queue ages, per-stage flags, and optional per-priority depths when enabled.
+
+### 14. Stage Controls (admin)
+
+- Get flags: `GET /api/v1/embeddings/stage/status` → `{ chunking|embedding|storage: { paused, drain } }`
+- Control: `POST /api/v1/embeddings/stage/control` with `{ stage: "chunking|embedding|storage|all", action: "pause|resume|drain" }`
+
+### 15. DLQ Administration (admin)
+
+- List DLQ items: `GET /api/v1/embeddings/dlq?stage=chunking|embedding|storage&count=50`
+- Requeue item: `POST /api/v1/embeddings/dlq/requeue` with `{ stage, entry_id, delete_from_dlq, override_fields? }`
+- Bulk requeue: `POST /api/v1/embeddings/dlq/requeue/bulk` with `{ stage, entries: [id...], delete_from_dlq?, override_fields? }`
+- DLQ stats: `GET /api/v1/embeddings/dlq/stats`
+- Set DLQ state: `POST /api/v1/embeddings/dlq/state` with `{ stage, entry_id, state: quarantined|approved_for_requeue|ignored, operator_note? }`
+
+### 16. Job Priority and Skip (admin)
+
+- Bump job priority: `POST /api/v1/embeddings/job/priority/bump` with `{ job_id, priority: high|normal|low, ttl_seconds? }`
+- Mark job skipped: `POST /api/v1/embeddings/job/skip` with `{ job_id, ttl_seconds? }`
+- Check skip: `GET /api/v1/embeddings/job/skip/status?job_id=<id>`
 
 - Warmup a model (preload and validate)
   - POST `/api/v1/embeddings/models/warmup`
@@ -291,7 +349,7 @@ For `text-embedding-3-*` models, you can specify a lower dimension count to redu
 }
 ```
 
-**How it works**: The API applies the configured policy: `reduce` slices the first-N dimensions; `pad` zero-pads up to `dimensions`; `ignore` leaves vectors unchanged. Set policy with `EMBEDDINGS_DIMENSION_POLICY` env var. The response includes `X-Embeddings-Dimensions-Policy`.
+**How it works**: The API applies the configured policy: `reduce` slices the first-N dimensions; `pad` zero-pads up to `dimensions`; `ignore` leaves vectors unchanged. Set policy with `EMBEDDINGS_DIMENSION_POLICY` env var. For `encoding_format: "base64"`, the server always reduces to the requested `dimensions` for deterministic byte length. The response includes `X-Embeddings-Dimensions-Policy`.
 
 **Benefits**:
 - Reduced storage requirements
@@ -309,15 +367,17 @@ The API automatically processes large input lists in optimized batches:
 ### Caching
 
 The API implements an in-memory TTL cache:
-- Cache size: 5,000 entries (default)
-- TTL: 1 hour (3600 seconds)
+- Cache size: 5,000 entries (default; `EMBEDDINGS_CACHE_MAX_SIZE`)
+- TTL: 1 hour (3600 seconds; `EMBEDDINGS_CACHE_TTL_SECONDS`)
 - Cache key: Hash of (text, provider, model, dimensions)
 - Background cleanup of expired entries and metrics for hit/size
 
 ### Rate Limiting
 
-- Disabled by default; enable with `EMBEDDINGS_RATE_LIMIT=on`.
-- When enabled, requests may receive HTTP 429 depending on configured policy.
+- Disabled by default; enable endpoint-level limiter with `EMBEDDINGS_RATE_LIMIT=on`. Default limit: `5/second` on `POST /embeddings`.
+- RBAC-aware request limiting and per-tenant quotas may also apply:
+  - Per-tenant RPS via `EMBEDDINGS_TENANT_RPS` (see Tenant Quotas endpoint)
+  - When limits are active, responses may include `X-RateLimit-Limit` and `X-RateLimit-Remaining`
 
 ## Working with Token Arrays
 
@@ -434,7 +494,7 @@ Error responses include detailed messages. For some validation cases, a top-leve
 
 ## Configuration
 
-The embeddings service can be configured in `config.txt`:
+The embeddings service can be configured in `config.txt` and environment variables:
 
 ```ini
 [Embeddings]
@@ -443,6 +503,18 @@ embedding_provider = openai
 embedding_api_key = your-api-key-here
 embedding_api_url = https://api.openai.com/v1/embeddings  # For OpenAI
 # embedding_api_url = http://localhost:8080/v1/embeddings  # For local models
+
+# Optional policy/limits
+# EMBEDDINGS_RATE_LIMIT=on
+# EMBEDDINGS_TENANT_RPS=20
+# ALLOWED_EMBEDDING_PROVIDERS=["openai","huggingface"]
+# ALLOWED_EMBEDDING_MODELS=["text-embedding-3-*","sentence-transformers/all-*"]
+# EMBEDDINGS_ENFORCE_POLICY=true   # Enforce allowlists (admins may bypass unless STRICT)
+# EMBEDDINGS_ENFORCE_POLICY_STRICT=true  # Enforce policy even for admins
+# EMBEDDINGS_DIMENSION_POLICY=reduce|pad|ignore
+# EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER=true
+# EMBEDDINGS_CACHE_MAX_SIZE=5000
+# EMBEDDINGS_CACHE_TTL_SECONDS=3600
 ```
 
 ## Migration Guide
@@ -485,17 +557,14 @@ from urllib.request import Request, urlopen
 class EmbeddingsClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip("/")
-        # For single-user mode, set X-API-KEY. For multi-user, set Authorization: Bearer <JWT>.
-        # Choose exactly one of the lines below based on your deployment:
-        # self.headers = {"Content-Type": "application/json", "X-API-KEY": api_key}
-        # self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-        self.headers = {"Content-Type": "application/json"}
+        # For single-user mode, use X-API-KEY. For multi-user, use Bearer JWT.
+        self.headers = {"Authorization": f"Bearer {api_key}", "X-API-KEY": api_key}
 
     def _request_json(self, payload):
         req = Request(
             f"{self.base_url}/api/v1/embeddings",
             data=json.dumps(payload).encode("utf-8"),
-            headers=self.headers,
+            headers={"Content-Type": "application/json", **self.headers},
             method="POST",
         )
         with urlopen(req) as resp:
@@ -539,38 +608,42 @@ embeddings = client.create_embeddings(
 
 ```bash
 # Single text input
-# Single-user
 curl -X POST http://localhost:8000/api/v1/embeddings \
   -H "Content-Type: application/json" \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -d '{"input": "Hello, world!", "model": "text-embedding-3-small"}'
-
-# Multi-user
-curl -X POST http://localhost:8000/api/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $JWT" \
-  -d '{"input": "Hello, world!", "model": "text-embedding-3-small"}'
+  -H "Authorization: Bearer YOUR_JWT_OR_API_KEY" \
+  -H "X-API-KEY: YOUR_API_KEY_IF_SINGLE_USER" \
+  -d '{
+    "input": "Hello, world!",
+    "model": "text-embedding-3-small"
+  }'
 
 # Token-array input (single)
-# Single-user (token array)
 curl -X POST http://localhost:8000/api/v1/embeddings \
   -H "Content-Type: application/json" \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -d '{"input": [15339, 11, 1917, 0], "model": "text-embedding-3-small"}'
+  -H "Authorization: Bearer YOUR_JWT_OR_API_KEY" \
+  -H "X-API-KEY: YOUR_API_KEY_IF_SINGLE_USER" \
+  -d '{
+    "input": [15339, 11, 1917, 0],
+    "model": "text-embedding-3-small"
+  }'
 
 # Token-array input (batch)
-# Single-user (token array batch)
 curl -X POST http://localhost:8000/api/v1/embeddings \
   -H "Content-Type: application/json" \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -d '{"input": [[15339,11,1917,0],[1115,374,264,1296],[315,279,40188,5446]], "model": "text-embedding-3-small", "dimensions": 512}'
+  -H "Authorization: Bearer YOUR_JWT_OR_API_KEY" \
+  -H "X-API-KEY: YOUR_API_KEY_IF_SINGLE_USER" \
+  -d '{
+    "input": [[15339,11,1917,0],[1115,374,264,1296],[315,279,40188,5446]],
+    "model": "text-embedding-3-small",
+    "dimensions": 512
+  }'
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **"Dimensions parameter not supported"**: Only `text-embedding-3-*` models support dimension reduction
+1. **"Dimensions parameter not supported"**: Some providers don't natively support `dimensions`, but the server applies post-processing (reduce/pad/ignore) across providers. For OpenAI `text-embedding-3-*`, `dimensions` is natively supported.
 2. **"Token decoding failed"**: Ensure token IDs are valid for the specified model
 3. **"Model not found"**: Check that the model is configured in your settings
 4. **Rate limiting**: Implement exponential backoff for retries
@@ -584,54 +657,9 @@ curl -X POST http://localhost:8000/api/v1/embeddings \
 
 ## Related Documentation
 
-- [RAG API Guide](./RAG-API-Guide.md)
+- [RAG API](./RAG_API_Documentation.md)
 - [API Design Guide](./API_Design.md)
 - [AuthNZ API Guide](./AuthNZ-API-Guide.md)
-
-### 9. Re-Embed Scheduling (Jobs)
-
-Admin-only endpoint to schedule a re-embed expansion job via the Jobs module. The expansion worker reads the job, fetches original chunks for the media, and enqueues new embedding-stage messages directly to the pipeline.
-
-Note: allow the queue and start the worker
-- Set one of:
-  - `JOBS_ALLOWED_QUEUES_EMBEDDINGS=reembed`
-  - `JOBS_ALLOWED_QUEUES=reembed`
-- Start the worker: set `EMBEDDINGS_REEMBED_WORKER_ENABLED=true` (integrated) or run `python -m tldw_Server_API.app.core.Embeddings.services.reembed_worker`.
-
-Endpoint: `POST /api/v1/embeddings/reembed/schedule`
-
-Description: Create a Jobs row (`domain=embeddings`, `queue=reembed`, `job_type=expand_reembed`). Returns the created job info.
-
-Request Body
-```json
-{
-  "media_id": 123,
-  "priority": 50,
-  "user_id": "1",
-  "idempotency_key": "reembed:1:123:hf:stella",
-  "dedupe_key": "reembed:1:123:hf:stella",
-  "operation_id": "uuid-optional",
-  "user_tier": "free",
-  "embedder_name": "huggingface",
-  "embedder_version": "dunzhang/stella_en_400M_v5"
-}
-```
-
-Response
-```json
-{
-  "id": 42,
-  "uuid": "a9b5e8c0-...",
-  "status": "queued",
-  "domain": "embeddings",
-  "queue": "reembed",
-  "job_type": "expand_reembed"
-}
-```
-
-Authorization
-- Single-user: `X-API-KEY` with admin privileges (single user is treated as admin).
-- Multi-user: `Authorization: Bearer <JWT>` for an admin user.
 
 ## Version History
 

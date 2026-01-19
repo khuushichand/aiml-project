@@ -510,7 +510,11 @@ async def tts_reading_item(
 
     try:
         tts_service = await get_tts_service_v2()
-        speech_iter = tts_service.generate_speech(tts_request, fallback=True)
+        speech_iter = tts_service.generate_speech(
+            tts_request,
+            fallback=True,
+            user_id=current_user.id,
+        )
     except Exception as exc:
         _raise_for_tts_error(exc)
 

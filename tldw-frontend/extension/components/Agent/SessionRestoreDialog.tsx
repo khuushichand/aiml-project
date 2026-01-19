@@ -142,7 +142,12 @@ export const SessionRestoreDialog: FC<SessionRestoreDialogProps> = ({
               )}
               {approvalSummary.other > 0 && (
                 <span>
-                  {approvalSummary.other} {t("other", "other")}
+                  {approvalSummary.other}{" "}
+                  {t("otherApprovals", {
+                    count: approvalSummary.other,
+                    defaultValue_one: "other",
+                    defaultValue_other: "others"
+                  })}
                 </span>
               )}
             </div>

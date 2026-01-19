@@ -611,7 +611,7 @@ CSP_DIRECTIVES="default-src 'self'; script-src 'self' 'unsafe-inline'"
 
 ---
 
-## Monitoring & Maintenance {#monitoring--maintenance}
+## Monitoring & Maintenance
 
 ### 1. Health Monitoring
 
@@ -965,7 +965,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Install from pyproject
 COPY pyproject.toml .
 RUN pip install --no-cache-dir -e .[multiplayer]
 

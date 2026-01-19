@@ -6,12 +6,13 @@ Audience: DevOps/SREs and self-hosters deploying tldw_server for the first time
 This guide walks you through a secure, production-ready first deployment of tldw_server. It covers Docker Compose (recommended) and a bare-metal alternative, plus the initial setup wizard, TLS, CORS, and basic verification.
 
 Related documents
-- Reverse proxy examples (Nginx/Traefik): `Deployment/Reverse_Proxy_Examples.md`
-- Postgres migration: `Deployment/Postgres_Migration_Guide.md`
-- Metrics and Grafana: `Monitoring/Metrics_Cheatsheet.md`
+- Reverse proxy examples (Nginx/Traefik): `Docs/Deployment/Reverse_Proxy_Examples.md`
+- Postgres migration: `Docs/Deployment/Postgres_Migration_Guide.md`
+- Sidecar workers (systemd/launchd): `Docs/Deployment/Sidecar_Workers.md`
+- Metrics and Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
 - Environment variables reference: `Env_Vars.md`
-- General installation (local/dev): `User_Guides/Installation-Setup-Guide.md`
-- Production hardening checklist: `User_Guides/Production_Hardening_Checklist.md`
+- General installation (local/dev): `Docs/Published/User_Guides/Installation-Setup-Guide.md`
+- Production hardening checklist: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`
 
 ## 1) Prerequisites
 
@@ -26,7 +27,7 @@ Related documents
 Security preflight
 - Decide auth mode: `single_user` (API key) or `multi_user` (JWT).
 - Generate strong secrets:
-  - API key: `python -c "import secrets;print(secrets.token_urlsafe(32))"`
+  - API key: `python -m tldw_Server_API.app.core.AuthNZ.initialize` (choose "Generate secure keys")
   - JWT secret: `openssl rand -base64 64`
 - Restrict CORS to your site(s) with `ALLOWED_ORIGINS`.
 - In production, set `tldw_production=true` to mask secrets in logs and harden defaults.
@@ -55,7 +56,8 @@ export JWT_SECRET_KEY="$(openssl rand -base64 64)"
 export DATABASE_URL="postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users"
 
 # Strong single-user key if you use single_user mode instead
-export SINGLE_USER_API_KEY="$(python -c "import secrets;print(secrets.token_urlsafe(32))")"
+# Generate via the AuthNZ initializer and copy SINGLE_USER_API_KEY into .env
+python -m tldw_Server_API.app.core.AuthNZ.initialize
 
 # Production hardening
 export tldw_production=true
@@ -72,9 +74,8 @@ docker compose ps
 ```
 
 The app listens on `:8000` inside the container and is exposed on the host at `:8000` by default.
-
-Note
-- `docker-compose.override.yml` is included with production-leaning defaults (tldw_production, CORS, Postgres). Compose auto-loads it alongside `docker-compose.yml`.
+Compose note
+- `docker-compose.override.yml` ships with production-leaning defaults and is auto-loaded with `docker-compose.yml`.
 
 Step A3 - First-time setup (optional wizard)
 - The server exposes a local-only setup flow at `/setup` when enabled.
@@ -85,7 +86,7 @@ Step A3 - First-time setup (optional wizard)
 Step A4 - Add TLS and reverse proxy
 - Terminate TLS at the proxy; forward to `app:8000`.
 - Ensure WebSocket upgrade for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
-- See: `Deployment/Reverse_Proxy_Examples.md` for Nginx/Traefik configs and labels.
+- See: `Docs/Deployment/Reverse_Proxy_Examples.md` for Nginx/Traefik configs and labels.
 - Caddy example: `Samples/Caddy/Caddyfile` (simple HTTPS reverse proxy to the app).
 
 Step A5 - Verify health
@@ -102,23 +103,6 @@ Notes
 - To scale CPU workers: set `UVICORN_WORKERS` via the app environment and rebuild or override in Compose.
 - If you run multiple Uvicorn workers with SQLite, enable sidecar jobs (`TLDW_WORKERS_SIDECAR_MODE=true`) or migrate to Postgres to reduce lock contention.
 
-Optional: Add a reverse proxy with Caddy (automatic HTTPS)
-```bash
-# Use the proxy variant with the base compose file
-docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
-
-# Edit the hostname/email in Samples/Caddy/Caddyfile.compose before starting
-```
-
-Optional: Add a reverse proxy with Nginx
-```bash
-# Use the nginx proxy variant with the base compose file
-docker compose -f docker-compose.yml -f docker-compose.proxy-nginx.yml up -d
-
-# Ensure Samples/Nginx/nginx.conf has your domain and cert paths
-# Map /etc/letsencrypt into the container or adjust the paths accordingly
-```
-
 ## 4) Option B - Bare-Metal (systemd + Nginx)
 
 Step B1 - System packages
@@ -134,7 +118,7 @@ cd tldw_server
 python3.11 -m venv /opt/tldw_server/venv
 source /opt/tldw_server/venv/bin/activate
 pip install -U pip
-pip install -e .[multiplayer]
+pip install -e .
 
 cp .env.authnz.template .env
 vi .env   # set AUTH_MODE, keys, DATABASE_URL, ALLOWED_ORIGINS, tldw_production=true
@@ -174,7 +158,7 @@ sudo systemctl status tldw --no-pager
 ```
 
 Step B4 - Nginx reverse proxy + TLS
-Use the examples in `Deployment/Reverse_Proxy_Examples.md` or configure a site:
+Use the examples in `Docs/Deployment/Reverse_Proxy_Examples.md` or configure a site:
 ```nginx
 server {
   listen 443 ssl http2;
@@ -203,7 +187,7 @@ server {
 - `tldw_production`: `true` in production to mask secrets and enable production guards.
 - Provider keys: e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
-See `Env_Vars.md` for the complete list and `User_Guides/Authentication_Setup.md` for AuthNZ details.
+See `Env_Vars.md` for the complete list and `Docs/AUTHNZ_DATABASE_CONFIG.md` for AuthNZ DB details.
 
 ## 6) Verify and smoke test
 
@@ -232,7 +216,7 @@ curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   - Don’t print keys on startup in production; keep `SHOW_API_KEY_ON_STARTUP` unset/false.
 - Database:
   - Use Postgres for multi-user; back up volumes regularly.
-  - If migrating from SQLite, follow `Deployment/Postgres_Migration_Guide.md`.
+  - If migrating from SQLite, follow `Postgres_Migration_Guide.md`.
 - Network:
   - TLS via reverse proxy; enable WebSocket upgrades.
   - Restrict `ALLOWED_ORIGINS`.
@@ -242,4 +226,4 @@ curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 - Rate limits:
   - Keep global and module-specific rate limiters enabled and tuned for your users.
 
-For a comprehensive list, see `User_Guides/Production_Hardening_Checklist.md`.
+For a comprehensive list, see `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.

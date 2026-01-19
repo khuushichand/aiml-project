@@ -452,6 +452,7 @@ class DatabasePaths:
         _ensure_dir(voices_dir / "uploads", label="voice uploads")
         _ensure_dir(voices_dir / "processed", label="voice processed")
         _ensure_dir(voices_dir / "temp", label="voice temp")
+        _ensure_dir(voices_dir / "metadata", label="voice metadata")
         return voices_dir
 
     @staticmethod

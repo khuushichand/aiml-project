@@ -8,6 +8,7 @@ tldw_server supports multiple TTS providers with OpenAI-compatible endpoints. Ne
 
 - Add NeuTTS-Nano and NeuTTS-Air as supported local TTS providers.
 - Enable voice cloning using stored reference codes and reference text.
+- Support optional per-request reference audio/text overrides when needed.
 - Support streaming synthesis when GGUF backbones are used.
 - Keep the default path fully offline.
 
@@ -19,39 +20,48 @@ tldw_server supports multiple TTS providers with OpenAI-compatible endpoints. Ne
 
 ## Decisions
 
-- Voice references map to stored reference codes (no per-request reference audio/text).
-- Bundle a default reference voice for quick-start usage.
-- Storage location should follow the existing voice storage pattern in the codebase; confirm by reviewing current voice management utilities.
+- Voice cloning maps to stored reference codes by default via `voice="custom:<voice_id>"`.
+- Per-request `voice_reference` + `extra_params.reference_text` is allowed as an optional override.
+- Stored references can persist `reference_text` and provider artifacts (e.g., NeuTTS `ref_codes`) via `/api/v1/audio/voices/encode`.
+- `extra_params.reference_text` and `extra_params.ref_codes` are accepted per request and override stored metadata when provided.
+- Bundle a default reference voice from `/Helper_Scripts/Audio/Sample_Voices/Sample_Voice_1.mp3`.
+- Store reference audio and codes using the existing voice manager filesystem pattern under per-user voices directories.
 - Automatic model download is disabled by default.
-- Streaming output format should favor widest compatibility; default to PCM s16le, 24kHz, mono, with WAV chunking allowed if needed by clients.
+- Streaming output format defaults to PCM s16le, 24kHz, mono for widest compatibility.
+- For NeuTTS streaming, WAV is not supported because current WAV streaming buffers until finalize; treat WAV as non-streaming or reject when `stream=true`.
 
 ## User Stories
 
-- As a local user, I can generate speech using a stored voice reference without re-uploading reference audio.
+- As a local user, I can upload a reference voice once and reuse it by passing `custom:<voice_id>`.
+- As a local user, I can optionally provide reference audio/text per request for ad-hoc voices.
+- As a power user, I can pre-encode NeuTTS reference codes for faster reuse.
 - As a power user, I can use GGUF backbones for low-latency streaming output.
 - As an offline user, I can point to local model and codec files without network access.
-- As a new user, I can try NeuTTS immediately using a bundled default voice.
+- As a new user, I can try NeuTTS immediately using the bundled default voice.
 
 ## Functional Requirements (MVP)
 
 - Provider integration:
-  - New provider option: `neutts` with models `neutts-nano` and `neutts-air`.
+  - Provider option: `neutts` with models `neutts-nano` and `neutts-air`, plus GGUF variants.
   - Support local paths and HF repo IDs for backbone/codec (downloads disabled by default).
 - Voice mapping:
-  - `voice` references stored `ref_codes` and `ref_text` rather than requiring reference audio per request.
-  - Extend voice upload/encode flow to generate and persist NeuTTS reference codes.
+  - Use `voice="custom:<voice_id>"` to load stored reference audio and metadata.
+  - Accept optional per-request `voice_reference` (base64 audio) and `extra_params.reference_text`.
+  - Persist optional `reference_text` on upload and provider artifacts via `voices/encode`.
+  - `extra_params.ref_codes` accepted per request; stored artifacts are used by default.
 - Output requirements:
   - Sample rate: 24kHz output.
   - Non-streaming responses follow existing `response_format` values.
-  - Streaming responses default to PCM s16le, 24kHz, mono.
+  - Streaming responses default to PCM s16le, 24kHz, mono; WAV chunks optional.
 - Streaming:
   - Streaming supported only for GGUF backbones.
   - Clear error if streaming is requested with non-GGUF backbones.
+  - For NeuTTS, validate `response_format` when `stream=true` and restrict to PCM (or other truly streaming formats). WAV must be rejected or coerced to non-streaming.
 - Caching:
   - Reuse loaded backbone and codec per worker.
   - Optional cache for reference codes by voice ID.
 - Validation:
-  - Enforce reference audio constraints on upload/encode (mono, 16-44kHz, 3-15s recommended).
+  - Validate reference audio size/type; duration is recommended (3-15s) but not enforced yet.
   - Validate file size/type and sanitize filenames.
 - Errors:
   - Clear errors for missing dependencies (espeak-ng, llama-cpp-python, onnxruntime).
@@ -60,41 +70,71 @@ tldw_server supports multiple TTS providers with OpenAI-compatible endpoints. Ne
 ## API and Data Contracts
 
 - Existing endpoint: `POST /api/v1/audio/speech`
-- `voice` maps to stored reference codes (use existing `custom:{voice_id}` pattern).
+- `voice="custom:<voice_id>"` resolves stored references before validation.
+- `voice_reference` and `extra_params.reference_text` are optional per request and override stored metadata.
 
 Example request:
 
 ```json
 {
-  "model": "neutts-nano",
+  "model": "neutts-air",
   "input": "Hello world",
   "voice": "custom:default",
   "response_format": "pcm",
-  "stream": true
+  "stream": true,
 }
 ```
 
 Voice creation options:
 
-- Extend `POST /api/v1/audio/voices/upload` to accept reference audio/text for NeuTTS and store reference codes.
-- Optional endpoint if needed: `POST /api/v1/audio/voices/encode` to re-encode reference audio into NeuTTS codes.
+- `POST /api/v1/audio/voices/upload` stores reference audio (optionally `reference_text`).
+- `POST /api/v1/audio/voices/encode` generates provider artifacts (NeuTTS `ref_codes`) for a stored voice.
+
+Stored voice request example:
+
+```json
+{
+  "model": "neutts-air",
+  "input": "Hello world",
+  "voice": "custom:VOICE_ID",
+  "response_format": "pcm",
+  "stream": false
+}
+```
+
+Optional per-request override example:
+
+```json
+{
+  "model": "neutts-air",
+  "input": "Hello world",
+  "voice": "custom:VOICE_ID",
+  "response_format": "pcm",
+  "stream": false,
+  "voice_reference": "<base64-audio>",
+  "extra_params": {
+    "reference_text": "Hello world"
+  }
+}
+```
 
 ## Storage and Voice Management
 
-- Use the existing voice storage pattern in the codebase for per-user voices.
-- Store NeuTTS reference codes and reference text alongside the processed audio.
-- Keep an in-memory registry for fast lookup, with filesystem scan fallback.
-- Bundle a default reference voice and pre-encoded codes; ensure licensing allows redistribution.
+- NeuTTS integrates with the voice manager for stored references.
+- Stored reference audio is kept per user; metadata includes `reference_text` and provider artifacts.
+- `custom:` voice IDs resolve to stored audio + metadata; per-request values override stored metadata.
+- Storage is adapter-neutral so future TTS providers can reuse stored references.
+- Default voice assets ship from `/Helper_Scripts/Audio/Sample_Voices/Sample_Voice_1.mp3` and are registered on first use.
 
 ## Configuration
 
-- New config keys (defaults):
-  - `NEUTTS_ENABLED=true|false`
-  - `NEUTTS_DEFAULT_MODEL=neuphonic/neutts-nano`
-  - `NEUTTS_DEFAULT_CODEC=neuphonic/neucodec-onnx-decoder`
-  - `NEUTTS_BACKBONE_DEVICE=cpu|gpu`
-  - `NEUTTS_CODEC_DEVICE=cpu`
-  - `NEUTTS_ALLOW_NETWORK_DOWNLOADS=false`
+- Provider config keys (defaults via `tts_providers_config.yaml`):
+  - `providers.neutts.enabled=true|false`
+  - `providers.neutts.backbone_repo=neuphonic/neutts-air`
+  - `providers.neutts.codec_repo=neuphonic/neucodec`
+  - `providers.neutts.backbone_device=cpu|gpu`
+  - `providers.neutts.codec_device=cpu`
+  - `providers.neutts.auto_download=false`
 - Dependencies:
   - `neutts`, `neucodec`, `phonemizer`, `espeak-ng`
   - `llama-cpp-python` for GGUF
@@ -105,10 +145,10 @@ Voice creation options:
 
 - TTS settings:
   - Provider selection: NeuTTS-Nano / NeuTTS-Air / GGUF variants.
-  - Default voice visible and selectable.
-  - Upload voice and store for reuse (maps to stored codes).
+  - Reference audio + reference text optional per request; stored `custom:` voices are the default path.
 - Voice library:
   - List saved voices with metadata.
+  - Encode stored voices for NeuTTS reference codes.
   - Delete voices.
 
 ## Non-functional Requirements
@@ -117,6 +157,11 @@ Voice creation options:
 - Memory: avoid per-request model loads; reuse per worker.
 - Security: never log reference audio/text; sanitize inputs.
 - Offline by default; explicit opt-in for downloads.
+
+## Streaming Limitations
+
+- NeuTTS streaming is supported only for GGUF backbones (llama-cpp).
+- WAV is not considered a true streaming format in the current stack because headers are finalized at the end; for NeuTTS `stream=true`, allow PCM (and other truly streaming formats) only.
 
 ## Observability
 
@@ -130,6 +175,7 @@ Voice creation options:
   - Reference audio validation rules.
 - Integration tests:
   - `/api/v1/audio/speech` with NeuTTS mock.
+  - `/api/v1/audio/voices/encode` and `custom:` voice resolution.
   - Streaming path for GGUF with stubbed backend.
 - Property-based tests:
   - Reference input validation (size/type/length).
@@ -144,12 +190,77 @@ Voice creation options:
 ## Milestones
 
 - M1: Backend provider wired to TTS service and adapters.
-- M2: Voice upload/encode stores reference codes and updates voice catalog.
+- M2: Voice upload/encode stores reference codes and custom voice resolution is supported.
 - M3: Streaming support for GGUF and UI updates.
 - M4: Documentation and deployment guidance updated.
 
 ## Open Questions
 
-- Which default voice sample should be bundled, and under what license?
-- Should WAV chunk streaming be enabled alongside PCM for compatibility?
-- Do we need a dedicated `voices/encode` endpoint or should upload always encode?
+- Should we add true WAV streaming support (header-first) or keep WAV disabled for NeuTTS streaming?
+
+## Staged Implementation Plan
+
+### Stage 1: Provider wiring + config validation
+**Goal**: Expose NeuTTS provider through the TTS adapter registry and configuration with offline defaults.
+**Scope/Deliverables**:
+- Add provider config block for NeuTTS with `auto_download=false` by default.
+- Register NeuTTS in adapter registry and provider catalog.
+- Extend validation maps to include NeuTTS formats, languages, and max text length.
+**Key Tasks**:
+- Update `tts_providers_config.yaml` and config parsing to include NeuTTS settings.
+- Ensure provider resolution maps model names to NeuTTS.
+- Add `neutts` to format/language validation tables.
+**Dependencies**:
+- NeuTTS adapter module available and importable.
+**Success Criteria**: NeuTTS appears in provider catalog, config keys are parsed, and validation recognizes NeuTTS formats/languages.
+**Tests**: Unit tests for config parsing and `tts_validation` provider maps; adapter registry lookup tests.
+**Status**: Not Started
+
+### Stage 2: Voice storage + default voice
+**Goal**: Store NeuTTS reference audio, ref_text, and ref_codes using the existing voice manager filesystem layout and register a default voice from `/Helper_Scripts/Audio/Sample_Voices/Sample_Voice_1.mp3`.
+**Scope/Deliverables**:
+- Persist per-voice metadata for `reference_text` and `ref_codes`.
+- Add default voice registration on first use or service startup.
+- Ensure `custom:<voice_id>` resolves to stored metadata.
+**Key Tasks**:
+- Extend voice upload/encode pipeline to store `reference_text` and `ref_codes` for NeuTTS.
+- Define how metadata is stored alongside voice files (metadata file or sidecar).
+- Register default voice for each user if not present.
+**Dependencies**:
+- Default voice file exists and licensing is approved.
+- Voice manager storage paths are stable.
+**Success Criteria**: `custom:<voice_id>` resolves to stored reference metadata; default voice is available on first use.
+**Tests**: Integration tests for voice upload/encode and custom voice resolution; file storage layout checks.
+**Status**: Not Started
+
+### Stage 3: Streaming enforcement + format gating
+**Goal**: Enforce GGUF-only streaming and allow PCM streaming only for NeuTTS.
+**Scope/Deliverables**:
+- Validate streaming requests against GGUF capability.
+- Enforce PCM (or other truly streaming formats) for NeuTTS streaming.
+- Reject WAV streaming or coerce to non-streaming.
+**Key Tasks**:
+- Check `request.stream` with NeuTTS capability and gate non-GGUF backbones.
+- Add format gating in NeuTTS adapter or service layer for streaming requests.
+- Ensure PCM streaming path uses normalized int16 chunk output.
+**Dependencies**:
+- NeuTTS streaming implementation uses `infer_stream` for GGUF only.
+**Success Criteria**: `stream=true` with non-GGUF models fails fast; PCM streams successfully; WAV streaming is rejected or coerced to non-streaming.
+**Tests**: Streaming tests for GGUF path; negative tests for non-GGUF streaming and WAV streaming.
+**Status**: Not Started
+
+### Stage 4: API polish + UI + docs
+**Goal**: Finalize API ergonomics (optional per-request override), update UI controls, and document NeuTTS setup and limitations.
+**Scope/Deliverables**:
+- OpenAI-compatible request examples for NeuTTS (stored voice + per-request override).
+- UI model/voice selection and default voice visibility.
+- Documentation for dependencies, offline setup, and streaming constraints.
+**Key Tasks**:
+- Update API schema docs and example payloads.
+- Update UI to surface NeuTTS models and stored voices.
+- Add setup guidance and streaming limitation notes to TTS docs.
+**Dependencies**:
+- UI configuration for provider catalog is in place.
+**Success Criteria**: UI shows NeuTTS models/voices; docs describe dependencies and streaming constraints; OpenAI-compatible API examples updated.
+**Tests**: UI smoke tests; docs/examples lint checks if applicable.
+**Status**: Not Started

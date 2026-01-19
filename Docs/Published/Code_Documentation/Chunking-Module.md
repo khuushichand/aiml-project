@@ -2,6 +2,8 @@
 
 This document explains the architecture, extension points, and best practices for the v2 Chunking subsystem. It is aimed at project developers and maintainers.
 
+See also: Guides/Chunking_Code_Guide.md for a surgical code-level map and usage tips.
+
 ## Purpose
 
 The Chunking module turns raw text (or structured content) into smaller, semantically meaningful units (“chunks”) suitable for RAG, embedding, and downstream analytics. It offers:
@@ -28,7 +30,7 @@ The Chunking module turns raw text (or structured content) into smaller, semanti
     - Hierarchical helpers and streaming utilities
     - `create_chunker()` factory
   - `strategies/` - Strategy implementations
-    - `words.py`, `sentences.py`, `paragraphs.py`, `tokens.py`, `json_xml.py`, `structure_aware.py`, `propositions.py`, `rolling_summarize.py`, `ebook_chapters.py`, `semantic.py`, …
+    - `words.py`, `sentences.py`, `paragraphs.py`, `tokens.py`, `json_xml.py`, `structure_aware.py`, `propositions.py`, `rolling_summarize.py`, `ebook_chapters.py`, `semantic.py`, `code.py`, `code_ast.py`
   - `templates.py` - Template system (processor/manager/learner)
   - `template_initialization.py` - Built-in chunking template seeding and updates (DB-backed)
   - `__init__.py` - Public API surface, defaults, and legacy bridges
@@ -72,10 +74,101 @@ Example (excerpt):
     - `get_strategy(method)` - retrieve or instantiate a strategy
     - `clear_cache()`, `get_cache_stats()`
 
-- Compatibility helpers:
+### Capabilities Endpoint
+
+`GET /api/v1/chunking/capabilities`
+
+Returns the current chunking capabilities derived from the runtime registry and defaults.
+
+Note: The methods list is the union of `ChunkingMethod` enum values and runtime‑registered strategy keys returned by `Chunker().get_available_methods()`. This ensures clients see non‑enum methods (for example, `structure_aware` and `code_ast`) when those strategies are available at runtime.
+
+#### Method-Specific Options (example payload shape)
+
+The endpoint returns `method_specific_options` for discoverability. Below is an illustrative shape (keys may evolve):
+
+```
+{
+  "method_specific_options": {
+    "code": {
+      "code_mode": ["auto", "ast", "heuristic"],
+      "language_hints": {"py": "python", "js": "javascript", "jsx": "javascript", "ts": "typescript", "tsx": "typescript"}
+    },
+    "tokens": {
+      "tokenizer_name_or_path": "gpt2",
+      "add_special_tokens": [true, false]
+    },
+    "json": {
+      "preserve_metadata": [true, false],
+      "single_metadata_reference": [true, false],
+      "metadata_reference_key": "__meta_ref__",
+      "json_chunkable_data_key": "data"
+    },
+    "xml": {
+      "preserve_metadata": [true, false]
+    },
+    "structure_aware": {
+      "preserve_tables": [true, false],
+      "preserve_code_blocks": [true, false],
+      "preserve_headers": [true, false],
+      "preserve_lists": [true, false],
+      "table_serialization": ["markdown", "entity", "narrative"],
+      "contextual_header_mode": ["none", "simple", "contextual"],
+      "max_breadcrumb_levels": 6
+    },
+    "propositions": {
+      "engine": ["heuristic", "spacy", "llm", "auto"],
+      "aggressiveness": [0, 1, 2],
+      "min_proposition_length": 15,
+      "prompt_profile": ["generic", "claimify", "gemma_aps"]
+    }
+  }
+}
+```
+
+#### Hierarchical Support and Template Rules
+
+The endpoint includes `"hierarchical_support": true`. To use hierarchical splitting at call time (e.g., via `process_text`), pass either `{"hierarchical": true}` or a `hierarchical_template` with custom boundaries.
+
+Boundary rule schema and limits:
+
+```
+{
+  "hierarchical_template": {
+    "boundaries": [
+      { "kind": "chapter", "pattern": "^Chapter\\s+\\d+\\b", "flags": "im" },
+      { "kind": "appendix", "pattern": "^Appendix\\s+[A-Z]\\b", "flags": "im" }
+    ]
+  }
+}
+```
+
+- Allowed flags: only `i` and `m`.
+- Safety: patterns are checked via regex_safety (length cap, dangerous-constructs check, compile guard); RE2 fallback is used when available.
+- Limits: max 20 rules; max pattern length 256 characters.
+- Related config (config.txt [Chunking]): `regex_timeout_seconds`, `regex_disable_multiprocessing`, `regex_simple_only`.
+
+Example response:
+
+```
+{
+  "methods": ["words", "sentences", "paragraphs", "tokens", "semantic", "json", "xml", "ebook_chapters", "rolling_summarize", "structure_aware", "code", "code_ast"],
+  "default_options": { ... },
+  "llm_required_methods": ["rolling_summarize", "propositions"],
+  "hierarchical_support": true,
+  "notes": "Text chunking capabilities. For method='code', the option 'code_mode' controls routing: 'auto' (default), 'ast' (Python), or 'heuristic'. Ingestion-specific chunkers are configured via templates or step config.",
+  "method_specific_options": {
+    "code": {
+      "code_mode": ["auto", "ast", "heuristic"],
+      "language_hints": {"py": "python", "js": "javascript", "jsx": "javascript", "ts": "typescript", "tsx": "typescript"}
+    }
+  }
+}
+```
+
+- Legacy bridges (back-compat):
   - `from ...Chunking import improved_chunking_process` - simplified wrapper around `Chunker`
   - `from ...Chunking import chunk_for_embedding` - standardized format for embedding pipelines
-  - `from ...Chunking import flatten_hierarchical` - convenience flattener built on the v2 chunker
+  - `from ...Chunking import flatten_hierarchical` - bridge to v1 flattener when available
 
 ## Strategy Interface
 
@@ -97,6 +190,45 @@ When writing a new strategy:
 - `__init__.py` also sets legacy defaults `DEFAULT_CHUNK_OPTIONS` and reads system config (if available) for a few toggles (e.g., proposition engine defaults).
 - Some `process_text` behaviors (e.g., adaptive sizing) respond to options like `adaptive`, `base_adaptive_chunk_size`, etc.
 
+## Config & Metrics Integration (Library Hooks)
+
+The v2 Chunking module is being extracted into a reusable library (`tldw_chunking`) so that it can be used outside the server. To keep the core portable while still honoring tldw_server settings and observability, configuration and metrics are wired through narrow integration hooks.
+
+### Config Provider
+
+- The library defines a small config integration module (planned name: `tldw_chunking.config_integration`):
+  - `ChunkingConfigProvider` protocol with a single method:
+    - `get(section: str, key: str, default: Optional[str] = None) -> Optional[str]`
+  - Global helpers:
+    - `set_config_provider(provider: Optional[ChunkingConfigProvider])`
+    - `get_config_provider()`
+- Library code uses the following precedence for config-like values:
+  1. Environment variables (e.g., `STRICT_GRAPHEME_END_EXPANSION`, `CHUNKING_MAX_STREAMING_FLUSH_CHARS`).
+  2. Optional `ChunkingConfigProvider` for `[Chunking]` keys (e.g., `cache_copy_on_access`, `verbose_logging`, `regex_timeout_seconds`, `max_streaming_flush_threshold_chars`).
+  3. Hard-coded defaults in `ChunkerConfig` or the relevant helper.
+- Inside tldw_server, an adapter (e.g., `tldw_Server_API.app.core.Chunking.config_adapter`) wraps `load_comprehensive_config()` in a `ChunkingConfigProvider` implementation and installs it at startup via `set_config_provider(...)`. The core library never imports `tldw_Server_API.app.core.config` directly.
+
+### Metrics Facade
+
+- The library exposes metrics via a facade module (planned name: `tldw_chunking.metrics_integration`) instead of importing the server’s `Metrics` module:
+  - `ChunkingSpan` protocol: context manager with `add_event`, `set_attribute`, `record_exception`.
+  - `ChunkingMetricsFacade` protocol with:
+    - `increment_counter(name: str, value: float = 1.0, labels: Optional[Dict[str, str]] = None)`
+    - `observe_histogram(name: str, value: float, labels: Optional[Dict[str, str]] = None)`
+    - `set_gauge(name: str, value: float, labels: Optional[Dict[str, str]] = None)`
+    - `start_span(name: str, attributes: Optional[Dict[str, Any]] = None) -> ChunkingSpan`
+  - Global helpers:
+    - `set_metrics_facade(facade: Optional[ChunkingMetricsFacade])`
+    - `increment_counter(...)`, `observe_histogram(...)`, `set_gauge(...)`, `start_span(...)`
+    - Thin helpers `add_span_event(span, name, attributes=None)`, `set_span_attribute(span, key, value)`, `record_span_exception(span, exc)`
+  - A no-op default implementation is provided so the library can run without any metrics backend.
+- Library call sites (e.g., `Chunker.process_text`, cache metrics, streaming helpers) import from this facade and do not depend on tldw_server internals.
+- Inside tldw_server, a bridge module (e.g., `tldw_Server_API.app.core.Chunking.metrics_adapter`) implements `ChunkingMetricsFacade` by delegating to `tldw_Server_API.app.core.Metrics` and is installed at startup via `set_metrics_facade(...)`. Metric registration and exporter wiring remain on the server side.
+
+When contributing new features to Chunking, prefer:
+- Reading configuration via constructor parameters, environment variables, or the config provider (not direct server config imports).
+- Emitting observability via the metrics facade (or the existing Prometheus helpers in `utils/metrics.py`), not direct server metrics imports.
+
 ## Hierarchical & Templates
 
 - Hierarchical chunking builds a simple tree of sections and blocks (headers, paragraphs, code fences, lists, hrules, tables, template matches), then chunks leaf blocks using a base method.
@@ -109,7 +241,7 @@ When writing a new strategy:
 
 - Chunking integrates with the unified metrics system (`app/core/Metrics`).
 - High-level operations observe histograms (e.g., front-matter parsing, header stripping, overall processing) and increment counters.
-- Prometheus metric definitions (chunk counts, bytes, timing) ship with the module for benchmarks and existing tests.
+- Legacy v1 registers Prometheus metric definitions (chunk counts, bytes, timing) for benchmarks and existing tests.
 - Use labels consistently (e.g., `method`, `language`) for cardinality control.
 
 ## Caching
@@ -155,9 +287,37 @@ When writing a new strategy:
 - Hierarchical (flat):
   - `chunks = chunker.chunk_text_hierarchical_flat(text, method="words", max_size=400, overlap=50, template=template_dict)`
 - End-to-end normalization:
-  - `rows = chunker.process_text(text, options={...})` - returns a list of dicts with consistent metadata fields. JSON frontmatter is stripped only when the leading object includes the sentinel key (`__tldw_frontmatter__` by default); override with `frontmatter_sentinel_key` or disable via `enable_frontmatter_parsing=False`.
+  - `rows = chunker.process_text(text, options={...})` - returns a list of dicts with consistent metadata fields. JSON frontmatter is stripped only when the leading object carries the sentinel key (`__tldw_frontmatter__` by default); override with `frontmatter_sentinel_key` or disable via `enable_frontmatter_parsing=False`.
 - Streaming a large file:
   - `for ch in chunker.chunk_file_stream(path, method="sentences", max_size=2048): ...`
+
+## Code Chunking (Python and JavaScript/TypeScript)
+
+- Method: `code`
+- Routing option: `code_mode` in options controls backend:
+  - `auto` (default): if `language` starts with `py`, routes to AST-based Python strategy; otherwise uses heuristic strategy.
+  - `ast`: force AST-based Python strategy (`strategies/code_ast.py`).
+  - `heuristic`: force heuristic strategy (`strategies/code.py`).
+
+- Python (AST): segments into import block, top-level classes, and functions with precise char offsets and greedy packing/overlap.
+- JavaScript/TypeScript (heuristic): recognizes `export default class Name`, `class Name`, `export function name(...)`, `function name(...)`,
+  `export const name = (...) => {}`, `const name = function (...)`, `export default function name(...)`, `export default function (...)`,
+  `export default (...) => {}`, `export interface Name {}`, and `export type Name = ...` and packs blocks accordingly.
+
+Example usage:
+
+```
+rows = chunker.process_text(
+    code_text,
+    options={
+        'method': 'code',
+        'language': 'python',
+        'code_mode': 'ast',
+        'max_size': 800,
+        'overlap': 50,
+    },
+)
+```
 
 ## Maintenance Notes
 

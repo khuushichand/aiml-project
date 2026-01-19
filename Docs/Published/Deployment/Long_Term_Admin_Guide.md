@@ -6,11 +6,11 @@ Audience: Operators and administrators running tldw_server in production
 This guide covers day-2 operations: upgrades, backups, monitoring, capacity and cost management, security operations, and troubleshooting. Pair this with the Production Hardening checklist and Metrics Cheatsheet.
 
 Related documents
-- First-time production setup: `Deployment/First_Time_Production_Setup.md`
-- Production hardening checklist: `User_Guides/Production_Hardening_Checklist.md`
-- Reverse proxy examples: `Deployment/Reverse_Proxy_Examples.md`
-- Postgres migration: `Deployment/Postgres_Migration_Guide.md`
-- Metrics & Grafana: `Monitoring/Metrics_Cheatsheet.md`
+- First-time production setup: `Docs/Deployment/First_Time_Production_Setup.md`
+- Production hardening checklist: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`
+- Reverse proxy examples: `Docs/Deployment/Reverse_Proxy_Examples.md`
+- Postgres migration: `Docs/Deployment/Postgres_Migration_Guide.md`
+- Metrics & Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
 - Environment reference: `Env_Vars.md`
 
 ## 1) Service Management
@@ -20,18 +20,18 @@ Docker Compose
 - Stop: `docker compose down`
 - Logs: `docker compose logs -f app`
 - Rebuild: `docker compose build app && docker compose up -d`
-- Sidecar workers: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build` (see `Deployment/Sidecar_Workers.md`).
+- Sidecar workers: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build` (see `Docs/Deployment/Sidecar_Workers.md`).
 - Scale workers (CPU bound): set `UVICORN_WORKERS` env and rebuild or override at runtime.
-- Overrides: `docker-compose.override.yml` ships with production defaults (tldw_production, CORS, Postgres); Compose auto-loads it.
+ - Overrides: `docker-compose.override.yml` ships with production defaults.
 
 systemd (bare-metal)
 - Status: `sudo systemctl status tldw`
 - Logs: `sudo journalctl -u tldw -f`
 - Restart: `sudo systemctl restart tldw`
-- Sidecar worker units/timers: `Deployment/systemd/` (see `Deployment/Sidecar_Workers.md`).
+- Sidecar worker units/timers: `Docs/Deployment/systemd/` (see `Docs/Deployment/Sidecar_Workers.md`).
 
 launchd (macOS)
-- LaunchAgents/LaunchDaemons examples: `Deployment/launchd/` (see `Deployment/Sidecar_Workers.md`).
+- LaunchAgents/LaunchDaemons examples: `Docs/Deployment/launchd/` (see `Docs/Deployment/Sidecar_Workers.md`).
 
 ## 2) Upgrades & Rollbacks
 
@@ -48,7 +48,7 @@ Bare-metal
 
 Database migrations
 - AuthNZ: startup runs migrations automatically; check logs for “Ensured AuthNZ migrations”.
-- Content/Workflows: see `Deployment/Postgres_Migration_Guide.md` for SQLite→Postgres migration and validation.
+- Content/Workflows: see `Postgres_Migration_Guide.md` for SQLite→Postgres migration and validation.
 
 ## 3) Backups & Restore
 
@@ -80,8 +80,6 @@ SQLite (file copy)
 cp Databases/*.db /backups/sqlite_$(date +%F)/
 ```
 
-Admin Data Ops backups (per-dataset) are available via `/api/v1/admin/backups` for `media`, `chacha`, `prompts`, `evaluations`, `audit`, and `authnz`. A full bundle export/import workflow is planned; see `Docs/Product/DB_Exports_SQLite_PRD.md`.
-
 Disaster recovery (Compose)
 1. Provision a new host with Docker/Compose, same `.env` and volumes.
 2. Restore DB dumps/files and persistent volumes.
@@ -96,7 +94,7 @@ Endpoints
 - Chat/LLM cost and tokens: `GET /api/v1/metrics/chat`.
 
 Grafana + Prometheus
-- Use the sample dashboards and alerts referenced in `Monitoring/Metrics_Cheatsheet.md`.
+- Use the sample dashboards and alerts referenced in `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`.
 - Suggested alerts: HTTP 5xx error rate, p95 latency, Postgres connection saturation, token/cost spikes, user storage near quota.
 
 Logs
@@ -117,10 +115,6 @@ Database
 - Prefer Postgres for multi-user. Tune pool sizes with `TLDW_DB_POOL_SIZE`, `TLDW_DB_MAX_OVERFLOW`, `TLDW_DB_POOL_TIMEOUT`.
 - Postgres maintenance: schedule VACUUM/ANALYZE, monitor autovacuum, and size indices.
 - SQLite: enable WAL; avoid concurrent heavy writers.
- - Kanban FTS maintenance (optimize/rebuild):
-   - Admin API: `POST /api/v1/admin/kanban/fts/optimize?user_id=1` or `POST /api/v1/admin/kanban/fts/rebuild?user_id=1` (admin auth required).
-   - CLI: `python Helper_Scripts/DB-Related/kanban_fts_maintenance.py --user-id 1 --action optimize` (or `rebuild`).
-   - Use optimize after large imports/migrations; reserve rebuilds for corruption or major search issues (plan for locks/downtime).
 
 LLM providers & cost
 - Track provider usage and cost via metrics and admin endpoints listed in the README under Admin Reporting.
@@ -130,7 +124,7 @@ LLM providers & cost
 RAG & embeddings
 - For high concurrency, consider the enterprise embeddings worker/orchestrator topology (see Embeddings Deployment Guide).
 - Place vector stores on persistent, fast storage; monitor `embedding_cache_*` metrics.
- - Kubernetes samples are provided under `Samples/Kubernetes` (namespace, Postgres, Redis, app deployment, ingress). Adjust image, TLS, and resources for your cluster.
+ - Kubernetes samples are provided under `Samples/Kubernetes`.
 
 ## 6) Security Operations
 
@@ -145,7 +139,7 @@ Registration controls (multi-user)
 Network
 - Enforce TLS at the proxy and restrict `ALLOWED_ORIGINS`.
 - Ensure WebSocket upgrade rules for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
- - Caddy example is available at `Samples/Caddy/Caddyfile`.
+ - Caddy example: `Samples/Caddy/Caddyfile`.
 
 Rate limiting
 - Keep global and module-specific rate limiters enabled; adjust per your user base.
@@ -153,10 +147,6 @@ Rate limiting
 
 Auditing
 - Centralize and retain logs. Export audit logs periodically (see Multi-User Deployment Guide examples).
-- Privilege snapshot retention
-  - Daily job keeps all org/team snapshots for 90 days and thins anything older to a single snapshot per ISO week (per org/team) out to 12 months.
-  - Snapshots older than 12 months are purged automatically. Tune via `PRIVILEGE_SNAPSHOT_RETENTION_DAYS` and `PRIVILEGE_SNAPSHOT_WEEKLY_RETENTION_DAYS`.
-  - Metrics: `privilege_snapshots_table_rows` gauge (all backends) plus `privilege_snapshots_table_bytes` on Postgres. Alert when growth trends upward or size exceeds 400 MB.
 
 ## 7) Routine Tasks (Checklist)
 
@@ -209,8 +199,8 @@ Recommended practice
 ## 10) References
 
 - README admin endpoints and usage reporting: `README.md`
-- Registration & AuthNZ configuration: `User_Guides/Authentication_Setup.md`
-- Multi-User deployment patterns: `User_Guides/Multi-User_Deployment_Guide.md`
-- Reverse proxy and TLS: `Deployment/Reverse_Proxy_Examples.md`
+- Registration & AuthNZ configuration: `Docs/User_Guides/Authentication_Setup.md`
+- Multi-User deployment patterns: `Docs/User_Guides/Multi-User_Deployment_Guide.md`
+- Reverse proxy and TLS: `Docs/Deployment/Reverse_Proxy_Examples.md`
 - Postgres/SQLite backends: `Docs/Database-Backends.md`
-- Metrics and dashboards: `Monitoring/Metrics_Cheatsheet.md`
+- Metrics and dashboards: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`

@@ -4,7 +4,7 @@ Description=Ensure tldw worker (audio) is running
 
 [Timer]
 OnBootSec=30s
-OnUnitActiveSec=5m
+OnStartupSec=30s
 Unit=tldw-worker-audio.service
 Persistent=true
 

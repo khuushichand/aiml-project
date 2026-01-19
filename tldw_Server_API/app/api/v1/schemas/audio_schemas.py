@@ -92,7 +92,7 @@ class OpenAISpeechRequest(BaseModel):
     )
     voice_reference: Optional[str] = Field(
         default=None,
-        description="Base64-encoded audio data for voice cloning/reference. Supported by Higgs (3-10s), Chatterbox (5-20s), and VibeVoice models.",
+        description="Base64-encoded audio data for voice cloning/reference. Supported by NeuTTS, Higgs (3-10s), Chatterbox (5-20s), and VibeVoice models.",
     )
     reference_duration_min: Optional[float] = Field(
         default=None,
@@ -104,6 +104,29 @@ class OpenAISpeechRequest(BaseModel):
         default=None,
         description="Provider-specific parameters passed through to adapters (e.g., stability, clarity, cfg_scale).",
     )
+
+
+class VoiceEncodeRequest(BaseModel):
+    """Request schema for encoding stored voice references."""
+    voice_id: str = Field(..., description="Stored voice ID to encode")
+    provider: str = Field(default="neutts", description="Target provider for encoding artifacts")
+    reference_text: Optional[str] = Field(
+        default=None,
+        description="Reference text associated with the stored audio (required for NeuTTS)",
+    )
+    force: bool = Field(
+        default=False,
+        description="Re-encode even if artifacts already exist",
+    )
+
+
+class VoiceEncodeResponse(BaseModel):
+    """Response schema for encoding stored voice references."""
+    voice_id: str
+    provider: str
+    cached: bool = False
+    ref_codes_len: Optional[int] = None
+    reference_text: Optional[str] = None
 
 
 class OpenAITranscriptionRequest(BaseModel):

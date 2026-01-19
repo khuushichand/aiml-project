@@ -14,7 +14,6 @@ Core module: `tldw_Server_API.app.core.Claims_Extraction.claims_engine`
 
 Extractor selection (ClaimsEngine.run argument `claim_extractor`):
 - `"aps"`: APS-style propositions via PropositionChunkingStrategy (LLM required).
-- `"ner"`: NER-assisted extractor (spaCy). Selects sentences containing named entities; falls back to LLM if unavailable.
 - any other (default): LLM JSON extractor with heuristic fallback.
 
 Prompts (override via `Config_Files/Prompts/`):
@@ -26,12 +25,21 @@ Prompts (override via `Config_Files/Prompts/`):
 Verifier: `HybridClaimVerifier` (per claim)
 - Retrieval: uses provided `retrieve_fn(claim_text, top_k)` when available; otherwise uses passed `documents` (top_k default 5).
 - Evidence selection: collects up to 3 snippets; boosts documents containing numbers/dates that appear in the claim.
-- Strategy (`claim_verifier`):
-  - `"hybrid"` (default): try NLI first; if unavailable/low-confidence, fall back to LLM judge.
-  - `"nli"`: use only NLI; if unavailable or below threshold, return `nei` (no LLM fallback).
-  - `"llm"`: skip NLI entirely and use only the LLM judge.
-- NLI: local model (default `roberta-large-mnli`, override with `RAG_NLI_MODEL`/`RAG_NLI_MODEL_PATH`).
-- LLM judge: calls the provided `analyze` function with a strict-JSON judging prompt to return `{ label, confidence, rationale }`.
+- NLI first: attempts a local NLI model (default `roberta-large-mnli`, override with `RAG_NLI_MODEL`/`RAG_NLI_MODEL_PATH`). If confidence ≥ `conf_threshold` (default 0.7), returns `supported|refuted|nei` immediately.
+- LLM judge fallback: calls the provided `analyze` function with a strict-JSON judging prompt to return `{ label, confidence, rationale }`.
+
+### Provider Configuration
+
+Both the extractor and the LLM judge resolve provider, model, and temperature using the same strategy:
+
+- Read from top-level Claims settings when provided:
+  - `CLAIMS_LLM_PROVIDER`, `CLAIMS_LLM_MODEL`, `CLAIMS_LLM_TEMPERATURE`
+- Otherwise fall back to RAG defaults (if present):
+  - `RAG.default_llm_provider`, `RAG.default_llm_model`
+- Finally fall back to global default API:
+  - `default_api` (e.g., `openai`), with conservative temperature (`0.1`-`0.2`)
+
+The engine accepts an injected `analyze` function and passes through `model_override` and temperature as resolved above for consistency across paths.
 
 ## Output
 
@@ -46,7 +54,7 @@ Verifier: `HybridClaimVerifier` (per claim)
       "label": "supported|refuted|nei",
       "confidence": 0.0,
       "evidence": [{"doc_id": "...", "snippet": "...", "score": 0.0}],
-      "citations": [],
+    "citations": [{"doc_id": "...", "start": 0, "end": 120}],
       "rationale": "..."
     }
   ],
@@ -85,7 +93,6 @@ result = await engine.run(
     documents=documents,
     claim_extractor="aps",           # or "auto" for LLM+heuristic fallback
     claims_top_k=5,
-    claims_concurrency=8,
     claims_conf_threshold=0.7,
     claims_max=25,
     retrieve_fn=None,                # optional callable(claim_text, top_k)
@@ -97,6 +104,6 @@ print(result["summary"])
 ## Notes
 
 - `claim_extractor="auto"` currently prefers the LLM extractor with heuristic fallback; APS requires an LLM.
-- `claim_extractor="ner"` uses spaCy if available; configure model via `CLAIMS_LOCAL_NER_MODEL` (e.g., `en_core_web_sm`).
 - NLI is attempted first for efficiency; the LLM judge runs only when NLI is unavailable or below confidence threshold.
 - This engine is answer-time only; ingestion-time claims and API endpoints are documented separately.
+ - Citations are populated for supported/refuted decisions using the selected evidence snippets (document IDs with best-effort character ranges).

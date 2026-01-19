@@ -5,9 +5,11 @@
 API uses FastAPI framework.
 Designed to be simple and easy to use.
 Generative endpoints follow openai API spec where possible.
-See [API Design](API_Design.md) for more details. For a quick map of OpenAPI tags to their docs, see the [API Tag Index](API_Tags_Index.md).
+See [API Design](API_Design.md) for more details.
 
-See also: `Docs/Published/Code_Documentation/Ingestion_Pipeline_Audio.md` for the audio processing endpoint (`POST /api/v1/media/process-audios`).
+See also:
+- `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md` for the audio processing endpoint (`POST /api/v1/media/process-audios`).
+- `Docs/API-related/Email_Processing_API.md` for the email processing endpoint (`POST /api/v1/media/process-emails`) and email ingestion via `/media/add`.
 
 ### URLs
 - **URLs**
@@ -30,49 +32,39 @@ See also: `Docs/Published/Code_Documentation/Ingestion_Pipeline_Audio.md` for th
   - Export chat history; fetch messages formatted for completions
   - Use Chat API for LLM replies with `conversation_id`/`character_id`
   - See: [API Design](API_Design.md) for character chat endpoints overview
-- Conversation metadata API: list/search, tree view, analytics, and knowledge-save under `/api/v1/chat/conversations` and `/api/v1/chat/analytics` (alias: `/api/v1/chats/conversations`)
+- Conversation metadata API: list/search, tree view, and analytics under `/api/v1/chat/conversations` and `/api/v1/chat/analytics` (alias: `/api/v1/chats/conversations`)
   - Includes ranking modes (`bm25|recency|hybrid|topic`) and topic/state filters
+- Knowledge-save API: `POST /api/v1/chat/knowledge/save`
 
 #### RAG (Retrieval-Augmented Generation) - `/api/v1/rag`
 
-The RAG module provides advanced search and question-answering capabilities across your content. It achieves 100% test coverage and is production-ready.
+Unified RAG endpoints provide hybrid search (FTS5 + vectors + reranking), optional answer generation, citations, and streaming.
 
-##### Search Endpoints
+##### Core Endpoints
 
-- **`POST /api/v1/rag/search`** - Simple search with hybrid (BM25 + semantic) capabilities
-  - Search across multiple databases (media, notes, characters, chat history)
-  - Support for keyword filtering
-  - Configurable search types (hybrid, semantic, fulltext)
+- `POST /api/v1/rag/search` - Unified search (all features via parameters)
+- `POST /api/v1/rag/search/stream` - NDJSON streaming of answer chunks (set `enable_generation=true`)
+- `GET /api/v1/rag/simple` - Convenience query param search with sensible defaults
+- `GET /api/v1/rag/advanced` - Convenience endpoint with common features enabled (citations/answer)
+- `POST /api/v1/rag/batch` - Batch multiple queries concurrently
 
-- **`POST /api/v1/rag/search/advanced`** - Advanced search with full configuration control
-  - Multiple search strategies (vanilla, query_fusion, HyDE)
-  - Fine-tuned hybrid weights and similarity thresholds
-  - Metadata filters and date range queries
-  - Reranking and score inclusion options
-
-##### Agent Endpoints
-
-- **`POST /api/v1/rag/agent`** - Simple Q&A agent with automatic context retrieval
-  - Conversational interface with memory
-  - Automatic search across specified databases
-  - Returns response with source citations
-
-- **`POST /api/v1/rag/agent/advanced`** - Research agent with advanced capabilities
-  - Multiple modes (RAG, research)
-  - Tool support (web_search, reasoning, calculator, code_execution)
-  - Custom system prompts
-  - Streaming support via Server-Sent Events
-  - Detailed statistics and metrics
-
-##### Health Check
-
-- **`GET /api/v1/rag/health`** - Service health status
-  - Monitor RAG service availability
-  - Used for load balancer health checks
+Notes:
+- “Agent” endpoints are not exposed in the current server. Use `/rag/search` with `enable_generation=true` or `/rag/search/stream`.
+- Health and ops endpoints are available under `/api/v1/rag/health*` and `/api/v1/rag/cache*`.
 
 For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
-- [RAG API Documentation](RAG_API_Documentation.md) - Architecture and implementation details
+- [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details
+
+#### Media Ingestion - `/api/v1/media`
+
+- `POST /api/v1/media/add` - ingest and persist media (synchronous)
+- `POST /api/v1/media/ingest/jobs` - async ingest (one job per item)
+- `GET /api/v1/media/ingest/jobs?batch_id=...` - list jobs for a batch
+- `GET /api/v1/media/ingest/jobs/{job_id}` - job status
+- `DELETE /api/v1/media/ingest/jobs/{job_id}` - cancel job
+
+See: [Media Ingest Jobs API](Media_Ingest_Jobs_API.md)
 
 #### Reading List - `/api/v1/reading`
 

@@ -8,7 +8,7 @@ embeddings of context-expanded blocks.
 
 - POST `/api/v1/audio/segment/transcript`
 
-## Authentication
+## Auth + Rate Limits
 
 - Single-user mode: send `X-API-KEY: <your_key>`
 - Multi-user mode (JWT): send `Authorization: Bearer <JWT>`

@@ -178,12 +178,12 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
   }, [modelOptions])
 
   const activeProvider = React.useMemo(() => {
-    if (modelOptions.length === 0) return manualProvider
+    if (modelOptions.length === 0) return manualProvider.trim()
     return modelMeta.get(selectedModel)?.provider || ""
   }, [manualProvider, modelMeta, modelOptions.length, selectedModel])
 
   const activeModel = React.useMemo(() => {
-    if (modelOptions.length === 0) return manualModel
+    if (modelOptions.length === 0) return manualModel.trim()
     return selectedModel
   }, [manualModel, modelOptions.length, selectedModel])
 
@@ -344,12 +344,14 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
           }
         })
       )
+      const isTerminal = (status?: string) =>
+        ["completed", "failed", "cancelled"].includes(String(status))
+      const shouldRefresh = updates.some((job) => {
+        const prev = jobs.find((prevJob) => prevJob.job_id === job.job_id)
+        return isTerminal(job.status) && !isTerminal(prev?.status)
+      })
       setJobs(updates)
-      if (
-        updates.some((job) =>
-          ["completed", "failed", "cancelled"].includes(String(job.status))
-        )
-      ) {
+      if (shouldRefresh) {
         void refreshDocuments()
       }
     } catch (err) {
