@@ -324,6 +324,7 @@ class TestSafeStreamGenerator:
         assert len(start_lines) == 1
         start_payload = json.loads(start_lines[0][6:])
         assert start_payload.get("tldw_system_message_id") == "sys_123"
+        assert start_payload.get("tldw_conversation_id") == "conv_123"
 
         # Check stream_end event
         end_msgs = [m for m in messages if "stream_end" in m]
@@ -334,6 +335,7 @@ class TestSafeStreamGenerator:
         end_payload = json.loads(end_lines[0][6:])
         assert end_payload.get("tldw_message_id") == "msg_456"
         assert end_payload.get("tldw_system_message_id") == "sys_123"
+        assert end_payload.get("tldw_conversation_id") == "conv_123"
 
     @pytest.mark.asyncio
     async def test_sync_stream_closed_on_cancel(self):
@@ -602,6 +604,7 @@ class TestSSENormalization:
         parsed = []
         for m in content_lines:
             data = json.loads(m[6:m.index("\n")])
+            assert data.get("tldw_conversation_id") == "conv_sse"
             content = data["choices"][0]["delta"].get("content")
             if content:
                 parsed.append(content)

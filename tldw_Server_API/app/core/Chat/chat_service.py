@@ -42,11 +42,10 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (
 from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.Chat.streaming_utils import (
-    create_streaming_response_with_timeout,
-)
-from tldw_Server_API.app.core.Chat.streaming_utils import (
+    CHAT_STREAM_INCLUDE_METADATA,
     HEARTBEAT_INTERVAL as CHAT_HEARTBEAT_INTERVAL,
     STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
+    create_streaming_response_with_timeout,
 )
 from tldw_Server_API.app.core.Chat.request_queue import (
     get_request_queue,
@@ -1683,10 +1682,22 @@ async def execute_streaming_call(
             try:
                 import json as _json
                 payload = {"error": {"message": msg, "type": typ}}
+                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                    payload["conversation_id"] = final_conversation_id
+                    payload["tldw_conversation_id"] = final_conversation_id
+                    if system_message_id:
+                        payload["tldw_system_message_id"] = system_message_id
                 yield f"data: {_json.dumps(payload)}\n\n"
             except Exception:
                 # Fallback string serialization
-                yield f"data: {{\"error\":{{\"message\":\"{msg}\",\"type\":\"{typ}\"}}}}\n\n"
+                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                    yield (
+                        f"data: {{\"error\":{{\"message\":\"{msg}\",\"type\":\"{typ}\"}},"
+                        f"\"conversation_id\":\"{final_conversation_id}\","
+                        f"\"tldw_conversation_id\":\"{final_conversation_id}\"}}\n\n"
+                    )
+                else:
+                    yield f"data: {{\"error\":{{\"message\":\"{msg}\",\"type\":\"{typ}\"}}}}\n\n"
             yield "data: [DONE]\n\n"
         await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
         return StreamingResponse(
@@ -1776,9 +1787,21 @@ async def execute_streaming_call(
             try:
                 import json as _json
                 payload = {"error": {"message": _err_message, "type": _err_type}}
+                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                    payload["conversation_id"] = final_conversation_id
+                    payload["tldw_conversation_id"] = final_conversation_id
+                    if system_message_id:
+                        payload["tldw_system_message_id"] = system_message_id
                 yield f"data: {_json.dumps(payload)}\n\n"
             except Exception:
-                yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
+                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                    yield (
+                        f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}},"
+                        f"\"conversation_id\":\"{final_conversation_id}\","
+                        f"\"tldw_conversation_id\":\"{final_conversation_id}\"}}\n\n"
+                    )
+                else:
+                    yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
             yield "data: [DONE]\n\n"
 
         await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)

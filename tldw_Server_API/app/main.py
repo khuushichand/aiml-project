@@ -1898,11 +1898,15 @@ async def lifespan(app: FastAPI):
     core_jobs_task = None
     files_jobs_task = None
     data_tables_jobs_task = None
+    prompt_studio_jobs_task = None
+    privilege_snapshot_task = None
     audio_jobs_task = None
     media_ingest_jobs_task = None
     chatbooks_cleanup_stop_event = None
     files_jobs_stop_event = None
     data_tables_jobs_stop_event = None
+    prompt_studio_jobs_stop_event = None
+    privilege_snapshot_stop_event = None
     media_ingest_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
@@ -1918,6 +1922,33 @@ async def lifespan(app: FastAPI):
             create_from_settings_for_user as _create_vs_from_settings,
         )
         from tldw_Server_API.app.core.config import settings as _app_settings
+
+        def _env_flag(key: str, default: bool) -> bool:
+            raw = _os.getenv(key)
+            if raw is None or str(raw).strip() == "":
+                return bool(default)
+            return str(raw).strip().lower() in {"true", "1", "yes", "y", "on"}
+
+        def _route_default(route_key: str, *, default_stable: bool = True) -> bool:
+            try:
+                if globals().get("_TEST_MODE"):
+                    return False
+            except Exception:
+                return False
+            try:
+                return bool(route_enabled(route_key, default_stable=default_stable))
+            except Exception:
+                return bool(default_stable)
+
+        _sidecar_mode = _env_flag("TLDW_WORKERS_SIDECAR_MODE", False)
+
+        def _should_start_worker(flag_key: str, route_key: str, *, default_stable: bool = True) -> bool:
+            if _sidecar_mode:
+                return False
+            return _env_flag(flag_key, _route_default(route_key, default_stable=default_stable))
+
+        if _sidecar_mode:
+            logger.info("Sidecar worker mode enabled; in-process Jobs workers are disabled")
 
         # Use per-user evaluations DB for cleanup; default to single-user ID
         _single_uid = int(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
@@ -1994,6 +2025,8 @@ async def lifespan(app: FastAPI):
             "y",
             "on",
         }
+        if _sidecar_mode:
+            _core_worker_enabled = False
         if _is_core and _core_worker_enabled:
             core_jobs_stop_event = _asyncio.Event()
             core_jobs_task = _asyncio.create_task(_run_cb_jobs(core_jobs_stop_event))
@@ -2009,7 +2042,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         from tldw_Server_API.app.core.File_Artifacts.jobs_worker import run_file_artifacts_jobs_worker as _run_files_jobs
 
-        _enabled = _os.getenv("FILES_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        _enabled = _should_start_worker("FILES_JOBS_WORKER_ENABLED", "files")
         if _enabled:
             files_jobs_stop_event = _asyncio.Event()
             files_jobs_task = _asyncio.create_task(_run_files_jobs(files_jobs_stop_event))
@@ -2025,7 +2058,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         from tldw_Server_API.app.core.Data_Tables.jobs_worker import run_data_tables_jobs_worker as _run_data_tables_jobs
 
-        _enabled = _os.getenv("DATA_TABLES_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        _enabled = _should_start_worker("DATA_TABLES_JOBS_WORKER_ENABLED", "data-tables")
         if _enabled:
             data_tables_jobs_stop_event = _asyncio.Event()
             data_tables_jobs_task = _asyncio.create_task(_run_data_tables_jobs(data_tables_jobs_stop_event))
@@ -2034,6 +2067,42 @@ async def lifespan(app: FastAPI):
             logger.info("Data Tables Jobs worker disabled by flag (DATA_TABLES_JOBS_WORKER_ENABLED)")
     except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
         logger.warning(f"Failed to start Data Tables Jobs worker: {e}")
+
+    # Prompt Studio Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.services.jobs_worker import (
+            run_prompt_studio_jobs_worker as _run_prompt_studio_jobs,
+        )
+
+        _enabled = _should_start_worker("PROMPT_STUDIO_JOBS_WORKER_ENABLED", "prompt-studio")
+        if _enabled:
+            prompt_studio_jobs_stop_event = _asyncio.Event()
+            prompt_studio_jobs_task = _asyncio.create_task(_run_prompt_studio_jobs(prompt_studio_jobs_stop_event))
+            logger.info("Prompt Studio Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Prompt Studio Jobs worker disabled by flag (PROMPT_STUDIO_JOBS_WORKER_ENABLED)")
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
+        logger.warning(f"Failed to start Prompt Studio Jobs worker: {e}")
+
+    # Privilege snapshot worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.privilege_snapshot_worker import (
+            run_privilege_snapshot_worker as _run_priv_snapshot,
+        )
+
+        _enabled = _should_start_worker("PRIVILEGE_SNAPSHOT_WORKER_ENABLED", "privileges")
+        if _enabled:
+            privilege_snapshot_stop_event = _asyncio.Event()
+            privilege_snapshot_task = _asyncio.create_task(_run_priv_snapshot(privilege_snapshot_stop_event))
+            logger.info("Privilege snapshot worker started with explicit stop_event signal")
+        else:
+            logger.info("Privilege snapshot worker disabled by flag (PRIVILEGE_SNAPSHOT_WORKER_ENABLED)")
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
+        logger.warning(f"Failed to start privilege snapshot worker: {e}")
 
     # Embeddings Vector Compactor (soft-delete propagation)
     try:
@@ -2057,7 +2126,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         from tldw_Server_API.app.services.audio_jobs_worker import run_audio_jobs_worker as _run_audio_jobs
 
-        _enabled = _os.getenv("AUDIO_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        _enabled = _should_start_worker("AUDIO_JOBS_WORKER_ENABLED", "audio-jobs")
         if _enabled:
             audio_jobs_stop_event = _asyncio.Event()
             audio_jobs_task = _asyncio.create_task(_run_audio_jobs(audio_jobs_stop_event))
@@ -2073,7 +2142,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         from tldw_Server_API.app.services.media_ingest_jobs_worker import run_media_ingest_jobs_worker as _run_media_jobs
 
-        _enabled = _os.getenv("MEDIA_INGEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        _enabled = _should_start_worker("MEDIA_INGEST_JOBS_WORKER_ENABLED", "media")
         if _enabled:
             media_ingest_jobs_stop_event = _asyncio.Event()
             media_ingest_jobs_task = _asyncio.create_task(_run_media_jobs(media_ingest_jobs_stop_event))
@@ -2094,6 +2163,8 @@ async def lifespan(app: FastAPI):
         _enabled = _os.getenv("EVALUATIONS_ABTEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
         if not _enabled:
             _enabled = _os.getenv("EVALS_ABTEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if _sidecar_mode:
+            _enabled = False
         if _enabled:
             evals_abtest_jobs_stop_event = _asyncio.Event()
             evals_abtest_jobs_task = _asyncio.create_task(_run_abtest_jobs(evals_abtest_jobs_stop_event))
@@ -2732,6 +2803,28 @@ async def lifespan(app: FastAPI):
                     data_tables_jobs_task.cancel()
             else:
                 data_tables_jobs_task.cancel()
+        if "prompt_studio_jobs_task" in locals() and prompt_studio_jobs_task:
+            # Prefer graceful stop via explicit stop_event
+            if "prompt_studio_jobs_stop_event" in locals() and prompt_studio_jobs_stop_event:
+                try:
+                    prompt_studio_jobs_stop_event.set()
+                    await _asyncio.wait_for(prompt_studio_jobs_task, timeout=5.0)
+                    logger.info("Prompt Studio Jobs worker stopped via stop_event")
+                except Exception:
+                    prompt_studio_jobs_task.cancel()
+            else:
+                prompt_studio_jobs_task.cancel()
+        if "privilege_snapshot_task" in locals() and privilege_snapshot_task:
+            # Prefer graceful stop via explicit stop_event
+            if "privilege_snapshot_stop_event" in locals() and privilege_snapshot_stop_event:
+                try:
+                    privilege_snapshot_stop_event.set()
+                    await _asyncio.wait_for(privilege_snapshot_task, timeout=5.0)
+                    logger.info("Privilege snapshot worker stopped via stop_event")
+                except Exception:
+                    privilege_snapshot_task.cancel()
+            else:
+                privilege_snapshot_task.cancel()
         if "audio_jobs_task" in locals() and audio_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "audio_jobs_stop_event" in locals() and audio_jobs_stop_event:

@@ -130,9 +130,12 @@ Notes:
 - `JOBS_LEASE_RENEW_SECONDS`: Renewal cadence while a worker processes a job (default `30`).
 - `JOBS_LEASE_RENEW_JITTER_SECONDS`: Jitter (seconds) applied to renewals to avoid herd behavior (default `5`).
 - `JOBS_LEASE_MAX_SECONDS`: Cap for acquire/renew lease seconds (default `3600`).
+- `TLDW_WORKERS_SIDECAR_MODE`: When true, skip in-process Jobs workers so you can run them as sidecars (`true|false`, default `false`).
 - `EVALUATIONS_ABTEST_JOBS_WORKER_ENABLED`: Enable the in-process Embeddings A/B Jobs worker (`true|false`, default `false`). Alias: `EVALS_ABTEST_JOBS_WORKER_ENABLED`.
 - `EVALUATIONS_JOBS_QUEUE`: Queue name for evaluations jobs (default `default`). Alias: `EVALS_JOBS_QUEUE`.
-- `FILES_JOBS_WORKER_ENABLED`: Enable the in-process file artifacts jobs worker (`true|false`, default `false`). When false, run `python -m tldw_Server_API.app.core.File_Artifacts.jobs_worker`.
+- `FILES_JOBS_WORKER_ENABLED`: Enable the in-process file artifacts jobs worker (`true|false`, default follows route policy for `files`). When false, run `python -m tldw_Server_API.app.core.File_Artifacts.jobs_worker`.
+- `PROMPT_STUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Prompt Studio jobs worker (`true|false`, default follows route policy for `prompt-studio`).
+- `PRIVILEGE_SNAPSHOT_WORKER_ENABLED`: Enable the in-process privilege snapshot jobs worker (`true|false`, default follows route policy for `privileges`).
 
 ## Embeddings Jobs
 - `EMBEDDINGS_JOBS_BACKEND`: Backend is fixed to "core"; this environment variable exists for compatibility and is ignored.
@@ -148,7 +151,7 @@ Notes:
 - `EMBEDDINGS_JOBS_EXPOSE_PROGRESS`: Include `progress_percent`/`total_chunks` in public jobs responses (`true|false`, default `false`).
 
 ## Data Tables Jobs
-- `DATA_TABLES_JOBS_WORKER_ENABLED`: Enable the in-process data tables jobs worker (`true|false`, default `false`). When false, run `python -m tldw_Server_API.app.core.Data_Tables.jobs_worker`.
+- `DATA_TABLES_JOBS_WORKER_ENABLED`: Enable the in-process data tables jobs worker (`true|false`, default follows route policy for `data-tables`). When false, run `python -m tldw_Server_API.app.core.Data_Tables.jobs_worker`.
 - `DATA_TABLES_JOBS_QUEUE`: Queue for data table generation jobs (default `default`).
 - `DATA_TABLES_JOBS_WORKER_ID`: Worker identifier for data tables jobs (default `data-tables-jobs-<pid>`).
 - `DATA_TABLES_JOBS_LEASE_SECONDS`: Lease duration for data tables jobs (default `60`).
@@ -184,12 +187,12 @@ Notes:
 - `CHATBOOKS_IMPORT_DICT_STRICT`: When true, skip dictionaries with fatal validation errors instead of importing with warnings.
 
 ## Audio Jobs
-- `AUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Audio Jobs worker (`true|false`, default `false`). When true, the worker starts at app startup and polls the Jobs backend for the `audio` domain pipeline stages.
+- `AUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Audio Jobs worker (`true|false`, default follows route policy for `audio-jobs`). When true, the worker starts at app startup and polls the Jobs backend for the `audio` domain pipeline stages.
 - `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition for fairness across users (`true|false`, default `false`). When enabled, the worker preferentially acquires jobs for owners under their concurrent-job caps.
 - `AUDIO_QUOTA_USE_REDIS`: Use Redis for distributed audio concurrency tracking (`true|false`, default `true` when `REDIS_URL` is set). Falls back to in-process counters when disabled or unavailable.
 
 ## Media Ingest Jobs
-- `MEDIA_INGEST_JOBS_WORKER_ENABLED`: Enable the in-process media ingest jobs worker (`true|false`, default `false`). When true, the worker starts at app startup and polls the Jobs backend for the `media_ingest` domain.
+- `MEDIA_INGEST_JOBS_WORKER_ENABLED`: Enable the in-process media ingest jobs worker (`true|false`, default follows route policy for `media`). When true, the worker starts at app startup and polls the Jobs backend for the `media_ingest` domain.
 
 Pytest markers
 - `-m jobs`: Run all core Jobs tests (SQLite + PG-gated).
@@ -237,6 +240,7 @@ Config file support (optional):
 ## Chat / WebUI
 - `CHAT_SAVE_DEFAULT`: Persist new chats by default (`true|false`).
 - `DEFAULT_CHAT_SAVE`: Legacy alias; same as above.
+- `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
 
 ### Tokenizer (Chat Dictionaries & World Books)
 - `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`

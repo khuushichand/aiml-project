@@ -212,15 +212,34 @@ async def _inflight_quota_guard(job: Dict[str, Any], jm: JobManager) -> bool:
     return True
 
 
-async def main() -> None:
+async def run_prompt_studio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
     worker_id = (os.getenv("PROMPT_STUDIO_JOBS_WORKER_ID") or f"prompt-studio-jobs-{os.getpid()}").strip()
     queue = (os.getenv("PROMPT_STUDIO_JOBS_QUEUE") or "default").strip() or "default"
     cfg = _build_worker_config(worker_id=worker_id, queue=queue)
 
     jm = _jobs_manager()
     sdk = WorkerSDK(jm, cfg)
+    stop_task: Optional[asyncio.Task[None]] = None
+    if stop_event is not None:
+        async def _watch_stop() -> None:
+            await stop_event.wait()
+            sdk.stop()
+
+        stop_task = asyncio.create_task(_watch_stop())
     logger.info(f"Prompt Studio Jobs worker starting (queue={queue}, worker_id={worker_id})")
-    await sdk.run(handler=_handle_job, acquire_guard=lambda job: _inflight_quota_guard(job, jm))
+    try:
+        await sdk.run(handler=_handle_job, acquire_guard=lambda job: _inflight_quota_guard(job, jm))
+    finally:
+        if stop_task is not None and not stop_task.done():
+            stop_task.cancel()
+            try:
+                await stop_task
+            except asyncio.CancelledError:
+                pass
+
+
+async def main() -> None:
+    await run_prompt_studio_jobs_worker()
 
 
 if __name__ == "__main__":

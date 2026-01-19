@@ -255,6 +255,17 @@ Tip: You can also use the convenience script from the repo root:
 ./start-webui.sh
 ```
 
+Optional: run the API + Jobs workers as separate processes (sidecar mode):
+
+```bash
+./start-sidecars.sh
+```
+
+Notes:
+- Sets `TLDW_WORKERS_SIDECAR_MODE=true` so the API process skips in-process workers.
+- Default list lives in `Docs/Deployment/sidecar_workers_manifest.json` (regen via `python Helper_Scripts/Deployment/generate_sidecar_files.py`).
+- Customize the worker list with `TLDW_SIDECAR_WORKERS=chatbooks,files,data_tables,prompt_studio,privilege_snapshots,audio,media_ingest,evals_abtest` or point to a different manifest with `TLDW_WORKERS_MANIFEST=/path/to/manifest.json`.
+
 ## 9) Verify
 
 - Health: `GET http://127.0.0.1:8000/health` should return `{ "status": "healthy" }`
@@ -264,7 +275,7 @@ Tip: You can also use the convenience script from the repo root:
 
 - “ffmpeg not found”: Ensure FFmpeg is installed and available on PATH.
 - Auth errors: Confirm `.env` is loaded and `AUTH_MODE`/keys are correctly set.
-- SQLite locks: Prefer PostgreSQL for multi-user production. Ensure proper shutdown before restarting.
+- SQLite locks: In-process jobs plus multiple Uvicorn workers can increase contention. Prefer sidecar workers or PostgreSQL for production and heavy workloads.
 - Port 8000 in use: Stop the other process or change the port (`--port 8001`).
 
 ## Next Steps

@@ -332,3 +332,10 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
                 await record_ingested_item(db, source_id=source_id, provider=provider, external_id=fid, name=name, mime=mime, size=size, version=version, modified_at=modified_at, content_hash=content_hash)
     # Complete job
     jm.complete_job(jid, result={"processed": processed, "total": total}, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_connectors_worker())
+    except KeyboardInterrupt:
+        pass

@@ -144,6 +144,7 @@ Total detected variables: 1016
 - `JOBS_WEBHOOKS_URL`
 - `JOBS_WORKER_MAX_ITERATIONS`
 - `TLDW_JOBS_BACKEND`
+- `TLDW_WORKERS_SIDECAR_MODE`
 
 ## Workflows
 

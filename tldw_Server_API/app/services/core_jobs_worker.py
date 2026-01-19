@@ -313,3 +313,10 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
             except Exception:
                 logger.debug("metrics increment failed for worker_loop_error")
             await asyncio.sleep(poll_sleep)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_chatbooks_core_jobs_worker())
+    except KeyboardInterrupt:
+        pass

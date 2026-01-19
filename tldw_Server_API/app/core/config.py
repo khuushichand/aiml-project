@@ -1819,6 +1819,20 @@ def load_comprehensive_config():
             except Exception:
                 maxsize_val = None
         _env_default('CHAT_STREAM_CHANNEL_MAXSIZE', maxsize_val)
+
+        # Chat streaming metadata injection (adds tldw_* IDs to SSE chunks)
+        meta_val: Optional[str] = None
+        if hasattr(config_parser, 'has_section') and config_parser.has_section('Chat-Module'):
+            try:
+                meta_val = config_parser.get('Chat-Module', 'chat_stream_include_metadata', fallback=None)
+            except Exception:
+                meta_val = None
+        if (not meta_val) and hasattr(config_parser, 'has_section') and config_parser.has_section('Streaming'):
+            try:
+                meta_val = config_parser.get('Streaming', 'chat_stream_include_metadata', fallback=None)
+            except Exception:
+                meta_val = None
+        _env_default('CHAT_STREAM_INCLUDE_METADATA', meta_val)
     except Exception as _stream_env_err:
         _log_debug(f"Streaming env propagation skipped: {_stream_env_err}")
 

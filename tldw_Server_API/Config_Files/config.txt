@@ -84,6 +84,9 @@ streaming_max_response_size_mb = 10
 # For queued streaming requests, bound the internal per-request channel size
 # to limit memory use and apply backpressure. Default: 100
 chat_stream_channel_maxsize = 100
+# Include tldw_* metadata (conversation/message IDs) in chat SSE streaming chunks.
+# Env override: CHAT_STREAM_INCLUDE_METADATA
+chat_stream_include_metadata = true
 chat_save_default = False
 inject_assistant_name = true
 conversation_creation_max_retries = 3

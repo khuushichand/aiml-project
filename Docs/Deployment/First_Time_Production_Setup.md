@@ -100,6 +100,7 @@ open http://127.0.0.1:8000/webui/
 Notes
 - For multi-user production, keep Postgres running via the `postgres` service in the Compose file. Back up its volume.
 - To scale CPU workers: set `UVICORN_WORKERS` via the app environment and rebuild or override in Compose.
+- If you run multiple Uvicorn workers with SQLite, enable sidecar jobs (`TLDW_WORKERS_SIDECAR_MODE=true`) or migrate to Postgres to reduce lock contention.
 
 ## 4) Option B - Bare-Metal (systemd + Nginx)
 

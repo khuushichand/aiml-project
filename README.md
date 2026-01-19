@@ -199,6 +199,21 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 - API docs: http://127.0.0.1:8000/docs
 - Legacy WebUI: http://127.0.0.1:8000/webui/ (deprecated)
 
+### Sidecar workers (optional)
+
+Run the API and Jobs workers as separate processes (recommended for heavier workloads or when using multiple Uvicorn workers):
+```bash
+./start-sidecars.sh
+```
+Notes:
+- Sets `TLDW_WORKERS_SIDECAR_MODE=true` to keep the API process from starting in-process workers.
+- Default worker list lives in `Docs/Deployment/sidecar_workers_manifest.json` (regen via `python Helper_Scripts/Deployment/generate_sidecar_files.py`).
+- Customize worker list with `TLDW_SIDECAR_WORKERS=chatbooks,files,data_tables,prompt_studio,privilege_snapshots,audio,media_ingest,evals_abtest` or point to a different manifest with `TLDW_WORKERS_MANIFEST=/path/to/manifest.json`.
+- Logs are written to `.logs/sidecars/` by default.
+- Compose overlay: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build`.
+- systemd and launchd examples: `Docs/Deployment/Sidecar_Workers.md`.
+In-process workers are fine for light dev use, but SQLite + multiple Uvicorn workers can increase lock contention; use sidecars or Postgres for heavier workloads.
+
 ### Run the Web UI (WIP)
 
 The current Next.js UI is a work in progress and may be unstable, buggy, or rough around the edges.
@@ -503,6 +518,7 @@ Examples
 ├── pyproject.toml                # Project configuration
 ├── README.md                     # Project README (this file)
 ├── start-webui.sh                # Convenience script for WebUI + server
+├── start-sidecars.sh             # Run API + Jobs workers as sidecar processes
 └── Project_Guidelines.md         # Development philosophy
 ```
 

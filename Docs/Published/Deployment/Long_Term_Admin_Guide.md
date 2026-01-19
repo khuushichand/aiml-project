@@ -20,6 +20,7 @@ Docker Compose
 - Stop: `docker compose down`
 - Logs: `docker compose logs -f app`
 - Rebuild: `docker compose build app && docker compose up -d`
+- Sidecar workers: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.workers.yml up -d --build` (see `Deployment/Sidecar_Workers.md`).
 - Scale workers (CPU bound): set `UVICORN_WORKERS` env and rebuild or override at runtime.
 - Overrides: `docker-compose.override.yml` ships with production defaults (tldw_production, CORS, Postgres); Compose auto-loads it.
 
@@ -27,6 +28,10 @@ systemd (bare-metal)
 - Status: `sudo systemctl status tldw`
 - Logs: `sudo journalctl -u tldw -f`
 - Restart: `sudo systemctl restart tldw`
+- Sidecar worker units/timers: `Deployment/systemd/` (see `Deployment/Sidecar_Workers.md`).
+
+launchd (macOS)
+- LaunchAgents/LaunchDaemons examples: `Deployment/launchd/` (see `Deployment/Sidecar_Workers.md`).
 
 ## 2) Upgrades & Rollbacks
 
@@ -106,6 +111,7 @@ Application
 - CPU workers: set `UVICORN_WORKERS` (default 4 in Dockerfile.prod). Monitor latency and CPU to tune.
 - Caching: ensure embeddings/model caches reside on fast disk; configure per module where available.
  - Background jobs: Chatbooks worker enabled by default (core backend). Control via `CHATBOOKS_CORE_WORKER_ENABLED`. Media ingest jobs worker is opt-in via `MEDIA_INGEST_JOBS_WORKER_ENABLED`.
+- SQLite deployments: avoid multiple Uvicorn workers with in-process jobs. Use sidecar workers or Postgres for higher concurrency.
 
 Database
 - Prefer Postgres for multi-user. Tune pool sizes with `TLDW_DB_POOL_SIZE`, `TLDW_DB_MAX_OVERFLOW`, `TLDW_DB_POOL_TIMEOUT`.

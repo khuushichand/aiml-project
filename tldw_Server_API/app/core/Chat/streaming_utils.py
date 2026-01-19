@@ -83,6 +83,17 @@ except (ValueError, TypeError) as exc:
 if STREAMING_SYNC_BRIDGE_MAX_QUEUE <= 0:
     STREAMING_SYNC_BRIDGE_MAX_QUEUE = 32
 
+try:
+    _include_meta_raw = (
+        os.getenv("CHAT_STREAM_INCLUDE_METADATA")
+        or _chat_config.get("chat_stream_include_metadata")
+        or "true"
+    )
+    CHAT_STREAM_INCLUDE_METADATA = str(_include_meta_raw).strip().lower() in {"1", "true", "yes", "on"}
+except (ValueError, TypeError) as exc:
+    logger.debug(f"Failed to parse CHAT_STREAM_INCLUDE_METADATA, using default: {exc}")
+    CHAT_STREAM_INCLUDE_METADATA = True
+
 #######################################################################################################################
 #
 # Functions:
@@ -303,6 +314,20 @@ class StreamingResponseHandler:
         # Lock for thread-safe state modifications
         self._state_lock = asyncio.Lock()
 
+    def _attach_stream_metadata(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+        if not CHAT_STREAM_INCLUDE_METADATA:
+            return payload
+        if self.conversation_id:
+            payload.setdefault("conversation_id", self.conversation_id)
+            payload.setdefault("tldw_conversation_id", self.conversation_id)
+        if self.system_message_id:
+            payload.setdefault("tldw_system_message_id", self.system_message_id)
+        if self.saved_message_id:
+            payload.setdefault("tldw_message_id", self.saved_message_id)
+        return payload
+
     def update_activity(self):
         """Update the last activity timestamp."""
         self.last_activity = time.time()
@@ -476,8 +501,7 @@ class StreamingResponseHandler:
                 "model": self.model_name,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-            if self.system_message_id:
-                start_payload["tldw_system_message_id"] = self.system_message_id
+            self._attach_stream_metadata(start_payload)
             yield f"event: stream_start\ndata: {json.dumps(start_payload)}\n\n"
             self.update_activity()
 
@@ -523,9 +547,13 @@ class StreamingResponseHandler:
                         return outputs, False
                     if isinstance(data, dict) and "error" in data:
                         try:
-                            outputs.append(f"data: {json.dumps({'error': data.get('error')})}\n\n")
+                            err_payload = {"error": data.get("error")}
+                            self._attach_stream_metadata(err_payload)
+                            outputs.append(f"data: {json.dumps(err_payload)}\n\n")
                         except Exception:
-                            outputs.append(f"data: {json.dumps({'error': {'message': 'Upstream error'}})}\n\n")
+                            err_payload = {"error": {"message": "Upstream error"}}
+                            self._attach_stream_metadata(err_payload)
+                            outputs.append(f"data: {json.dumps(err_payload)}\n\n")
                         self.error_occurred = True
                         return outputs, True
                     if isinstance(data, dict):
@@ -558,6 +586,7 @@ class StreamingResponseHandler:
                                                 "type": stopper.error_type,
                                             }
                                         }
+                                        self._attach_stream_metadata(err_payload)
                                         # Combine error and DONE into a single chunk to ensure clients see DONE
                                         combined = f"data: {json.dumps(err_payload)}\n\n" + "data: [DONE]\n\n"
                                         outputs.append(combined)
@@ -569,15 +598,18 @@ class StreamingResponseHandler:
                                     except Exception as transform_err:
                                         logger.debug(f"text_transform error ignored: {transform_err}")
                                     if text_piece and not append_content(text_piece):
-                                        outputs.append(
-                                            f"data: {json.dumps({'error': {'message': 'Response size limit exceeded'}})}\n\n"
-                                        )
+                                        err_payload = {"error": {"message": "Response size limit exceeded"}}
+                                        self._attach_stream_metadata(err_payload)
+                                        outputs.append(f"data: {json.dumps(err_payload)}\n\n")
                                         self.error_occurred = True
                                         return outputs, True
                                     delta["content"] = text_piece
+                            self._attach_stream_metadata(data)
                             outputs.append(f"data: {json.dumps(data)}\n\n")
                             self.update_activity()
                             return outputs, False
+                    if isinstance(data, dict):
+                        self._attach_stream_metadata(data)
                     outputs.append(f"data: {json.dumps(data)}\n\n")
                     self.update_activity()
                     return outputs, False
@@ -597,6 +629,7 @@ class StreamingResponseHandler:
                             "type": stopper.error_type,
                         }
                     }
+                    self._attach_stream_metadata(err_payload)
                     combined = f"data: {json.dumps(err_payload)}\n\n" + "data: [DONE]\n\n"
                     outputs.append(combined)
                     self.done_sent = True
@@ -607,13 +640,15 @@ class StreamingResponseHandler:
                 except Exception as transform_err:
                     logger.debug(f"text_transform error ignored: {transform_err}")
                 if text_piece and not append_content(text_piece):
-                    outputs.append(f"data: {json.dumps({'error': {'message': 'Response size limit exceeded'}})}\n\n")
+                    err_payload = {"error": {"message": "Response size limit exceeded"}}
+                    self._attach_stream_metadata(err_payload)
+                    outputs.append(f"data: {json.dumps(err_payload)}\n\n")
                     self.error_occurred = True
                     return outputs, True
                 if text_piece:
-                    outputs.append(
-                        f"data: {json.dumps({'choices': [{'delta': {'content': text_piece}}]})}\n\n"
-                    )
+                    content_payload = {"choices": [{"delta": {"content": text_piece}}]}
+                    self._attach_stream_metadata(content_payload)
+                    outputs.append(f"data: {json.dumps(content_payload)}\n\n")
                     self.update_activity()
                 return outputs, False
 
@@ -649,7 +684,9 @@ class StreamingResponseHandler:
                     except Exception as e:
                         logger.error(f"Error processing stream chunk for {self.conversation_id}: {e}")
                         self.error_occurred = True
-                        yield f"data: {json.dumps({'error': {'message': f'Error processing chunk: {str(e)}'}})}\n\n"
+                        err_payload = {"error": {"message": f"Error processing chunk: {str(e)}"}}
+                        self._attach_stream_metadata(err_payload)
+                        yield f"data: {json.dumps(err_payload)}\n\n"
                         break
             else:
                 # Sync iterator (legacy, blocks event loop) - deprecated path
@@ -690,7 +727,9 @@ class StreamingResponseHandler:
                     except Exception as e:
                         logger.error(f"Error processing sync stream chunk for {self.conversation_id}: {e}")
                         self.error_occurred = True
-                        yield f"data: {json.dumps({'error': {'message': f'Error processing chunk: {str(e)}'}})}\n\n"
+                        err_payload = {"error": {"message": f"Error processing chunk: {str(e)}"}}
+                        self._attach_stream_metadata(err_payload)
+                        yield f"data: {json.dumps(err_payload)}\n\n"
                         break
 
         except asyncio.CancelledError:
@@ -707,7 +746,9 @@ class StreamingResponseHandler:
             # Unexpected error
             logger.error(f"Unexpected error in stream for {self.conversation_id}: {e}", exc_info=True)
             self.error_occurred = True
-            yield f"data: {json.dumps({'error': {'message': f'Stream error: {str(e)}'}})}\n\n"
+            err_payload = {"error": {"message": f"Stream error: {str(e)}"}}
+            self._attach_stream_metadata(err_payload)
+            yield f"data: {json.dumps(err_payload)}\n\n"
 
         finally:
             # Cleanup and final message
@@ -788,12 +829,8 @@ class StreamingResponseHandler:
                         "created": int(datetime.now(timezone.utc).timestamp()),
                         "model": self.model_name,
                         "choices": [{"delta": {}, "finish_reason": "stop", "index": 0}],
-                        "conversation_id": self.conversation_id,
                     }
-                    if self.saved_message_id:
-                        done_payload["tldw_message_id"] = self.saved_message_id
-                    if self.system_message_id:
-                        done_payload["tldw_system_message_id"] = self.system_message_id
+                    self._attach_stream_metadata(done_payload)
                     yield f"data: {json.dumps(done_payload)}\n\n"
 
                 if finalize_callback and self.error_occurred:
@@ -815,10 +852,7 @@ class StreamingResponseHandler:
                         "success": not self.error_occurred,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
-                    if self.saved_message_id:
-                        end_payload["tldw_message_id"] = self.saved_message_id
-                    if self.system_message_id:
-                        end_payload["tldw_system_message_id"] = self.system_message_id
+                    self._attach_stream_metadata(end_payload)
                     yield f"event: stream_end\ndata: {json.dumps(end_payload)}\n\n"
                 # Ensure final [DONE] sentinel for client compatibility (unless already sent).
                 # If upstream already sent [DONE], defer emission until after stream_end.
