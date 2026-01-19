@@ -148,6 +148,44 @@ def _pydantic_error_detail(exc: ValidationError) -> str:
     return "; ".join(parts) or "invalid config"
 
 
+def _llm_step_schema_base() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "provider": {"type": "string"},
+            "api_provider": {"type": "string"},
+            "api_endpoint": {"type": "string"},
+            "api_key": {"type": "string"},
+            "model": {"type": "string"},
+            "model_id": {"type": "string"},
+            "prompt": {"type": "string"},
+            "input": {"type": "string"},
+            "template": {"type": "string"},
+            "messages": {"type": ["array", "string"]},
+            "messages_payload": {"type": ["array", "string"]},
+            "system_message": {"type": "string"},
+            "system": {"type": "string"},
+            "system_prompt": {"type": "string"},
+            "temperature": {"type": "number"},
+            "top_p": {"type": "number"},
+            "max_tokens": {"type": "integer", "minimum": 1},
+            "max_completion_tokens": {"type": "integer", "minimum": 1},
+            "stop": {"type": ["string", "array"]},
+            "tools": {"type": "array"},
+            "tool_choice": {},
+            "response_format": {"type": "object"},
+            "seed": {"type": "integer"},
+            "stream": {"type": "boolean"},
+            "include_response": {"type": "boolean"},
+            "n": {"type": "integer", "minimum": 1},
+            "logit_bias": {"type": "object"},
+            "user": {"type": ["string", "integer"]},
+        },
+        "required": [],
+        "additionalProperties": True,
+    }
+
+
 def _rag_search_schema_base() -> Dict[str, Any]:
     return {
         "type": "object",
@@ -334,7 +372,7 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
     if len(steps) > MAX_STEPS:
         raise HTTPException(status_code=422, detail="Too many steps")
     reg = StepTypeRegistry()
-    # Build a schema map (keep in sync with list_step_types())
+    # Build a schema map (LLM schema shared with list_step_types()).
     step_schemas: Dict[str, Dict[str, Any]] = {
         "prompt": {
             "type": "object",
@@ -346,30 +384,7 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
             "required": ["template"],
             "additionalProperties": True,
         },
-        "llm": {
-            "type": "object",
-            "properties": {
-                "provider": {"type": "string"},
-                "model": {"type": "string"},
-                "prompt": {"type": "string"},
-                "messages": {"type": ["array", "string"]},
-                "system_message": {"type": "string"},
-                "system": {"type": "string"},
-                "temperature": {"type": "number"},
-                "top_p": {"type": "number"},
-                "max_tokens": {"type": "integer", "minimum": 1},
-                "max_completion_tokens": {"type": "integer", "minimum": 1},
-                "stop": {"type": ["string", "array"]},
-                "tools": {"type": "array"},
-                "tool_choice": {},
-                "response_format": {"type": "object"},
-                "seed": {"type": "integer"},
-                "stream": {"type": "boolean"},
-                "include_response": {"type": "boolean"},
-            },
-            "required": [],
-            "additionalProperties": True,
-        },
+        "llm": _llm_step_schema_base(),
         "branch": {
             "type": "object",
             "properties": {
@@ -391,6 +406,14 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
             "additionalProperties": True,
         },
         "rag_search": _rag_search_schema_base(),
+        "kanban": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+            },
+            "required": ["action"],
+            "additionalProperties": True,
+        },
         "webhook": {
             "type": "object",
             "properties": {
@@ -400,6 +423,27 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                 "body": {"type": ["object", "array", "string", "number", "boolean", "null"]},
                 "include_outputs": {"type": "boolean", "default": True},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "default": 10},
+                "follow_redirects": {"type": "boolean", "default": False},
+                "max_redirects": {"type": "integer", "minimum": 0},
+                "max_bytes": {"type": "integer", "minimum": 1},
+                "egress_policy": {
+                    "type": "object",
+                    "properties": {
+                        "allowlist": {"type": "array", "items": {"type": "string"}},
+                        "denylist": {"type": "array", "items": {"type": "string"}},
+                        "block_private": {"type": "boolean"},
+                    },
+                    "additionalProperties": True,
+                },
+                "signing": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "secret_ref": {"type": "string"},
+                        "secret": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
             },
             "required": [],
             "additionalProperties": True,
@@ -522,8 +566,10 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                     ) from e
 
     # Optional MCP policy validation (per-workflow allowlist/scopes)
+    raw_policy = None
+    allowlist = None
+    scopes = None
     try:
-        raw_policy = None
         meta = defn.get("metadata") if isinstance(defn, dict) else None
         if isinstance(meta, dict):
             raw_policy = meta.get("mcp") or meta.get("mcp_policy")
@@ -539,9 +585,21 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
             if scopes is not None and not isinstance(scopes, (list, tuple, set, str)):
                 raise HTTPException(status_code=422, detail="Invalid mcp scopes format")
     except HTTPException:
+        logger.exception(
+            "Workflows validation: invalid mcp policy. raw_policy={} allowlist={} scopes={}",
+            raw_policy,
+            allowlist,
+            scopes,
+        )
         raise
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception(
+            "Workflows validation: unexpected mcp policy error. raw_policy={} allowlist={} scopes={}",
+            raw_policy,
+            allowlist,
+            scopes,
+        )
+        raise HTTPException(status_code=422, detail="Invalid mcp policy") from e
 
     # Graph/DAG robustness checks (detect explicit cycles and unknown targets)
     _validate_dag(defn)
@@ -1315,8 +1373,8 @@ async def run_saved(
         # Ensure status is always a string for response validation
         if run and not getattr(run, "status", None):
             run.status = "queued"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"workflows: audit log failed for run_id={run_id}: {exc}")
     try:
         _logger.debug(f"Workflows endpoint: post-submit status={run.status if run else 'missing'} run_id={run_id}")
     except Exception as e:
@@ -2833,25 +2891,7 @@ async def list_step_types():
             "min_engine_version": "0.1.0",
         },
         "llm": {
-            "type": "object",
-            "properties": {
-                "provider": {"type": "string"},
-                "model": {"type": "string"},
-                "prompt": {"type": "string"},
-                "messages": {"type": ["array", "string"]},
-                "system_message": {"type": "string"},
-                "temperature": {"type": "number"},
-                "top_p": {"type": "number"},
-                "max_tokens": {"type": "integer", "minimum": 1},
-                "stop": {"type": ["string", "array"]},
-                "tools": {"type": "array"},
-                "tool_choice": {},
-                "response_format": {"type": "object"},
-                "stream": {"type": "boolean"},
-                "include_response": {"type": "boolean"},
-            },
-            "required": [],
-            "additionalProperties": True,
+            **_llm_step_schema_base(),
             "example": {"provider": "openai", "model": "gpt-4o-mini", "prompt": "Summarize {{ inputs.topic }}"},
             "min_engine_version": "0.1.1",
         },
@@ -2884,16 +2924,50 @@ async def list_step_types():
             "example": {"query": "large language models safety", "top_k": 8},
             "min_engine_version": "0.1.0",
         },
+        "kanban": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "board_id": {"type": ["integer", "string"]},
+                "list_id": {"type": ["integer", "string"]},
+                "card_id": {"type": ["integer", "string"]},
+            },
+            "required": ["action"],
+            "additionalProperties": True,
+            "example": {"action": "card.create", "list_id": 123, "title": "Review {{ inputs.topic }}", "client_id": "wf-card-1"},
+            "min_engine_version": "0.1.4",
+        },
         "webhook": {
             "type": "object",
             "properties": {
                 "url": {"type": "string"},
                 "include_outputs": {"type": "boolean", "default": True},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "default": 10},
+                "follow_redirects": {"type": "boolean", "default": False},
+                "max_redirects": {"type": "integer", "minimum": 0},
+                "max_bytes": {"type": "integer", "minimum": 1},
+                "egress_policy": {
+                    "type": "object",
+                    "properties": {
+                        "allowlist": {"type": "array", "items": {"type": "string"}},
+                        "denylist": {"type": "array", "items": {"type": "string"}},
+                        "block_private": {"type": "boolean"},
+                    },
+                    "additionalProperties": True,
+                },
+                "signing": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "secret_ref": {"type": "string"},
+                        "secret": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
             },
             "required": [],
             "additionalProperties": True,
-            "example": {"url": "https://example.com/hooks/workflow"},
+            "example": {"url": "https://example.com/hooks/workflow", "follow_redirects": False, "max_bytes": 1048576},
             "min_engine_version": "0.1.0",
         },
         "tts": {

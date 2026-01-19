@@ -547,6 +547,14 @@ Speaker notes here
 
 If a Reveal.js theme is not in the table, default to `default` unless `marp_theme` is explicitly provided.
 
+### 6.4.1 Export Path (Separate from File_Artifacts)
+
+- Slides export is served directly from `/api/v1/slides/presentations/{id}/export` and does **not** use the File_Artifacts API, jobs worker, or `file_artifacts` storage.
+- Export generation is synchronous in v1 (target < 1s) and returns the file bytes immediately with `Content-Type` and `Content-Disposition` headers.
+- The Slides service (`slides_export.py`) is the single formatter surface for Reveal.js ZIP, Marp Markdown, and JSON outputs.
+- No artifacts are persisted beyond the request lifecycle; large/async exports are out of scope for v1 (future: optional adapter under File_Artifacts).
+- If Reveal.js assets are unavailable, the export endpoint must return a clear error indicating missing bundled assets.
+
 ### 6.5 Concurrency & Error Semantics
 
 **ETag / If-Match Contract:**

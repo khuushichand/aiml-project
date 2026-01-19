@@ -161,7 +161,11 @@ def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -
 
 
 def _sanitize_title_for_filename(title: str) -> str:
-    s = re.sub(r"[^A-Za-z0-9_.-]+", "_", title.strip())
+    cleaned = title.replace("\x00", "")
+    cleaned = cleaned.replace(os.sep, "_")
+    if os.altsep:
+        cleaned = cleaned.replace(os.altsep, "_")
+    s = re.sub(r"[^A-Za-z0-9_.-]+", "_", cleaned.strip())
     s = re.sub(r"\.+", ".", s).strip(".")
     return s[:80] or "output"
 

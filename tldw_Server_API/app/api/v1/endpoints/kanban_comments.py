@@ -23,6 +23,7 @@ from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
+    kanban_rate_limit,
 )
 
 
@@ -44,7 +45,8 @@ def _handle_error(e: Exception) -> HTTPException:
     response_model=CommentResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a comment",
-    description="Create a new comment on a card."
+    description="Create a new comment on a card.",
+    dependencies=[Depends(kanban_rate_limit("kanban.comments.create"))]
 )
 async def create_comment(
     card_id: int,
@@ -72,12 +74,13 @@ async def create_comment(
     "/cards/{card_id}/comments",
     response_model=CommentsListResponse,
     summary="List card comments",
-    description="Get all comments for a card with pagination."
+    description="Get all comments for a card with pagination.",
+    dependencies=[Depends(kanban_rate_limit("kanban.comments.list"))]
 )
 async def list_comments(
     card_id: int,
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(50, ge=1, le=100, description="Items per page"),
+    limit: int = Query(50, ge=1, le=100, description="Maximum comments to return"),
+    offset: int = Query(0, ge=0, description="Number of comments to skip"),
     include_deleted: bool = Query(False, description="Include soft-deleted comments"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> CommentsListResponse:
@@ -86,18 +89,17 @@ async def list_comments(
         comments, total = db.list_comments(
             card_id=card_id,
             include_deleted=include_deleted,
-            page=page,
-            per_page=per_page
+            limit=limit,
+            offset=offset
         )
 
-        offset = (page - 1) * per_page
         has_more = offset + len(comments) < total
 
         return CommentsListResponse(
             comments=[CommentResponse(**c) for c in comments],
             pagination=PaginationInfo(
                 total=total,
-                limit=per_page,
+                limit=limit,
                 offset=offset,
                 has_more=has_more
             )
@@ -110,7 +112,8 @@ async def list_comments(
     "/comments/{comment_id}",
     response_model=CommentResponse,
     summary="Get a comment",
-    description="Get a comment by ID."
+    description="Get a comment by ID.",
+    dependencies=[Depends(kanban_rate_limit("kanban.comments.get"))]
 )
 async def get_comment(
     comment_id: int,
@@ -136,7 +139,8 @@ async def get_comment(
     "/comments/{comment_id}",
     response_model=CommentResponse,
     summary="Update a comment",
-    description="Update an existing comment. Only the comment author can edit their comments."
+    description="Update an existing comment. Only the comment author can edit their comments.",
+    dependencies=[Depends(kanban_rate_limit("kanban.comments.update"))]
 )
 async def update_comment(
     comment_id: int,
@@ -165,7 +169,8 @@ async def update_comment(
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Delete a comment",
-    description="Soft delete a comment. The comment can be recovered within the retention period."
+    description="Soft delete a comment. The comment can be recovered within the retention period.",
+    dependencies=[Depends(kanban_rate_limit("kanban.comments.delete"))]
 )
 async def delete_comment(
     comment_id: int,

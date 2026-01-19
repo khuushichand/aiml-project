@@ -14,6 +14,7 @@ import {
   type ApiDataTableGenerateResponse,
   type ApiDataTableJobStatus
 } from "@/services/tldw/data-tables"
+import type { ReadingImportJobDetail, ReadingImportJobResponse } from "@/types/collections"
 import type { DataTableColumn, DataTableSource } from "@/types/data-tables"
 
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
@@ -2837,10 +2838,10 @@ export class TldwApiClient {
     source: string
     file: File
     merge_tags?: boolean
-  }): Promise<{ job_id: string; job_uuid?: string; status: string }> {
+  }): Promise<ReadingImportJobResponse> {
     const buffer = await data.file.arrayBuffer()
     const fileData = Array.from(new Uint8Array(buffer))
-    return await this.upload<{ job_id: string; job_uuid?: string; status: string }>({
+    return await this.upload<ReadingImportJobResponse>({
       path: "/api/v1/reading/import",
       method: "POST",
       fileFieldName: "file",
@@ -2856,9 +2857,10 @@ export class TldwApiClient {
     })
   }
 
-  async getReadingImportJob(jobId: string): Promise<any> {
-    const path = `/api/v1/reading/import/jobs/${encodeURIComponent(jobId)}` as const
-    return await this.request<any>({
+  async getReadingImportJob(jobId: string | number): Promise<ReadingImportJobDetail> {
+    const id = String(jobId)
+    const path = `/api/v1/reading/import/jobs/${encodeURIComponent(id)}` as const
+    return await this.request<ReadingImportJobDetail>({
       path,
       method: "GET"
     })

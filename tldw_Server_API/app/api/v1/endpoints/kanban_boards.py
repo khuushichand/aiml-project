@@ -9,7 +9,7 @@ Provides CRUD operations for Kanban boards including:
 - Get board with nested lists and cards
 """
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
 from loguru import logger
@@ -42,6 +42,7 @@ from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     handle_kanban_db_error,
     kanban_rate_limit,
 )
+from tldw_Server_API.app.api.v1.endpoints._kanban_utils import to_db_timestamp
 
 
 router = APIRouter(prefix="/boards", tags=["Kanban Boards"])
@@ -52,14 +53,19 @@ def _handle_error(e: Exception) -> HTTPException:
     """Convert exceptions to appropriate HTTP responses."""
     return handle_kanban_db_error(e)
 
-
-def _to_db_timestamp(value: Optional[datetime]) -> Optional[str]:
-    """Convert datetime to DB-friendly timestamp string."""
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+def _export_board_data(
+    db: KanbanDB,
+    board_id: int,
+    *,
+    include_archived: bool,
+    include_deleted: bool,
+) -> BoardExportResponse:
+    export_data = db.export_board(
+        board_id=board_id,
+        include_archived=include_archived,
+        include_deleted=include_deleted,
+    )
+    return BoardExportResponse(**export_data)
 
 
 # =============================================================================
@@ -98,9 +104,7 @@ async def create_board(
         logger.info(f"Created board {board['id']} for user {db.user_id}")
         return BoardResponse(**board)
     except (InputError, ConflictError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "",
     response_model=BoardListResponse,
@@ -137,9 +141,7 @@ async def list_boards(
             )
         )
     except KanbanDBError as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/{board_id}",
     response_model=BoardWithListsResponse,
@@ -187,7 +189,7 @@ async def get_board(
 
         return BoardWithListsResponse(**board)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e
 
 
 @router.patch(
@@ -221,9 +223,7 @@ async def update_board(
         logger.info(f"Updated board {board_id}")
         return BoardResponse(**board)
     except (NotFoundError, InputError, ConflictError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Archive Operations
 # =============================================================================
@@ -245,7 +245,7 @@ async def archive_board(
         logger.info(f"Archived board {board_id}")
         return BoardResponse(**board)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e
 
 
 @router.post(
@@ -265,7 +265,7 @@ async def unarchive_board(
         logger.info(f"Unarchived board {board_id}")
         return BoardResponse(**board)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e
 
 
 # =============================================================================
@@ -298,9 +298,7 @@ async def delete_board(
         logger.info(f"Deleted board {board_id}")
         return DetailResponse(detail=f"Board {board_id} deleted successfully")
     except KanbanDBError as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/{board_id}/restore",
     response_model=BoardResponse,
@@ -318,9 +316,7 @@ async def restore_board(
         logger.info(f"Restored board {board_id}")
         return BoardResponse(**board)
     except (NotFoundError, InputError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Activity Endpoints (Phase 2 placeholder)
 # =============================================================================
@@ -349,13 +345,18 @@ async def get_board_activities(
 
     Activities track changes to boards, lists, and cards.
     """
+    if created_after and created_before and created_after > created_before:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="created_after must be less than or equal to created_before.",
+        )
     try:
         activities, total = db.get_board_activities(
             board_id=board_id,
             list_id=list_id,
             card_id=card_id,
-            created_after=_to_db_timestamp(created_after),
-            created_before=_to_db_timestamp(created_before),
+            created_after=to_db_timestamp(created_after),
+            created_before=to_db_timestamp(created_before),
             action_type=action_type,
             entity_type=entity_type,
             limit=limit,
@@ -371,9 +372,7 @@ async def get_board_activities(
             )
         )
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Export/Import Endpoints (Phase 3)
 # =============================================================================
@@ -393,14 +392,14 @@ async def export_board_get(
 ) -> BoardExportResponse:
     """Export a board with all its data."""
     try:
-        export_data = db.export_board(
-            board_id=board_id,
+        return _export_board_data(
+            db,
+            board_id,
             include_archived=include_archived,
-            include_deleted=include_deleted
+            include_deleted=include_deleted,
         )
-        return BoardExportResponse(**export_data)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e
 
 @router.post(
     "/{board_id}/export",
@@ -424,16 +423,14 @@ async def export_board(
     - **include_deleted**: Include soft-deleted items in export (default: false)
     """
     try:
-        export_data = db.export_board(
-            board_id=board_id,
+        return _export_board_data(
+            db,
+            board_id,
             include_archived=export_request.include_archived,
-            include_deleted=export_request.include_deleted
+            include_deleted=export_request.include_deleted,
         )
-        return BoardExportResponse(**export_data)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/import",
     response_model=BoardImportResponse,
@@ -468,4 +465,4 @@ async def import_board(
             import_stats=ImportStatsResponse(**result["import_stats"])
         )
     except (InputError, KanbanDBError) as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e

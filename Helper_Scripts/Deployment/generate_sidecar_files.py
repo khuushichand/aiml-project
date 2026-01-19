@@ -125,6 +125,7 @@ LAUNCHD_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
   <string>{launchd_user}</string>
   <key>GroupName</key>
   <string>{launchd_group}</string>
+  <!-- Ensure /opt/tldw_server/logs/launchd exists and is writable by {launchd_user}:{launchd_group}. -->
   <key>StandardOutPath</key>
   <string>/opt/tldw_server/logs/launchd/{slug}.log</string>
   <key>StandardErrorPath</key>

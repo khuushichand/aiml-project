@@ -80,9 +80,7 @@ async def create_checklist(
         )
         return ChecklistResponse(**checklist)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/cards/{card_id}/checklists",
     response_model=ChecklistsListResponse,
@@ -100,9 +98,7 @@ async def list_checklists(
             checklists=[ChecklistResponse(**cl) for cl in checklists]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/checklists/{checklist_id}",
     response_model=ChecklistWithItemsResponse,
@@ -125,9 +121,7 @@ async def get_checklist(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.patch(
     "/checklists/{checklist_id}",
     response_model=ChecklistResponse,
@@ -151,9 +145,7 @@ async def update_checklist(
         )
         return ChecklistResponse(**checklist)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.delete(
     "/checklists/{checklist_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -177,9 +169,7 @@ async def delete_checklist(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/{card_id}/checklists/reorder",
     response_model=ChecklistsListResponse,
@@ -205,9 +195,7 @@ async def reorder_checklists(
             checklists=[ChecklistResponse(**cl) for cl in checklists]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Checklist Item CRUD Endpoints
 # =============================================================================
@@ -240,9 +228,7 @@ async def create_checklist_item(
         )
         return ChecklistItemResponse(**item)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/checklists/{checklist_id}/items",
     response_model=ChecklistItemsListResponse,
@@ -260,9 +246,7 @@ async def list_checklist_items(
             items=[ChecklistItemResponse(**item) for item in items]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/checklist-items/{item_id}",
     response_model=ChecklistItemResponse,
@@ -285,9 +269,7 @@ async def get_checklist_item(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.patch(
     "/checklist-items/{item_id}",
     response_model=ChecklistItemResponse,
@@ -313,9 +295,7 @@ async def update_checklist_item(
         )
         return ChecklistItemResponse(**item)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.delete(
     "/checklist-items/{item_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -339,9 +319,7 @@ async def delete_checklist_item(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/checklists/{checklist_id}/items/reorder",
     response_model=ChecklistItemsListResponse,
@@ -367,9 +345,7 @@ async def reorder_checklist_items(
             items=[ChecklistItemResponse(**item) for item in items]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Convenience Endpoints
 # =============================================================================
@@ -389,9 +365,7 @@ async def check_item(
         item = db.update_checklist_item(item_id=item_id, checked=True)
         return ChecklistItemResponse(**item)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/checklist-items/{item_id}/uncheck",
     response_model=ChecklistItemResponse,
@@ -407,9 +381,7 @@ async def uncheck_item(
         item = db.update_checklist_item(item_id=item_id, checked=False)
         return ChecklistItemResponse(**item)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/checklists/{checklist_id}/toggle-all",
     response_model=ChecklistWithItemsResponse,
@@ -433,4 +405,4 @@ async def toggle_all_checklist_items(
         )
         return ChecklistWithItemsResponse(**checklist)
     except Exception as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e

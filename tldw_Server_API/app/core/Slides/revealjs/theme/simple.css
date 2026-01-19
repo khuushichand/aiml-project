@@ -1,0 +1,10 @@
+:root {
+  --reveal-bg: #fafafa;
+  --reveal-fg: #111111;
+  --reveal-heading: #111111;
+  --reveal-accent: #00897b;
+}
+
+body {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}

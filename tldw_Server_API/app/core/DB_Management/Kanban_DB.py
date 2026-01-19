@@ -92,6 +92,17 @@ def _normalize_db_path(
     return str(resolved), False
 
 
+def _get_int_setting(key: str, default: int) -> int:
+    raw = settings.get(key)
+    if raw is None:
+        raw = os.getenv(key)
+    try:
+        value = int(str(raw).strip()) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
 # --- SQLite Connection Helpers ---
 class _KanbanMemoryConnection(sqlite3.Connection):
     """SQLite connection that keeps :memory: databases alive across operations."""
@@ -170,14 +181,15 @@ class KanbanDB:
 
     # Configuration defaults (can be overridden via environment variables)
     DEFAULT_ACTIVITY_RETENTION_DAYS = 30
-    MAX_BOARDS_PER_USER = 100
-    MAX_LISTS_PER_BOARD = 50
-    MAX_CARDS_PER_LIST = 500
-    MAX_LABELS_PER_BOARD = 50
+    MAX_BOARDS_PER_USER = 50
+    MAX_LISTS_PER_BOARD = 20
+    MAX_CARDS_PER_LIST = 200
+    MAX_CARDS_PER_BOARD = 500
+    MAX_LABELS_PER_BOARD = 20
     MAX_CHECKLISTS_PER_CARD = 20
     MAX_CHECKLIST_ITEMS_PER_CHECKLIST = 100
     MAX_COMMENTS_PER_CARD = 500
-    MAX_COMMENT_SIZE = 10000  # characters
+    MAX_COMMENT_SIZE = 16384  # characters
 
     def __init__(self, db_path: str, user_id: str) -> None:
         """
@@ -201,6 +213,7 @@ class KanbanDB:
         self._memory_conn: Optional[_KanbanMemoryConnection] = None
         self._vector_search = None
         self._vector_search_initialized = False
+        self._apply_limit_overrides()
 
         # Ensure directory exists
         if not self._is_memory_db:
@@ -211,6 +224,49 @@ class KanbanDB:
         # Initialize schema
         self._ensure_schema()
         logger.debug(f"KanbanDB initialized for user {self.user_id} at {self.db_path}")
+
+    def _apply_limit_overrides(self) -> None:
+        """Apply limit overrides from settings/environment."""
+        self.DEFAULT_ACTIVITY_RETENTION_DAYS = _get_int_setting(
+            "KANBAN_DEFAULT_ACTIVITY_RETENTION_DAYS",
+            self.DEFAULT_ACTIVITY_RETENTION_DAYS,
+        )
+        self.MAX_BOARDS_PER_USER = _get_int_setting(
+            "KANBAN_MAX_BOARDS_PER_USER",
+            self.MAX_BOARDS_PER_USER,
+        )
+        self.MAX_LISTS_PER_BOARD = _get_int_setting(
+            "KANBAN_MAX_LISTS_PER_BOARD",
+            self.MAX_LISTS_PER_BOARD,
+        )
+        self.MAX_CARDS_PER_LIST = _get_int_setting(
+            "KANBAN_MAX_CARDS_PER_LIST",
+            self.MAX_CARDS_PER_LIST,
+        )
+        self.MAX_CARDS_PER_BOARD = _get_int_setting(
+            "KANBAN_MAX_CARDS_PER_BOARD",
+            self.MAX_CARDS_PER_BOARD,
+        )
+        self.MAX_LABELS_PER_BOARD = _get_int_setting(
+            "KANBAN_MAX_LABELS_PER_BOARD",
+            self.MAX_LABELS_PER_BOARD,
+        )
+        self.MAX_CHECKLISTS_PER_CARD = _get_int_setting(
+            "KANBAN_MAX_CHECKLISTS_PER_CARD",
+            self.MAX_CHECKLISTS_PER_CARD,
+        )
+        self.MAX_CHECKLIST_ITEMS_PER_CHECKLIST = _get_int_setting(
+            "KANBAN_MAX_CHECKLIST_ITEMS_PER_CHECKLIST",
+            self.MAX_CHECKLIST_ITEMS_PER_CHECKLIST,
+        )
+        self.MAX_COMMENTS_PER_CARD = _get_int_setting(
+            "KANBAN_MAX_COMMENTS_PER_CARD",
+            self.MAX_COMMENTS_PER_CARD,
+        )
+        self.MAX_COMMENT_SIZE = _get_int_setting(
+            "KANBAN_MAX_COMMENT_SIZE",
+            self.MAX_COMMENT_SIZE,
+        )
 
     def _configure_connection(self, conn: sqlite3.Connection, *, enable_wal: bool = True) -> None:
         conn.row_factory = sqlite3.Row
@@ -266,8 +322,6 @@ class KanbanDB:
 
     def _ensure_schema(self) -> None:
         """Create all tables, indexes, and triggers if they don't exist."""
-        result: Dict[str, Any] = {}
-        result: Dict[str, Any] = {}
         with self._lock:
             conn = self._connect()
             try:
@@ -777,10 +831,6 @@ END;
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
                     raise NotFoundError("Board not found", entity="board", entity_id=board_id)
-                if board["archived"] and not include_archived:
-                    return [], 0
-                if board["archived"] and not include_archived:
-                    return []
 
                 # Check version if provided
                 if expected_version is not None and board["version"] != expected_version:
@@ -853,6 +903,8 @@ END;
         Returns:
             The updated board.
         """
+        card_ids: List[int] = []
+        updated_board: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -877,6 +929,7 @@ END;
                     """,
                     (board_id,),
                 ).fetchall()
+                card_ids = [row["id"] for row in card_rows]
                 conn.execute(
                     """
                     UPDATE kanban_boards
@@ -934,10 +987,14 @@ END;
 
                 conn.commit()
 
-                return self._get_board_by_id(conn, board_id)
+                updated_board = self._get_board_by_id(conn, board_id)
 
             finally:
                 conn.close()
+
+        if card_ids:
+            self._sync_vector_index_for_card_ids(card_ids)
+        return updated_board
 
     def delete_board(self, board_id: int, hard_delete: bool = False) -> bool:
         """
@@ -950,6 +1007,8 @@ END;
         Returns:
             True if deleted, False if not found.
         """
+        card_ids: List[int] = []
+        deleted = False
         with self._lock:
             conn = self._connect()
             try:
@@ -958,6 +1017,11 @@ END;
                     return False
 
                 if hard_delete:
+                    card_rows = conn.execute(
+                        "SELECT id FROM kanban_cards WHERE board_id = ?",
+                        (board_id,),
+                    ).fetchall()
+                    card_ids = [row["id"] for row in card_rows]
                     conn.execute("DELETE FROM kanban_boards WHERE id = ?", (board_id,))
                 else:
                     now = _utcnow_iso()
@@ -975,6 +1039,7 @@ END;
                         """,
                         (board_id,),
                     ).fetchall()
+                    card_ids = [row["id"] for row in card_rows]
                     conn.execute(
                         """
                         UPDATE kanban_boards
@@ -1026,10 +1091,14 @@ END;
                         )
 
                 conn.commit()
-                return True
+                deleted = True
 
             finally:
                 conn.close()
+
+        if deleted and card_ids:
+            self._sync_vector_index_for_card_ids(card_ids)
+        return deleted
 
     def restore_board(self, board_id: int) -> Dict[str, Any]:
         """
@@ -1044,6 +1113,8 @@ END;
         Raises:
             NotFoundError: If board not found or not deleted.
         """
+        card_ids: List[int] = []
+        restored_board: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1068,6 +1139,7 @@ END;
                     """,
                     (board_id,),
                 ).fetchall()
+                card_ids = [row["id"] for row in card_rows]
 
                 conn.execute(
                     """
@@ -1122,10 +1194,14 @@ END;
 
                 conn.commit()
 
-                return self._get_board_by_id(conn, board_id)
+                restored_board = self._get_board_by_id(conn, board_id)
 
             finally:
                 conn.close()
+
+        if card_ids:
+            self._sync_vector_index_for_card_ids(card_ids)
+        return restored_board
 
     # =========================================================================
     # LIST OPERATIONS
@@ -1443,6 +1519,8 @@ END;
 
     def archive_list(self, list_id: int, archive: bool = True) -> Dict[str, Any]:
         """Archive or unarchive a list."""
+        card_ids: List[int] = []
+        updated_list: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1496,14 +1574,20 @@ END;
                     )
 
                 conn.commit()
-
-                return self._get_list_by_id(conn, list_id)
+                card_ids = [row["id"] for row in card_rows]
+                updated_list = self._get_list_by_id(conn, list_id)
 
             finally:
                 conn.close()
 
+        if card_ids:
+            self._sync_vector_index_for_card_ids(card_ids)
+        return updated_list
+
     def delete_list(self, list_id: int, hard_delete: bool = False) -> bool:
         """Delete a list (soft delete by default)."""
+        card_ids: List[int] = []
+        deleted = False
         with self._lock:
             conn = self._connect()
             try:
@@ -1512,6 +1596,11 @@ END;
                     return False
 
                 if hard_delete:
+                    card_rows = conn.execute(
+                        "SELECT id FROM kanban_cards WHERE list_id = ?",
+                        (list_id,),
+                    ).fetchall()
+                    card_ids = [row["id"] for row in card_rows]
                     conn.execute("DELETE FROM kanban_lists WHERE id = ?", (list_id,))
                 else:
                     now = _utcnow_iso()
@@ -1522,6 +1611,7 @@ END;
                         """,
                         (list_id,),
                     ).fetchall()
+                    card_ids = [row["id"] for row in card_rows]
                     conn.execute(
                         """
                         UPDATE kanban_lists
@@ -1555,13 +1645,19 @@ END;
                             details={"title": card["title"]},
                         )
                 conn.commit()
-                return True
+                deleted = True
 
             finally:
                 conn.close()
 
+        if deleted and card_ids:
+            self._sync_vector_index_for_card_ids(card_ids)
+        return deleted
+
     def restore_list(self, list_id: int) -> Dict[str, Any]:
         """Restore a soft-deleted list."""
+        card_ids: List[int] = []
+        restored_list: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1579,6 +1675,7 @@ END;
                     """,
                     (list_id,),
                 ).fetchall()
+                card_ids = [row["id"] for row in card_rows]
 
                 conn.execute(
                     """
@@ -1615,11 +1712,14 @@ END;
                     )
 
                 conn.commit()
-
-                return self._get_list_by_id(conn, list_id)
+                restored_list = self._get_list_by_id(conn, list_id)
 
             finally:
                 conn.close()
+
+        if card_ids:
+            self._sync_vector_index_for_card_ids(card_ids)
+        return restored_list
 
     # =========================================================================
     # CARD OPERATIONS
@@ -1682,6 +1782,15 @@ END;
                 board_id = lst["board_id"]
 
                 # Check card limit
+                cur = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM kanban_cards WHERE board_id = ? AND deleted = 0",
+                    (board_id,)
+                )
+                board_count = cur.fetchone()["cnt"]
+                if board_count >= self.MAX_CARDS_PER_BOARD:
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_BOARD}) per board reached")
+
+                # Check list limit
                 cur = conn.execute(
                     "SELECT COUNT(*) as cnt FROM kanban_cards WHERE list_id = ? AND deleted = 0",
                     (list_id,)
@@ -2298,6 +2407,23 @@ END;
                 # Verify target list is in the same board
                 if target_list["board_id"] != card["board_id"]:
                     raise InputError("Cannot copy card to a list in a different board")
+
+                # Enforce board and list limits
+                cur = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM kanban_cards WHERE board_id = ? AND deleted = 0",
+                    (card["board_id"],)
+                )
+                board_count = cur.fetchone()["cnt"]
+                if board_count >= self.MAX_CARDS_PER_BOARD:
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_BOARD}) per board reached")
+
+                cur = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM kanban_cards WHERE list_id = ? AND deleted = 0",
+                    (target_list_id,)
+                )
+                list_count = cur.fetchone()["cnt"]
+                if list_count >= self.MAX_CARDS_PER_LIST:
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_LIST}) per list reached")
 
                 # Generate title if not provided
                 if new_title is None:
@@ -3113,9 +3239,9 @@ END;
         with self._lock:
             conn = self._connect()
             try:
-                if board_id:
+                if board_id is not None:
                     # Get board-specific retention or use default
-                    board = self._get_board_by_id(conn, board_id)
+                    board = self._get_board_by_id(conn, board_id, include_deleted=True)
                     if not board:
                         return 0
 
@@ -3127,13 +3253,29 @@ END;
                         (board_id, cutoff)
                     )
                 else:
-                    # Clean all boards with their respective retention periods
-                    # For simplicity, use default retention
-                    cutoff = (datetime.now(timezone.utc) - timedelta(days=self.DEFAULT_ACTIVITY_RETENTION_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
-                    cur = conn.execute(
-                        "DELETE FROM kanban_activities WHERE created_at < ?",
-                        (cutoff,)
-                    )
+                    now = datetime.now(timezone.utc)
+                    board_rows = conn.execute(
+                        """
+                        SELECT id, COALESCE(activity_retention_days, ?) as retention_days
+                        FROM kanban_boards
+                        WHERE user_id = ?
+                        """,
+                        (self.DEFAULT_ACTIVITY_RETENTION_DAYS, self.user_id),
+                    ).fetchall()
+                    deleted = 0
+                    for row in board_rows:
+                        retention_days = int(row["retention_days"]) if row["retention_days"] else self.DEFAULT_ACTIVITY_RETENTION_DAYS
+                        if retention_days <= 0:
+                            retention_days = self.DEFAULT_ACTIVITY_RETENTION_DAYS
+                        cutoff = (now - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S")
+                        cur = conn.execute(
+                            "DELETE FROM kanban_activities WHERE board_id = ? AND created_at < ?",
+                            (row["id"], cutoff)
+                        )
+                        deleted += cur.rowcount
+                    conn.commit()
+                    logger.info(f"Cleaned up {deleted} old activities")
+                    return deleted
 
                 deleted = cur.rowcount
                 conn.commit()
@@ -3194,6 +3336,19 @@ END;
                 cur = conn.execute(
                     "SELECT COUNT(*) as cnt FROM kanban_cards WHERE list_id = ? AND deleted = 0 AND archived = 0",
                     (list_id,)
+                )
+                return cur.fetchone()["cnt"]
+            finally:
+                conn.close()
+
+    def get_card_count_for_board(self, board_id: int) -> int:
+        """Get the count of non-deleted cards in a board."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM kanban_cards WHERE board_id = ? AND deleted = 0",
+                    (board_id,)
                 )
                 return cur.fetchone()["cnt"]
             finally:
@@ -3565,7 +3720,7 @@ END;
 
         if assigned:
             self._sync_vector_index_for_card_id(card_id)
-        return True
+        return assigned
 
     def remove_label_from_card(self, card_id: int, label_id: int) -> bool:
         """
@@ -4416,8 +4571,8 @@ END;
         self,
         card_id: int,
         include_deleted: bool = False,
-        page: int = 1,
-        per_page: int = 50
+        limit: int = 50,
+        offset: int = 0
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         Get comments for a card with pagination.
@@ -4425,8 +4580,8 @@ END;
         Args:
             card_id: The card ID.
             include_deleted: If True, include soft-deleted comments.
-            page: Page number (1-indexed).
-            per_page: Items per page.
+            limit: Maximum comments to return.
+            offset: Number of comments to skip.
 
         Returns:
             Tuple of (comments list, total count).
@@ -4453,7 +4608,6 @@ END;
                 total = cur.fetchone()["cnt"]
 
                 # Get paginated results
-                offset = (page - 1) * per_page
                 sql = f"""
                     SELECT cm.id, cm.uuid, cm.card_id, cm.user_id, cm.content, cm.created_at, cm.updated_at, cm.deleted
                     FROM kanban_comments cm
@@ -4461,7 +4615,7 @@ END;
                     ORDER BY cm.created_at DESC
                     LIMIT ? OFFSET ?
                 """
-                params.extend([per_page, offset])
+                params.extend([limit, offset])
                 cur = conn.execute(sql, params)
 
                 comments = [self._row_to_comment_dict(row) for row in cur.fetchall()]
@@ -5469,8 +5623,8 @@ END;
         is_complete: Optional[bool] = None,
         include_archived: bool = False,
         include_deleted: bool = False,
-        page: int = 1,
-        per_page: int = 50
+        limit: int = 50,
+        offset: int = 0
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         Get filtered cards for a board.
@@ -5487,8 +5641,8 @@ END;
             is_complete: If True, only cards where all checklist items are checked.
             include_archived: Include archived cards.
             include_deleted: Include soft-deleted cards.
-            page: Page number (1-indexed).
-            per_page: Items per page.
+            limit: Maximum cards to return.
+            offset: Number of cards to skip.
 
         Returns:
             Tuple of (cards list, total count).
@@ -5585,7 +5739,6 @@ END;
                 total = cur.fetchone()["cnt"]
 
                 # Get paginated results
-                offset = (page - 1) * per_page
                 query_sql = f"""
                     SELECT c.* FROM kanban_cards c
                     JOIN kanban_lists l ON c.list_id = l.id
@@ -5593,7 +5746,7 @@ END;
                     ORDER BY c.list_id, c.position
                     LIMIT ? OFFSET ?
                 """
-                cur = conn.execute(query_sql, params + [per_page, offset])
+                cur = conn.execute(query_sql, params + [limit, offset])
                 rows = cur.fetchall()
 
                 cards = [self._row_to_card_dict(row) for row in rows]
@@ -5713,6 +5866,23 @@ END;
                 # Verify target list is in the same board
                 if target_list["board_id"] != card["board_id"]:
                     raise InputError("Cannot copy card to a list in a different board")
+
+                # Enforce board and list limits
+                cur = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM kanban_cards WHERE board_id = ? AND deleted = 0",
+                    (card["board_id"],)
+                )
+                board_count = cur.fetchone()["cnt"]
+                if board_count >= self.MAX_CARDS_PER_BOARD:
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_BOARD}) per board reached")
+
+                cur = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM kanban_cards WHERE list_id = ? AND deleted = 0",
+                    (target_list_id,)
+                )
+                list_count = cur.fetchone()["cnt"]
+                if list_count >= self.MAX_CARDS_PER_LIST:
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_LIST}) per list reached")
 
                 # Generate title if not provided
                 if new_title is None:

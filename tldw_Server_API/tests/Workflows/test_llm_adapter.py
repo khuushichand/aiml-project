@@ -1,13 +1,12 @@
-import asyncio
 import pytest
 
 import tldw_Server_API.app.core.Workflows.adapters as wf_adapters
 
-
 pytestmark = pytest.mark.unit
 
 
-def test_llm_adapter_builds_messages_and_metadata(monkeypatch):
+@pytest.mark.asyncio
+async def test_llm_adapter_builds_messages_and_metadata(monkeypatch):
     monkeypatch.delenv("TEST_MODE", raising=False)
 
     import tldw_Server_API.app.core.Chat.chat_service as chat_service
@@ -31,7 +30,7 @@ def test_llm_adapter_builds_messages_and_metadata(monkeypatch):
     }
     context = {"inputs": {"name": "Nina"}, "user_id": "1"}
 
-    out = asyncio.run(wf_adapters.run_llm_adapter(config, context))
+    out = await wf_adapters.run_llm_adapter(config, context)
 
     assert out["text"] == "Hello Nina"
     assert out["metadata"]["token_usage"]["prompt_tokens"] == 3

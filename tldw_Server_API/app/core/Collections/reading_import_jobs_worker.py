@@ -31,8 +31,14 @@ async def main() -> None:
     )
     jm = JobManager()
     sdk = WorkerSDK(jm, cfg)
-    logger.info("Reading import worker starting: queue=%s worker_id=%s", queue, worker_id)
-    await sdk.run(handler=handle_reading_import_job)
+    logger.info(f"Reading import worker starting: queue={queue} worker_id={worker_id}")
+    try:
+        await sdk.run(handler=handle_reading_import_job)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - log and re-raise unexpected worker failures
+        logger.exception(f"Reading import worker crashed: queue={queue} worker_id={worker_id}")
+        raise
 
 
 if __name__ == "__main__":

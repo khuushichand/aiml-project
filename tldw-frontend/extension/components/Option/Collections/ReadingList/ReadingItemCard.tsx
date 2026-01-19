@@ -19,15 +19,21 @@ import { StatusBadge } from "../common/StatusBadge"
 interface ReadingItemCardProps {
   item: ReadingItemSummary
   onRefresh?: () => void
+  progressPercent?: number
 }
 
 export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
   item,
-  onRefresh
+  onRefresh,
+  progressPercent
 }) => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
   const [actionLoading, setActionLoading] = useState(false)
+  const normalizedProgress =
+    typeof progressPercent === "number"
+      ? Math.min(100, Math.max(0, progressPercent))
+      : null
 
   const openItemDetail = useCollectionsStore((s) => s.openItemDetail)
   const updateItemInList = useCollectionsStore((s) => s.updateItemInList)
@@ -190,6 +196,21 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
             <p className="mt-2 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-300">
               {item.summary}
             </p>
+          )}
+
+          {normalizedProgress !== null && normalizedProgress > 0 && (
+            <div className="mt-2">
+              <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+                <span>{t("collections:reading.progressLabel", "Progress")}</span>
+                <span>{Math.round(normalizedProgress)}%</span>
+              </div>
+              <div className="mt-1 h-1.5 w-full rounded-full bg-zinc-200 dark:bg-zinc-700">
+                <div
+                  className="h-1.5 rounded-full bg-emerald-500"
+                  style={{ width: `${normalizedProgress}%` }}
+                />
+              </div>
+            </div>
           )}
 
           {/* Tags */}

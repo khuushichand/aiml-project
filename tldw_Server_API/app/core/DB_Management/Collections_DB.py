@@ -120,6 +120,28 @@ class ContentItemRow:
     content_changed: bool = False
 
 
+@dataclass
+class ReadingDigestScheduleRow:
+    id: str
+    tenant_id: str
+    user_id: str
+    name: Optional[str]
+    cron: str
+    timezone: Optional[str]
+    enabled: bool
+    require_online: bool
+    filters_json: str
+    template_id: Optional[int]
+    template_name: Optional[str]
+    format: str
+    retention_days: Optional[int]
+    last_run_at: Optional[str]
+    next_run_at: Optional[str]
+    last_status: Optional[str]
+    created_at: str
+    updated_at: str
+
+
 class CollectionsDatabase:
     """Adapter for Collections tables stored in the per-user Media DB."""
 
@@ -283,6 +305,29 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = FALSE;
 
+            CREATE TABLE IF NOT EXISTS reading_digest_schedules (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                name TEXT,
+                cron TEXT NOT NULL,
+                timezone TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                require_online BOOLEAN NOT NULL DEFAULT FALSE,
+                filters_json TEXT NOT NULL DEFAULT '{}',
+                template_id BIGINT,
+                template_name TEXT,
+                format TEXT NOT NULL DEFAULT 'md',
+                retention_days INTEGER,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                last_status TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reading_digest_user ON reading_digest_schedules(user_id);
+            CREATE INDEX IF NOT EXISTS idx_reading_digest_tenant ON reading_digest_schedules(tenant_id);
+
             CREATE TABLE IF NOT EXISTS file_artifacts (
                 id BIGSERIAL PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -370,6 +415,29 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0;
 
+            CREATE TABLE IF NOT EXISTS reading_digest_schedules (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                name TEXT,
+                cron TEXT NOT NULL,
+                timezone TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                require_online INTEGER NOT NULL DEFAULT 0,
+                filters_json TEXT NOT NULL DEFAULT '{}',
+                template_id INTEGER,
+                template_name TEXT,
+                format TEXT NOT NULL DEFAULT 'md',
+                retention_days INTEGER,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                last_status TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reading_digest_user ON reading_digest_schedules(user_id);
+            CREATE INDEX IF NOT EXISTS idx_reading_digest_tenant ON reading_digest_schedules(tenant_id);
+
             CREATE TABLE IF NOT EXISTS file_artifacts (
                 id INTEGER PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -433,6 +501,58 @@ class CollectionsDatabase:
             self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
         except Exception:
             logger.debug("collections backfill: outputs unique index already exists or skipped")
+        # Reading digest schedule backfills
+        try:
+            enabled_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+            enabled_default = "TRUE" if self.backend.backend_type == BackendType.POSTGRESQL else "1"
+            self.backend.execute(
+                f"ALTER TABLE reading_digest_schedules ADD COLUMN enabled {enabled_type} NOT NULL DEFAULT {enabled_default}",
+                tuple(),
+            )
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.enabled already exists or skipped")
+        try:
+            online_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+            online_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
+            self.backend.execute(
+                f"ALTER TABLE reading_digest_schedules ADD COLUMN require_online {online_type} NOT NULL DEFAULT {online_default}",
+                tuple(),
+            )
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.require_online already exists or skipped")
+        try:
+            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", tuple())
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.filters_json already exists or skipped")
+        try:
+            template_id_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+            self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", tuple())
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.template_id already exists or skipped")
+        try:
+            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", tuple())
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.template_name already exists or skipped")
+        try:
+            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", tuple())
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.format already exists or skipped")
+        try:
+            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", tuple())
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.retention_days already exists or skipped")
+        try:
+            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", tuple())
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.last_run_at already exists or skipped")
+        try:
+            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", tuple())
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.next_run_at already exists or skipped")
+        try:
+            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", tuple())
+        except Exception:
+            logger.debug("collections backfill: reading_digest_schedules.last_status already exists or skipped")
         # File artifacts backfills
         try:
             deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
@@ -2070,6 +2190,187 @@ class CollectionsDatabase:
         if res.rowcount <= 0:
             raise KeyError("output_not_found")
         return self.get_output_artifact(output_id)
+
+    # ------------------------
+    # Reading digest schedules API
+    # ------------------------
+    @staticmethod
+    def _coerce_truthy(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return value != 0
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "t"}
+
+    def _reading_digest_row_from_db(self, row: Dict[str, Any]) -> ReadingDigestScheduleRow:
+        return ReadingDigestScheduleRow(
+            id=str(row.get("id")),
+            tenant_id=str(row.get("tenant_id") or "default"),
+            user_id=str(row.get("user_id")),
+            name=row.get("name"),
+            cron=str(row.get("cron")),
+            timezone=row.get("timezone"),
+            enabled=self._coerce_truthy(row.get("enabled")),
+            require_online=self._coerce_truthy(row.get("require_online")),
+            filters_json=row.get("filters_json") or "{}",
+            template_id=row.get("template_id"),
+            template_name=row.get("template_name"),
+            format=str(row.get("format") or "md"),
+            retention_days=row.get("retention_days"),
+            last_run_at=row.get("last_run_at"),
+            next_run_at=row.get("next_run_at"),
+            last_status=row.get("last_status"),
+            created_at=row.get("created_at"),
+            updated_at=row.get("updated_at"),
+        )
+
+    def create_reading_digest_schedule(
+        self,
+        *,
+        id: str,
+        tenant_id: str,
+        name: Optional[str],
+        cron: str,
+        timezone: Optional[str],
+        enabled: bool,
+        require_online: bool,
+        filters: Dict[str, Any],
+        template_id: Optional[int],
+        template_name: Optional[str],
+        format: str,
+        retention_days: Optional[int],
+    ) -> ReadingDigestScheduleRow:
+        now = _utcnow_iso()
+        enabled_flag = self._coerce_bool_flag(enabled, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        online_flag = self._coerce_bool_flag(require_online, postgres=self.backend.backend_type == BackendType.POSTGRESQL)
+        params = (
+            id,
+            tenant_id,
+            self.user_id,
+            name,
+            cron,
+            timezone,
+            enabled_flag,
+            online_flag,
+            json.dumps(filters or {}),
+            template_id,
+            template_name,
+            format or "md",
+            retention_days,
+            None,
+            None,
+            None,
+            now,
+            now,
+        )
+        q = (
+            "INSERT INTO reading_digest_schedules ("
+            "id, tenant_id, user_id, name, cron, timezone, enabled, require_online, filters_json, "
+            "template_id, template_name, format, retention_days, last_run_at, next_run_at, last_status, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        self._execute_insert(q, params)
+        return self.get_reading_digest_schedule(id)
+
+    def update_reading_digest_schedule(self, schedule_id: str, patch: Dict[str, Any]) -> ReadingDigestScheduleRow:
+        if not patch:
+            return self.get_reading_digest_schedule(schedule_id)
+        fields = []
+        params: List[Any] = []
+        if "filters" in patch:
+            fields.append("filters_json = ?")
+            params.append(json.dumps(patch.get("filters") or {}))
+        if "enabled" in patch:
+            fields.append("enabled = ?")
+            params.append(self._coerce_bool_flag(patch.get("enabled"), postgres=self.backend.backend_type == BackendType.POSTGRESQL))
+        if "require_online" in patch:
+            fields.append("require_online = ?")
+            params.append(self._coerce_bool_flag(patch.get("require_online"), postgres=self.backend.backend_type == BackendType.POSTGRESQL))
+        for key in ("name", "cron", "timezone", "template_id", "template_name", "format", "retention_days"):
+            if key in patch:
+                fields.append(f"{key} = ?")
+                params.append(patch.get(key))
+        fields.append("updated_at = ?")
+        params.append(_utcnow_iso())
+        params.extend([schedule_id, self.user_id])
+        q = f"UPDATE reading_digest_schedules SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        res = self.backend.execute(q, tuple(params))
+        if res.rowcount <= 0:
+            raise KeyError("reading_digest_schedule_not_found")
+        return self.get_reading_digest_schedule(schedule_id)
+
+    def delete_reading_digest_schedule(self, schedule_id: str) -> bool:
+        q = "DELETE FROM reading_digest_schedules WHERE id = ? AND user_id = ?"
+        res = self.backend.execute(q, (schedule_id, self.user_id))
+        return res.rowcount > 0
+
+    def get_reading_digest_schedule(self, schedule_id: str) -> ReadingDigestScheduleRow:
+        q = "SELECT * FROM reading_digest_schedules WHERE id = ? AND user_id = ?"
+        row = self.backend.execute(q, (schedule_id, self.user_id)).first
+        if not row:
+            raise KeyError("reading_digest_schedule_not_found")
+        return self._reading_digest_row_from_db(row)
+
+    def list_reading_digest_schedules(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[ReadingDigestScheduleRow], int]:
+        where = "user_id = ? AND tenant_id = ?"
+        params: List[Any] = [self.user_id, tenant_id]
+        count_q = f"SELECT COUNT(*) AS cnt FROM reading_digest_schedules WHERE {where}"
+        total = int(self.backend.execute(count_q, tuple(params)).scalar or 0)
+        q = (
+            "SELECT * FROM reading_digest_schedules "
+            f"WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, tuple(params + [limit, offset])).rows
+        return [self._reading_digest_row_from_db(row) for row in rows], total
+
+    def set_reading_digest_history(
+        self,
+        schedule_id: str,
+        *,
+        last_run_at: Optional[str] = None,
+        next_run_at: Optional[str] = None,
+        last_status: Optional[str] = None,
+    ) -> None:
+        update: Dict[str, Any] = {}
+        if last_run_at is not None:
+            update["last_run_at"] = last_run_at
+        if next_run_at is not None:
+            update["next_run_at"] = next_run_at
+        if last_status is not None:
+            update["last_status"] = last_status
+        if not update:
+            return
+        self.update_reading_digest_schedule(schedule_id, update)
+
+    def try_claim_reading_digest_run(
+        self,
+        schedule_id: str,
+        *,
+        expected_next_run_at: Optional[str],
+        next_run_at: Optional[str],
+        last_run_at: Optional[str],
+        last_status: Optional[str],
+    ) -> bool:
+        fields = ["next_run_at = ?", "last_run_at = ?", "last_status = ?"]
+        params: list[Any] = [next_run_at, last_run_at, last_status, schedule_id, self.user_id]
+        if expected_next_run_at is None:
+            q = f"UPDATE reading_digest_schedules SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND next_run_at IS NULL"
+        else:
+            q = (
+                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "
+                "WHERE id = ? AND user_id = ? AND next_run_at = ?"
+            )
+            params.append(expected_next_run_at)
+        res = self.backend.execute(q, tuple(params))
+        return res.rowcount > 0
 
     def purge_expired_outputs(self) -> int:
         """Hard delete expired/retained outputs. Returns number of rows removed."""

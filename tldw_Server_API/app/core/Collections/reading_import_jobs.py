@@ -51,18 +51,27 @@ def stage_reading_import_file(
     raw_bytes: bytes,
 ) -> Path:
     imports_dir = DatabasePaths.get_user_reading_imports_dir(user_id)
+    imports_dir_resolved = imports_dir.resolve()
     try:
         safe_name = normalize_output_storage_filename(
             filename or "reading_import",
             allow_absolute=False,
             reject_relative_with_separators=True,
             expand_user=False,
+            base_resolved=imports_dir_resolved,
+            check_relative_containment=True,
         )
     except InvalidStoragePathError:
         safe_name = "reading_import"
     if not safe_name:
         safe_name = "reading_import"
-    target = imports_dir / f"reading_import_{uuid4().hex}_{safe_name}"
+    token = uuid4().hex
+    target = (imports_dir / f"reading_import_{token}_{safe_name}").resolve()
+    try:
+        target.relative_to(imports_dir_resolved)
+    except ValueError:
+        safe_name = "reading_import"
+        target = (imports_dir / f"reading_import_{token}_{safe_name}").resolve()
     target.write_bytes(raw_bytes)
     return target
 
@@ -166,5 +175,5 @@ async def handle_reading_import_job(job: Dict[str, Any]) -> Dict[str, Any]:
     finally:
         try:
             import_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as cleanup_exc:
+            logger.debug(f"reading_import_job: cleanup failed for {import_path}: {cleanup_exc}")

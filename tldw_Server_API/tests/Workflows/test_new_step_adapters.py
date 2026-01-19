@@ -152,6 +152,28 @@ def test_llm_step_test_mode(client_with_wf: TestClient):
     assert "Rui" in (out.get("text") or "")
 
 
+def test_kanban_step_crud(client_with_wf: TestClient):
+    client = client_with_wf
+    definition = {
+        "name": "kanban-crud",
+        "version": 1,
+        "steps": [
+            {"id": "b", "type": "kanban", "config": {"action": "board.create", "name": "Board {{ inputs.name }}", "client_id": "wf-board-1"}},
+            {"id": "l", "type": "kanban", "config": {"action": "list.create", "board_id": "{{ last.board.id }}", "name": "To Do", "client_id": "wf-list-1"}},
+            {"id": "c", "type": "kanban", "config": {"action": "card.create", "list_id": "{{ last.list.id }}", "title": "Card {{ inputs.name }}", "client_id": "wf-card-1"}},
+            {"id": "g", "type": "kanban", "config": {"action": "card.get", "card_id": "{{ last.card.id }}", "include_details": True}},
+        ],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {"name": "Kanban"}}).json()["run_id"]
+    data = _wait_terminal(client, run_id)
+    assert data["status"] == "succeeded"
+    out = data.get("outputs") or {}
+    card = out.get("card") or {}
+    assert card.get("title") == "Card Kanban"
+    assert isinstance(card.get("checklists"), list)
+
+
 def test_diff_change_detector(client_with_wf: TestClient):
     client = client_with_wf
     definition = {

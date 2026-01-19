@@ -13,6 +13,7 @@ Tests cover:
 - Error handling
 """
 from typing import Dict, Any
+from datetime import datetime, timezone, timedelta
 import sqlite3
 
 import pytest
@@ -416,6 +417,30 @@ class TestCardOperations:
         assert card["priority"] == "high"
         assert card["metadata"]["tags"] == ["urgent", "review"]
 
+    def test_create_card_enforces_board_limit(self, kanban_db: KanbanDB, sample_list: dict):
+        """Test board-level card limit enforcement."""
+        kanban_db.MAX_CARDS_PER_BOARD = 2
+        kanban_db.MAX_CARDS_PER_LIST = 10
+
+        kanban_db.create_card(
+            list_id=sample_list["id"],
+            title="Card 1",
+            client_id="card-client-1"
+        )
+        kanban_db.create_card(
+            list_id=sample_list["id"],
+            title="Card 2",
+            client_id="card-client-2"
+        )
+
+        with pytest.raises(InputError) as exc_info:
+            kanban_db.create_card(
+                list_id=sample_list["id"],
+                title="Card 3",
+                client_id="card-client-3"
+            )
+        assert "per board" in str(exc_info.value).lower()
+
     def test_create_card_invalid_priority(self, kanban_db: KanbanDB, sample_list: dict):
         """Test that invalid priority raises InputError."""
         with pytest.raises(InputError):
@@ -485,6 +510,19 @@ class TestCardOperations:
         assert copy["list_id"] == list2["id"]
         assert "Copy of" in copy["title"]
         assert copy["description"] == sample_card["description"]
+
+    def test_copy_card_respects_board_limit(self, kanban_db: KanbanDB, sample_list: dict, sample_card: dict):
+        """Test copy card fails when board limit is reached."""
+        kanban_db.MAX_CARDS_PER_BOARD = 1
+        kanban_db.MAX_CARDS_PER_LIST = 10
+
+        with pytest.raises(InputError) as exc_info:
+            kanban_db.copy_card(
+                card_id=sample_card["id"],
+                target_list_id=sample_list["id"],
+                new_client_id="card-copy-limit"
+            )
+        assert "per board" in str(exc_info.value).lower()
 
     def test_copy_card_custom_title(self, kanban_db: KanbanDB, sample_list: dict, sample_card: dict):
         """Test copying a card with a custom title."""
@@ -653,6 +691,49 @@ class TestActivityOperations:
 
         activities, total = kanban_db.get_board_activities(sample_board["id"])
         assert total == initial_count + 2  # 2 new activities added
+
+    def test_cleanup_old_activities_respects_board_retention(self, kanban_db: KanbanDB, sample_board: dict):
+        """Cleanup should honor per-board retention values."""
+        short_board = kanban_db.create_board(
+            name="Short Retention",
+            client_id="board-retention-short",
+            activity_retention_days=7,
+        )
+        act_long = kanban_db.log_activity(
+            board_id=sample_board["id"],
+            action_type="update",
+            entity_type="card",
+            entity_id=1,
+        )
+        act_short = kanban_db.log_activity(
+            board_id=short_board["id"],
+            action_type="update",
+            entity_type="card",
+            entity_id=2,
+        )
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = kanban_db._connect()
+        try:
+            conn.execute(
+                "UPDATE kanban_activities SET created_at = ? WHERE id IN (?, ?)",
+                (old_ts, act_long["id"], act_short["id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        deleted = kanban_db.cleanup_old_activities()
+        assert deleted == 1
+
+        conn = kanban_db._connect()
+        try:
+            cur = conn.execute("SELECT COUNT(*) as cnt FROM kanban_activities WHERE id = ?", (act_long["id"],))
+            assert cur.fetchone()["cnt"] == 1
+            cur = conn.execute("SELECT COUNT(*) as cnt FROM kanban_activities WHERE id = ?", (act_short["id"],))
+            assert cur.fetchone()["cnt"] == 0
+        finally:
+            conn.close()
 
 
 # =============================================================================
@@ -1155,23 +1236,23 @@ class TestCommentOperations:
 
         page1, total = kanban_db.list_comments(
             card_id=sample_card["id"],
-            page=1,
-            per_page=2
+            limit=2,
+            offset=0
         )
         assert len(page1) == 2
         assert total == 5
 
         page2, _ = kanban_db.list_comments(
             card_id=sample_card["id"],
-            page=2,
-            per_page=2
+            limit=2,
+            offset=2
         )
         assert len(page2) == 2
 
         page3, _ = kanban_db.list_comments(
             card_id=sample_card["id"],
-            page=3,
-            per_page=2
+            limit=2,
+            offset=4
         )
         assert len(page3) == 1
 
@@ -1239,12 +1320,13 @@ class TestCommentOperations:
         assert "required" in str(exc_info.value).lower()
 
         # Too long content should fail
+        too_long = "x" * (kanban_db.MAX_COMMENT_SIZE + 1)
         with pytest.raises(InputError) as exc_info:
             kanban_db.create_comment(
                 card_id=sample_card["id"],
-                content="x" * 11000
+                content=too_long
             )
-        assert "10000" in str(exc_info.value)
+        assert str(kanban_db.MAX_COMMENT_SIZE) in str(exc_info.value)
 
 
 # =============================================================================
@@ -1923,8 +2005,8 @@ class TestCardFiltering:
 
         cards, total = kanban_db.get_board_cards_filtered(
             board_id=sample_board["id"],
-            page=1,
-            per_page=3
+            limit=3,
+            offset=0
         )
 
         assert total == 10
@@ -1932,8 +2014,8 @@ class TestCardFiltering:
 
         cards, total = kanban_db.get_board_cards_filtered(
             board_id=sample_board["id"],
-            page=4,
-            per_page=3
+            limit=3,
+            offset=9
         )
 
         assert total == 10

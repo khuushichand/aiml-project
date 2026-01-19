@@ -29,6 +29,7 @@ from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
+    kanban_rate_limit,
 )
 
 
@@ -50,7 +51,8 @@ def _handle_error(e: Exception) -> HTTPException:
     response_model=LabelResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new label",
-    description="Create a new label for a board."
+    description="Create a new label for a board.",
+    dependencies=[Depends(kanban_rate_limit("kanban.labels.create"))]
 )
 async def create_label(
     board_id: int,
@@ -71,14 +73,13 @@ async def create_label(
         )
         return LabelResponse(**label)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/boards/{board_id}/labels",
     response_model=LabelsListResponse,
     summary="List board labels",
-    description="Get all labels for a board."
+    description="Get all labels for a board.",
+    dependencies=[Depends(kanban_rate_limit("kanban.labels.list"))]
 )
 async def list_labels(
     board_id: int,
@@ -91,14 +92,13 @@ async def list_labels(
             labels=[LabelResponse(**label) for label in labels]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/labels/{label_id}",
     response_model=LabelResponse,
     summary="Get a label",
-    description="Get a label by ID."
+    description="Get a label by ID.",
+    dependencies=[Depends(kanban_rate_limit("kanban.labels.get"))]
 )
 async def get_label(
     label_id: int,
@@ -116,14 +116,13 @@ async def get_label(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.patch(
     "/labels/{label_id}",
     response_model=LabelResponse,
     summary="Update a label",
-    description="Update an existing label."
+    description="Update an existing label.",
+    dependencies=[Depends(kanban_rate_limit("kanban.labels.update"))]
 )
 async def update_label(
     label_id: int,
@@ -144,15 +143,14 @@ async def update_label(
         )
         return LabelResponse(**label)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.delete(
     "/labels/{label_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Delete a label",
-    description="Delete a label (hard delete). This removes the label from all cards."
+    description="Delete a label (hard delete). This removes the label from all cards.",
+    dependencies=[Depends(kanban_rate_limit("kanban.labels.delete"))]
 )
 async def delete_label(
     label_id: int,
@@ -170,9 +168,7 @@ async def delete_label(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Card-Label Association Endpoints
 # =============================================================================
@@ -182,7 +178,8 @@ async def delete_label(
     response_model=DetailResponse,
     status_code=status.HTTP_200_OK,
     summary="Assign label to card",
-    description="Assign a label to a card."
+    description="Assign a label to a card.",
+    dependencies=[Depends(kanban_rate_limit("kanban.labels.assign"))]
 )
 async def assign_label_to_card(
     card_id: int,
@@ -199,15 +196,14 @@ async def assign_label_to_card(
         db.assign_label_to_card(card_id=card_id, label_id=label_id)
         return DetailResponse(detail="Label assigned to card")
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.delete(
     "/cards/{card_id}/labels/{label_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Remove label from card",
-    description="Remove a label from a card."
+    description="Remove a label from a card.",
+    dependencies=[Depends(kanban_rate_limit("kanban.labels.remove"))]
 )
 async def remove_label_from_card(
     card_id: int,
@@ -220,14 +216,13 @@ async def remove_label_from_card(
         # Don't raise 404 if the association didn't exist - idempotent behavior
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/cards/{card_id}/labels",
     response_model=LabelsListResponse,
     summary="Get card labels",
-    description="Get all labels assigned to a card."
+    description="Get all labels assigned to a card.",
+    dependencies=[Depends(kanban_rate_limit("kanban.labels.list"))]
 )
 async def get_card_labels(
     card_id: int,
@@ -240,4 +235,4 @@ async def get_card_labels(
             labels=[LabelResponse(**label) for label in labels]
         )
     except Exception as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e

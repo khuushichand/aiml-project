@@ -95,9 +95,7 @@ async def add_card_link(
         logger.info(f"Added link from card {card_id} to {link_in.linked_type}:{link_in.linked_id}")
         return CardLinkResponse(**link)
     except (NotFoundError, InputError, ConflictError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/cards/{card_id}/links",
     response_model=CardLinksListResponse,
@@ -120,9 +118,7 @@ async def get_card_links(
         links = db.get_card_links(card_id=card_id, linked_type=linked_type)
         return CardLinksListResponse(links=[CardLinkResponse(**link) for link in links])
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/cards/{card_id}/links/counts",
     response_model=CardLinkCountsResponse,
@@ -142,9 +138,7 @@ async def get_card_link_counts(
         counts = db.get_linked_content_counts(card_id=card_id)
         return CardLinkCountsResponse(**counts)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.delete(
     "/cards/{card_id}/links/{linked_type}/{linked_id}",
     response_model=DetailResponse,
@@ -179,9 +173,7 @@ async def remove_card_link(
         logger.info(f"Removed link from card {card_id} to {linked_type}:{linked_id}")
         return DetailResponse(detail="Link removed successfully")
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.delete(
     "/cards/{card_id}/links/{link_id}",
     response_model=DetailResponse,
@@ -205,9 +197,7 @@ async def remove_card_link_by_id_for_card(
         logger.info(f"Removed link {link_id} from card {card_id}")
         return DetailResponse(detail="Link removed successfully")
     except KanbanDBError as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.delete(
     "/links/{link_id}",
     response_model=DetailResponse,
@@ -230,9 +220,7 @@ async def remove_card_link_by_id(
         logger.info(f"Removed link {link_id}")
         return DetailResponse(detail="Link removed successfully")
     except KanbanDBError as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Bulk Link Operations
 # =============================================================================
@@ -261,9 +249,7 @@ async def bulk_add_card_links(
         logger.info(f"Bulk added {result['added_count']} links to card {card_id}")
         return BulkCardLinksAddResponse(**result)
     except (NotFoundError, InputError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/{card_id}/links/bulk-remove",
     response_model=BulkCardLinksRemoveResponse,
@@ -288,9 +274,7 @@ async def bulk_remove_card_links(
         logger.info(f"Bulk removed {result['removed_count']} links from card {card_id}")
         return BulkCardLinksRemoveResponse(**result)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Bidirectional Lookup Endpoints
 # =============================================================================
@@ -335,4 +319,4 @@ async def get_cards_by_linked_content(
             cards=[LinkedCardResponse(**card) for card in cards]
         )
     except KanbanDBError as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e

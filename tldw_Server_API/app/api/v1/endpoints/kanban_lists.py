@@ -9,7 +9,7 @@ Provides CRUD operations for Kanban lists including:
 - Reorder lists within a board
 """
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
 from loguru import logger
@@ -38,6 +38,7 @@ from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     handle_kanban_db_error,
     kanban_rate_limit,
 )
+from tldw_Server_API.app.api.v1.endpoints._kanban_utils import to_db_timestamp
 
 
 router = APIRouter(tags=["Kanban Lists"])
@@ -47,15 +48,6 @@ router = APIRouter(tags=["Kanban Lists"])
 def _handle_error(e: Exception) -> HTTPException:
     """Convert exceptions to appropriate HTTP responses."""
     return handle_kanban_db_error(e)
-
-
-def _to_db_timestamp(value: Optional[datetime]) -> Optional[str]:
-    """Convert datetime to DB-friendly timestamp string."""
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # =============================================================================
@@ -93,9 +85,7 @@ async def create_list(
         logger.info(f"Created list {lst['id']} in board {board_id}")
         return ListResponse(**lst)
     except (NotFoundError, InputError, ConflictError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/boards/{board_id}/lists",
     response_model=ListsListResponse,
@@ -125,9 +115,7 @@ async def get_lists(
             lst["card_count"] = db.get_card_count_for_list(lst["id"])
         return ListsListResponse(lists=[ListResponse(**lst) for lst in lists])
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/boards/{board_id}/lists/reorder",
     response_model=ReorderResponse,
@@ -151,9 +139,7 @@ async def reorder_lists(
         logger.info(f"Reordered {len(reorder_in.ids)} lists in board {board_id}")
         return ReorderResponse(success=True, message="Lists reordered successfully")
     except (NotFoundError, InputError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Individual List Endpoints (at /lists/{list_id})
 # =============================================================================
@@ -180,9 +166,7 @@ async def get_list(
         lst["card_count"] = db.get_card_count_for_list(list_id)
         return ListResponse(**lst)
     except KanbanDBError as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.patch(
     "/lists/{list_id}",
     response_model=ListResponse,
@@ -212,9 +196,7 @@ async def update_list(
         logger.info(f"Updated list {list_id}")
         return ListResponse(**lst)
     except (NotFoundError, InputError, ConflictError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Archive Operations
 # =============================================================================
@@ -237,9 +219,7 @@ async def archive_list(
         logger.info(f"Archived list {list_id}")
         return ListResponse(**lst)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/lists/{list_id}/unarchive",
     response_model=ListResponse,
@@ -258,9 +238,7 @@ async def unarchive_list(
         logger.info(f"Unarchived list {list_id}")
         return ListResponse(**lst)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Delete Operations
 # =============================================================================
@@ -291,9 +269,7 @@ async def delete_list(
         logger.info(f"Deleted list {list_id}")
         return DetailResponse(detail=f"List {list_id} deleted successfully")
     except KanbanDBError as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/lists/{list_id}/restore",
     response_model=ListResponse,
@@ -312,9 +288,7 @@ async def restore_list(
         logger.info(f"Restored list {list_id}")
         return ListResponse(**lst)
     except (NotFoundError, InputError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Activity Endpoints
 # =============================================================================
@@ -337,11 +311,16 @@ async def get_list_activities(
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> ActivitiesListResponse:
     """Get activity log for a list."""
+    if created_after and created_before and created_after > created_before:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="created_after must be less than or equal to created_before.",
+        )
     try:
         activities, total = db.get_list_activities(
             list_id=list_id,
-            created_after=_to_db_timestamp(created_after),
-            created_before=_to_db_timestamp(created_before),
+            created_after=to_db_timestamp(created_after),
+            created_before=to_db_timestamp(created_before),
             action_type=action_type,
             entity_type=entity_type,
             limit=limit,
@@ -357,4 +336,4 @@ async def get_list_activities(
             )
         )
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e

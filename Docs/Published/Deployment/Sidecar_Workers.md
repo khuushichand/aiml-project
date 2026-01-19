@@ -22,6 +22,7 @@ Important: set `TLDW_WORKERS_SIDECAR_MODE=true` for the API process so it skips 
 - Audio jobs worker: `python -m tldw_Server_API.app.services.audio_jobs_worker`
 - Media ingest jobs worker: `python -m tldw_Server_API.app.services.media_ingest_jobs_worker`
 - Reading list import jobs worker: `python -m tldw_Server_API.app.core.Collections.reading_import_jobs_worker`
+- Reading digest jobs worker: `python -m tldw_Server_API.app.core.Collections.reading_digest_jobs_worker`
 - Evaluations embeddings ABTest worker: `python -m tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs_worker`
 - Connectors worker (optional): `python -m tldw_Server_API.app.services.connectors_worker`
 
@@ -32,7 +33,7 @@ Important: set `TLDW_WORKERS_SIDECAR_MODE=true` for the API process so it skips 
 ```
 
 Tunable env vars:
-- `TLDW_SIDECAR_WORKERS=chatbooks,files,data_tables,prompt_studio,privilege_snapshots,audio,media_ingest,reading_import,evals_abtest`
+- `TLDW_SIDECAR_WORKERS=chatbooks,files,data_tables,prompt_studio,privilege_snapshots,audio,media_ingest,reading_import,reading_digest,evals_abtest`
   (add connectors if you use those jobs)
 - `TLDW_ENV_FILE=/path/to/.env`
 - `TLDW_LOG_DIR=/path/to/logs`
@@ -85,7 +86,9 @@ cp Docs/Deployment/launchd/com.tldw.worker.chatbooks.plist ~/Library/LaunchAgent
 # For LaunchAgents, set SERVICE_USER/GROUP to your login user.
 SERVICE_USER="${SERVICE_USER:-tldw}"
 SERVICE_GROUP="${SERVICE_GROUP:-tldw}"
-sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0755 /opt/tldw_server/logs/launchd
+sudo mkdir -p /opt/tldw_server/logs/launchd
+sudo chown "$SERVICE_USER":"$SERVICE_GROUP" /opt/tldw_server/logs/launchd
+sudo chmod 0755 /opt/tldw_server/logs/launchd
 
 # Modern macOS (10.11+)
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tldw.worker.chatbooks.plist

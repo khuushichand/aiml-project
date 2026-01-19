@@ -1,0 +1,10 @@
+:root {
+  --reveal-bg: #f6f1ea;
+  --reveal-fg: #2f2a24;
+  --reveal-heading: #1c1712;
+  --reveal-accent: #8a5a2b;
+}
+
+body {
+  font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+}

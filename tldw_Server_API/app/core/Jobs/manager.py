@@ -167,6 +167,9 @@ class JobManager:
 
     # Standard queues across domains
     STANDARD_QUEUES = ("default", "high", "low")
+    DOMAIN_ALLOWED_QUEUES = {
+        "reading": ("reading-digest",),
+    }
 
     # --- Shutdown/acquisition gate (process-wide) ---
     _ACQUIRE_GATE_ENABLED: bool = False
@@ -178,6 +181,9 @@ class JobManager:
 
     def _get_allowed_queues(self, domain: Optional[str] = None) -> List[str]:
         allowed = list(self.STANDARD_QUEUES)
+        if domain:
+            domain_key = str(domain).strip().lower()
+            allowed.extend(self.DOMAIN_ALLOWED_QUEUES.get(domain_key, ()))
         extra = os.getenv("JOBS_ALLOWED_QUEUES", "").strip()
         if extra:
             allowed.extend([q.strip() for q in extra.split(",") if q.strip()])
@@ -4269,6 +4275,8 @@ class JobManager:
                         else:
                             jitter = random.randint(0, max(1, exp_backoff // 4))
                         delay = exp_backoff + jitter
+                        base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
+                        thresh = base_thresh
                         if test_mode:
                             _outbox = str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {
                                 "1",
@@ -4285,15 +4293,12 @@ class JobManager:
                             except Exception:
                                 if _outbox and delay < 3:
                                     delay = 3
-                            base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
                             if test_mode and int(backoff_seconds) <= 0:
                                 # Respect explicit threshold in tests; otherwise, avoid quarantining to allow timeline growth
                                 if os.getenv("JOBS_QUARANTINE_THRESHOLD") is None:
                                     thresh = max(base_thresh, 10**9)
                                 else:
                                     thresh = base_thresh
-                            else:
-                                thresh = base_thresh
                         # SQLite retry path with failure streak bookkeeping
                         if enforce:
                             conn.execute(

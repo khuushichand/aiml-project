@@ -913,6 +913,7 @@ else:
         _HAS_ITEMS = False
     # Notes / Prompts
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
+    from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
 
     # Notes Graph (stub, RBAC-wired)
     try:
@@ -1909,12 +1910,14 @@ async def lifespan(app: FastAPI):
     privilege_snapshot_task = None
     audio_jobs_task = None
     media_ingest_jobs_task = None
+    reading_digest_jobs_task = None
     chatbooks_cleanup_stop_event = None
     files_jobs_stop_event = None
     data_tables_jobs_stop_event = None
     prompt_studio_jobs_stop_event = None
     privilege_snapshot_stop_event = None
     media_ingest_jobs_stop_event = None
+    reading_digest_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     try:
@@ -2158,6 +2161,26 @@ async def lifespan(app: FastAPI):
             logger.info("Media Ingest Jobs worker disabled by flag (MEDIA_INGEST_JOBS_WORKER_ENABLED)")
     except Exception as e:
         logger.warning(f"Failed to start Media Ingest Jobs worker: {e}")
+
+    # Reading Digest Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Collections.reading_digest_jobs_worker import (
+            run_reading_digest_jobs_worker as _run_reading_digest_jobs,
+        )
+
+        _enabled = _should_start_worker("READING_DIGEST_JOBS_WORKER_ENABLED", "reading")
+        if _enabled:
+            reading_digest_jobs_stop_event = _asyncio.Event()
+            reading_digest_jobs_task = _asyncio.create_task(
+                _run_reading_digest_jobs(reading_digest_jobs_stop_event)
+            )
+            logger.info("Reading digest Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Reading digest Jobs worker disabled by flag (READING_DIGEST_JOBS_WORKER_ENABLED)")
+    except Exception as e:
+        logger.warning(f"Failed to start Reading digest Jobs worker: {e}")
 
     # Evaluations Embeddings A/B Jobs worker
     try:
@@ -2535,6 +2558,36 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Outputs purge scheduler: {e}")
 
+    # Start Kanban activity cleanup scheduler (retention cleanup)
+    try:
+        _enable_kanban_activity_cleanup = _env_os.getenv("KANBAN_ACTIVITY_CLEANUP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        if not _enable_kanban_activity_cleanup:
+            logger.info("Kanban activity cleanup scheduler disabled (KANBAN_ACTIVITY_CLEANUP_ENABLED != true)")
+        else:
+            from tldw_Server_API.app.services.kanban_activity_cleanup_service import (
+                start_kanban_activity_cleanup_scheduler,
+            )
+
+            _kanban_cleanup_task = await start_kanban_activity_cleanup_scheduler()
+            if _kanban_cleanup_task:
+                logger.info("Kanban activity cleanup scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start Kanban activity cleanup scheduler: {e}")
+
+    # Start Kanban soft-delete purge scheduler
+    try:
+        _enable_kanban_purge = _env_os.getenv("KANBAN_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        if not _enable_kanban_purge:
+            logger.info("Kanban purge scheduler disabled (KANBAN_PURGE_ENABLED != true)")
+        else:
+            from tldw_Server_API.app.services.kanban_purge_service import start_kanban_purge_scheduler
+
+            _kanban_purge_task = await start_kanban_purge_scheduler()
+            if _kanban_purge_task:
+                logger.info("Kanban purge scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start Kanban purge scheduler: {e}")
+
     # Start File artifacts export GC scheduler (expired export cleanup)
     try:
         _enable_files_export_gc = _env_os.getenv("FILES_EXPORT_GC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
@@ -2604,6 +2657,30 @@ async def lifespan(app: FastAPI):
             logger.info("Workflows recurring scheduler disabled (WORKFLOWS_SCHEDULER_ENABLED != true)")
     except Exception as e:
         logger.warning(f"Failed to start Workflows recurring scheduler: {e}")
+
+    # Start Reading digest scheduler (cron-based submission into Jobs)
+    reading_digest_sched_task = None
+    try:
+        from tldw_Server_API.app.services.reading_digest_scheduler import start_reading_digest_scheduler
+
+        try:
+            _rd_sched_enabled = _env_flag("READING_DIGEST_SCHEDULER_ENABLED", True)
+            if globals().get("_TEST_MODE") and _os.getenv("READING_DIGEST_SCHEDULER_ENABLED") is None:
+                _rd_sched_enabled = False
+        except Exception:
+            _rd_sched_enabled = _os.getenv("READING_DIGEST_SCHEDULER_ENABLED", "true").lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        reading_digest_sched_task = await start_reading_digest_scheduler(enabled=_rd_sched_enabled)
+        if reading_digest_sched_task:
+            logger.info("Reading digest scheduler started")
+        else:
+            logger.info("Reading digest scheduler disabled (READING_DIGEST_SCHEDULER_ENABLED != true)")
+    except Exception as e:
+        logger.warning(f"Failed to start Reading digest scheduler: {e}")
 
     # Display authentication mode (mask API key in production)
     try:
@@ -2854,6 +2931,16 @@ async def lifespan(app: FastAPI):
                     media_ingest_jobs_task.cancel()
             else:
                 media_ingest_jobs_task.cancel()
+        if "reading_digest_jobs_task" in locals() and reading_digest_jobs_task:
+            if "reading_digest_jobs_stop_event" in locals() and reading_digest_jobs_stop_event:
+                try:
+                    reading_digest_jobs_stop_event.set()
+                    await _asyncio.wait_for(reading_digest_jobs_task, timeout=5.0)
+                    logger.info("Reading digest Jobs worker stopped via stop_event")
+                except Exception:
+                    reading_digest_jobs_task.cancel()
+            else:
+                reading_digest_jobs_task.cancel()
         if "evals_abtest_jobs_task" in locals() and evals_abtest_jobs_task:
             if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
                 try:
@@ -2911,6 +2998,18 @@ async def lifespan(app: FastAPI):
             try:
                 if "workflows_sched_task" in locals() and workflows_sched_task:
                     workflows_sched_task.cancel()
+            except Exception:
+                pass
+        # Stop Reading digest scheduler
+        try:
+            if "reading_digest_sched_task" in locals() and reading_digest_sched_task:
+                from tldw_Server_API.app.services.reading_digest_scheduler import stop_reading_digest_scheduler as _stop_rd_sched
+
+                await _stop_rd_sched(reading_digest_sched_task)
+        except Exception:
+            try:
+                if "reading_digest_sched_task" in locals() and reading_digest_sched_task:
+                    reading_digest_sched_task.cancel()
             except Exception:
                 pass
         # Jobs metrics gauges worker shutdown
@@ -4768,6 +4867,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     except Exception as _notes_min_err:
         logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
+    # Slides endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
+
+        app.include_router(slides_router, prefix=f"{API_V1_PREFIX}", tags=["slides"])
+    except Exception as _slides_min_err:
+        logger.debug(f"Skipping slides router in minimal test app: {_slides_min_err}")
     # Kanban Board endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.kanban_boards import router as kanban_boards_router
@@ -5203,6 +5309,7 @@ else:
             "notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"]
         )  # /api/v1/notes/graph
     _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    _include_if_enabled("slides", slides_router, prefix=f"{API_V1_PREFIX}", tags=["slides"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
     # Kanban Board endpoints
     if _HAS_KANBAN:

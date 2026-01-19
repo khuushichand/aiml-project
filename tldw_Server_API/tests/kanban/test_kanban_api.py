@@ -257,8 +257,9 @@ def test_card_crud(client_with_kanban_db):
 # =============================================================================
 
 def test_activity_endpoints_filters(client_with_kanban_db):
+    """Verify activity endpoint filtering behavior."""
 
-    client, db = client_with_kanban_db
+    client, _ = client_with_kanban_db
 
     board = client.post(
         "/api/v1/kanban/boards",
@@ -1057,7 +1058,7 @@ def test_search_cards_post(client_with_kanban_db):
     # Search via POST
     search_resp = client.post(
         "/api/v1/kanban/search",
-        json={"query": "database", "per_page": 10}
+        json={"query": "database", "limit": 10}
     )
     assert search_resp.status_code == 200
     result = search_resp.json()
@@ -1263,7 +1264,7 @@ def test_search_pagination(client_with_kanban_db):
     # Search with pagination
     search_resp = client.get(
         "/api/v1/kanban/search",
-        params={"q": "paginated", "page": 1, "per_page": 2}
+        params={"q": "paginated", "limit": 2, "offset": 0}
     )
     assert search_resp.status_code == 200
     result = search_resp.json()
@@ -1275,7 +1276,7 @@ def test_search_pagination(client_with_kanban_db):
     # Get page 2
     search_resp2 = client.get(
         "/api/v1/kanban/search",
-        params={"q": "paginated", "page": 2, "per_page": 2}
+        params={"q": "paginated", "limit": 2, "offset": 2}
     )
     assert search_resp2.status_code == 200
     result2 = search_resp2.json()
@@ -1573,8 +1574,8 @@ def test_search_post_with_all_parameters(client_with_kanban_db):
             "priority": "high",
             "include_archived": False,
             "search_mode": "fts",
-            "page": 1,
-            "per_page": 10
+            "limit": 10,
+            "offset": 0
         }
     )
     assert search_resp.status_code == 200

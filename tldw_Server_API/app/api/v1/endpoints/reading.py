@@ -2,27 +2,40 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
-import json
-from typing import Dict, List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
+from tldw_Server_API.app.api.v1.endpoints.items import bulk_update_items as bulk_update_items_handler
+from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
+from tldw_Server_API.app.api.v1.schemas.items_schemas import ItemsBulkRequest, ItemsBulkResponse
 from tldw_Server_API.app.api.v1.schemas.reading_schemas import (
-    ReadingCitation,
-    ReadingDeleteResponse,
-    ReadingItem,
-    ReadingItemDetail,
-    ReadingImportResponse,
     ReadingArchiveCreateRequest,
     ReadingArchiveResponse,
+    ReadingCitation,
+    ReadingDeleteResponse,
+    ReadingDigestOutput,
+    ReadingDigestOutputsListResponse,
+    ReadingDigestScheduleCreateRequest,
+    ReadingDigestScheduleFilters,
+    ReadingDigestScheduleResponse,
+    ReadingDigestScheduleUpdateRequest,
     ReadingImportJobResponse,
-    ReadingImportJobStatus,
     ReadingImportJobsListResponse,
+    ReadingImportJobStatus,
+    ReadingImportResponse,
+    ReadingItem,
+    ReadingItemDetail,
     ReadingItemsListResponse,
     ReadingSaveRequest,
     ReadingSummarizeRequest,
@@ -30,14 +43,7 @@ from tldw_Server_API.app.api.v1.schemas.reading_schemas import (
     ReadingTTSRequest,
     ReadingUpdateRequest,
 )
-from tldw_Server_API.app.api.v1.schemas.items_schemas import ItemsBulkRequest, ItemsBulkResponse
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
-from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
-from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
-from tldw_Server_API.app.api.v1.endpoints.items import bulk_update_items as bulk_update_items_handler
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.Collections.reading_service import ReadingService
 from tldw_Server_API.app.core.Collections.reading_import_jobs import (
     MAX_READING_IMPORT_BYTES,
     READING_IMPORT_DOMAIN,
@@ -45,13 +51,14 @@ from tldw_Server_API.app.core.Collections.reading_import_jobs import (
     reading_import_queue,
     stage_reading_import_file,
 )
+from tldw_Server_API.app.core.Collections.reading_service import ReadingService
 from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as summarize_analyze
 from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
-    TTSError,
     TTSAuthenticationError,
+    TTSError,
     TTSProviderNotConfiguredError,
     TTSQuotaExceededError,
     TTSRateLimitError,
@@ -64,7 +71,7 @@ from tldw_Server_API.app.services.outputs_service import (
     _resolve_output_path_for_user,
     _sanitize_title_for_filename,
 )
-
+from tldw_Server_API.app.services.reading_digest_scheduler import get_reading_digest_scheduler
 
 READING_ARCHIVE_MAX_BYTES = int(os.getenv("READING_ARCHIVE_MAX_BYTES", str(5 * 1024 * 1024)))
 READING_ARCHIVE_RETENTION_DAYS = int(os.getenv("READING_ARCHIVE_RETENTION_DAYS", "30") or "30")
@@ -79,22 +86,16 @@ def _service_for_user(user: User) -> ReadingService:
     return ReadingService(user.id)
 
 
-def _jobs_manager() -> JobManager:
-    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
-    backend = "postgres" if db_url.startswith("postgres") else None
-    return JobManager(backend=backend, db_url=db_url or None)
-
-
-def _parse_metadata(row: ContentItemRow) -> Dict[str, object]:
+def _parse_metadata(row: ContentItemRow) -> dict[str, object]:
     if getattr(row, "metadata_json", None):
         try:
             return json.loads(row.metadata_json) if row.metadata_json else {}
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             return {}
     return {}
 
 
-def _derive_processing_status(row: ContentItemRow, metadata: Dict[str, object]) -> str:
+def _derive_processing_status(row: ContentItemRow, metadata: dict[str, object]) -> str:
     status_raw = str(metadata.get("processing_status", "")).lower()
     if status_raw in {"processing", "ready"}:
         return status_raw
@@ -140,8 +141,8 @@ def _to_reading_detail(row: ContentItemRow) -> ReadingItemDetail:
 
 def _select_text_for_action(
     row: ContentItemRow,
-    metadata: Dict[str, object],
-    text_source: Optional[str],
+    metadata: dict[str, object],
+    text_source: str | None,
 ) -> str:
     if text_source == "summary":
         return row.summary or ""
@@ -196,17 +197,17 @@ def _parse_import_job_result(result: object) -> Optional[ReadingImportResponse]:
     if isinstance(result, str):
         try:
             result = json.loads(result)
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             return None
     if isinstance(result, dict):
         try:
             return ReadingImportResponse(**result)
-        except Exception:
+        except (TypeError, ValueError):
             return None
     return None
 
 
-def _to_import_job_status(job: Dict[str, object]) -> ReadingImportJobStatus:
+def _to_import_job_status(job: dict[str, object]) -> ReadingImportJobStatus:
     return ReadingImportJobStatus(
         job_id=int(job.get("id")),
         job_uuid=job.get("uuid"),
@@ -226,11 +227,40 @@ def _parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
         return None
     try:
         dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except Exception:
+    except ValueError:
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _parse_digest_filters(raw: Optional[str]) -> Optional[ReadingDigestScheduleFilters]:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or not payload:
+        return None
+    try:
+        return ReadingDigestScheduleFilters(**payload)
+    except Exception:
+        return None
+
+
+def _validate_cron_or_422(cron: str, timezone_str: Optional[str]) -> None:
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+        CronTrigger.from_crontab(cron, timezone=timezone_str or "UTC")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Invalid cron or timezone. Timezone must be an IANA name. "
+                f"Details: {exc}"
+            ),
+        )
 
 
 def _resolve_archive_retention(payload: ReadingArchiveCreateRequest) -> Optional[str]:
@@ -275,7 +305,7 @@ def _strip_basic_html(html_value: str) -> str:
     return html.unescape(stripped)
 
 
-def _serialize_highlight_row(row) -> Dict[str, object]:
+def _serialize_highlight_row(row) -> dict[str, object]:
     return {
         "id": row.id,
         "item_id": row.item_id,
@@ -349,8 +379,8 @@ async def save_reading_item(
     dependencies=[Depends(rbac_rate_limit("reading.list"))],
 )
 async def list_reading_items(
-    status: Optional[List[str]] = Query(None),
-    tags: Optional[List[str]] = Query(None),
+    status: Optional[list[str]] = Query(None),
+    tags: Optional[list[str]] = Query(None),
     favorite: Optional[bool] = Query(None),
     q: Optional[str] = Query(None),
     domain: Optional[str] = Query(None),
@@ -432,12 +462,13 @@ async def import_reading_items(
     source: str = Form("auto"),
     merge_tags: bool = Form(True),
     current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
 ) -> ReadingImportJobResponse:
     try:
         raw = await file.read()
     except Exception as exc:
         logger.error(f"reading_import_read_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_import_failed")
+        raise HTTPException(status_code=400, detail="reading_import_failed") from exc
     if not raw:
         raise HTTPException(status_code=400, detail="reading_import_empty")
     if len(raw) > MAX_READING_IMPORT_BYTES:
@@ -456,7 +487,6 @@ async def import_reading_items(
             "merge_tags": merge_tags,
             "filename": file.filename,
         }
-        jm = _jobs_manager()
         job = jm.create_job(
             domain=READING_IMPORT_DOMAIN,
             queue=reading_import_queue(),
@@ -471,9 +501,9 @@ async def import_reading_items(
         if staged_path is not None:
             try:
                 staged_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-        raise HTTPException(status_code=500, detail="reading_import_failed")
+            except OSError as cleanup_exc:
+                logger.debug(f"Failed to cleanup staged file: {cleanup_exc}")
+        raise HTTPException(status_code=500, detail="reading_import_failed") from exc
 
     return ReadingImportJobResponse(
         job_id=int(job.get("id")),
@@ -493,8 +523,8 @@ async def list_reading_import_jobs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
 ) -> ReadingImportJobsListResponse:
-    jm = _jobs_manager()
     fetch_limit = limit + offset
     rows = jm.list_jobs(
         domain=READING_IMPORT_DOMAIN,
@@ -526,8 +556,8 @@ async def list_reading_import_jobs(
 async def get_reading_import_job(
     job_id: int,
     current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
 ) -> ReadingImportJobStatus:
-    jm = _jobs_manager()
     job = jm.get_job(job_id)
     if not job or str(job.get("domain")) != READING_IMPORT_DOMAIN:
         raise HTTPException(status_code=404, detail="reading_import_job_not_found")
@@ -893,9 +923,9 @@ async def create_reading_archive(
         out_dir.mkdir(parents=True, exist_ok=True)
     except Exception as exc:
         logger.error(f"reading_archive: failed to create outputs dir: {exc}")
-        raise HTTPException(status_code=500, detail="storage_unavailable")
+        raise HTTPException(status_code=500, detail="storage_unavailable") from exc
 
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
     archive_title = f"{base_title} (archive {ts})"
     safe_title = _sanitize_title_for_filename(base_title)
     filename = f"reading_archive_{item_id}_{safe_title}_{ts}.{ext}"
@@ -905,7 +935,7 @@ async def create_reading_archive(
         path.write_text(content, encoding="utf-8")
     except Exception as exc:
         logger.error(f"reading_archive: failed to write archive file: {exc}")
-        raise HTTPException(status_code=500, detail="reading_archive_write_failed")
+        raise HTTPException(status_code=500, detail="reading_archive_write_failed") from exc
 
     retention_until = _resolve_archive_retention(payload)
     meta = {
@@ -930,9 +960,9 @@ async def create_reading_archive(
         logger.error(f"reading_archive: failed to insert output record: {exc}")
         try:
             path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail="reading_archive_db_failed")
+        except OSError as cleanup_exc:
+            logger.warning(f"reading_archive: failed to cleanup file after DB error: {cleanup_exc}")
+        raise HTTPException(status_code=500, detail="reading_archive_db_failed") from exc
 
     return ReadingArchiveResponse(
         output_id=output_row.id,
@@ -952,8 +982,8 @@ async def create_reading_archive(
     dependencies=[Depends(rbac_rate_limit("reading.export"))],
 )
 async def export_reading_items(
-    status: Optional[List[str]] = Query(None),
-    tags: Optional[List[str]] = Query(None),
+    status: Optional[list[str]] = Query(None),
+    tags: Optional[list[str]] = Query(None),
     favorite: Optional[bool] = Query(None),
     q: Optional[str] = Query(None),
     domain: Optional[str] = Query(None),
@@ -982,9 +1012,7 @@ async def export_reading_items(
         if include_metadata or include_clean_html or include_text:
             if getattr(row, "metadata_json", None):
                 try:
-                    import json as _json
-
-                    metadata = _json.loads(row.metadata_json) if row.metadata_json else {}
+                    metadata = json.loads(row.metadata_json) if row.metadata_json else {}
                 except Exception:
                     metadata = {}
         if not isinstance(metadata, dict):
@@ -1015,7 +1043,8 @@ async def export_reading_items(
         if include_highlights:
             try:
                 highlights = service.collections.list_highlights_by_item(item_id=row.id)
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Failed to fetch highlights for item {row.id}: {exc}")
                 highlights = []
             payload["highlights"] = [_serialize_highlight_row(h) for h in highlights]
         return payload
@@ -1047,3 +1076,195 @@ async def export_reading_items(
 
     headers = {"Content-Disposition": f"attachment; filename=reading_export_{timestamp}.jsonl"}
     return StreamingResponse(_iter_lines(), media_type="application/x-ndjson", headers=headers)
+
+
+# -------------------------
+# Reading Digest Schedules
+# -------------------------
+def _digest_schedule_response(row) -> ReadingDigestScheduleResponse:
+    return ReadingDigestScheduleResponse(
+        id=str(row.id),
+        name=row.name,
+        cron=row.cron,
+        timezone=row.timezone,
+        enabled=bool(row.enabled),
+        require_online=bool(row.require_online),
+        format=str(row.format or "md"),
+        template_id=row.template_id,
+        template_name=row.template_name,
+        retention_days=row.retention_days,
+        filters=_parse_digest_filters(getattr(row, "filters_json", None)),
+        last_run_at=row.last_run_at,
+        next_run_at=row.next_run_at,
+        last_status=row.last_status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.post(
+    "/digests/schedules",
+    response_model=dict[str, str],
+    status_code=201,
+    dependencies=[Depends(rbac_rate_limit("reading.digests"))],
+)
+async def create_reading_digest_schedule(
+    body: ReadingDigestScheduleCreateRequest,
+    current_user: User = Depends(get_request_user),
+) -> dict[str, str]:
+    _validate_cron_or_422(body.cron, body.timezone)
+    svc = get_reading_digest_scheduler()
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    filters = body.filters.model_dump(exclude_none=True) if body.filters else {}
+    schedule_id = svc.create(
+        tenant_id=tenant_id,
+        user_id=str(current_user.id),
+        name=body.name,
+        cron=body.cron,
+        timezone=body.timezone,
+        enabled=body.enabled,
+        require_online=body.require_online,
+        filters=filters,
+        template_id=body.template_id,
+        template_name=body.template_name,
+        format=body.format,
+        retention_days=body.retention_days,
+    )
+    return {"id": schedule_id}
+
+
+@router.get(
+    "/digests/schedules",
+    response_model=list[ReadingDigestScheduleResponse],
+    dependencies=[Depends(rbac_rate_limit("reading.digests"))],
+)
+async def list_reading_digest_schedules(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_request_user),
+) -> list[ReadingDigestScheduleResponse]:
+    svc = get_reading_digest_scheduler()
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    rows = svc.list(tenant_id=tenant_id, user_id=str(current_user.id), limit=limit, offset=offset)
+    return [_digest_schedule_response(row) for row in rows]
+
+
+@router.get(
+    "/digests/schedules/{schedule_id}",
+    response_model=ReadingDigestScheduleResponse,
+    dependencies=[Depends(rbac_rate_limit("reading.digests"))],
+)
+async def get_reading_digest_schedule(
+    schedule_id: str,
+    current_user: User = Depends(get_request_user),
+) -> ReadingDigestScheduleResponse:
+    svc = get_reading_digest_scheduler()
+    schedule = svc.get(schedule_id)
+    if not schedule or str(schedule.user_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="reading_digest_schedule_not_found")
+    return _digest_schedule_response(schedule)
+
+
+@router.patch(
+    "/digests/schedules/{schedule_id}",
+    response_model=ReadingDigestScheduleResponse,
+    dependencies=[Depends(rbac_rate_limit("reading.digests"))],
+)
+async def update_reading_digest_schedule(
+    schedule_id: str,
+    body: ReadingDigestScheduleUpdateRequest,
+    current_user: User = Depends(get_request_user),
+    collections_db=Depends(get_collections_db_for_user),
+) -> ReadingDigestScheduleResponse:
+    svc = get_reading_digest_scheduler()
+    schedule = svc.get(schedule_id)
+    if not schedule or str(schedule.user_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="reading_digest_schedule_not_found")
+    if body.cron:
+        _validate_cron_or_422(body.cron, body.timezone or schedule.timezone)
+    patch = body.model_dump(exclude_none=True)
+    filters_payload = patch.get("filters")
+    if isinstance(filters_payload, ReadingDigestScheduleFilters):
+        patch["filters"] = filters_payload.model_dump(exclude_none=True)
+    elif isinstance(filters_payload, dict):
+        patch["filters"] = filters_payload
+    if not patch:
+        return _digest_schedule_response(schedule)
+    svc.update(schedule_id, patch)
+    updated = collections_db.get_reading_digest_schedule(schedule_id)
+    return _digest_schedule_response(updated)
+
+
+@router.delete(
+    "/digests/schedules/{schedule_id}",
+    response_model=dict[str, bool],
+    dependencies=[Depends(rbac_rate_limit("reading.digests"))],
+)
+async def delete_reading_digest_schedule(
+    schedule_id: str,
+    current_user: User = Depends(get_request_user),
+) -> dict[str, bool]:
+    svc = get_reading_digest_scheduler()
+    schedule = svc.get(schedule_id)
+    if not schedule or str(schedule.user_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="reading_digest_schedule_not_found")
+    ok = svc.delete(schedule_id)
+    return {"ok": bool(ok)}
+
+
+@router.get(
+    "/digests/outputs",
+    response_model=ReadingDigestOutputsListResponse,
+    dependencies=[Depends(rbac_rate_limit("reading.digests"))],
+)
+async def list_reading_digest_outputs(
+    schedule_id: Optional[str] = Query(None, description="Optional schedule id filter"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _current_user: User = Depends(get_request_user),
+    collections_db=Depends(get_collections_db_for_user),
+) -> ReadingDigestOutputsListResponse:
+    batch = 200
+    matched: list[ReadingDigestOutput] = []
+    scan_offset = 0
+    total_seen = 0
+
+    while True:
+        rows, total = collections_db.list_output_artifacts(
+            limit=batch,
+            offset=scan_offset,
+            type_="reading_digest",
+            include_deleted=False,
+        )
+        total_seen = total
+        if not rows:
+            break
+        for row in rows:
+            meta: dict[str, object] = {}
+            try:
+                if row.metadata_json:
+                    meta = json.loads(row.metadata_json)
+            except Exception:
+                meta = {}
+            if schedule_id and str(meta.get("schedule_id")) != str(schedule_id):
+                continue
+            matched.append(
+                ReadingDigestOutput(
+                    output_id=row.id,
+                    title=row.title,
+                    format=row.format,
+                    created_at=row.created_at,
+                    download_url=f"/api/v1/outputs/{row.id}/download",
+                    schedule_id=meta.get("schedule_id"),
+                    schedule_name=meta.get("schedule_name"),
+                    item_count=meta.get("item_count"),
+                    metadata=meta or None,
+                )
+            )
+        scan_offset += batch
+        if scan_offset >= total_seen:
+            break
+
+    total_matches = len(matched)
+    page = matched[offset : offset + limit]
+    return ReadingDigestOutputsListResponse(items=page, total=total_matches, limit=limit, offset=offset)

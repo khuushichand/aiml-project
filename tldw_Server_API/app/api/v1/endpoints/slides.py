@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
 from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
+    ExportFormat,
+    GenerateFromChatRequest,
+    GenerateFromMediaRequest,
+    GenerateFromNotesRequest,
+    GenerateFromPromptRequest,
+    GenerateFromRagRequest,
     PresentationCreateRequest,
     PresentationUpdateRequest,
     PresentationPatchRequest,
@@ -21,10 +31,31 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     PresentationListResponse,
     PresentationSearchResponse,
     Slide,
+    SlidesHealthResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, MEDIA_READ, MEDIA_UPDATE, MEDIA_DELETE
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Slides.slides_db import SlidesDatabase, ConflictError, InputError
+from tldw_Server_API.app.core.Slides.slides_export import (
+    SlidesAssetsMissingError,
+    SlidesExportError,
+    SlidesExportInputError,
+    export_presentation_bundle,
+    export_presentation_json,
+    export_presentation_markdown,
+)
+from tldw_Server_API.app.core.Slides.slides_generator import (
+    SlidesGenerationError,
+    SlidesGenerationInputError,
+    SlidesGenerationOutputError,
+    SlidesGenerator,
+    SlidesSourceTooLargeError,
+)
 
 
 router = APIRouter(prefix="/slides", tags=["slides"])
@@ -66,6 +97,7 @@ _SETTINGS_ALLOWLIST: Dict[str, Tuple[type, ...]] = {
 }
 
 _ETAG_RE = re.compile(r'^(W/)?"v(?P<version>\d+)"$')
+_MARP_THEME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def _parse_etag(raw: Optional[str]) -> int:
@@ -84,8 +116,8 @@ def _format_etag(version: int) -> str:
 def _normalize_dt(value: str) -> datetime:
     try:
         dt = datetime.fromisoformat(value)
-    except Exception:
-        return datetime.now(timezone.utc)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid_timestamp") from exc
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
@@ -127,6 +159,16 @@ def _validate_theme(theme: str) -> None:
         raise HTTPException(status_code=422, detail="invalid_theme")
 
 
+def _validate_marp_theme(marp_theme: Optional[str]) -> Optional[str]:
+    if marp_theme is None:
+        return None
+    if not isinstance(marp_theme, str) or not marp_theme.strip():
+        raise HTTPException(status_code=422, detail="invalid_marp_theme")
+    if not _MARP_THEME_RE.match(marp_theme):
+        raise HTTPException(status_code=422, detail="invalid_marp_theme")
+    return marp_theme
+
+
 def _validate_settings(settings: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if settings is None:
         return None
@@ -155,8 +197,8 @@ def _deserialize_settings(value: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     try:
         parsed = json.loads(value)
-    except Exception:
-        return None
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="invalid_settings_json") from exc
     return parsed if isinstance(parsed, dict) else None
 
 
@@ -165,8 +207,8 @@ def _deserialize_source_ref(value: Optional[str]) -> Optional[Any]:
         return None
     try:
         return json.loads(value)
-    except Exception:
-        return value
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="invalid_source_ref_json") from exc
 
 
 def _serialize_source_ref(value: Optional[Any]) -> Optional[str]:
@@ -186,6 +228,7 @@ def _build_presentation_response(row) -> PresentationResponse:
         title=row.title,
         description=row.description,
         theme=row.theme,
+        marp_theme=getattr(row, "marp_theme", None),
         settings=_deserialize_settings(row.settings),
         slides=slides,
         custom_css=row.custom_css,
@@ -194,7 +237,7 @@ def _build_presentation_response(row) -> PresentationResponse:
         source_query=row.source_query,
         created_at=_normalize_dt(row.created_at),
         last_modified=_normalize_dt(row.last_modified),
-        deleted=int(row.deleted or 0),
+        deleted=bool(row.deleted),
         client_id=row.client_id,
         version=int(row.version),
     )
@@ -208,7 +251,7 @@ def _build_summary(row) -> PresentationSummary:
         theme=row.theme,
         created_at=_normalize_dt(row.created_at),
         last_modified=_normalize_dt(row.last_modified),
-        deleted=int(row.deleted or 0),
+        deleted=bool(row.deleted),
         version=int(row.version),
     )
 
@@ -226,9 +269,154 @@ def _parse_sort(sort: Optional[str]) -> Tuple[str, str]:
     return col, direction.upper()
 
 
+def _resolve_provider(request_provider: Optional[str]) -> str:
+    provider = (request_provider or DEFAULT_LLM_PROVIDER or "openai").strip()
+    return provider.lower() if provider else "openai"
+
+
+def _format_chat_messages(messages: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for msg in messages:
+        sender = msg.get("sender") or msg.get("role") or "unknown"
+        content = msg.get("content") or ""
+        if content:
+            lines.append(f"{sender}: {content}")
+    return "\n".join(lines).strip()
+
+
+def _format_notes(notes: List[Dict[str, Any]]) -> str:
+    parts: List[str] = []
+    for note in notes:
+        title = note.get("title") or ""
+        content = note.get("content") or ""
+        if title:
+            parts.append(f"# {title}")
+        if content:
+            parts.append(str(content))
+    return "\n\n".join(parts).strip()
+
+
+def _format_rag_documents(documents: List[Any]) -> str:
+    parts: List[str] = []
+    for doc in documents:
+        metadata = getattr(doc, "metadata", {}) or {}
+        title = metadata.get("title") or metadata.get("source_title") or getattr(doc, "id", "source")
+        content = getattr(doc, "content", "")
+        if title:
+            parts.append(f"# {title}")
+        if content:
+            parts.append(str(content))
+    return "\n\n".join(parts).strip()
+
+
+def _generate_presentation(
+    *,
+    response: Response,
+    db: SlidesDatabase,
+    request: Any,
+    source_text: str,
+    source_type: str,
+    source_ref: Optional[Any],
+    source_query: Optional[str],
+) -> PresentationResponse:
+    theme = request.theme or "black"
+    _validate_theme(theme)
+    marp_theme = _validate_marp_theme(getattr(request, "marp_theme", None))
+    settings = _validate_settings(request.settings)
+    provider = _resolve_provider(request.provider)
+    generator = SlidesGenerator()
+    try:
+        metrics = get_metrics_registry()
+    except Exception:
+        metrics = None
+    started_at = time.perf_counter()
+
+    def _record_generation_error(error_type: str) -> None:
+        if metrics is None:
+            return
+        try:
+            metrics.increment(
+                "slides_generation_errors_total",
+                labels={"source_type": source_type, "error": error_type},
+            )
+        except Exception:
+            pass
+
+    try:
+        generated = generator.generate_from_text(
+            source_text=source_text,
+            title_hint=request.title_hint,
+            provider=provider,
+            model=request.model,
+            api_key=None,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            max_source_tokens=request.max_source_tokens,
+            max_source_chars=request.max_source_chars,
+            enable_chunking=request.enable_chunking,
+            chunk_size_tokens=request.chunk_size_tokens,
+            summary_tokens=request.summary_tokens,
+        )
+    except SlidesSourceTooLargeError as exc:
+        _record_generation_error("input_too_large")
+        detail = {
+            "detail": "Input exceeds size limits and chunking is disabled.",
+            "code": "input_too_large",
+        }
+        if exc.max_source_tokens is not None:
+            detail["max_source_tokens"] = exc.max_source_tokens
+        if exc.max_source_chars is not None:
+            detail["max_source_chars"] = exc.max_source_chars
+        raise HTTPException(status_code=413, detail=detail) from exc
+    except SlidesGenerationInputError as exc:
+        _record_generation_error("input_error")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SlidesGenerationOutputError as exc:
+        _record_generation_error("output_error")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SlidesGenerationError as exc:
+        _record_generation_error("generation_error")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    try:
+        slides = _normalize_slides([_slide_from_obj(s) for s in generated["slides"]])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="invalid_generated_slides") from exc
+    slides_text = _flatten_slides_text(slides)
+    row = db.create_presentation(
+        presentation_id=None,
+        title=generated["title"],
+        description=None,
+        theme=theme,
+        marp_theme=marp_theme,
+        settings=_serialize_settings(settings),
+        slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
+        slides_text=slides_text,
+        source_type=source_type,
+        source_ref=_serialize_source_ref(source_ref),
+        source_query=source_query,
+        custom_css=request.custom_css,
+    )
+    if metrics is not None:
+        try:
+            metrics.observe(
+                "slides_generation_latency_seconds",
+                time.perf_counter() - started_at,
+                labels={"source_type": source_type},
+            )
+        except Exception:
+            pass
+    response.headers["ETag"] = _format_etag(row.version)
+    response.headers["Last-Modified"] = row.last_modified
+    return _build_presentation_response(row)
+
+
 @router.post(
     "/presentations",
     response_model=PresentationResponse,
+    status_code=status.HTTP_201_CREATED,
     summary="Create a presentation",
     dependencies=[Depends(require_permissions(MEDIA_CREATE)), Depends(rbac_rate_limit("slides.create"))],
 )
@@ -236,12 +424,12 @@ async def create_presentation(
     request: PresentationCreateRequest,
     response: Response,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    current_user: User = Depends(get_request_user),
 ) -> PresentationResponse:
     title = request.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="title_required")
     _validate_theme(request.theme)
+    marp_theme = _validate_marp_theme(request.marp_theme)
     settings = _validate_settings(request.settings)
     slides = _normalize_slides([_slide_from_obj(s) for s in request.slides])
     slides_text = _flatten_slides_text(slides)
@@ -250,6 +438,7 @@ async def create_presentation(
         title=title,
         description=request.description,
         theme=request.theme,
+        marp_theme=marp_theme,
         settings=_serialize_settings(settings),
         slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
         slides_text=slides_text,
@@ -353,6 +542,7 @@ async def update_presentation(
     if not title:
         raise HTTPException(status_code=422, detail="title_required")
     _validate_theme(request.theme)
+    marp_theme = _validate_marp_theme(request.marp_theme)
     settings = _validate_settings(request.settings)
     slides = _normalize_slides([_slide_from_obj(s) for s in request.slides])
     slides_text = _flatten_slides_text(slides)
@@ -363,6 +553,7 @@ async def update_presentation(
                 "title": title,
                 "description": request.description,
                 "theme": request.theme,
+                "marp_theme": marp_theme,
                 "settings": _serialize_settings(settings),
                 "slides": json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
                 "slides_text": slides_text,
@@ -406,6 +597,8 @@ async def patch_presentation(
     if request.theme is not None:
         _validate_theme(request.theme)
         update_fields["theme"] = request.theme
+    if request.marp_theme is not None:
+        update_fields["marp_theme"] = _validate_marp_theme(request.marp_theme)
     if request.settings is not None:
         settings = _validate_settings(request.settings)
         update_fields["settings"] = _serialize_settings(settings)
@@ -486,15 +679,293 @@ async def restore_presentation(
     return _build_presentation_response(row)
 
 
+@router.post(
+    "/generate",
+    response_model=PresentationResponse,
+    summary="Generate slides from prompt",
+    dependencies=[Depends(require_permissions(MEDIA_CREATE)), Depends(rbac_rate_limit("slides.generate"))],
+)
+async def generate_from_prompt(
+    request: GenerateFromPromptRequest,
+    response: Response,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> PresentationResponse:
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="prompt_required")
+    return _generate_presentation(
+        response=response,
+        db=db,
+        request=request,
+        source_text=prompt,
+        source_type="prompt",
+        source_ref=None,
+        source_query=request.prompt,
+    )
+
+
+@router.post(
+    "/generate/from-chat",
+    response_model=PresentationResponse,
+    summary="Generate slides from chat conversation",
+    dependencies=[Depends(require_permissions(MEDIA_CREATE)), Depends(rbac_rate_limit("slides.generate"))],
+)
+async def generate_from_chat(
+    request: GenerateFromChatRequest,
+    response: Response,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+    notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PresentationResponse:
+    conversation_id = request.conversation_id.strip()
+    if not conversation_id:
+        raise HTTPException(status_code=422, detail="conversation_id_required")
+    conversation = notes_db.get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    messages = notes_db.get_messages_for_conversation(conversation_id, limit=500, offset=0, order_by_timestamp="ASC")
+    source_text = _format_chat_messages(messages)
+    if not source_text:
+        raise HTTPException(status_code=404, detail="conversation_empty")
+    return _generate_presentation(
+        response=response,
+        db=db,
+        request=request,
+        source_text=source_text,
+        source_type="chat",
+        source_ref=conversation_id,
+        source_query=None,
+    )
+
+
+@router.post(
+    "/generate/from-media",
+    response_model=PresentationResponse,
+    summary="Generate slides from media transcript",
+    dependencies=[Depends(require_permissions(MEDIA_CREATE)), Depends(rbac_rate_limit("slides.generate"))],
+)
+async def generate_from_media(
+    request: GenerateFromMediaRequest,
+    response: Response,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+    media_db: MediaDatabase = Depends(get_media_db_for_user),
+) -> PresentationResponse:
+    try:
+        media_id = int(request.media_id)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="media_id_invalid") from exc
+    media_row = media_db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+    if not media_row:
+        raise HTTPException(status_code=404, detail="media_not_found")
+    transcript = get_latest_transcription(media_db, media_id)
+    if not transcript:
+        raise HTTPException(status_code=404, detail="media_transcript_not_found")
+    return _generate_presentation(
+        response=response,
+        db=db,
+        request=request,
+        source_text=transcript,
+        source_type="media",
+        source_ref=str(media_id),
+        source_query=None,
+    )
+
+
+@router.post(
+    "/generate/from-notes",
+    response_model=PresentationResponse,
+    summary="Generate slides from notes",
+    dependencies=[Depends(require_permissions(MEDIA_CREATE)), Depends(rbac_rate_limit("slides.generate"))],
+)
+async def generate_from_notes(
+    request: GenerateFromNotesRequest,
+    response: Response,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+    notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PresentationResponse:
+    if not request.note_ids:
+        raise HTTPException(status_code=422, detail="note_ids_required")
+    notes: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    for note_id in request.note_ids:
+        note = notes_db.get_note_by_id(note_id)
+        if not note:
+            missing.append(note_id)
+            continue
+        notes.append(note)
+    if missing:
+        raise HTTPException(status_code=404, detail={"missing_note_ids": missing})
+    source_text = _format_notes(notes)
+    if not source_text:
+        raise HTTPException(status_code=404, detail="notes_empty")
+    return _generate_presentation(
+        response=response,
+        db=db,
+        request=request,
+        source_text=source_text,
+        source_type="notes",
+        source_ref=request.note_ids,
+        source_query=None,
+    )
+
+
+@router.post(
+    "/generate/from-rag",
+    response_model=PresentationResponse,
+    summary="Generate slides from RAG results",
+    dependencies=[Depends(require_permissions(MEDIA_CREATE)), Depends(rbac_rate_limit("slides.generate"))],
+)
+async def generate_from_rag(
+    request: GenerateFromRagRequest,
+    response: Response,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> PresentationResponse:
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=422, detail="query_required")
+    try:
+        user_id = int(db.client_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="user_unavailable") from exc
+    rag_result = await unified_rag_pipeline(
+        query=query,
+        top_k=request.top_k or 8,
+        sources=["media_db", "notes", "chats"],
+        media_db_path=str(DatabasePaths.get_media_db_path(user_id)),
+        notes_db_path=str(DatabasePaths.get_chacha_db_path(user_id)),
+        character_db_path=str(DatabasePaths.get_chacha_db_path(user_id)),
+    )
+    documents = getattr(rag_result, "documents", None) or []
+    source_text = _format_rag_documents(documents)
+    if not source_text and getattr(rag_result, "generated_answer", None):
+        source_text = str(getattr(rag_result, "generated_answer"))
+    if not source_text:
+        raise HTTPException(status_code=404, detail="rag_no_results")
+    return _generate_presentation(
+        response=response,
+        db=db,
+        request=request,
+        source_text=source_text,
+        source_type="rag",
+        source_ref=None,
+        source_query=query,
+    )
+
+
+@router.get(
+    "/presentations/{presentation_id}/export",
+    summary="Export presentation",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.export"))],
+)
+async def export_presentation(
+    presentation_id: str,
+    format: ExportFormat = Query(ExportFormat.REVEAL),
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> Response:
+    try:
+        row = db.get_presentation_by_id(presentation_id, include_deleted=False)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="presentation_not_found") from None
+
+    slides_raw = json.loads(row.slides)
+    slides = [_slide_from_obj(item) for item in slides_raw]
+    slides = _normalize_slides(slides)
+    settings = _deserialize_settings(row.settings)
+    try:
+        metrics = get_metrics_registry()
+    except Exception:
+        metrics = None
+    started_at = time.perf_counter()
+
+    if format == ExportFormat.JSON:
+        payload = jsonable_encoder(_build_presentation_response(row))
+        body = export_presentation_json(payload).encode("utf-8")
+        filename = f"presentation_{presentation_id}.json"
+        media_type = "application/json"
+    elif format == ExportFormat.MARKDOWN:
+        body = export_presentation_markdown(
+            title=row.title,
+            slides=slides,
+            theme=row.theme,
+            marp_theme=getattr(row, "marp_theme", None),
+        ).encode("utf-8")
+        filename = f"presentation_{presentation_id}.md"
+        media_type = "text/markdown"
+    elif format == ExportFormat.REVEAL:
+        try:
+            body = export_presentation_bundle(
+                title=row.title,
+                slides=slides,
+                theme=row.theme,
+                settings=settings,
+                custom_css=row.custom_css,
+            )
+        except SlidesAssetsMissingError as exc:
+            if metrics is not None:
+                try:
+                    metrics.increment(
+                        "slides_export_errors_total",
+                        labels={"format": format.value, "error": "assets_missing"},
+                    )
+                except Exception:
+                    pass
+            raise HTTPException(status_code=500, detail="slides_assets_missing") from exc
+        except SlidesExportInputError as exc:
+            if metrics is not None:
+                try:
+                    metrics.increment(
+                        "slides_export_errors_total",
+                        labels={"format": format.value, "error": "input_error"},
+                    )
+                except Exception:
+                    pass
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except SlidesExportError as exc:
+            if metrics is not None:
+                try:
+                    metrics.increment(
+                        "slides_export_errors_total",
+                        labels={"format": format.value, "error": "export_error"},
+                    )
+                except Exception:
+                    pass
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        filename = f"presentation_{presentation_id}.zip"
+        media_type = "application/zip"
+    else:
+        if metrics is not None:
+            try:
+                metrics.increment(
+                    "slides_export_errors_total",
+                    labels={"format": str(format), "error": "invalid_format"},
+                )
+            except Exception:
+                pass
+        raise HTTPException(status_code=400, detail="invalid_export_format")
+
+    if metrics is not None:
+        try:
+            metrics.observe(
+                "slides_export_latency_seconds",
+                time.perf_counter() - started_at,
+                labels={"format": format.value},
+            )
+        except Exception:
+            pass
+
+    headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
+    return Response(content=body, media_type=media_type, headers=headers)
+
+
 @router.get(
     "/health",
     summary="Slides health check",
+    response_model=SlidesHealthResponse,
     dependencies=[Depends(rbac_rate_limit("slides.health"))],
 )
-async def slides_health(db: SlidesDatabase = Depends(get_slides_db_for_user)) -> Dict[str, Any]:
+async def slides_health(db: SlidesDatabase = Depends(get_slides_db_for_user)) -> SlidesHealthResponse:
     try:
         _ = db.list_presentations(limit=1, offset=0, include_deleted=True, sort_column="created_at", sort_direction="DESC")
     except Exception as exc:
-        logger.warning("slides health check failed: %s", exc)
+        logger.warning("slides health check failed: {}", exc)
         raise HTTPException(status_code=500, detail="slides_db_unavailable") from exc
-    return {"service": "slides", "status": "ok"}
+    return SlidesHealthResponse(service="slides", status="ok")

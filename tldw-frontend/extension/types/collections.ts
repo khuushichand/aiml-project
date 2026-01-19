@@ -250,13 +250,13 @@ export type ReadingImportJobStatus =
   | "quarantined"
 
 export interface ReadingImportJobResponse {
-  job_id: string
+  job_id: number
   job_uuid?: string
   status: ReadingImportJobStatus
 }
 
 export interface ReadingImportJobDetail {
-  job_id: string
+  job_id: number
   job_uuid?: string
   status: ReadingImportJobStatus
   created_at?: string

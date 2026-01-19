@@ -1,0 +1,287 @@
+"""LLM-backed slide generation helpers."""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Any, Callable, Dict, List, Optional
+
+from loguru import logger
+
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Utils.tokenizer import count_tokens
+
+
+class SlidesGenerationError(Exception):
+    """Base exception for slide generation failures."""
+
+
+class SlidesSourceTooLargeError(SlidesGenerationError):
+    """Raised when input exceeds size limits and chunking is disabled."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        max_source_tokens: Optional[int] = None,
+        max_source_chars: Optional[int] = None,
+        actual_tokens: Optional[int] = None,
+        actual_chars: Optional[int] = None,
+    ) -> None:
+        super().__init__(message)
+        self.max_source_tokens = max_source_tokens
+        self.max_source_chars = max_source_chars
+        self.actual_tokens = actual_tokens
+        self.actual_chars = actual_chars
+
+
+class SlidesGenerationInputError(SlidesGenerationError):
+    """Raised for invalid inputs."""
+
+
+class SlidesGenerationOutputError(SlidesGenerationError):
+    """Raised when LLM output cannot be parsed."""
+
+
+_SYSTEM_PROMPT = (
+    "You are creating presentation slides. Output valid JSON:\n"
+    "{\n"
+    '  "title": "Presentation Title",\n'
+    '  "slides": [\n'
+    '    {"order": 0, "layout": "title", "title": "...", "content": "..."},\n'
+    '    {"order": 1, "layout": "content", "title": "...", "content": "- Bullet 1\\n- Bullet 2"},\n'
+    "    ...\n"
+    "  ]\n"
+    "}\n\n"
+    "Guidelines:\n"
+    "- 5-12 slides typical length\n"
+    "- Title slide first, conclusion/summary last\n"
+    "- Use markdown formatting (bullets, bold, code)\n"
+    "- 3-6 bullet points per content slide\n"
+    "- Add speaker_notes for details that do not fit slides\n"
+)
+
+_SUMMARY_SYSTEM_PROMPT = "Summarize the following content for slide generation."
+
+
+def _normalize_provider(provider: Optional[str]) -> str:
+    value = (provider or "").strip()
+    return value.lower() if value else ""
+
+
+def _extract_json_block(text: str) -> str:
+    if not text:
+        return text
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    if fenced:
+        return fenced.group(1)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text[start : end + 1]
+    return text
+
+
+def _chunk_by_words(text: str, chunk_size: int) -> List[str]:
+    if chunk_size <= 0:
+        return [text]
+    words = text.split()
+    if not words:
+        return []
+    return [" ".join(words[i : i + chunk_size]) for i in range(0, len(words), chunk_size)]
+
+
+def _chunk_by_chars(text: str, chunk_size: int) -> List[str]:
+    if chunk_size <= 0:
+        return [text]
+    chunks: List[str] = []
+    for idx in range(0, len(text), chunk_size):
+        chunks.append(text[idx : idx + chunk_size])
+    return chunks
+
+
+class SlidesGenerator:
+    def __init__(
+        self,
+        *,
+        llm_call: Optional[Callable[..., Any]] = None,
+    ) -> None:
+        self._llm_call = llm_call or perform_chat_api_call
+
+    def generate_from_text(
+        self,
+        *,
+        source_text: str,
+        title_hint: Optional[str],
+        provider: str,
+        model: Optional[str],
+        api_key: Optional[str],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        max_source_tokens: Optional[int],
+        max_source_chars: Optional[int],
+        enable_chunking: bool,
+        chunk_size_tokens: Optional[int],
+        summary_tokens: Optional[int],
+    ) -> Dict[str, Any]:
+        if not source_text or not source_text.strip():
+            raise SlidesGenerationInputError("source_text_required")
+
+        normalized_provider = _normalize_provider(provider)
+        if not normalized_provider:
+            raise SlidesGenerationInputError("provider_required")
+
+        source_text = source_text.strip()
+        actual_tokens = count_tokens(source_text)
+        actual_chars = len(source_text)
+
+        limit_exceeded = False
+        if max_source_tokens is not None and actual_tokens > max_source_tokens:
+            limit_exceeded = True
+        if max_source_chars is not None and actual_chars > max_source_chars:
+            limit_exceeded = True
+
+        if limit_exceeded and not enable_chunking:
+            raise SlidesSourceTooLargeError(
+                "input_too_large",
+                max_source_tokens=max_source_tokens,
+                max_source_chars=max_source_chars,
+                actual_tokens=actual_tokens,
+                actual_chars=actual_chars,
+            )
+
+        prepared_text = source_text
+        if enable_chunking:
+            prepared_text = self._chunk_and_summarize(
+                source_text=source_text,
+                provider=normalized_provider,
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                chunk_size_tokens=chunk_size_tokens,
+                summary_tokens=summary_tokens,
+            )
+
+        user_prompt = "Source material:\n" + prepared_text
+        if title_hint:
+            user_prompt = f"Title hint: {title_hint}\n\n" + user_prompt
+
+        llm_response = self._call_llm(
+            provider=normalized_provider,
+            model=model,
+            api_key=api_key,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
+        payload = self._parse_json(llm_response)
+        normalized = self._normalize_payload(payload, title_hint)
+        return normalized
+
+    def _chunk_and_summarize(
+        self,
+        *,
+        source_text: str,
+        provider: str,
+        model: Optional[str],
+        api_key: Optional[str],
+        temperature: Optional[float],
+        chunk_size_tokens: Optional[int],
+        summary_tokens: Optional[int],
+    ) -> str:
+        chunk_size = chunk_size_tokens or 1000
+        mode = str(settings.get("TOKEN_ESTIMATOR_MODE") or "whitespace").lower()
+        if mode == "char_approx":
+            try:
+                chars_per_token = max(1, int(settings.get("TOKEN_CHAR_APPROX_DIVISOR", 4)))
+            except Exception:
+                chars_per_token = 4
+            size_chars = chunk_size * chars_per_token
+            chunks = _chunk_by_chars(source_text, size_chars)
+        else:
+            chunks = _chunk_by_words(source_text, chunk_size)
+
+        if not chunks:
+            return ""
+
+        summary_target = summary_tokens or 200
+        summaries: List[str] = []
+        for chunk in chunks:
+            prompt = "Summarize this content for slide generation:\n\n" + chunk
+            summary = self._call_llm(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=summary_target,
+                system_prompt=_SUMMARY_SYSTEM_PROMPT,
+                user_prompt=prompt,
+            )
+            summaries.append(summary.strip())
+        return "\n\n".join(summaries).strip()
+
+    def _call_llm(
+        self,
+        *,
+        provider: str,
+        model: Optional[str],
+        api_key: Optional[str],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        system_prompt: str,
+        user_prompt: str,
+    ) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        try:
+            response = self._llm_call(
+                api_provider=provider,
+                model=model,
+                api_key=api_key,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except Exception as exc:
+            logger.error("slides generation LLM call failed: %s", exc)
+            raise SlidesGenerationError("llm_call_failed") from exc
+
+        content = extract_response_content(response)
+        if not content:
+            raise SlidesGenerationOutputError("empty_llm_response")
+        return content
+
+    def _parse_json(self, raw_text: str) -> Dict[str, Any]:
+        candidate = _extract_json_block(raw_text)
+        try:
+            parsed = json.loads(candidate)
+        except Exception as exc:
+            raise SlidesGenerationOutputError("invalid_json_output") from exc
+        if not isinstance(parsed, dict):
+            raise SlidesGenerationOutputError("json_output_not_object")
+        return parsed
+
+    def _normalize_payload(self, payload: Dict[str, Any], title_hint: Optional[str]) -> Dict[str, Any]:
+        slides = payload.get("slides")
+        if not isinstance(slides, list) or not slides:
+            raise SlidesGenerationOutputError("slides_missing")
+        normalized_slides: List[Dict[str, Any]] = []
+        for idx, slide in enumerate(slides):
+            if not isinstance(slide, dict):
+                raise SlidesGenerationOutputError("slide_entry_invalid")
+            slide.setdefault("order", idx)
+            slide.setdefault("layout", "content")
+            slide.setdefault("title", None)
+            slide.setdefault("content", "")
+            slide.setdefault("speaker_notes", None)
+            slide.setdefault("metadata", {})
+            normalized_slides.append(slide)
+        title = payload.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = title_hint or "Untitled Presentation"
+        return {"title": title.strip(), "slides": normalized_slides}

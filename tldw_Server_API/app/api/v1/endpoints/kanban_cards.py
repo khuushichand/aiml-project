@@ -11,7 +11,7 @@ Provides CRUD operations for Kanban cards including:
 - Search cards
 """
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
 from loguru import logger
@@ -56,6 +56,7 @@ from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     handle_kanban_db_error,
     kanban_rate_limit,
 )
+from tldw_Server_API.app.api.v1.endpoints._kanban_utils import to_db_timestamp
 
 
 router = APIRouter(tags=["Kanban Cards"])
@@ -65,15 +66,6 @@ router = APIRouter(tags=["Kanban Cards"])
 def _handle_error(e: Exception) -> HTTPException:
     """Convert exceptions to appropriate HTTP responses."""
     return handle_kanban_db_error(e)
-
-
-def _to_db_timestamp(value: Optional[datetime]) -> Optional[str]:
-    """Convert datetime to DB-friendly timestamp string."""
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # =============================================================================
@@ -124,9 +116,7 @@ async def create_card(
         logger.info(f"Created card {card['id']} in list {list_id}")
         return CardResponse(**card)
     except (NotFoundError, InputError, ConflictError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/lists/{list_id}/cards",
     response_model=CardsListResponse,
@@ -153,7 +143,7 @@ async def get_cards(
         )
         return CardsListResponse(cards=[CardResponse(**c) for c in cards])
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e
 
 
 @router.post(
@@ -179,9 +169,7 @@ async def reorder_cards(
         logger.info(f"Reordered {len(reorder_in.ids)} cards in list {list_id}")
         return ReorderResponse(success=True, message="Cards reordered successfully")
     except (NotFoundError, InputError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Individual Card Endpoints (at /cards/{card_id})
 # =============================================================================
@@ -207,9 +195,7 @@ async def get_card(
             )
         return CardWithDetailsResponse(**card)
     except KanbanDBError as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.patch(
     "/cards/{card_id}",
     response_model=CardResponse,
@@ -248,9 +234,7 @@ async def update_card(
         logger.info(f"Updated card {card_id}")
         return CardResponse(**card)
     except (NotFoundError, InputError, ConflictError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Move and Copy Operations
 # =============================================================================
@@ -281,9 +265,7 @@ async def move_card(
         logger.info(f"Moved card {card_id} to list {move_in.target_list_id}")
         return CardResponse(**card)
     except (NotFoundError, InputError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/{card_id}/copy",
     response_model=CardResponse,
@@ -316,9 +298,7 @@ async def copy_card(
         logger.info(f"Copied card {card_id} to list {copy_in.target_list_id} as {card['id']}")
         return CardResponse(**card)
     except (NotFoundError, InputError, ConflictError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Archive Operations
 # =============================================================================
@@ -340,9 +320,7 @@ async def archive_card(
         logger.info(f"Archived card {card_id}")
         return CardResponse(**card)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/{card_id}/unarchive",
     response_model=CardResponse,
@@ -360,9 +338,7 @@ async def unarchive_card(
         logger.info(f"Unarchived card {card_id}")
         return CardResponse(**card)
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Delete Operations
 # =============================================================================
@@ -389,9 +365,7 @@ async def delete_card(
         logger.info(f"Deleted card {card_id}")
         return DetailResponse(detail=f"Card {card_id} deleted successfully")
     except KanbanDBError as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/{card_id}/restore",
     response_model=CardResponse,
@@ -409,9 +383,7 @@ async def restore_card(
         logger.info(f"Restored card {card_id}")
         return CardResponse(**card)
     except (NotFoundError, InputError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Activity Endpoints
 # =============================================================================
@@ -437,8 +409,8 @@ async def get_card_activities(
     try:
         activities, total = db.get_card_activities(
             card_id=card_id,
-            created_after=_to_db_timestamp(created_after),
-            created_before=_to_db_timestamp(created_before),
+            created_after=to_db_timestamp(created_after),
+            created_before=to_db_timestamp(created_before),
             action_type=action_type,
             entity_type=entity_type,
             limit=limit,
@@ -454,9 +426,7 @@ async def get_card_activities(
             )
         )
     except (NotFoundError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Search Operations
 # =============================================================================
@@ -494,9 +464,7 @@ async def search_cards(
             )
         )
     except (InputError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.get(
     "/cards/search",
     response_model=CardSearchResponse,
@@ -533,9 +501,7 @@ async def search_cards_get(
             )
         )
     except (InputError, KanbanDBError) as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Bulk Operations Endpoints (Phase 3)
 # =============================================================================
@@ -570,9 +536,7 @@ async def bulk_move_cards(
             cards=[CardResponse(**c) for c in result["cards"]]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/bulk-archive",
     response_model=BulkArchiveCardsResponse,
@@ -596,9 +560,7 @@ async def bulk_archive_cards(
             archived_count=result.get("archived_count", 0)
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/bulk-unarchive",
     response_model=BulkUnarchiveCardsResponse,
@@ -622,9 +584,7 @@ async def bulk_unarchive_cards(
             unarchived_count=result.get("unarchived_count", 0)
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/bulk-delete",
     response_model=BulkDeleteCardsResponse,
@@ -648,9 +608,7 @@ async def bulk_delete_cards(
             deleted_count=result["deleted_count"]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 @router.post(
     "/cards/bulk-label",
     response_model=BulkLabelCardsResponse,
@@ -680,9 +638,7 @@ async def bulk_label_cards(
             updated_count=result["updated_count"]
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Card Filtering Endpoint (Phase 3)
 # =============================================================================
@@ -706,8 +662,8 @@ async def get_filtered_cards(
     is_complete: Optional[bool] = Query(None, description="True for cards with all checklist items checked"),
     include_archived: bool = Query(False, description="Include archived cards"),
     include_deleted: bool = Query(False, description="Include soft-deleted cards"),
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(50, ge=1, le=100, description="Items per page"),
+    limit: int = Query(50, ge=1, le=100, description="Maximum cards to return"),
+    offset: int = Query(0, ge=0, description="Number of cards to skip"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> FilteredCardsResponse:
     """
@@ -733,24 +689,21 @@ async def get_filtered_cards(
             is_complete=is_complete,
             include_archived=include_archived,
             include_deleted=include_deleted,
-            page=page,
-            per_page=per_page
+            limit=limit,
+            offset=offset
         )
 
-        offset = (page - 1) * per_page
         return FilteredCardsResponse(
             cards=[CardResponse(**c) for c in cards],
             pagination=PaginationInfo(
                 total=total,
-                limit=per_page,
+                limit=limit,
                 offset=offset,
                 has_more=(offset + len(cards)) < total
             )
         )
     except Exception as e:
-        raise _handle_error(e)
-
-
+        raise _handle_error(e) from e
 # =============================================================================
 # Enhanced Card Copy Endpoint (Phase 3)
 # =============================================================================
@@ -791,4 +744,4 @@ async def copy_card_with_checklists(
         logger.info(f"Copied card {card_id} to {request.target_list_id} with checklists={request.copy_checklists}")
         return CardResponse(**card)
     except Exception as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e

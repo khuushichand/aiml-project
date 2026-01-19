@@ -65,7 +65,7 @@ def _find_free_port() -> int:
 
 
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-        sock.bind(("", 0))
+        sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
 
 
@@ -77,6 +77,18 @@ def _set_env(overrides: Dict[str, str]) -> Dict[str, Optional[str]]:
 
 
 def _merge_route_enable(existing: Optional[str], extra: str) -> str:
+    """Merge two comma/newline-separated route-enable strings.
+
+    Args:
+        existing: Existing route-enable string or None.
+        extra: Additional route-enable entries.
+
+    Returns:
+        Comma-separated, deduplicated string preserving order.
+
+    Notes:
+        Treats None/empty as empty, normalizes newlines to commas, strips whitespace.
+    """
     def _split(value: Optional[str]) -> list[str]:
         if not value:
             return []

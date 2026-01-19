@@ -720,8 +720,8 @@ class SearchRequest(BaseModel):
     priority: Optional[str] = Field(None, description="Filter by priority")
     include_archived: bool = Field(False, description="Include archived cards")
     search_mode: SEARCH_MODES = Field("fts", description="Search mode: fts, vector, or hybrid")
-    page: int = Field(1, ge=1, description="Page number")
-    per_page: int = Field(20, ge=1, le=100, description="Results per page")
+    limit: int = Field(20, ge=1, le=100, description="Maximum results")
+    offset: int = Field(0, ge=0, description="Results to skip")
 
 
 class SearchResultCard(BaseModel):

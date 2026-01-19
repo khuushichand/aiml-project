@@ -1,7 +1,7 @@
 import asyncio
+import contextlib
 import importlib
 import json
-import os
 import shutil
 from pathlib import Path
 
@@ -19,11 +19,10 @@ from tldw_Server_API.app.core.Collections.reading_importers import (
     parse_instapaper_export,
     parse_pocket_export,
 )
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.config import settings
-
 
 pytestmark = pytest.mark.unit
 
@@ -65,7 +64,8 @@ def test_parse_instapaper_export():
     assert item.notes == "Note A"
 
 
-def test_stage_and_resolve_import_file(client_with_user):
+@pytest.mark.usefixtures("client_with_user")
+def test_stage_and_resolve_import_file():
     path = stage_reading_import_file(
         user_id=222,
         filename="pocket.json",
@@ -79,7 +79,8 @@ def test_stage_and_resolve_import_file(client_with_user):
         path.unlink(missing_ok=True)
 
 
-def test_resolve_import_file_rejects_invalid_token(client_with_user):
+@pytest.mark.usefixtures("client_with_user")
+def test_resolve_import_file_rejects_invalid_token():
     with pytest.raises(ReadingImportJobError):
         resolve_reading_import_file(222, "../evil.json")
 
@@ -101,7 +102,6 @@ def client_with_user(monkeypatch):
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     jobs_db_path = base_dir / "jobs.db"
     monkeypatch.setenv("JOBS_DB_PATH", str(jobs_db_path))
-    os.environ["JOBS_DB_PATH"] = str(jobs_db_path)
 
     from tldw_Server_API.app import main as app_main
 
@@ -117,11 +117,8 @@ def client_with_user(monkeypatch):
         if prev_base_dir is not None:
             settings.USER_DB_BASE_DIR = prev_base_dir
         else:
-            try:
+            with contextlib.suppress(AttributeError):
                 del settings.USER_DB_BASE_DIR
-            except AttributeError:
-                pass
-        os.environ.pop("JOBS_DB_PATH", None)
 
 
 def _run_import_job(job_id: int) -> None:

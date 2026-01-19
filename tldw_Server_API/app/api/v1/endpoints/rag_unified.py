@@ -25,6 +25,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_rate_limit,
     rbac_rate_limit,
@@ -71,6 +72,7 @@ def _build_unified_pipeline_kwargs(
     payload["media_db_path"] = db_paths.get("media_db_path")
     payload["notes_db_path"] = db_paths.get("notes_db_path")
     payload["character_db_path"] = db_paths.get("character_db_path")
+    payload["kanban_db_path"] = db_paths.get("kanban_db_path")
     payload["media_db"] = media_db
     payload["chacha_db"] = chacha_db
     payload["index_namespace"] = request.index_namespace or request.corpus
@@ -80,6 +82,27 @@ def _build_unified_pipeline_kwargs(
     payload["user_id"] = current_user.username if current_user else payload.get("user_id")
     allowed = set(inspect.signature(unified_rag_pipeline).parameters.keys())
     return {k: v for k, v in payload.items() if k in allowed}
+
+
+def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optional[str] = None) -> Optional[str]:
+    """Resolve the Kanban DB path for the active user context."""
+    user_id: Optional[Any] = None
+    try:
+        if current_user is not None and getattr(current_user, "id", None) is not None:
+            user_id = current_user.id
+        elif request_user_id:
+            user_id = request_user_id
+    except Exception:
+        user_id = request_user_id
+    if user_id is None:
+        try:
+            user_id = DatabasePaths.get_single_user_id()
+        except Exception:
+            return None
+    try:
+        return str(DatabasePaths.get_kanban_db_path(user_id))
+    except Exception:
+        return None
 
 
 def _normalize_documents_for_generation(docs: List[Any]) -> List[Document]:
@@ -305,10 +328,12 @@ async def rag_ablate(
     media_db: MediaDatabase = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
+    kanban_db_path = _resolve_kanban_db_path(current_user)
     db_paths = {
         "media_db_path": media_db.db_path if media_db else None,
         "notes_db_path": chacha_db.db_path if chacha_db else None,
         "character_db_path": chacha_db.db_path if chacha_db else None,
+        "kanban_db_path": kanban_db_path,
     }
 
     common = dict(
@@ -317,6 +342,7 @@ async def rag_ablate(
         media_db_path=db_paths["media_db_path"],
         notes_db_path=db_paths["notes_db_path"],
         character_db_path=db_paths["character_db_path"],
+        kanban_db_path=db_paths["kanban_db_path"],
         media_db=media_db,
         chacha_db=chacha_db,
         search_mode=request.search_mode,
@@ -878,7 +904,8 @@ async def unified_search_endpoint(
             "media_db_path": media_db.db_path if media_db else None,
             # Notes are stored in ChaChaNotes DB by design; reuse its path for notes_db
             "notes_db_path": chacha_db.db_path if chacha_db else None,
-            "character_db_path": chacha_db.db_path if chacha_db else None
+            "character_db_path": chacha_db.db_path if chacha_db else None,
+            "kanban_db_path": _resolve_kanban_db_path(current_user, request.user_id),
         }
 
         # Branch: agentic strategy builds a synthetic chunk at query time
@@ -925,6 +952,7 @@ async def unified_search_endpoint(
                     media_db_path=db_paths.get("media_db_path"),
                     notes_db_path=db_paths.get("notes_db_path"),
                     character_db_path=db_paths.get("character_db_path"),
+                    kanban_db_path=db_paths.get("kanban_db_path"),
                     search_mode=request.search_mode,
                     fts_level=request.fts_level,
                     hybrid_alpha=request.hybrid_alpha,
@@ -1114,7 +1142,8 @@ async def unified_batch_endpoint(
         db_paths = {
             "media_db_path": media_db.db_path if media_db else None,
             "notes_db_path": chacha_db.db_path if chacha_db else None,
-            "character_db_path": chacha_db.db_path if chacha_db else None
+            "character_db_path": chacha_db.db_path if chacha_db else None,
+            "kanban_db_path": _resolve_kanban_db_path(current_user, request.user_id),
         }
 
         # Convert request to kwargs, excluding queries (Pydantic compat)
@@ -1221,6 +1250,7 @@ async def simple_search_endpoint(
             media_db_path=(media_db.db_path if media_db else None),
             notes_db_path=(chacha_db.db_path if chacha_db else None),
             character_db_path=(chacha_db.db_path if chacha_db else None),
+            kanban_db_path=_resolve_kanban_db_path(current_user),
             user_id=current_user.username if current_user else None,
         )
 
@@ -1291,6 +1321,9 @@ async def unified_search_stream_endpoint(
             if chacha_db:
                 db_paths["notes_db"] = chacha_db.db_path
                 db_paths["character_cards_db"] = chacha_db.db_path
+            kanban_db_path = _resolve_kanban_db_path(current_user, request.user_id)
+            if kanban_db_path:
+                db_paths["kanban_db"] = kanban_db_path
 
             docs = []
             try:
@@ -1549,7 +1582,8 @@ async def advanced_search_endpoint(
         # Set up database paths
         db_paths = {
             "media_db_path": media_db.db_path if media_db else None,
-            "character_db_path": chacha_db.db_path if chacha_db else None
+            "character_db_path": chacha_db.db_path if chacha_db else None,
+            "kanban_db_path": _resolve_kanban_db_path(current_user),
         }
 
         # Use the advanced_search wrapper

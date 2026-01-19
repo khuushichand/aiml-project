@@ -1,5 +1,10 @@
+"""Integration tests for workflow approval permissions."""
+
 import itertools
 import time
+from pathlib import Path
+from typing import Generator
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,7 +19,12 @@ pytestmark = pytest.mark.integration
 _NAME_COUNTER = itertools.count(1)
 
 @pytest.fixture()
-def client_with_user_switch(tmp_path, auth_headers, monkeypatch):
+def client_with_user_switch(
+    tmp_path: Path,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[tuple[TestClient, dict[str, User]], None, None]:
+    """Provide a TestClient and mutable user state for auth switching."""
     base = tmp_path / "user_databases"
     base.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
@@ -40,6 +50,7 @@ def client_with_user_switch(tmp_path, auth_headers, monkeypatch):
 
 
 def _wait_for_status(client: TestClient, run_id: str, statuses: set[str], timeout_s: float = 5.0) -> dict:
+    """Poll run status until it matches one of the expected statuses."""
     deadline = time.time() + timeout_s
     last = {}
     while time.time() < deadline:
@@ -51,10 +62,12 @@ def _wait_for_status(client: TestClient, run_id: str, statuses: set[str], timeou
 
 
 def _wait_for_terminal(client: TestClient, run_id: str, timeout_s: float = 5.0) -> dict:
+    """Wait until a run reaches a terminal status."""
     return _wait_for_status(client, run_id, {"succeeded", "failed", "cancelled"}, timeout_s)
 
 
 def _create_waiting_run(client: TestClient, definition: dict) -> str:
+    """Create a run that blocks on a human/approval step."""
     payload = dict(definition)
     payload["name"] = f"{definition.get('name', 'workflow')}-{next(_NAME_COUNTER)}"
     r = client.post("/api/v1/workflows", json=payload)
@@ -68,7 +81,10 @@ def _create_waiting_run(client: TestClient, definition: dict) -> str:
     return run_id
 
 
-def test_approve_requires_assigned_user(client_with_user_switch):
+def test_approve_requires_assigned_user(
+    client_with_user_switch: tuple[TestClient, dict[str, User]],
+) -> None:
+    """Verify assigned users can approve approval steps."""
     client, state = client_with_user_switch
     definition = {
         "name": "approval-perms",
@@ -96,7 +112,10 @@ def test_approve_requires_assigned_user(client_with_user_switch):
     assert data["status"] == "succeeded"
 
 
-def test_reject_allows_admin_override(client_with_user_switch):
+def test_reject_allows_admin_override(
+    client_with_user_switch: tuple[TestClient, dict[str, User]],
+) -> None:
+    """Verify admins can reject approval steps."""
     client, state = client_with_user_switch
     definition = {
         "name": "approval-reject-perms",

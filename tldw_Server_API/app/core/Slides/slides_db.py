@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, Iterable, List, Optional, Tuple
 
 class SlidesDatabaseError(Exception):
     """Base exception for SlidesDatabase."""
@@ -39,6 +39,7 @@ class PresentationRow:
     title: str
     description: Optional[str]
     theme: str
+    marp_theme: Optional[str]
     settings: Optional[str]
     slides: str
     slides_text: str
@@ -55,7 +56,7 @@ class PresentationRow:
 
 class SlidesDatabase:
     _SCHEMA_VERSION = 1
-    _schema_init_paths: set[str] = set()
+    _schema_init_paths: ClassVar[set[str]] = set()
 
     def __init__(self, db_path: str | Path, client_id: str) -> None:
         if not client_id:
@@ -88,6 +89,7 @@ class SlidesDatabase:
                     title TEXT NOT NULL,
                     description TEXT,
                     theme TEXT DEFAULT 'black',
+                    marp_theme TEXT,
                     settings TEXT,
                     slides TEXT NOT NULL,
                     slides_text TEXT NOT NULL,
@@ -145,6 +147,7 @@ class SlidesDatabase:
                 CREATE INDEX IF NOT EXISTS idx_sync_log_client_id ON sync_log(client_id);
                 """
             )
+            self._ensure_marp_theme_column(conn)
             conn.commit()
             self._schema_init_paths.add(self._db_path_str)
         except sqlite3.Error as exc:
@@ -205,6 +208,13 @@ class SlidesDatabase:
                 ),
             )
 
+    @staticmethod
+    def _ensure_marp_theme_column(conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(presentations)").fetchall()
+        if any(col["name"] == "marp_theme" for col in columns):
+            return
+        conn.execute("ALTER TABLE presentations ADD COLUMN marp_theme TEXT")
+
     def create_presentation(
         self,
         *,
@@ -212,6 +222,7 @@ class SlidesDatabase:
         title: str,
         description: Optional[str],
         theme: str,
+        marp_theme: Optional[str],
         settings: Optional[str],
         slides: str,
         slides_text: str,
@@ -229,16 +240,17 @@ class SlidesDatabase:
                 conn.execute(
                     """
                     INSERT INTO presentations (
-                        id, title, description, theme, settings, slides, slides_text,
+                        id, title, description, theme, marp_theme, settings, slides, slides_text,
                         source_type, source_ref, source_query, custom_css,
                         created_at, last_modified, deleted, client_id, version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
                     """,
                     (
                         pres_id,
                         title,
                         description,
                         theme,
+                        marp_theme,
                         settings,
                         slides,
                         slides_text,
@@ -344,6 +356,7 @@ class SlidesDatabase:
             "title",
             "description",
             "theme",
+            "marp_theme",
             "settings",
             "slides",
             "slides_text",
@@ -365,6 +378,7 @@ class SlidesDatabase:
         next_version = expected_version + 1
         sets.extend(["last_modified = ?", "version = ?", "client_id = ?"])
         params.extend([self._utcnow_iso(), next_version, self.client_id, presentation_id, expected_version])
+        # Column names come from the allowlist above; values are always bound params.
         sql = f"UPDATE presentations SET {', '.join(sets)} WHERE id = ? AND version = ?"
         with self.transaction() as conn:
             cur = conn.execute(sql, tuple(params))

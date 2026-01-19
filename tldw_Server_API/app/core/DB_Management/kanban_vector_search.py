@@ -21,6 +21,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Embeddings import redis_pipeline
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+
 # Try to import ChromaDB components - graceful fallback if unavailable
 _CHROMADB_AVAILABLE = False
 _ChromaDBManager = None
@@ -38,6 +41,8 @@ except Exception as e:
 
 
 KANBAN_COLLECTION_PREFIX = "kanban_user_"
+_EMBEDDINGS_DOMAIN = "embeddings"
+_EMBEDDINGS_ROOT_JOB_TYPE = "embeddings_pipeline"
 
 
 def is_vector_search_available() -> bool:
@@ -69,6 +74,47 @@ def get_kanban_collection_name(user_id: str) -> str:
     else:
         safe_user_id = sanitized
     return f"{KANBAN_COLLECTION_PREFIX}{safe_user_id}"
+
+
+def _jobs_queue() -> str:
+    queue = (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip()
+    return queue or "default"
+
+
+def _root_jobs_queue(stage_queue: str) -> str:
+    root_queue = (os.getenv("EMBEDDINGS_ROOT_JOBS_QUEUE") or "").strip()
+    if root_queue:
+        return root_queue
+    return "low" if stage_queue != "low" else "default"
+
+
+def _jobs_manager() -> JobManager:
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    if not db_url:
+        return JobManager()
+    backend = "postgres" if db_url.startswith("postgres") else None
+    return JobManager(backend=backend, db_url=db_url)
+
+
+def _map_priority(priority: int) -> int:
+    try:
+        val = int(priority)
+    except (TypeError, ValueError):
+        val = 50
+    mapped = max(1, min(10, int(val / 10)))
+    return mapped or 5
+
+
+def _extract_embedding_settings(embedding_config: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+    if not isinstance(embedding_config, dict):
+        return None, None
+    model = (
+        embedding_config.get("embedding_model")
+        or embedding_config.get("default_model_id")
+        or embedding_config.get("model_id")
+    )
+    provider = embedding_config.get("embedding_provider") or embedding_config.get("provider")
+    return model, provider
 
 
 class KanbanVectorSearch:
@@ -220,23 +266,55 @@ class KanbanVectorSearch:
                 logger.warning(f"KanbanVectorSearch.index_card: missing or invalid card id for user {self.user_id}")
                 return False
 
+            if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes"}:
+                return True
+
             doc_id = f"card_{card_id}"
             document = self._build_document(card)
             metadata = self._build_metadata(card)
+            embedding_model, embedding_provider = _extract_embedding_settings(self.embedding_config)
 
-            # Upsert the document using the manager's generic storage API
-            # Reuse the existing collection name and let the manager handle embedding generation.
-            self._manager.process_and_store_content(
-                content=document,
-                media_id=doc_id,
-                file_name=f"kanban_card_{card_id}",
-                collection_name=self._collection_name,
-                create_embeddings=True,
-                create_contextualized=False,
-                base_metadata=metadata,
+            payload = {
+                "content": document,
+                "metadata": metadata,
+                "collection_name": self._collection_name,
+                "document_id": doc_id,
+                "card_id": card_id,
+                "card_version": card.get("version"),
+                "current_stage": "content",
+                "request_source": "kanban",
+            }
+            if embedding_model:
+                payload["embedding_model"] = embedding_model
+            if embedding_provider:
+                payload["embedding_provider"] = embedding_provider
+
+            jm = _jobs_manager()
+            stage_queue = _jobs_queue()
+            root_queue = _root_jobs_queue(stage_queue)
+            root_job = jm.create_job(
+                domain=_EMBEDDINGS_DOMAIN,
+                queue=root_queue,
+                job_type=_EMBEDDINGS_ROOT_JOB_TYPE,
+                payload=payload,
+                owner_user_id=str(self.user_id),
+                priority=_map_priority(50),
+                max_retries=0,
+            )
+            root_uuid = str(root_job.get("uuid") or "")
+            stage_payload = dict(payload)
+            stage_payload["root_job_uuid"] = root_uuid
+            stage_payload["parent_job_uuid"] = root_uuid
+            stage_payload["user_id"] = str(self.user_id)
+
+            redis_pipeline.enqueue_content_job(
+                payload=stage_payload,
+                root_job_uuid=root_uuid,
+                force_regenerate=False,
+                require_redis=not redis_pipeline.allow_stub(),
             )
 
-            logger.debug(f"Indexed card {card_id} for user {self.user_id}")
+            logger.debug(f"Queued embeddings for card {card_id} (user {self.user_id})")
             return True
 
         except Exception as e:

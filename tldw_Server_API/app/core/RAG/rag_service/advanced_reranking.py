@@ -935,7 +935,8 @@ class MultiCriteriaReranker(BaseReranker):
             DataSource.MEDIA_DB: 0.8,
             DataSource.CHAT_HISTORY: 0.7,
             DataSource.NOTES: 0.9,
-            DataSource.CHARACTER_CARDS: 0.6
+            DataSource.CHARACTER_CARDS: 0.6,
+            DataSource.KANBAN: 0.85,
         }
         return source_scores.get(doc.source, 0.5)
 

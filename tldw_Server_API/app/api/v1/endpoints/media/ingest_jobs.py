@@ -15,6 +15,7 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
     get_auth_principal,
     rbac_rate_limit,
     require_permissions,

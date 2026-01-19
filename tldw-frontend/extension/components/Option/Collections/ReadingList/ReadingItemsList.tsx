@@ -16,6 +16,7 @@ import { Plus, Search, Filter, Star, RefreshCw } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useCollectionsStore } from "@/store/collections"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
+import { clearReadingProgress, getReadingProgress } from "@/services/reading-progress"
 import type { ReadingStatus } from "@/types/collections"
 import { ReadingItemCard } from "./ReadingItemCard"
 import { ReadingItemDetail } from "./ReadingItemDetail"
@@ -83,6 +84,7 @@ export const ReadingItemsList: React.FC = () => {
   const setAvailableTags = useCollectionsStore((s) => s.setAvailableTags)
 
   const [deleteLoading, setDeleteLoading] = React.useState(false)
+  const [progressById, setProgressById] = React.useState<Record<string, number>>({})
 
   const buildSortParam = useCallback(() => {
     if (sortBy === "relevance") return "relevance"
@@ -146,6 +148,38 @@ export const ReadingItemsList: React.FC = () => {
     fetchItems()
   }, [fetchItems])
 
+  useEffect(() => {
+    if (itemDetailOpen) return
+    let cancelled = false
+
+    const loadProgress = async () => {
+      if (items.length === 0) {
+        setProgressById({})
+        return
+      }
+      const entries = await Promise.all(
+        items.map(async (item) => {
+          const saved = await getReadingProgress(item.id)
+          return { id: item.id, percent: saved?.percent ?? null }
+        })
+      )
+      if (cancelled) return
+      const next: Record<string, number> = {}
+      entries.forEach(({ id, percent }) => {
+        if (typeof percent === "number" && Number.isFinite(percent) && percent > 0) {
+          next[id] = percent
+        }
+      })
+      setProgressById(next)
+    }
+
+    void loadProgress()
+
+    return () => {
+      cancelled = true
+    }
+  }, [items, itemDetailOpen])
+
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setItemsSearch(e.target.value)
@@ -204,6 +238,11 @@ export const ReadingItemsList: React.FC = () => {
     try {
       await api.deleteReadingItem(deleteTargetId, { hard: true })
       removeItem(deleteTargetId)
+      await clearReadingProgress(deleteTargetId)
+      setProgressById((prev) => {
+        const { [deleteTargetId]: _, ...rest } = prev
+        return rest
+      })
       message.success(t("collections:reading.deleted", "Article deleted"))
     } catch (error: any) {
       message.error(error?.message || "Failed to delete article")
@@ -366,7 +405,12 @@ export const ReadingItemsList: React.FC = () => {
       ) : (
         <div className="space-y-3">
           {items.map((item) => (
-            <ReadingItemCard key={item.id} item={item} onRefresh={fetchItems} />
+            <ReadingItemCard
+              key={item.id}
+              item={item}
+              onRefresh={fetchItems}
+              progressPercent={progressById[item.id]}
+            />
           ))}
         </div>
       )}

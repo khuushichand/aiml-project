@@ -36,6 +36,8 @@ import type {
   HighlightColor,
   ReadingStatus
 } from "@/types/collections"
+import type { ReadingProgress } from "@/services/reading-progress"
+import { clearReadingProgress, getReadingProgress, setReadingProgress } from "@/services/reading-progress"
 import { StatusBadge } from "../common/StatusBadge"
 import { TagSelector } from "../common/TagSelector"
 import { HighlightCard } from "../Highlights/HighlightCard"
@@ -96,9 +98,16 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   const [highlightDeleteOpen, setHighlightDeleteOpen] = useState(false)
   const [highlightDeleteId, setHighlightDeleteId] = useState<string | null>(null)
   const [highlightDeleteLoading, setHighlightDeleteLoading] = useState(false)
+  const [activeTabKey, setActiveTabKey] = useState("content")
+  const [progressPercent, setProgressPercent] = useState<number | null>(null)
   const lastEditedItemId = useRef<string | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const notesSaveTokenRef = useRef(0)
+  const progressSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastProgressRef = useRef<ReadingProgress | null>(null)
+  const lastSavedProgressRef = useRef<string | null>(null)
+  const lastRestoredItemRef = useRef<string | null>(null)
 
   // Fetch item details
   useEffect(() => {
@@ -189,12 +198,13 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   }, [highlightEditorOpen, currentItem?.id, fetchItemHighlights])
 
   const handleClose = useCallback(() => {
+    flushProgressSave()
     closeItemDetail()
     setEditingNotes(false)
     setNotesDirty(false)
     setNotesSaveError(null)
     setNotesSaving(false)
-  }, [closeItemDetail])
+  }, [closeItemDetail, flushProgressSave])
 
   const handleStartEditingNotes = useCallback(() => {
     setEditingNotes(true)
@@ -356,6 +366,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     setActionLoading(true)
     try {
       await api.deleteReadingItem(currentItem.id, { hard: true })
+      await clearReadingProgress(currentItem.id)
       removeItem(currentItem.id)
       message.success(t("collections:reading.deleted", "Article deleted"))
       handleClose()
@@ -367,6 +378,153 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       setDeleteModalOpen(false)
     }
   }, [api, currentItem, removeItem, handleClose, onRefresh, t])
+
+  const computeProgress = useCallback((): ReadingProgress | null => {
+    const container = scrollContainerRef.current
+    if (!container) return null
+    const maxScroll = container.scrollHeight - container.clientHeight
+    const scrollTop = container.scrollTop
+    const percent = maxScroll > 0 ? (scrollTop / maxScroll) * 100 : 100
+    return {
+      percent: Math.min(100, Math.max(0, percent)),
+      scrollTop: Math.max(0, scrollTop),
+      scrollHeight: Math.max(0, container.scrollHeight),
+      clientHeight: Math.max(0, container.clientHeight)
+    }
+  }, [])
+
+  const persistProgress = useCallback(
+    async (progress: ReadingProgress) => {
+      if (!currentItem?.id) return
+      const serialized = JSON.stringify(progress)
+      if (serialized === lastSavedProgressRef.current) return
+      await setReadingProgress(currentItem.id, progress)
+      lastSavedProgressRef.current = serialized
+    },
+    [currentItem?.id]
+  )
+
+  const scheduleProgressSave = useCallback(
+    (progress: ReadingProgress) => {
+      if (progressSaveTimerRef.current) {
+        clearTimeout(progressSaveTimerRef.current)
+      }
+      progressSaveTimerRef.current = setTimeout(() => {
+        void persistProgress(progress)
+      }, 350)
+    },
+    [persistProgress]
+  )
+
+  const flushProgressSave = useCallback(() => {
+    if (progressSaveTimerRef.current) {
+      clearTimeout(progressSaveTimerRef.current)
+      progressSaveTimerRef.current = null
+    }
+    if (lastProgressRef.current) {
+      void persistProgress(lastProgressRef.current)
+    }
+  }, [persistProgress])
+
+  const handleContentScroll = useCallback(() => {
+    if (activeTabKey !== "content") return
+    const progress = computeProgress()
+    if (!progress) return
+    lastProgressRef.current = progress
+    setProgressPercent(progress.percent)
+    scheduleProgressSave(progress)
+  }, [activeTabKey, computeProgress, scheduleProgressSave])
+
+  const restoreScrollPosition = useCallback(async () => {
+    if (!currentItem?.id) return
+    const container = scrollContainerRef.current
+    if (!container) return
+    const saved = await getReadingProgress(currentItem.id)
+    if (!saved) {
+      setProgressPercent(0)
+      return
+    }
+    const maxScroll = container.scrollHeight - container.clientHeight
+    if (maxScroll <= 0) {
+      container.scrollTop = 0
+      setProgressPercent(100)
+      return
+    }
+    let targetScrollTop = saved.scrollTop
+    if (saved.scrollHeight > 0 && Math.abs(saved.scrollHeight - container.scrollHeight) > 5) {
+      targetScrollTop = Math.round((saved.percent / 100) * maxScroll)
+    }
+    container.scrollTop = Math.min(Math.max(0, targetScrollTop), maxScroll)
+    setProgressPercent(saved.percent)
+  }, [currentItem?.id])
+
+  const handleClearProgress = useCallback(async () => {
+    if (!currentItem?.id) return
+    if (progressSaveTimerRef.current) {
+      clearTimeout(progressSaveTimerRef.current)
+      progressSaveTimerRef.current = null
+    }
+    await clearReadingProgress(currentItem.id)
+    lastSavedProgressRef.current = null
+    lastProgressRef.current = null
+    const container = scrollContainerRef.current
+    if (container) {
+      container.scrollTop = 0
+    }
+    setProgressPercent(0)
+    message.success(t("collections:reading.progressCleared", "Progress reset"))
+  }, [currentItem?.id, t])
+
+  useEffect(() => {
+    if (!itemDetailOpen) {
+      lastRestoredItemRef.current = null
+      setProgressPercent(null)
+    }
+  }, [itemDetailOpen])
+
+  useEffect(() => {
+    lastSavedProgressRef.current = null
+    lastProgressRef.current = null
+  }, [currentItem?.id])
+
+  useEffect(() => {
+    if (!itemDetailOpen || !currentItem?.id || activeTabKey !== "content") return
+    if (lastRestoredItemRef.current === currentItem.id) return
+    lastRestoredItemRef.current = currentItem.id
+    let cancelled = false
+
+    const restore = async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
+      if (cancelled) return
+      await restoreScrollPosition()
+      if (cancelled) return
+      const progress = computeProgress()
+      if (progress) {
+        lastProgressRef.current = progress
+        setProgressPercent(progress.percent)
+      }
+    }
+
+    void restore()
+    return () => {
+      cancelled = true
+    }
+  }, [itemDetailOpen, currentItem?.id, activeTabKey, restoreScrollPosition, computeProgress])
+
+  useEffect(() => {
+    if (activeTabKey !== "content") return
+    handleContentScroll()
+  }, [activeTabKey, handleContentScroll])
+
+  useEffect(() => {
+    return () => {
+      if (progressSaveTimerRef.current) {
+        clearTimeout(progressSaveTimerRef.current)
+      }
+    }
+  }, [])
 
   const captureSelection = useCallback(() => {
     const container = contentRef.current
@@ -866,11 +1024,36 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                   />
                 </div>
               </div>
+
+              {progressPercent !== null && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+                    <span>
+                      {t("collections:reading.progressLabel", "Progress")}
+                    </span>
+                    <span>{Math.round(progressPercent)}%</span>
+                  </div>
+                  <div className="mt-1 h-1.5 w-full rounded-full bg-zinc-200 dark:bg-zinc-700">
+                    <div
+                      className="h-1.5 rounded-full bg-emerald-500 transition-all"
+                      style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Content Tabs */}
-            <div className="flex-1 overflow-auto p-4">
-              <Tabs items={tabItems} defaultActiveKey="content" />
+            <div
+              ref={scrollContainerRef}
+              className="flex-1 overflow-auto p-4"
+              onScroll={handleContentScroll}
+            >
+              <Tabs
+                items={tabItems}
+                activeKey={activeTabKey}
+                onChange={setActiveTabKey}
+              />
             </div>
 
             {/* Footer Actions */}
@@ -902,6 +1085,9 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  <Button onClick={handleClearProgress}>
+                    {t("collections:reading.clearProgress", "Clear progress")}
+                  </Button>
                   <Button
                     danger
                     icon={<Trash2 className="h-4 w-4" />}

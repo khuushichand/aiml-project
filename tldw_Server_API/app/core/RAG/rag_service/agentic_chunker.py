@@ -738,6 +738,7 @@ async def agentic_rag_pipeline(
     media_db_path: Optional[str] = None,
     notes_db_path: Optional[str] = None,
     character_db_path: Optional[str] = None,
+    kanban_db_path: Optional[str] = None,
     # retrieval config
     search_mode: str = "hybrid",
     fts_level: str = "media",
@@ -795,6 +796,8 @@ async def agentic_rag_pipeline(
         db_paths["notes_db"] = notes_db_path
     if character_db_path:
         db_paths["character_cards_db"] = character_db_path
+    if kanban_db_path:
+        db_paths["kanban_db"] = kanban_db_path
 
     retriever = MultiDatabaseRetriever(
         db_paths,
@@ -819,6 +822,8 @@ async def agentic_rag_pipeline(
         "notes": DataSource.NOTES,
         "characters": DataSource.CHARACTER_CARDS,
         "chats": DataSource.CHARACTER_CARDS,
+        "kanban": DataSource.KANBAN,
+        "kanban_db": DataSource.KANBAN,
     }
     wanted_sources = [src_map.get(s, DataSource.MEDIA_DB) for s in (sources or ["media_db"]) ]
 

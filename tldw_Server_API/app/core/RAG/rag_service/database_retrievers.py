@@ -23,6 +23,7 @@ import numpy as np
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 
 from .types import Document, DataSource
 from .utils import normalize_scores as _normalize_scores
@@ -52,6 +53,16 @@ def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
     if "-" in text and " " not in text:
         return f"\"{text}\""
     return text
+
+
+def _get_float_env(key: str, default: float) -> float:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -1394,6 +1405,293 @@ class NotesDBRetriever(BaseRetriever):
         return {}
 
 
+class KanbanDBRetriever(BaseRetriever):
+    """Retriever for Kanban cards."""
+
+    _FTS_WEIGHT = _get_float_env("KANBAN_SEARCH_FTS_WEIGHT", 0.6)
+    _VECTOR_WEIGHT = _get_float_env("KANBAN_SEARCH_VECTOR_WEIGHT", 0.4)
+    _VECTOR_ONLY_WEIGHT = _get_float_env("KANBAN_SEARCH_VECTOR_ONLY_WEIGHT", 0.3)
+
+    def __init__(
+        self,
+        db_path: Optional[str],
+        config: Optional[RetrievalConfig] = None,
+        *,
+        user_id: str = "0",
+        kanban_db: Optional[KanbanDB] = None,
+    ) -> None:
+        super().__init__(db_path, config, db_adapter=kanban_db)
+        self._owns_db = False
+        self.kanban_db = kanban_db
+        self.user_id = self._resolve_user_id(user_id, self.db_path)
+        if self.kanban_db is None and self.db_path is not None:
+            self.kanban_db = KanbanDB(db_path=str(self.db_path), user_id=self.user_id)
+            self._owns_db = True
+
+    @staticmethod
+    def _resolve_user_id(user_id: Optional[str], db_path: Optional[str]) -> str:
+        raw = str(user_id).strip() if user_id is not None else ""
+        derived = KanbanDBRetriever._derive_user_id_from_path(db_path)
+        if derived:
+            return derived
+        return raw or "0"
+
+    @staticmethod
+    def _derive_user_id_from_path(db_path: Optional[str]) -> Optional[str]:
+        if not db_path or "://" in str(db_path):
+            return None
+        try:
+            return Path(str(db_path)).resolve().parent.name
+        except Exception:
+            return None
+
+    def _get_db(self) -> KanbanDB:
+        if self.kanban_db is None:
+            if self.db_path is None:
+                raise ValueError("Kanban db_path is required for retrieval")
+            self.kanban_db = KanbanDB(db_path=str(self.db_path), user_id=self.user_id)
+            self._owns_db = True
+        return self.kanban_db
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        board_id: Optional[int] = None,
+        label_ids: Optional[List[int]] = None,
+        priority: Optional[str] = None,
+        include_archived: bool = False,
+        **kwargs,
+    ) -> List[Document]:
+        if not query or not str(query).strip():
+            return []
+        db = self._get_db()
+        limit = int(getattr(self.config, "max_results", 20) or 20)
+
+        if getattr(self.config, "use_vector", False) and getattr(self.config, "use_fts", True):
+            cards = self._hybrid_search(
+                db,
+                query=query,
+                board_id=board_id,
+                label_ids=label_ids,
+                priority=priority,
+                include_archived=include_archived,
+                limit=limit,
+            )
+        elif getattr(self.config, "use_vector", False):
+            cards = self._vector_search(
+                db,
+                query=query,
+                board_id=board_id,
+                label_ids=label_ids,
+                priority=priority,
+                include_archived=include_archived,
+                limit=limit,
+            )
+        else:
+            cards = self._fts_search(
+                db,
+                query=query,
+                board_id=board_id,
+                label_ids=label_ids,
+                priority=priority,
+                include_archived=include_archived,
+                limit=limit,
+            )
+
+        return self._cards_to_documents(cards, min_score=float(self.config.min_score or 0.0))
+
+    def _fts_search(
+        self,
+        db: KanbanDB,
+        *,
+        query: str,
+        board_id: Optional[int],
+        label_ids: Optional[List[int]],
+        priority: Optional[str],
+        include_archived: bool,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        cards, _ = db.search_cards(
+            query=query,
+            board_id=board_id,
+            label_ids=label_ids,
+            priority=priority,
+            include_archived=include_archived,
+            limit=limit,
+            offset=0,
+        )
+        total = max(len(cards), 1)
+        for idx, card in enumerate(cards):
+            card["relevance_score"] = 1.0 - (idx / total)
+        return cards
+
+    def _vector_search(
+        self,
+        db: KanbanDB,
+        *,
+        query: str,
+        board_id: Optional[int],
+        label_ids: Optional[List[int]],
+        priority: Optional[str],
+        include_archived: bool,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        vector_search = db.get_vector_search()
+        if vector_search is None or not getattr(vector_search, "available", False):
+            return self._fts_search(
+                db,
+                query=query,
+                board_id=board_id,
+                label_ids=label_ids,
+                priority=priority,
+                include_archived=include_archived,
+                limit=limit,
+            )
+        results = vector_search.search(
+            query=query,
+            board_id=board_id,
+            priority=priority,
+            limit=limit,
+        )
+        if not results:
+            return []
+        card_ids = [r.get("card_id") for r in results if r.get("card_id")]
+        score_map = {r["card_id"]: r.get("relevance_score", 0.0) for r in results if r.get("card_id")}
+        cards = db.get_cards_by_ids(
+            card_ids=card_ids,
+            include_deleted=False,
+            include_archived=include_archived,
+        )
+        filtered = self._filter_by_labels(cards, label_ids)
+        for card in filtered:
+            card["relevance_score"] = score_map.get(card["id"], 0.0)
+        filtered.sort(key=lambda c: c.get("relevance_score", 0.0), reverse=True)
+        return filtered[:limit]
+
+    def _hybrid_search(
+        self,
+        db: KanbanDB,
+        *,
+        query: str,
+        board_id: Optional[int],
+        label_ids: Optional[List[int]],
+        priority: Optional[str],
+        include_archived: bool,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        fts_cards = self._fts_search(
+            db,
+            query=query,
+            board_id=board_id,
+            label_ids=label_ids,
+            priority=priority,
+            include_archived=include_archived,
+            limit=limit * 2,
+        )
+        vector_search = db.get_vector_search()
+        if vector_search is None or not getattr(vector_search, "available", False):
+            return fts_cards[:limit]
+        vector_results = vector_search.search(
+            query=query,
+            board_id=board_id,
+            priority=priority,
+            limit=limit * 2,
+        )
+        if not vector_results:
+            return fts_cards[:limit]
+        vector_scores = {
+            r["card_id"]: r.get("relevance_score", 0.0)
+            for r in vector_results
+            if r.get("card_id")
+        }
+        combined: List[Dict[str, Any]] = []
+        seen: set[int] = set()
+        for idx, card in enumerate(fts_cards):
+            card_id = card["id"]
+            if card_id in seen:
+                continue
+            seen.add(card_id)
+            fts_score = card.get("relevance_score", 0.0)
+            vector_score = vector_scores.get(card_id, 0.0)
+            card["relevance_score"] = (self._FTS_WEIGHT * fts_score) + (self._VECTOR_WEIGHT * vector_score)
+            combined.append(card)
+        extra_ids = [cid for cid in vector_scores.keys() if cid not in seen]
+        if extra_ids:
+            extra_cards = db.get_cards_by_ids(
+                card_ids=extra_ids,
+                include_deleted=False,
+                include_archived=include_archived,
+            )
+            extra_cards = self._filter_by_labels(extra_cards, label_ids)
+            for card in extra_cards:
+                card["relevance_score"] = self._VECTOR_ONLY_WEIGHT * vector_scores.get(card["id"], 0.0)
+            combined.extend(extra_cards)
+        combined.sort(key=lambda c: c.get("relevance_score", 0.0), reverse=True)
+        return combined[:limit]
+
+    @staticmethod
+    def _filter_by_labels(cards: List[Dict[str, Any]], label_ids: Optional[List[int]]) -> List[Dict[str, Any]]:
+        if not label_ids:
+            return list(cards)
+        required = set(label_ids)
+        filtered = []
+        for card in cards:
+            card_label_ids = {label.get("id") for label in card.get("labels", []) if label.get("id") is not None}
+            if required.issubset(card_label_ids):
+                filtered.append(card)
+        return filtered
+
+    def _cards_to_documents(self, cards: List[Dict[str, Any]], *, min_score: float) -> List[Document]:
+        documents: List[Document] = []
+        for card in cards:
+            score = float(card.get("relevance_score") or 0.0)
+            if score < min_score:
+                continue
+            content_parts = [card.get("title") or ""]
+            description = card.get("description") or ""
+            if description:
+                content_parts.append(description)
+            labels = card.get("labels") or []
+            label_names = [label.get("name") for label in labels if label.get("name")]
+            if label_names:
+                content_parts.append("Labels: " + ", ".join(label_names))
+            content = "\n\n".join([p for p in content_parts if p]).strip()
+            documents.append(
+                Document(
+                    id=f"kanban_card_{card.get('id')}",
+                    content=content,
+                    source=DataSource.KANBAN,
+                    metadata={
+                        "card_id": card.get("id"),
+                        "card_uuid": card.get("uuid"),
+                        "board_id": card.get("board_id"),
+                        "board_name": card.get("board_name"),
+                        "list_id": card.get("list_id"),
+                        "list_name": card.get("list_name"),
+                        "due_date": card.get("due_date"),
+                        "priority": card.get("priority"),
+                        "created_at": card.get("created_at"),
+                        "updated_at": card.get("updated_at"),
+                        "source": "kanban",
+                    },
+                    score=score,
+                )
+            )
+        documents.sort(key=lambda d: getattr(d, "score", 0.0), reverse=True)
+        return documents
+
+    def close(self) -> None:
+        if self._owns_db and self.kanban_db is not None:
+            try:
+                self.kanban_db.close()
+            except Exception:
+                pass
+            finally:
+                self.kanban_db = None
+                self._owns_db = False
+
+
 class PromptsDBRetriever(BaseRetriever):
     """Retriever for prompts database."""
 
@@ -1790,6 +2088,11 @@ class MultiDatabaseRetriever:
                 db_paths["character_cards_db"],
                 chacha_db=chacha_db,
             )
+        if "kanban_db" in db_paths:
+            self.retrievers[DataSource.KANBAN] = KanbanDBRetriever(
+                db_paths["kanban_db"],
+                user_id=user_id,
+            )
         # Optional: Claims retriever if provided
         if "claims_db" in db_paths:
             try:
@@ -2012,6 +2315,7 @@ class MultiDatabaseRetriever:
             DataSource.NOTES: 0.8,
             DataSource.PROMPTS: 0.6,
             DataSource.CHARACTER_CARDS: 0.5,
+            DataSource.KANBAN: 0.85,
         }
         doc_scores: Dict[str, Dict[str, Any]] = {}
         for source, docs in source_results.items():
@@ -2306,7 +2610,8 @@ except Exception:
                 DataSource.MEDIA_DB: 1.0,
                 DataSource.NOTES: 0.8,
                 DataSource.PROMPTS: 0.6,
-                DataSource.CHARACTER_CARDS: 0.5
+                DataSource.CHARACTER_CARDS: 0.5,
+                DataSource.KANBAN: 0.85,
             }
 
         doc_scores = {}

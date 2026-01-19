@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +31,7 @@ class PresentationBase(BaseModel):
     title: str
     description: Optional[str] = None
     theme: str = "black"
+    marp_theme: Optional[str] = None
     settings: Optional[Dict[str, Any]] = None
     slides: List[Slide] = Field(default_factory=list)
     custom_css: Optional[str] = None
@@ -48,6 +49,7 @@ class PresentationPatchRequest(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     theme: Optional[str] = None
+    marp_theme: Optional[str] = None
     settings: Optional[Dict[str, Any]] = None
     slides: Optional[List[Slide]] = None
     custom_css: Optional[str] = None
@@ -60,7 +62,7 @@ class PresentationResponse(PresentationBase):
     source_query: Optional[str] = None
     created_at: datetime
     last_modified: datetime
-    deleted: int
+    deleted: bool
     client_id: str
     version: int
 
@@ -72,7 +74,7 @@ class PresentationSummary(BaseModel):
     theme: str
     created_at: datetime
     last_modified: datetime
-    deleted: int
+    deleted: bool
     version: int
 
 
@@ -93,6 +95,7 @@ class PresentationSearchResponse(BaseModel):
 class SlideGenerationBase(BaseModel):
     title_hint: Optional[str] = None
     theme: Optional[str] = None
+    marp_theme: Optional[str] = None
     settings: Optional[Dict[str, Any]] = None
     custom_css: Optional[str] = None
     max_source_tokens: Optional[int] = Field(default=None, ge=1)

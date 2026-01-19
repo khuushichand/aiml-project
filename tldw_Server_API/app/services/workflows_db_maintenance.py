@@ -70,15 +70,15 @@ async def run_workflows_db_maintenance(stop_event: asyncio.Event) -> None:
                         checkpoint_mode = "TRUNCATE"
                     try:
                         db._conn.execute(f"PRAGMA wal_checkpoint({checkpoint_mode});")  # type: ignore[attr-defined]
-                    except Exception:
+                    except Exception as e:
                         # Some environments may not be in WAL mode; ignore
-                        pass
+                        logger.debug(f"Workflows DB maintenance: WAL checkpoint skipped: {e}")
 
                     # PRAGMA optimize is a lightweight hint to SQLite
                     try:
                         db._conn.execute("PRAGMA optimize;")  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Workflows DB maintenance: PRAGMA optimize skipped: {e}")
 
                     if _env_bool("WORKFLOWS_SQLITE_VACUUM", False):
                         try:
