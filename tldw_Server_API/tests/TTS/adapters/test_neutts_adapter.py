@@ -6,7 +6,7 @@ import pytest
 
 from tldw_Server_API.app.core.TTS.adapters.neutts_adapter import NeuTTSAdapter
 from tldw_Server_API.app.core.TTS.adapters.base import TTSRequest, AudioFormat
-from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError, TTSValidationError
 
 
 class _FakeNeuTTSEngine:
@@ -35,6 +35,15 @@ class _FakeNeuTTSEngineOnnx(_FakeNeuTTSEngine):
 class _FakeNeuTTSEngineError(_FakeNeuTTSEngine):
     def infer(self, text, ref_codes, ref_text):
         raise ValueError("No valid speech tokens found in the output.")
+
+
+class _FakeNeuTTSEngineStreaming(_FakeNeuTTSEngine):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._is_quantized_model = True
+
+    def infer_stream(self, text, ref_codes, ref_text):
+        yield np.zeros(480, dtype=np.float32)
 
 
 def _install_fake_engine(fake_cls):
@@ -102,4 +111,65 @@ async def test_neutts_no_speech_tokens_error(monkeypatch):
         extra_params={"reference_text": "text", "ref_codes": [1, 2]},
     )
     with pytest.raises(TTSGenerationError):
+        await adapter.generate(req)
+
+
+@pytest.mark.asyncio
+async def test_neutts_streaming_requires_gguf(monkeypatch):
+    _install_fake_engine(_FakeNeuTTSEngine)
+    adapter = NeuTTSAdapter(config={
+        "backbone_repo": "neuphonic/neutts-air",
+        "codec_repo": "neuphonic/neucodec",
+        "sample_rate": 24000,
+    })
+    assert await adapter.ensure_initialized()
+    req = TTSRequest(
+        text="stream",
+        format=AudioFormat.PCM,
+        stream=True,
+        extra_params={"reference_text": "ref", "ref_codes": [1, 2, 3]},
+    )
+    with pytest.raises(TTSGenerationError):
+        await adapter.generate(req)
+
+
+@pytest.mark.asyncio
+async def test_neutts_streaming_pcm(monkeypatch):
+    _install_fake_engine(_FakeNeuTTSEngineStreaming)
+    adapter = NeuTTSAdapter(config={
+        "backbone_repo": "neuphonic/neutts-air-q4-gguf",
+        "codec_repo": "neuphonic/neucodec",
+        "sample_rate": 24000,
+    })
+    assert await adapter.ensure_initialized()
+    req = TTSRequest(
+        text="stream",
+        format=AudioFormat.PCM,
+        stream=True,
+        extra_params={"reference_text": "ref", "ref_codes": [1, 2, 3]},
+    )
+    resp = await adapter.generate(req)
+    assert resp.audio_stream is not None
+    chunks = []
+    async for chunk in resp.audio_stream:
+        chunks.append(chunk)
+    assert chunks
+
+
+@pytest.mark.asyncio
+async def test_neutts_streaming_rejects_wav(monkeypatch):
+    _install_fake_engine(_FakeNeuTTSEngineStreaming)
+    adapter = NeuTTSAdapter(config={
+        "backbone_repo": "neuphonic/neutts-air-q4-gguf",
+        "codec_repo": "neuphonic/neucodec",
+        "sample_rate": 24000,
+    })
+    assert await adapter.ensure_initialized()
+    req = TTSRequest(
+        text="stream",
+        format=AudioFormat.WAV,
+        stream=True,
+        extra_params={"reference_text": "ref", "ref_codes": [1, 2, 3]},
+    )
+    with pytest.raises(TTSValidationError):
         await adapter.generate(req)

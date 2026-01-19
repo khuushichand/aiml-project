@@ -126,3 +126,10 @@ async def run_privilege_snapshot_worker(stop_event: Optional[asyncio.Event] = No
                 lease_id=lease_id,
                 completion_token=lease_id,
             )
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_privilege_snapshot_worker())
+    except KeyboardInterrupt:
+        pass

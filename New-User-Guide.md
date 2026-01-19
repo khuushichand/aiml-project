@@ -294,6 +294,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/media/add" \
 | `ffmpeg`/audio errors | Binary not installed or not in `PATH` | Install `ffmpeg`, restart terminal |
 | `X-API-KEY` rejected | Key mismatch or wrong auth mode | Verify `AUTH_MODE`, check env, inspect server logs |
 | Media stuck in `processing` | Background workers blocked or DB locked | Check logs under `Databases/`, ensure only one writer, consider Postgres |
+| SQLite `database is locked` | In-process workers + multiple Uvicorn workers | Use sidecar workers or Postgres; avoid multiple Uvicorn workers with in-process jobs |
 | Docker health fails | Compose overlay mismatch | Start with base compose file, then add overlays gradually |
 
 > Enable debug logging by setting `LOG_LEVEL=DEBUG` before launching the server if you need granular traces (Loguru handles formatting).

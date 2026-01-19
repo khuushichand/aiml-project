@@ -148,7 +148,7 @@ Key settings to update:
 api_key = your-secure-random-key-here
 
 [Database]
-database_path = /var/lib/tldw/databases/
+database_path = /var/lib/tldw/user_databases/
 media_db_name = <user_id>/Media_DB_v2.db
 
 [API]
@@ -179,7 +179,7 @@ API_KEY=your-secure-api-key
 JWT_SECRET=your-jwt-secret
 SESSION_ENCRYPTION_KEY=your-32-byte-key
 
-# Database
+# Database (per-user root)
 DATABASE_PATH=/var/lib/tldw/user_databases
 
 # Logging
@@ -206,7 +206,7 @@ migrations.apply_all_migrations('/var/lib/tldw/databases/')
 "
 
 # Verify databases created
-ls -la /var/lib/tldw/user_databases/
+ls -la /var/lib/tldw/databases/
 ```
 
 #### 4.2 Set database permissions
@@ -447,10 +447,10 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Install from pyproject (editable)
 COPY pyproject.toml .
-RUN pip install --no-cache-dir -e .
-RUN pip install gunicorn uvicorn[standard]
+RUN pip install --no-cache-dir -e . && \
+    pip install --no-cache-dir gunicorn uvicorn[standard]
 
 # Copy application
 COPY tldw_Server_API/ ./tldw_Server_API/
@@ -553,7 +553,7 @@ docker-compose logs -f
 sudo journalctl -u tldw -n 50
 
 # Check permissions
-ls -la /var/lib/tldw/databases/
+ls -la /var/lib/tldw/user_databases/
 ls -la /var/log/tldw/
 
 # Test configuration

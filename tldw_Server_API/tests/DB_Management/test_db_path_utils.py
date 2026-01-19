@@ -3,6 +3,7 @@ import pytest
 from tldw_Server_API.app.core.DB_Management import db_path_utils
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 
 
 def test_get_user_base_directory_expands_user(monkeypatch, tmp_path):
@@ -69,3 +70,29 @@ def test_invalid_user_id_rejected_outside_tests(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError, match="Invalid user_id"):
         DatabasePaths.get_user_base_directory("..")
+
+
+def test_user_db_base_dir_relative_escape_rejected(monkeypatch, tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    monkeypatch.setattr(db_path_utils, "get_project_root", lambda: str(project_root))
+    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", "../outside")
+    monkeypatch.delenv("USER_DB_BASE_DIR", raising=False)
+
+    with pytest.raises(InvalidStoragePathError):
+        DatabasePaths.get_user_base_directory(1)
+
+
+def test_prompts_db_path_salt_rejects_path_separators(monkeypatch, tmp_path):
+    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+
+    with pytest.raises(InvalidStoragePathError):
+        DatabasePaths.get_prompts_db_path(1, salt="../bad")
+
+
+def test_prompts_db_path_salt_accepts_safe_value(monkeypatch, tmp_path):
+    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+
+    path = DatabasePaths.get_prompts_db_path(1, salt="safe_123")
+
+    assert path.name == "user_prompts_v2_safe_123.sqlite"

@@ -141,7 +141,9 @@ curl -G http://localhost:8000/api/v1/rag/advanced \
   --data-urlencode "with_answer=true"
 ```
 
-### 3. Simple Agent - `POST /agent`
+### 3. Simple Agent - `POST /agent` (Deprecated)
+
+Note: Agent endpoints are not exposed in the current server. Use `POST /api/v1/rag/search` (with `enable_generation=true`) or `POST /api/v1/rag/search/stream` instead.
 
 Conversational Q&A with automatic context retrieval.
 
@@ -203,7 +205,9 @@ response = await fetch('http://localhost:8000/api/v1/rag/agent', {
 });
 ```
 
-### 4. Advanced Agent - `POST /agent/advanced`
+### 4. Advanced Agent - `POST /agent/advanced` (Deprecated)
+
+Note: This endpoint is not available. Use `POST /api/v1/rag/search/stream` for streaming answers.
 
 Research agent with tools and streaming support.
 
@@ -352,7 +356,7 @@ if (health.status === 'healthy') {
 }
 ```
 
-## Request & Response Schemas {#request--response-schemas}
+## Request & Response Schemas
 
 ### Available Databases
 
@@ -375,7 +379,7 @@ if (health.status === 'healthy') {
 
 Enable expansion to improve recall using strategies like acronym, synonym, domain, and entity expansion. Control via `expand_query` and `expansion_strategies` in `POST /search`.
 
-## Search Types & Strategies {#search-types--strategies}
+## Search Types & Strategies
 
 ### Hybrid Search Configuration
 
@@ -415,21 +419,6 @@ Generates a hypothetical answer to improve semantic search:
 // Then searches for similar documents
 ```
 
-## Agent Modes & Tools {#agent-modes--tools}
-
-The advanced agent endpoint (`POST /agent/advanced`) supports multiple modes and tool integrations:
-
-- Modes
-  - `rag` (default): Retrieve context from your configured sources and generate an answer.
-  - `research`: Enable research tools (e.g., web search) and multi-step reasoning; may stream intermediate events.
-
-- Tools (examples)
-  - `web_search`: Use configured web search providers to augment retrieval.
-  - `reasoning`: Invoke a chain-of-thought style assistant to plan sub-queries (streaming supported).
-  - `rerank`: Apply reranking models to retrieved chunks for improved relevance.
-
-Enable tools via `tools: ["web_search", "reasoning"]` in the request body. Each tool emits usage/latency metrics and may contribute to token and cost accounting in admin reports.
-
 ## Capabilities & Features
 
 - `GET /capabilities`: Returns supported features, defaults, and limits for the unified pipeline.
@@ -460,7 +449,7 @@ class RAGClient {
         query,
         search_mode: options.searchMode || 'hybrid',
         top_k: options.limit || 10,
-        sources: options.sources || ['media_db'],
+        sources: options.databases || ['media_db'],
         keyword_filter: options.keywords
       })
     });
@@ -522,11 +511,7 @@ for await (const chunk of rag.streamSearch('Explain quantum computing')) {
 
 ```python
 import json
-import socket
-import sys
 from typing import List, Dict, Optional, Generator
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 class RAGClient:
@@ -549,34 +534,10 @@ class RAGClient:
         """Perform a search query."""
         data = {
             'query': query,
-            'search_mode': search_type,
-            'top_k': limit,
-            'sources': databases or ['media_db'],
-            'keyword_filter': keywords
-        }
-
-        req = Request(
-            f'{self.base_url}/search',
-            data=json.dumps(data).encode('utf-8'),
-            headers=self.headers,
-            method='POST',
-        )
-        try:
-            with urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode('utf-8'))
-        except HTTPError as exc:
-            raise RuntimeError(f"RAG search failed with HTTPError: {exc.code} {exc.reason}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"RAG search failed with URLError: {exc.reason}") from exc
-        except Exception as exc:
-            raise RuntimeError(f"RAG search failed with unexpected error: {exc}") from exc
-
-    def ask(self, message: str, databases: List[str] = None) -> Dict:
-        """Generate an answer using unified search with generation enabled."""
-        data = {
-            'query': message,
-            'sources': databases or ['media_db'],
-            'enable_generation': True
+            'search_type': search_type,
+            'limit': limit,
+            'databases': databases or ['media_db'],
+            'keywords': keywords
         }
         req = Request(
             f'{self.base_url}/search',
@@ -584,86 +545,106 @@ class RAGClient:
             headers=self.headers,
             method='POST',
         )
-        try:
-            with urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode('utf-8'))
-        except HTTPError as exc:
-            raise RuntimeError(f"RAG ask failed with HTTPError: {exc.code} {exc.reason}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"RAG ask failed with URLError: {exc.reason}") from exc
-        except Exception as exc:
-            raise RuntimeError(f"RAG ask failed with unexpected error: {exc}") from exc
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode('utf-8'))
 
-    def stream(self, query: str) -> Generator[str, None, None]:
-        """Stream NDJSON answer chunks from unified search."""
+    def ask(
+        self,
+        message: str,
+        conversation_id: Optional[str] = None,
+        databases: List[str] = None
+    ) -> Dict:
+        """Ask a question to the agent."""
         data = {
-            'query': query,
-            'enable_generation': True
+            'message': message,
+            'conversation_id': conversation_id,
+            'search_databases': databases or ['media_db']
         }
         req = Request(
-            f'{self.base_url}/search/stream',
+            f'{self.base_url}/agent',
             data=json.dumps(data).encode('utf-8'),
             headers=self.headers,
             method='POST',
         )
-        try:
-            with urlopen(req, timeout=30) as resp:
-                status = resp.status if hasattr(resp, 'status') else resp.getcode()
-                if status < 200 or status >= 300:
-                    error_body = resp.read().decode('utf-8', errors='replace')
-                    raise RuntimeError(f"RAG stream failed with HTTP {status}: {error_body}")
-                buffer = ''
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+
+    def research(
+        self,
+        message: str,
+        tools: List[str] = None,
+        stream: bool = False
+    ) -> Generator[str, None, None]:
+        """Use the research agent with tools."""
+        data = {
+            'message': message,
+            'mode': 'research',
+            'tools': tools or ['web_search', 'reasoning'],
+            'generation_config': {
+                'stream': stream
+            }
+        }
+        if stream:
+            req = Request(
+                f'{self.base_url}/agent/advanced',
+                data=json.dumps(data).encode('utf-8'),
+                headers=self.headers,
+                method='POST',
+            )
+            with urlopen(req) as resp:
                 for raw in resp:
-                    buffer += raw.decode('utf-8', errors='replace')
-                    while '\n' in buffer:
-                        line, buffer = buffer.split('\n', 1)
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            evt = json.loads(line)
-                        except json.JSONDecodeError:
-                            print(f"Skipping malformed NDJSON line: {line!r}", file=sys.stderr)
-                            continue
-                        if not isinstance(evt, dict):
-                            print(f"Skipping non-object NDJSON event: {evt!r}", file=sys.stderr)
-                            continue
-                        if evt.get('type') == 'delta':
-                            yield evt.get('text', '')
-                if buffer.strip():
-                    print(f"Skipping trailing partial NDJSON fragment: {buffer!r}", file=sys.stderr)
-        except HTTPError as exc:
-            raise RuntimeError(f"RAG stream failed with HTTPError: {exc.code} {exc.reason}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"RAG stream failed with URLError: {exc.reason}") from exc
-        except Exception as exc:
-            raise RuntimeError(f"RAG stream failed with unexpected error: {exc}") from exc
+                    line = raw.decode('utf-8', errors='replace').strip()
+                    if not line.startswith('data:'):
+                        continue
+                    payload = line[len('data:'):].strip()
+                    if payload == '[DONE]':
+                        break
+                    try:
+                        event = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    yield event.get('content', '')
+        else:
+            req = Request(
+                f'{self.base_url}/agent/advanced',
+                data=json.dumps(data).encode('utf-8'),
+                headers=self.headers,
+                method='POST',
+            )
+            with urlopen(req) as resp:
+                payload = json.loads(resp.read().decode('utf-8'))
+                yield payload['response']
 
-    def advanced_search(self, query: str, with_citations: bool = True, with_answer: bool = True) -> Dict:
-        """Perform an advanced search with common features enabled."""
-        params = urlencode({
+    def advanced_search(
+        self,
+        query: str,
+        strategy: str = 'vanilla',
+        filters: Dict = None,
+        weights: Dict = None
+    ) -> Dict:
+        """Perform an advanced search with full control."""
+        data = {
             'query': query,
-            'with_citations': str(with_citations).lower(),
-            'with_answer': str(with_answer).lower()
-        })
+            'strategy': strategy,
+            'search_config': {
+                'search_type': 'hybrid',
+                'limit': 20,
+                'metadata_filters': filters or {},
+                'include_full_content': True,
+                'include_scores': True
+            }
+        }
+
+        if weights:
+            data['hybrid_config'] = weights
         req = Request(
-            f'{self.base_url}/advanced?{params}',
+            f'{self.base_url}/search/advanced',
+            data=json.dumps(data).encode('utf-8'),
             headers=self.headers,
-            method='GET',
+            method='POST',
         )
-        try:
-            with urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode('utf-8'))
-        except HTTPError as exc:
-            raise RuntimeError(f"RAG advanced search failed with HTTPError: {exc.code} {exc.reason}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"RAG advanced search failed with URLError: {exc.reason}") from exc
-        except socket.timeout as exc:
-            raise RuntimeError("RAG advanced search timed out after 30s") from exc
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"RAG advanced search failed to parse JSON: {exc}") from exc
-        except Exception as exc:
-            raise RuntimeError(f"RAG advanced search failed with unexpected error: {exc}") from exc
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode('utf-8'))
 
 
 # Usage example
@@ -672,16 +653,27 @@ if __name__ == '__main__':
 
     # Simple search
     results = rag.search('python tutorials', limit=5)
-    for doc in results.get('documents', []):
-        print(f"- {doc['id']}: {doc['score']:.2f}")
+    for result in results['results']:
+        print(f"- {result['title']}: {result['score']:.2f}")
 
     # Q&A conversation
-    answer = rag.ask("What is machine learning?")
-    print(f"Answer: {answer.get('generated_answer')}")
+    response = rag.ask("What is machine learning?")
+    print(f"Answer: {response['response']}")
+
+    # Continue conversation
+    follow_up = rag.ask(
+        "How does it differ from deep learning?",
+        conversation_id=response['conversation_id']
+    )
+    print(f"Follow-up: {follow_up['response']}")
 
     # Research with streaming
     print("Research output:")
-    for chunk in rag.stream("Latest advances in quantum computing"):
+    for chunk in rag.research(
+        "Latest advances in quantum computing",
+        tools=['web_search', 'reasoning'],
+        stream=True
+    ):
         print(chunk, end='', flush=True)
 ```
 
@@ -694,7 +686,7 @@ curl -X POST http://localhost:8000/api/v1/rag/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "machine learning",
-    "limit": 5
+    "top_k": 5
   }'
 
 # Advanced search
@@ -711,8 +703,7 @@ curl -N -X POST http://localhost:8000/api/v1/rag/search/stream \
   -d '{ "query": "Explain transformers", "enable_generation": true }'
 
 # Health check
-curl -X GET http://localhost:8000/api/v1/rag/health \
-  -H "X-API-KEY: your-api-key"
+curl -X GET http://localhost:8000/api/v1/rag/health
 ```
 
 ## Best Practices
@@ -901,7 +892,7 @@ Handle validation errors gracefully:
 }
 ```
 
-## Rate Limiting & Performance {#rate-limiting--performance}
+## Rate Limiting & Performance
 
 ### Rate Limits
 
@@ -1204,4 +1195,4 @@ class LearningAssistant {
 
 The RAG API provides powerful search and question-answering capabilities with a clean, intuitive interface. Whether you need simple search, conversational Q&A, or advanced research capabilities, the API offers the flexibility and performance for production applications.
 
-For implementation details and extending the RAG module, see the [RAG API Documentation](RAG_API_Documentation.md).
+For implementation details and extending the RAG module, see the [RAG Developer Guide](../Development/RAG-Developer-Guide.md).

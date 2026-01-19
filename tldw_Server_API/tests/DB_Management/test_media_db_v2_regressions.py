@@ -146,7 +146,9 @@ def test_process_media_update_wraps_transaction_and_commits():
     assert set(tags) == {"new1", "new2"}
 
 
-def test_media_db_backup_helpers_create_and_rotate(tmp_path: Path):
+def test_media_db_backup_helpers_create_and_rotate(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("TLDW_DB_BACKUP_PATH", str(tmp_path))
+    monkeypatch.setenv("TLDW_DB_ALLOWED_BASE_DIRS", str(tmp_path))
     db_path = tmp_path / "media.db"
     conn = sqlite3.connect(db_path)
     conn.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT)")

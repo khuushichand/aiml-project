@@ -119,6 +119,8 @@ https://llmapitest.com/
 https://github.com/huggingface/evaluation-guidebook/tree/main
 https://www.kaggle.com/benchmarks/google/facts-grounding
 https://github.com/allenai/IFBench
+https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
+https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents?utm_source=substack&utm_medium=email
 https://arxiv.org/abs/2507.02825
 https://arxiv.org/abs/2506.18032
 https://accounting.penrose.com/

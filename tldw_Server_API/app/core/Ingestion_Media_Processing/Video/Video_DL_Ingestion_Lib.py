@@ -33,7 +33,7 @@ import shutil
 from datetime import datetime
 import time
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable
 from urllib.parse import urlparse, parse_qs, urlunparse
 #
 # 3rd-Party Imports
@@ -806,6 +806,7 @@ def process_videos(
     keep_original: bool = False, # Add if needed for intermediate files
     perform_diarization:bool = False,
     user_id: Optional[int] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """
     Processes multiple videos or local file paths, transcribes, summarizes,
@@ -841,6 +842,7 @@ def process_videos(
     :param keep_original: If True, keep the downloaded file
     :param perform_diarization: If True, perform diarization on inputs
     :param user_id: Identifier for the requesting user; used for downstream logging/context.
+    :param cancel_check: Optional callable that returns True when processing should be cancelled.
     :return: A dict with the overall results, e.g.:
              {
                "processed_count": int,
@@ -858,6 +860,36 @@ def process_videos(
     errors: List[str] = []
     warnings_accum: List[str] = []
     results = []
+
+    def _is_cancelled() -> bool:
+        """Return True if cancellation is requested, logging callback errors."""
+        if cancel_check is None:
+            return False
+        try:
+            return bool(cancel_check())
+        except Exception as exc:
+            logging.warning(f"cancel_check raised an error: {exc}")
+            return False
+
+    def _cancelled_result(input_ref: str, processing_source: Optional[str] = None) -> Dict[str, Any]:
+        """Build a standard cancelled result payload."""
+        return {
+            "status": "Cancelled",
+            "input_ref": input_ref,
+            "processing_source": processing_source or input_ref,
+            "media_type": "video",
+            "metadata": {},
+            "content": None,
+            "segments": None,
+            "chunks": None,
+            "analysis": None,
+            "analysis_details": {},
+            "error": "Cancelled by user",
+            "warnings": [],
+            "kept_video_path": None,
+        }
+
+    from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
     all_transcripts_for_confab: Dict[str, str] = {}
     all_summaries_for_confab: Dict[str, str] = {}
 
@@ -936,8 +968,13 @@ def process_videos(
          }
     logging.info(f"process_videos using provided temporary directory: {processing_temp_dir}")
 
-    for video_input in inputs:
+    for idx, video_input in enumerate(inputs):
         video_start_time = datetime.now()
+        if _is_cancelled():
+            logger.info("Cancellation detected before processing video input.")
+            for remaining_input in inputs[idx:]:
+                results.append(_cancelled_result(remaining_input))
+            break
         try:
             # Pass necessary parameters down, including temp_dir
             single_result = process_single_video(
@@ -969,9 +1006,14 @@ def process_videos(
                 perform_diarization=perform_diarization,
                 keep_original=keep_original,
                 user_id=user_id,
+                cancel_check=cancel_check,
             )
 
             results.append(single_result) # Append regardless of status
+            if single_result.get("status") == "Cancelled":
+                for remaining_input in inputs[idx + 1:]:
+                    results.append(_cancelled_result(remaining_input))
+                break
 
             if single_result.get("status") == "Success":
                 item_warnings = single_result.get("warnings") or []
@@ -1019,6 +1061,12 @@ def process_videos(
                 if item_warnings:
                     warnings_accum.extend(item_warnings)
 
+        except TranscriptionCancelled:
+            logger.info("Cancellation detected during video processing.")
+            results.append(_cancelled_result(video_input))
+            for remaining_input in inputs[idx + 1:]:
+                results.append(_cancelled_result(remaining_input))
+            break
         except Exception as exc:
             msg = f"Exception processing '{video_input}': {exc}"
             logging.error(msg, exc_info=True)
@@ -1044,7 +1092,7 @@ def process_videos(
 
     # --- Recalculate counts based on the correctly populated 'results' list ---
     processed_count_calc = sum(1 for r in results if r.get("status") in {"Success", "Warning"})
-    errors_count_calc = sum(1 for r in results if r.get("status") == "Error")
+    errors_count_calc = sum(1 for r in results if r.get("status") in {"Error", "Cancelled"})
     warnings_count_calc = sum(1 for r in results if r.get("status") == "Warning")
 
     # Optionally, run a confabulation check on the entire set of summaries
@@ -1137,6 +1185,7 @@ def process_single_video(
     perform_diarization: bool = False, # Flag to perform diarization
     keep_original: bool = False,
     user_id: Optional[int] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """
     Processes a single video/file: Extracts metadata, downloads if URL,
@@ -1144,6 +1193,7 @@ def process_single_video(
     Returns a dict matching MediaItemProcessResponse structure.
     'input_ref' should hold the original URL/path passed in video_input.
     'processing_source' should hold the path of the file actually processed.
+    cancel_check: Optional callable that returns True when processing should be cancelled.
     """
     # --- Initialize result with the ORIGINAL input reference ---
     processing_result = {
@@ -1164,8 +1214,24 @@ def process_single_video(
     local_file_path_for_transcription = None
     # Temp dir for download is provided by the caller (`temp_dir`)
 
+    def _is_cancelled() -> bool:
+        """Return True if cancellation is requested, logging callback errors."""
+        if cancel_check is None:
+            return False
+        try:
+            return bool(cancel_check())
+        except Exception as exc:
+            logger.warning(f"cancel_check raised an error: {exc}")
+            return False
+
+    from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
+
     try:
         logger.info(f"Processing single video input: {video_input}") # Log original
+        if _is_cancelled():
+            processing_result["status"] = "Cancelled"
+            processing_result["error"] = "Cancelled by user"
+            return processing_result
 
         # Check if it's a URL - handle cases without protocol
         parsed_url = urlparse(video_input)
@@ -1291,6 +1357,10 @@ def process_single_video(
         # Note: Pass the PROCESSING TEMP DIR to perform_transcription if it needs
         # a place to put its *own* intermediate files (like the WAV).
         # Check the signature of perform_transcription. Assuming it takes `temp_dir` now.
+        if _is_cancelled():
+            processing_result["status"] = "Cancelled"
+            processing_result["error"] = "Cancelled by user"
+            return processing_result
         intermediate_wav_path, segments = perform_transcription(
             video_path=local_file_path_for_transcription, # THE LOCAL PATH
             offset=start_seconds,
@@ -1300,7 +1370,8 @@ def process_single_video(
             diarize=diarize,
             overwrite=False, # Usually False for safety unless specifically needed
             transcription_language=transcription_language,
-            temp_dir=str(processing_temp_dir) # Pass temp dir for its use
+            temp_dir=str(processing_temp_dir), # Pass temp dir for its use
+            cancel_check=cancel_check,
         )
 
         # Check transcription results carefully
@@ -1494,6 +1565,11 @@ def process_single_video(
         processing_result["input_ref"] = video_input
         return processing_result
 
+    except TranscriptionCancelled:
+        processing_result["status"] = "Cancelled"
+        processing_result["error"] = "Cancelled by user"
+        processing_result["input_ref"] = video_input
+        return processing_result
     except FileNotFoundError as e:
         logger.error(f"File not found error processing {video_input}: {e}", exc_info=True)
         processing_result["status"] = "Error"

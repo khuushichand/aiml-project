@@ -283,18 +283,22 @@ class WorkflowEngine:
                     step_name = step.get("name") or step_id
                     step_type = (step.get("type") or "").strip()
                     step_cfg = step.get("config") or {}
+                    context["last"] = last_outputs
 
                     self._append_event(run_id, "step_started", {"step_id": step_id, "type": step_type})
                     step_run_id = f"{run_id}:{step_id}:{int(time.time()*1000)}"
                     try:
+                        assigned_to = self._resolve_assigned_to(step_type, step_cfg, context)
                         self.db.create_step_run(
                             step_run_id=step_run_id,
+                            tenant_id=str(context.get("tenant_id") or self.config.tenant_id),
                             run_id=run_id,
                             step_id=step_id,
                             name=step_name,
                             step_type=step_type,
                             status="running",
                             inputs={"config": step_cfg, "context_keys": list(context.keys())},
+                            assigned_to=assigned_to,
                         )
                         # Acquire lock and write initial heartbeat
                         self.db.update_step_lock_and_heartbeat(step_run_id=step_run_id, locked_by="engine", lock_ttl_seconds=int(self.config.heartbeat_interval_sec * 5))
@@ -453,6 +457,13 @@ class WorkflowEngine:
                             self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last_outputs)
                         except Exception:
                             pass
+                        try:
+                            on_timeout = str(step.get("on_timeout") or "").strip() or None
+                            timeout_cfg = step_cfg.get("timeout_seconds") if isinstance(step_cfg, dict) else None
+                            if timeout_cfg is not None:
+                                self._schedule_human_timeout(run_id, step_id, timeout_cfg, on_timeout)
+                        except Exception:
+                            pass
                         keep_secrets = True
                         _finalize(True)
                         finalized = True
@@ -545,8 +556,14 @@ class WorkflowEngine:
                 _finalize(keep_secrets)
                 finalized = True
 
-    async def continue_run(self, run_id: str, after_step_id: str, last_outputs: Optional[dict] = None) -> None:
-        """Resume a run starting after the given step id (for human-in-loop)."""
+    async def continue_run(
+        self,
+        run_id: str,
+        after_step_id: str,
+        last_outputs: Optional[dict] = None,
+        next_step_id: Optional[str] = None,
+    ) -> None:
+        """Resume a run after the given step id, optionally jumping to next_step_id."""
         run = self.db.get_run(run_id)
         _tenant_for_notify = getattr(run, "tenant_id", None) or self.config.tenant_id
         _wf_for_notify = getattr(run, "workflow_id", None)
@@ -585,6 +602,11 @@ class WorkflowEngine:
             id_to_idx[str(sid_i)] = i
             if str(sid_i) == str(after_step_id):
                 start_idx = i + 1
+        if next_step_id:
+            try:
+                start_idx = id_to_idx[str(next_step_id)]
+            except Exception:
+                pass
         context = {
             "inputs": json.loads(run.inputs_json or "{}"),
             "tenant_id": getattr(run, "tenant_id", None) or self.config.tenant_id,
@@ -611,10 +633,21 @@ class WorkflowEngine:
             sname = step.get("name") or sid
             stype = (step.get("type") or "").strip()
             scfg = step.get("config") or {}
+            context["last"] = last
             self._append_event(run_id, "step_started", {"step_id": sid, "type": stype})
             step_run_id = f"{run_id}:{sid}:{int(time.time()*1000)}"
             try:
-                self.db.create_step_run(step_run_id=step_run_id, run_id=run_id, step_id=sid, name=sname, step_type=stype, inputs={"config": scfg})
+                assigned_to = self._resolve_assigned_to(stype, scfg, context)
+                self.db.create_step_run(
+                    step_run_id=step_run_id,
+                    tenant_id=str(context.get("tenant_id") or self.config.tenant_id),
+                    run_id=run_id,
+                    step_id=sid,
+                    name=sname,
+                    step_type=stype,
+                    inputs={"config": scfg},
+                    assigned_to=assigned_to,
+                )
                 self.db.update_step_lock_and_heartbeat(step_run_id=step_run_id, locked_by="engine", lock_ttl_seconds=int(self.config.heartbeat_interval_sec * 5))
             except Exception:
                 pass
@@ -699,6 +732,13 @@ class WorkflowEngine:
             if last.get("__status__") in {"waiting_human", "waiting_approval"}:
                 try:
                     self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last)
+                except Exception:
+                    pass
+                try:
+                    on_timeout = str(step.get("on_timeout") or "").strip() or None
+                    timeout_cfg = scfg.get("timeout_seconds") if isinstance(scfg, dict) else None
+                    if timeout_cfg is not None:
+                        self._schedule_human_timeout(run_id, sid, timeout_cfg, on_timeout)
                 except Exception:
                     pass
                 keep_secrets = True
@@ -891,6 +931,107 @@ class WorkflowEngine:
             pass
         return val
 
+    def _resolve_assigned_to(
+        self,
+        step_type: str,
+        step_cfg: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Resolve assigned_to_user_id for human steps, applying templates if needed."""
+        if step_type not in {"wait_for_human", "wait_for_approval"}:
+            return None
+        raw = step_cfg.get("assigned_to_user_id")
+        if raw is None:
+            return None
+        if isinstance(raw, bool):
+            return None
+        if isinstance(raw, (int, float)):
+            try:
+                return str(int(raw))
+            except Exception:
+                return str(raw)
+        if isinstance(raw, str):
+            try:
+                from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+                rendered = apply_template_to_string(raw, context) or raw
+            except Exception:
+                rendered = raw
+            rendered = str(rendered).strip()
+            return rendered or None
+        try:
+            return str(raw)
+        except Exception:
+            return None
+
+    def _schedule_human_timeout(
+        self,
+        run_id: str,
+        step_id: str,
+        timeout_seconds: Any,
+        on_timeout: Optional[str],
+    ) -> None:
+        """Schedule a best-effort timeout handler for human steps."""
+        try:
+            timeout = float(timeout_seconds)
+        except Exception:
+            return
+        if timeout <= 0:
+            return
+
+        async def _timeout_task() -> None:
+            try:
+                await asyncio.sleep(timeout)
+                run = self.db.get_run(run_id)
+                if not run or run.status not in {"waiting_human", "waiting_approval"}:
+                    return
+                if self.db.is_cancel_requested(run_id):
+                    return
+                step_run = self.db.get_latest_step_run(run_id=run_id, step_id=step_id)
+                if not step_run:
+                    return
+                if step_run.get("decision") in {"approved", "rejected"}:
+                    return
+                step_run_id = step_run.get("step_run_id")
+                try:
+                    if step_run_id:
+                        self.db.complete_step_run(
+                            step_run_id=str(step_run_id),
+                            status="failed",
+                            outputs={"__status__": "timeout"},
+                            error="timeout",
+                        )
+                except Exception:
+                    pass
+                self._append_event(run_id, "human_timeout", {"step_id": step_id})
+                if on_timeout:
+                    asyncio.create_task(
+                        self.continue_run(
+                            run_id,
+                            after_step_id=step_id,
+                            last_outputs={"__status__": "timeout"},
+                            next_step_id=on_timeout,
+                        )
+                    )
+                    return
+                try:
+                    self.db.update_run_status(
+                        run_id,
+                        status="failed",
+                        status_reason="human_timeout",
+                        ended_at=self._now_iso(),
+                        error="human_timeout",
+                    )
+                except Exception:
+                    pass
+                self._append_event(run_id, "run_failed", {"error": "human_timeout"})
+            except Exception:
+                return
+
+        try:
+            asyncio.create_task(_timeout_task())
+        except Exception:
+            return
+
     async def _run_step_adapter(
         self,
         step_type: str,
@@ -1004,11 +1145,14 @@ class WorkflowEngine:
             from tldw_Server_API.app.core.Workflows.adapters import run_diff_change_adapter
             return await run_diff_change_adapter(step_cfg, ctx)
         if step_type == "wait_for_human" or step_type == "wait_for_approval":
+            assigned_to = self._resolve_assigned_to(step_type, step_cfg, ctx)
+            if not assigned_to:
+                raise RuntimeError("assigned_to_required")
             # Mark run waiting, signal caller via special status
             wait_status = "waiting_human" if step_type == "wait_for_human" else "waiting_approval"
             self.db.update_run_status(run_id, status=wait_status, status_reason="awaiting_review")
-            self._append_event(run_id, wait_status, {})
-            return {"__status__": wait_status}
+            self._append_event(run_id, wait_status, {"assigned_to": assigned_to})
+            return {"__status__": wait_status, "assigned_to": assigned_to}
         # Avoid f-string here to prevent any quoting issues across Python versions
         raise RuntimeError("Unsupported step type: {}".format(step_type))
 

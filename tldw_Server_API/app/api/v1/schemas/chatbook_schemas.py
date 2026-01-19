@@ -185,7 +185,7 @@ class ContentItemResponse(BaseModel):
     description: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    tags: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list, max_length=50)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     file_path: Optional[str] = None
     checksum: Optional[str] = None

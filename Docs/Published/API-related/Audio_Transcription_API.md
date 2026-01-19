@@ -4,6 +4,12 @@
 
 The tldw_server provides a comprehensive audio transcription API that is fully compatible with OpenAI's Audio API while offering additional transcription engines including NVIDIA Nemo models (Canary and Parakeet) for improved performance and flexibility.
 
+## Auth + Rate Limits
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+- Transcriptions/Translations: 20 requests/minute, keyed per user when authenticated (falls back to IP).
+- Real-time WebSocket transcription: per-user concurrent stream limits and daily minutes quotas enforced.
+
 ## Table of Contents
 - [Features](#features)
 - [Supported Models](#supported-models)
@@ -12,7 +18,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - [Live Transcription](#live-transcription)
 - [Usage Examples](#usage-examples)
 - [Performance Comparison](#performance-comparison)
- - [Notes & Limitations](#notes--limitations)
+- [Notes & Limitations](#notes--limitations)
 
 ## Features
 
@@ -62,6 +68,22 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - **Languages**: Multiple languages
 - **Best For**: Complex audio understanding tasks
 
+#### Model ID patterns (HTTP + ingestion)
+
+The `model` string for `/api/v1/audio/transcriptions` is parsed via the same logic as the ingestion pipeline (`parse_transcription_model` in `Audio_Transcription_Lib.py`), so the following patterns are accepted:
+
+- **Whisper / faster-whisper**
+  - `whisper-1`, `whisper` (aliases for the default faster-whisper Whisper model)
+  - Raw faster-whisper ids such as `large-v3`, `distil-whisper-large-v3`, or full HF ids (e.g. `openai/whisper-large-v3`).
+- **NVIDIA NeMo Parakeet**
+  - `parakeet`, `parakeet-standard`, `parakeet-onnx`, `parakeet-mlx`
+  - Any string that `parse_transcription_model` resolves to provider `"parakeet"` (e.g., some `nemo-parakeet-*` ids).
+- **NVIDIA NeMo Canary**
+  - `canary` (and related aliases whose provider resolves to `"canary"`).
+- **Qwen2Audio**
+  - `qwen2audio`, `qwen2audio-*` (all map to provider `"qwen2audio"`)
+  - Convenience alias `qwen` also maps to `qwen2audio` in the HTTP API.
+
 ## API Endpoints
 
 Authentication
@@ -79,12 +101,13 @@ Transcribe audio into text.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| file | file | Yes | The audio file to transcribe (max 25MB) |
-| model | string | No | Model to use: `whisper-1`, `parakeet`, `canary`, `qwen2audio` (default: `whisper-1`) |
-| language | string | No | Language code in ISO-639-1 format (e.g., 'en', 'es') |
+| file | file | Yes | The audio file to transcribe (default max 25MB; actual limit may vary by quota tier) |
+| model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*` (default: `whisper-1`). |
+| language | string | No | Language code in ISO-639-1 format (e.g., 'en', 'es'). When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
+| task | string | No | For Whisper-based models, decoding task: `transcribe` (default) or `translate`. For non-Whisper providers this hint is ignored and a plain transcription is performed. |
 | timestamp_granularities | string | No | Comma-separated values or JSON array. Supported tokens: `segment`, `word` |
 | segment | boolean | No | If true and JSON response, also run transcript segmentation (TreeSeg) and include `segmentation` in the JSON |
 | seg_K | integer | No | Max segments for TreeSeg (default 6) |
@@ -95,6 +118,10 @@ Transcribe audio into text.
 | seg_embeddings_model | string | No | Embeddings model override (optional) |
 
 When `timestamp_granularities` includes `word` (Whisper only), each segment includes a `words` array with `{start, end, word}` entries.
+
+Accepted Content-Types:
+- `audio/wav`, `audio/x-wav`, `audio/mpeg`, `audio/mp3`, `audio/mp4`, `audio/m4a`, `audio/x-m4a`, `audio/flac`, `audio/ogg`, `audio/opus`, `audio/webm`.
+Unsupported types return 415.
 
 **Response (JSON format):**
 ```json
@@ -119,6 +146,15 @@ When `timestamp_granularities` includes `word` (Whisper only), each segment incl
   ]
 }
 ```
+
+Notes:
+- For `response_format: text|srt|vtt` responses, outputs are simple best-effort formats; precise per-segment timings require JSON.
+- For `response_format: verbose_json`, the response includes `task` and `duration` fields.
+- For Whisper-based models, the underlying `speech_to_text(...)` helper prepends a metadata header (model + detected language) to the first segment. The HTTP API always calls `strip_whisper_metadata_header(...)` before returning JSON/text so clients see only user content. If you use `speech_to_text` directly (e.g., in workflows or custom tools), call `strip_whisper_metadata_header` on segment lists, or `_strip_whisper_metadata_header_from_text` (speech chat) before presenting text to end users.
+
+Internal STT helpers:
+- `speech_to_text(...)` (file or NumPy input) is the canonical segment-based helper used by media ingestion and offline workers; it returns a list of segments (or `(segments, language)` when requested).
+- `transcribe_audio(...)` (NumPy waveform input) is the canonical plain-text helper used by this HTTP endpoint, speech-chat, and streaming sinks; it routes to the configured provider and returns a single transcript string. Provider failures are surfaced as error sentinel strings (for example, `"[Transcription error] Qwen2Audio ..."`), which HTTP handlers detect via `is_transcription_error_message(...)` and map to appropriate HTTP error responses rather than returning the sentinel text as user content.
 
 ### Word-level Timestamps Example (Whisper only)
 
@@ -158,6 +194,11 @@ Translate audio into English.
 | response_format | string | No | Output format (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 |
 
+For Whisper models, this endpoint internally calls the transcription endpoint
+with `task=translate` and no explicit `language`, allowing the backend to
+auto-detect the source language and return English output. Non-Whisper
+providers treat `task` as a no-op and perform a regular transcription.
+
 ## Configuration
 
 ### config.txt Settings
@@ -180,33 +221,33 @@ nemo_device = cuda
 
 # Cache directory for downloaded models
 nemo_cache_dir = ./models/nemo
-
-# Optional faster-whisper compute type override
-# When unset or set to "auto", the server uses float16 on CUDA and int8 on CPU.
-# whisper_compute_type = auto
-# Examples: float16, int8, int8_float16
-
-# Transcript cache limits (applied to on-disk .segments.json files)
-# When omitted, conservative defaults are used (age ~30 days, total ~512MB,
-# up to ~32 files per source). Set disable_transcript_cache_pruning=true to
-# turn pruning off entirely.
-# transcript_cache_max_age_days = 30
-# transcript_cache_max_total_mb = 512
-# transcript_cache_max_files_per_source = 32
-# disable_transcript_cache_pruning = false
 ```
 
 ### Environment Variables
 
-STT configuration is primarily read from `Config_Files/config.txt` in the `[STT-Settings]` section, and the options shown above remain fully supported. Transcript cache behavior can also be controlled via environment variables, which override the corresponding `config.txt` values when set:
+Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`). Environment overrides are limited; use `config.txt` to change default transcriber, Nemo device, model variant, and cache dir.
 
-- `STT_DISABLE_TRANSCRIPT_CACHE` – when truthy, disables writing new transcript cache files.
-- `STT_CACHE_MAX_FILES_PER_SOURCE` – max cached files per source (overrides `transcript_cache_max_files_per_source`).
-- `STT_CACHE_MAX_AGE_DAYS` – max age in days before cached transcripts are eligible for pruning (overrides `transcript_cache_max_age_days`).
-- `STT_CACHE_MAX_TOTAL_MB` – max cumulative size (in MB) for cached transcripts (overrides `transcript_cache_max_total_mb`).
-- `STT_DISABLE_TRANSCRIPT_CACHE_PRUNING` – when truthy, disables transcript cache pruning entirely (overrides `disable_transcript_cache_pruning`).
+Additional streaming quota/env controls:
+- `AUDIO_TIER_LIMITS_JSON`: JSON mapping to override per-tier limits, e.g. `{ "free": { "daily_minutes": 60, "concurrent_streams": 2 } }`
+- `AUDIO_STREAM_TTL_SECONDS`: TTL for Redis stream counters (default 120) to mitigate counter leaks on abrupt disconnects
+- `AUDIO_FAILOPEN_CAP_MINUTES`: Bounded fail-open allowance (minutes) per WebSocket connection when the quota backing store (DB/Redis) is unavailable. Defaults to `5.0`. Set to a positive float to change.
 
-Other STT settings listed above (for example `default_transcriber`, `nemo_model_variant`, `nemo_device`, `nemo_cache_dir`, and `whisper_compute_type`) are currently configured via `Config_Files/config.txt` only and do not have dedicated environment variable overrides.
+Config file overrides (Config_Files/config.txt):
+```ini
+[Audio-Quota]
+free_daily_minutes = 60
+free_concurrent_streams = 2
+free_concurrent_jobs = 1
+free_max_file_size_mb = 25
+standard_daily_minutes = 480
+premium_daily_minutes = unlimited  # or 'none'
+# Optional bounded fail-open allowance (minutes) per connection when quota store is unavailable
+failopen_cap_minutes = 5.0
+
+[Audio]
+# You can also specify the fail-open cap here if [Audio-Quota] is not present
+failopen_cap_minutes = 5.0
+```
 
 ## Live Transcription
 
@@ -215,110 +256,204 @@ Other STT settings listed above (for example `default_transcriber`, `nemo_model_
 - Endpoint: `ws://localhost:8000/api/v1/audio/stream/transcribe`
 - Authentication:
   - Single-user: `?token=<SINGLE_USER_API_KEY>` in the query OR first message `{ "type": "auth", "token": "<SINGLE_USER_API_KEY>" }`
-  - Multi-user JWT: supported via `Authorization: Bearer <JWT>` header on the WebSocket upgrade request (preferred), or by sending an initial auth message `{ "type": "auth", "token": "<JWT>" }`.
+  - Multi-user JWT: `Authorization: Bearer <JWT>` on the upgrade request, or first message `{ "type": "auth", "token": "<JWT>" }`.
+  - Multi-user API Keys: `X-API-KEY` header supported; keys can be scoped to endpoints (must include `audio.stream.transcribe`) and optionally path-prefixed allowlists. Quotas may be enforced per key.
 - Protocol:
   - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
   - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
   - Optional finalize: `{ "type": "commit" }`
-  - Server messages include:
+- Server messages include:
     - `{ "type": "status", "message": "Authenticated" }` or `"Authenticated (JWT)"`
-    - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false }`
-    - `{ "type": "transcription", "text": "...", "timestamp": ..., "is_final": true }`
+    - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false, "segment_id": 3, "segment_start": 12.5, "segment_end": 15.0 }`
+    - `{ "type": "final", "text": "...", "timestamp": ..., "is_final": true, "segment_id": 3, "segment_start": 12.5, "segment_end": 14.0, "overlap": 0.5, "speaker_id": 1, "speaker_label": "SPEAKER_1" }` (speaker fields appear when diarization is enabled)
     - `{ "type": "full_transcript", "text": "..." }`
+    - `{ "type": "insight", "stage": "live|final", "summary": [...], "action_items": [...], ... }` when live meeting notes are enabled
+    - `{ "type": "diarization_summary", "speaker_map": [...], "audio_path": "...", "speakers": [...] }` after `commit` when diarization is enabled
     - `{ "type": "error", "message": "..." }`
-    - Quota exceeded (structured): `{ "type": "error", "error_type": "quota_exceeded", "quota": "daily_minutes", "message": "..." }` followed by clean close with code `4003`.
+    - Quota exceeded (structured): `{ "type": "error", "error_type": "quota_exceeded", "quota": "daily_minutes" }` followed by close with code `4003`.
+
+#### Observability: Fail-open metrics
+
+When the quota backing store is unavailable, the server allows a bounded amount of streaming time per connection (fail-open). The following metrics are emitted:
+
+- `audio_failopen_minutes_total{reason=db_check|db_record}`: Minutes allowed during fail-open when quota checks or recording fail.
+- `audio_failopen_events_total{reason=db_check|db_record}`: Count of fail-open allowance events.
+- `audio_failopen_cap_exhausted_total{reason=db_check|db_record}`: Count of connections that hit the fail-open cap and were closed with `quota_exceeded`.
+
+Use these to build dashboards/alerts on fail-open frequency and potential quota-store outages.
+
+  - Metadata fields (`segment_id`, `segment_start`, `segment_end`, `chunk_start`, `chunk_end`, `overlap`) allow clients to align transcripts on a timeline or build diarization overlays.
 
 Helper endpoints
-- `GET /api/v1/audio/stream/status` → returns availability and supported models/variants
+- `GET /api/v1/audio/stream/status` → returns availability and supported models/variants and features
+- `GET /api/v1/audio/stream/limits` → per-user limits, minutes remaining, active streams
 - `POST /api/v1/audio/stream/test` → runs a built-in quick test of streaming setup
 
 Examples (wscat)
 ```bash
-# Single-user
 wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=$API_KEY"
-
-# Multi-user (JWT header)
 wscat -H "Authorization: Bearer $JWT" -c "ws://localhost:8000/api/v1/audio/stream/transcribe"
 ```
 
-Python example (multi-user, Authorization header)
-```python
-import asyncio
-import json
-import websockets
+For multilingual Nemo streaming with Canary:
 
-WS_URL = "ws://localhost:8000/api/v1/audio/stream/transcribe"
-JWT = "<YOUR_JWT>"
+- Use `model: "canary"` in the initial config message.
+- Set `"task": "transcribe"` for same-language ASR, or `"task": "translate"` to request English translations (mirrors the `/audio/translations` HTTP endpoint semantics).
 
-async def main():
-    async with websockets.connect(WS_URL, extra_headers={"Authorization": f"Bearer {JWT}"}) as ws:
-        # Optional: send config
-        await ws.send(json.dumps({"type": "config", "sample_rate": 16000, "language": "en"}))
-        # Send a dummy audio chunk (Float32 mono 0.1s of silence)
-        import numpy as np, base64
-        audio = (np.zeros(1600, dtype=np.float32)).tobytes()
-        await ws.send(json.dumps({"type": "audio", "data": base64.b64encode(audio).decode("ascii")}))
-        # Read messages until server closes or we decide to stop
-        try:
-            async for msg in ws:
-                data = json.loads(msg)
-                print("<-", data)
-                if data.get("type") == "transcription":
-                    break
-        except websockets.ConnectionClosed as e:
-            print("closed", e.code, e.reason)
+For low-latency English-only streaming with NVIDIA Parakeet-Realtime-EOU:
 
-asyncio.run(main())
+- Keep `model: "parakeet"` and enable the RNNT backend with `"parakeet_use_rnnt_streamer": true`.
+- Set `"parakeet_rnnt_model_name": "nvidia/parakeet_realtime_eou_120m-v1"` in the config message to use the new realtime EOU model.
+- The server strips the literal `<EOU>` token from transcripts while still using it internally as an utterance boundary hint.
+
+#### Live Insights Configuration (Granola-style Notes)
+
+Send an `insights` object inside the initial `{ "type": "config" }` message to enable live meeting summaries, action items, and decision tracking:
+
+```json
+{
+  "type": "config",
+  "model": "parakeet-onnx",
+  "sample_rate": 16000,
+  "insights": {
+    "enabled": true,
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "summary_interval_seconds": 90,
+    "context_window_segments": 6,
+    "live_updates": true,
+    "final_summary": true,
+    "generate_action_items": true,
+    "generate_decisions": true
+  }
+}
 ```
 
-JavaScript/TypeScript example (Node)
+- `summary_interval_seconds`: cadence for live summaries (set to `0` for “every segment”).
+- `context_window_segments`: how many recent finalized segments are considered in each update.
+- `live_updates`: toggle real-time `{"type":"insight","stage":"live"}` messages.
+- `final_summary`: emit a final `{"type":"insight","stage":"final"}` after commit.
+- Provider/model values fall back to the server’s default chat provider when omitted.
 
-```ts
-// npm i ws
-import WebSocket from 'ws'
+The insight payload mirrors granola-style UX:
 
-const WS_URL = 'ws://localhost:8000/api/v1/audio/stream/transcribe'
-const JWT = process.env.JWT || '<YOUR_JWT>'
-
-async function main() {
-  const ws = new WebSocket(WS_URL, {
-    headers: { Authorization: `Bearer ${JWT}` },
-  })
-
-  ws.on('open', () => {
-    // Optional config
-    ws.send(JSON.stringify({ type: 'config', sample_rate: 16000, language: 'en' }))
-
-    // Send 0.1s of silence (Float32 mono)
-    const duration = 0.1
-    const samples = Math.floor(16000 * duration)
-    const buf = new Float32Array(samples)
-    const b64 = Buffer.from(buf.buffer).toString('base64')
-    ws.send(JSON.stringify({ type: 'audio', data: b64 }))
-  })
-
-  ws.on('message', (data) => {
-    try {
-      const msg = JSON.parse(String(data))
-      console.log('<-', msg)
-      if (msg.type === 'transcription') {
-        ws.close()
-      }
-    } catch (e) {
-      console.error('bad message', e)
-    }
-  })
-
-  ws.on('close', (code, reason) => {
-    console.log('closed', code, reason.toString())
-  })
-
-  ws.on('error', (err) => {
-    console.error('ws error', err)
-  })
+```json
+{
+  "type": "insight",
+  "stage": "live",
+  "summary": ["Key bullet point", "..."],
+  "action_items": [{"description": "Follow up with Alex", "owner": "Alex"}],
+  "decisions": ["Ship v1 this week"],
+  "topics": ["Roadmap"],
+  "source": {"segment_range": [3,4], "start": 45.0, "end": 62.0}
 }
+```
 
-main().catch(console.error)
+### Auth & Close Codes
+
+- Auth modes
+  - Single-user: pass `?token=<API_KEY>` query, or `X-API-KEY` header, or `Authorization: Bearer <API_KEY>`, or first message `{ "type":"auth", "token":"..." }`.
+  - Multi-user: prefer `Authorization: Bearer <JWT>`; first-message JWT also accepted. Virtual API keys via `X-API-KEY` are supported with endpoint/path allowlists and DB-backed quotas.
+- Quotas
+  - Concurrent streams and daily minutes enforced per user; Redis is used when available for cross-process counters; otherwise in-process.
+  - On quota violations, the server emits `{ "type":"error", "error_type":"quota_exceeded", "quota":"daily_minutes|concurrent_streams" }` and closes with code `4003`.
+- Common close codes
+  - `4401` Unauthorized (auth missing/invalid)
+  - `4403` Forbidden (endpoint/path not allowed or key/JWT quota exceeded)
+  - `4003` Application quota violation (daily minutes / concurrent streams)
+  - `1008` Policy violation (e.g., IP not on allowlist)
+  - `1011` Internal error (e.g., no models available after fallback)
+
+
+#### Speaker Diarization & Audio Persistence
+
+Add a `diarization` object inside the config message to enable per-segment speaker tagging:
+
+```json
+{
+  "type": "config",
+  "model": "parakeet",
+  "sample_rate": 16000,
+  "diarization": {
+    "enabled": true,
+    "num_speakers": 3,
+    "store_audio": true,
+    "storage_dir": "/tmp/meeting-audio"
+  }
+}
+```
+
+- When enabled, every finalized segment includes `speaker_id`/`speaker_label`.
+- On `commit`, the server emits a `diarization_summary` frame containing `speaker_map`, aggregate speaker stats, and (optionally) the path to the persisted WAV file for replay or offline reprocessing.
+- `store_audio` writes the full session audio to the provided directory (defaults to the system temp directory).
+
+##### VAD Fallback Behavior
+
+- The diarization pipeline uses Silero VAD to detect speech regions. Loading Silero via `torch.hub` can be network-bound and may fail in locked-down environments.
+- When VAD is unavailable or fails at runtime, the server can optionally fall back to a single full-span speech region so diarization and transcript alignment can still proceed.
+- This behavior is controlled by a configuration flag: `diarization.allow_vad_fallback` (default: `true`).
+  - `true`: On VAD failures, use one region from 0.0s to full duration.
+  - `false`: Treat VAD failure as fatal for diarization and return an error.
+- Torch Hub cache directory is configured via `TORCH_HOME` (preferred) or `TORCH_HUB`, and the server sets `torch.hub.set_dir(...)` to ensure the directory is respected.
+- To run in a locked-down/no-network environment, set `diarization.enable_torch_hub_fetch=false` to disable hub fetching entirely. With `diarization.allow_vad_fallback=true` (default), the server will fall back to a single full-span speech region when VAD is not available.
+- Audio persistence prefers `soundfile`. If not available, the server falls back to `scipy.io.wavfile` or the standard `wave` module (16-bit PCM). A warning is logged when falling back.
+
+##### Embedding Model Local-Only Mode
+
+- The diarization pipeline uses a speaker embedding model (default: `speechbrain/spkrec-ecapa-voxceleb`). By default, the server may download this model when missing.
+- To run fully offline, set `diarization.embedding_local_only=true`. In this mode, the server will only load models from local paths and will never attempt a network fetch.
+- Resolution order when `embedding_local_only=true`:
+  1) If `diarization.embedding_model` is a local filesystem path that exists, load from that directory.
+  2) Else, look under the pre-seeded cache directory: `pretrained_models/<sanitized_name>`.
+  3) If neither exists, diarization raises a structured error indicating local files are required.
+
+Example config snippet (config.txt or env-equivalent):
+
+```
+[diarization]
+embedding_model = /opt/models/speechbrain/spkrec-ecapa-voxceleb
+embedding_local_only = true
+```
+
+Expected directory layout for a SpeechBrain model (simplified):
+
+```
+/opt/models/speechbrain/spkrec-ecapa-voxceleb/
+├── hyperparams.yaml
+├── model.ckpt          # or equivalent checkpoint
+├── README.md           # optional
+└── additional files…
+```
+
+Notes:
+- `embedding_model` also accepts repo identifiers (e.g., `speechbrain/spkrec-ecapa-voxceleb`) when `embedding_local_only=false` (default). In that case the server caches into `pretrained_models/<sanitized_name>/`.
+- Combine with `diarization.enable_torch_hub_fetch=false` and `diarization.allow_vad_fallback=true` to operate in fully offline/locked-down environments.
+
+Example error payloads when files are missing and `embedding_local_only=true`:
+
+- WebSocket (unified streaming) warning frame on initialization/finalize:
+
+```
+{
+  "type": "warning",
+  "state": "diarization_unavailable",
+  "message": "Diarization disabled: initialization failed",
+  "details": "Embedding model files not found locally. Set embedding_local_only=false to allow download or provide a local path in embedding_model."
+}
+```
+
+- Generic structured error shape for non-WS callers (illustrative):
+
+```
+{
+  "error": true,
+  "error_type": "diarization_model_unavailable",
+  "message": "Embedding model files not found locally",
+  "details": {
+    "embedding_model": "/opt/models/speechbrain/spkrec-ecapa-voxceleb",
+    "embedding_local_only": true
+  }
+}
 ```
 
 ### Basic Live Transcription (Local Python)
@@ -470,7 +605,7 @@ with open("foreign_audio.wav", "rb") as audio_file:
 
 ### Using Python (Direct API)
 
-Note: This example reads the entire file into memory and manually builds multipart boundaries. For large files or untrusted filenames, prefer a multipart library and sanitize filenames.
+Note: This manual multipart example is minimal and no-deps; for production clients, prefer a well-tested multipart library.
 
 ```python
 import json
@@ -581,13 +716,17 @@ except KeyboardInterrupt:
 4. **For Live Transcription**: Use Parakeet with VAD mode
 5. **For Resource-Constrained**: Use Parakeet ONNX or Whisper tiny
 
-## Notes & Limitations {#notes--limitations}
+## Notes & Limitations
 
 - Endpoint paths include `/api/v1` (examples reflect this; headings updated accordingly).
 - `timestamp_granularities` supports `segment` and `word`; send as CSV or JSON array. Word-level timestamps are available for Whisper only.
 - Language detection: When `language` is omitted and Whisper is used, the API returns the detected language in the JSON response.
 - Authentication: Single-user mode uses `X-API-KEY`. The OpenAI Python client defaults to Bearer; pass `default_headers={"X-API-KEY": "..."}`.
 - SRT/VTT outputs are basic placeholders without precise per-segment timings.
+- File size limit is quota-aware; defaults to 25MB but can be increased/decreased per user tier. Requests over the limit return 413.
+- Daily minutes are enforced for both batch and streaming transcription. When exceeded:
+  - Batch/file transcription returns 402 (Payment Required) with `"Transcription quota exceeded (daily minutes)"`.
+  - WebSocket streaming emits a structured error and closes with code 4003.
 
 ## Troubleshooting
 
@@ -624,9 +763,16 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## API Rate Limits
 
-- Transcription endpoint: 20 requests/minute per IP
-- Translation endpoint: 20 requests/minute per IP
-- File size limit: 25MB per request
+- Transcription endpoint: 20 requests/minute (per user when authenticated; falls back to IP)
+- Translation endpoint: 20 requests/minute (per user when authenticated; falls back to IP)
+- File size limit: 25MB per request (tier-adjusted)
+
+WebSocket limits
+- Per-user concurrent streams and daily minutes enforced (exact values depend on server quotas). Structured errors emitted when quotas are exceeded.
+
+TTS
+- `POST /api/v1/audio/speech`: 10 requests/minute; OpenAI-compatible request with `model`, `input`, `voice`, `response_format` (mp3, opus, aac, flac, wav, pcm).
+- `GET /api/v1/audio/voices/catalog`: Lists available TTS voices across providers; optional `provider` filter.
 
 ## Security Considerations
 
@@ -637,8 +783,8 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## Future Enhancements
 
-- [ ] Batch transcription API
-- [ ] WebSocket support for live transcription
+- [ ] Batch transcription API (Jobs-backed, multi-stage fan-out)
+- [ ] WebSocket JWT auth + per-user quotas/limits
 - [ ] Speaker diarization with Nemo models
 - [ ] Custom vocabulary support
 - [ ] Fine-tuning support for domain-specific transcription
@@ -647,9 +793,16 @@ logging.basicConfig(level=logging.DEBUG)
 ## Related Documentation
 
 - [API Overview](./API_README.md)
-- [Installation & Setup](../User_Guides/Installation-Setup-Guide.md)
-- [Live Transcription](#live-transcription)
-- [Supported Models](#supported-models)
+- [Configuration Guide](../User_Guides/Configuration.md)
+- [Live Transcription Guide](../User_Guides/Live_Transcription.md)
+- [Model Selection Guide](../User_Guides/Model_Selection.md)
 - For non-JSON responses (`text`, `srt`, `vtt`), `segment=true` is ignored and no `segmentation` is returned.
 - TreeSeg embeddings use the configured embedding service unless `seg_embeddings_provider`/`seg_embeddings_model` overrides are supplied.
 - If you have per-utterance segments from your STT provider, you can call the dedicated segmentation endpoint with those entries for better alignment.
+- Errors:
+  - 400: No file, invalid params, or bad `timestamp_granularities`
+  - 402: Daily minutes quota exceeded
+  - 413: File too large
+  - 415: Unsupported media type
+  - 429: Rate limit exceeded
+  - 500: Transcription failed

@@ -382,15 +382,16 @@ def export_chatbook_task(job_id: str, params: dict):
 
 ### Security Measures
 
-1. **Archive Validation** (production):
-Use `ChatbookValidator.validate_zip_file(path)` which performs:
+1. **Path Traversal Protection**:
+Use the production validator `ChatbookValidator.validate_zip_file(path)` which performs:
 - ZIP magic check and integrity test
 - Total and per-file size limits; zip-bomb compression ratio checks
 - Path traversal, symlink, and dangerous extension checks
 - Required files presence (e.g., `manifest.json`)
 
-2. **Directory Setup** (in `ChatbookService.__init__`):
+2. **Secure File Storage**:
 ```python
+# Directory setup in ChatbookService.__init__
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 user_data_dir = DatabasePaths.get_user_chatbooks_dir(user_id)
@@ -1038,17 +1039,26 @@ CHATBOOK_ENABLE_COMPRESSION=true
 CHATBOOK_COMPRESSION_LEVEL=6
 ```
 
-`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+`DATABASE_URL` points to the central auth/users database (SQLite or Postgres). `USER_DB_BASE_DIR` is the per-user
+storage root defined in `tldw_Server_API.app.core.config`, used by `tldw_Server_API/app/core/config.py` and
+`tldw_Server_API/app/core/DB_Management/db_path_utils.py` to locate user-specific SQLite DBs and storage
+directories (for example, `Media_DB_v2.db`, `ChaChaNotes.db`, and chatbook exports/imports). The defaults can vary
+by environment: `Dockerfiles/docker-compose.yml` sets `DATABASE_URL=sqlite:///./Databases/users.db`, while
+`config.py` falls back to `Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db` if `DATABASE_URL` is unset.
+Override `USER_DB_BASE_DIR` via environment variable or `Config_Files/config.txt` as needed.
 
 ### Docker Configuration
 
-```dockerfile
-# In Dockerfile
-RUN mkdir -p /app/Databases/user_databases && \
-    chmod 700 /app/Databases/user_databases
-
-VOLUME ["/app/Databases/user_databases"]
+```yaml
+# docker-compose.yml (app service)
+volumes:
+  - app-data:/app/Databases
+  - chroma-data:/app/Databases/user_databases
 ```
+
+Volume setup is environment-specific (dev vs prod). `Dockerfiles/Dockerfile.prod` copies `Databases/` into
+`/app/Databases`, while `Dockerfiles/Dockerfile.worker` runs `mkdir -p /app/Databases`. See
+`Dockerfiles/docker-compose.yml` and `Dockerfiles/docker-compose.embeddings.yml` for the current volume mappings.
 
 ### Backup Strategy
 

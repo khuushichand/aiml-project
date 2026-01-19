@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 from hypothesis import given, settings as hyp_settings, strategies as st
 
-from tldw_Server_API.app.core.Collections.reading_service import ReadingService
+from tldw_Server_API.app.core.Collections.reading_service import ReadingService, _contains_html_tag
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
@@ -33,6 +33,26 @@ def reading_env(monkeypatch):
                 del settings.USER_DB_BASE_DIR
             except AttributeError:
                 pass
+
+
+def test_contains_html_tag_basic_cases():
+    assert _contains_html_tag("<a>hello</a>") is True
+    assert _contains_html_tag("<A>") is True
+    assert _contains_html_tag("plain text") is False
+    assert _contains_html_tag("<>") is False
+    assert _contains_html_tag("<1>") is False
+    assert _contains_html_tag("<a") is False
+
+
+@hyp_settings(max_examples=50)
+@given(
+    value=st.text(
+        alphabet=st.characters(min_codepoint=32, max_codepoint=126, blacklist_characters=">"),
+        max_size=200,
+    )
+)
+def test_contains_html_tag_false_without_gt(value):
+    assert _contains_html_tag(value) is False
 
 
 @pytest.mark.asyncio
@@ -304,6 +324,24 @@ async def test_reading_save_sanitizes_html_content(reading_env, monkeypatch):
     assert "content" in captured
     assert "alert" not in captured["content"]
     assert "Hello" in captured["content"]
+
+
+@pytest.mark.asyncio
+async def test_reading_search_handles_punctuation(reading_env):
+    service = ReadingService(TEST_USER_ID + 7)
+    saved = await service.save_url(
+        url="https://example.org/punct",
+        tags=["c++", "rust"],
+        status="saved",
+        favorite=False,
+        title_override="C++/Rust: Intro? [Guide]",
+        content_override="Content about C++ and Rust.",
+    )
+
+    coll_db = CollectionsDatabase.for_user(TEST_USER_ID + 7)
+    items, total = coll_db.list_content_items(origin="reading", q="C++/Rust: Intro? [Guide]")
+    assert total >= 1
+    assert any(item.id == saved.item.id for item in items)
 
 
 @hyp_settings(max_examples=50)

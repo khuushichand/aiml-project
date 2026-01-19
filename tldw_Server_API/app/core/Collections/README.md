@@ -29,7 +29,7 @@
 - Key Classes/Functions:
   - `ReadingService.save_url`, `.list_items`, `.update_item`
   - `embedding_queue.enqueue_embeddings_job_for_item` (core Jobs-backed enqueue)
-  - Templating: `Chat/prompt_template_manager.safe_render` for outputs
+  - Templating: `services/outputs_service.render_output_template` for outputs
 - Dependencies:
   - Internal: `DB_Management/Collections_DB`, core Jobs, `Web_Scraping.Article_Extractor_Lib`
   - External (optional): Redis for embeddings queue; provider TTS for mp3 outputs
@@ -40,6 +40,7 @@
 - Concurrency & Performance:
   - Background embeddings job per new/updated item
   - Paging on list endpoints; FTS optional depending on backend
+  - HTML tag detection uses a linear scan to avoid regex backtracking on user input
 - Error Handling:
   - Safe fallbacks when outputs re-encode fails; DB backfills in schema initializer
 - Security:
@@ -50,7 +51,8 @@
 - Folder Structure:
   - `Collections/reading_service.py`, `embedding_queue.py`, `utils.py`; DB adapter in `DB_Management/Collections_DB.py`
 - Extension Points:
-  - Add new origins to `content_items`; extend outputs formats; add highlight strategies
+  - Add new origins 
+  - to `content_items`; extend outputs formats; add highlight strategies
 - Coding Patterns:
   - DI for DB, loguru for logging; avoid raw SQL in endpoints (use DB adapter)
 - Tests:

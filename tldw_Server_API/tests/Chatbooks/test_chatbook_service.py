@@ -460,7 +460,7 @@ class TestChatbookService:
             "user_info": {},
         }
 
-        archive_path = tmp_path / "broken.chatbook"
+        archive_path = temp_dir / "broken.chatbook"
         with zipfile.ZipFile(archive_path, "w") as zf:
             zf.writestr("manifest.json", json.dumps(bad_manifest))
 
@@ -498,7 +498,7 @@ class TestChatbookService:
             "user_info": {},
         }
 
-        archive_path = tmp_path / "broken_preview.chatbook"
+        archive_path = temp_dir / "broken_preview.chatbook"
         with zipfile.ZipFile(archive_path, "w") as zf:
             zf.writestr("manifest.json", json.dumps(bad_manifest))
 
@@ -633,7 +633,7 @@ class TestChatbookService:
             ],
         )
 
-        archive_path = tmp_path / "unsupported.chatbook"
+        archive_path = service.temp_dir / "unsupported.chatbook"
         with zipfile.ZipFile(archive_path, "w") as zf:
             zf.writestr("manifest.json", json.dumps(manifest.to_dict()))
 
@@ -945,13 +945,13 @@ class TestChatbookService:
 
     def test_validate_chatbook_file(self, service, sample_manifest):
         """Test validating a chatbook file structure."""
-        with tempfile.NamedTemporaryFile(suffix='.chatbook', delete=False) as tmp:
-            with zipfile.ZipFile(tmp.name, 'w') as zf:
-                zf.writestr('manifest.json', json.dumps(manifest_to_dict(sample_manifest)))
-                zf.writestr('conversations/test.json', '{}')
+        chatbook_path = service.temp_dir / f"validate_{uuid4().hex}.chatbook"
+        with zipfile.ZipFile(chatbook_path, 'w') as zf:
+            zf.writestr('manifest.json', json.dumps(manifest_to_dict(sample_manifest)))
+            zf.writestr('conversations/test.json', '{}')
 
-            # Use the correct method name: validate_chatbook_file
-            result = service.validate_chatbook_file(tmp.name)
+        # Use the correct method name: validate_chatbook_file
+        result = service.validate_chatbook_file(str(chatbook_path))
 
         # Result is a dict with is_valid key
         assert result["is_valid"] == True
@@ -959,12 +959,11 @@ class TestChatbookService:
 
     def test_validate_invalid_chatbook(self, service):
         """Test validating an invalid chatbook file."""
-        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as tmp:
-            tmp.write(b"Not a zip file")
-            tmp.flush()
+        invalid_path = service.temp_dir / f"invalid_{uuid4().hex}.txt"
+        invalid_path.write_bytes(b"Not a zip file")
 
-            # Invalid ZIP should raise an exception
-            result = service.validate_chatbook_file(tmp.name)
+        # Invalid ZIP should raise an exception
+        result = service.validate_chatbook_file(str(invalid_path))
 
         assert result["is_valid"] == False
         assert "error" in result

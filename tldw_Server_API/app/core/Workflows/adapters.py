@@ -205,10 +205,58 @@ def _unsafe_file_access_allowed(config: Dict[str, Any] | None) -> bool:  # noqa:
 
     Security:
         Only honors the `WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS` environment
-        variable so workflow configs cannot bypass path restrictions.
+        variable so workflow configs cannot bypass path restrictions. When
+        enabled, access is still restricted to allowlisted base directories
+        or the per-user base dir.
     """
     # Ignore per-step config to avoid user-controlled path bypasses.
     return str(os.getenv("WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS", "")).lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_workflows_file_allowlist(raw: str | None) -> list[str]:
+    """Parse the allowlist env var into a list of non-empty path strings."""
+    if not raw:
+        return []
+    parts = [p.strip() for p in raw.replace("\n", ",").split(",")]
+    return [p for p in parts if p]
+
+
+def _resolve_workflows_file_allowlist_paths(paths: list[str]) -> list[Path]:
+    """Resolve allowlist entries into absolute Paths anchored to the project root."""
+    if not paths:
+        return []
+    project_root = None
+    try:
+        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+        project_root = Path(get_project_root())
+    except Exception as exc:
+        logger.debug(f"Workflow file allowlist: failed to resolve project root: {exc}")
+    resolved: list[Path] = []
+    for raw in paths:
+        try:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                if project_root is not None:
+                    candidate = (project_root / candidate).resolve(strict=False)
+                else:
+                    candidate = candidate.resolve(strict=False)
+            else:
+                candidate = candidate.resolve(strict=False)
+            resolved.append(candidate)
+        except Exception as exc:
+            logger.debug(f"Workflow file allowlist: invalid path {raw!r}: {exc}")
+    return resolved
+
+
+def _workflow_file_allowlist(context: Dict[str, Any]) -> list[Path]:
+    """Return the resolved allowlist for the current tenant, if configured."""
+    tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
+    tenant_key = f"WORKFLOWS_FILE_ALLOWLIST_{tenant_id.upper().replace('-', '_')}"
+    if tenant_key in os.environ:
+        raw = os.environ.get(tenant_key)
+    else:
+        raw = os.getenv("WORKFLOWS_FILE_ALLOWLIST")
+    return _resolve_workflows_file_allowlist_paths(_parse_workflows_file_allowlist(raw))
 
 
 def _workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | None) -> Path:  # noqa: ARG001
@@ -270,13 +318,11 @@ def _resolve_workflow_file_path(path_value: str, context: Dict[str, Any], config
         Path: A resolved filesystem path.
 
     Security:
-        When unsafe access is enabled, returns the expanded path without
-        containment checks. Otherwise resolves with `strict=False` and enforces
-        containment via `_is_subpath`, raising `AdapterError("file_access_denied")`
-        on violations.
+        When unsafe access is enabled, resolution is still constrained to the
+        per-user base directory or a configured allowlist. Otherwise resolves
+        with `strict=False` and enforces containment via `_is_subpath`, raising
+        `AdapterError("file_access_denied")` on violations.
     """
-    if _unsafe_file_access_allowed(config):
-        return Path(path_value).expanduser()
     base_dir = _workflow_file_base_dir(context, config)
     try:
         base_resolved = base_dir.resolve(strict=False)
@@ -288,6 +334,15 @@ def _resolve_workflow_file_path(path_value: str, context: Dict[str, Any], config
         resolved = candidate.resolve(strict=False)
     else:
         resolved = (base_resolved / candidate).resolve(strict=False)
+    if _unsafe_file_access_allowed(config):
+        allowed_bases = [base_resolved]
+        try:
+            allowed_bases.extend(_workflow_file_allowlist(context))
+        except Exception as exc:
+            logger.debug(f"Workflow file allowlist: failed to resolve allowlist: {exc}")
+        if not any(_is_subpath(base, resolved) for base in allowed_bases):
+            raise AdapterError("file_access_denied")
+        return resolved
     if not _is_subpath(base_resolved, resolved):
         raise AdapterError("file_access_denied")
     return resolved

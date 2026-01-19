@@ -5,7 +5,7 @@ Owner: Core Maintainers (Server/API + WebUI)
 Status: In Progress
 Updated: 2026-01-15
 
-Related: Docs/Product/Content_Collections_PRD.md, Docs/Product/Watchlists-UX-PRD.md
+Related: Docs/Product/Completed/Content_Collections_PRD.md, Docs/Product/Watchlists-UX-PRD.md
 
 ---
 
@@ -48,26 +48,25 @@ This PRD tracks the remaining UX delivery work for Content Collections. It rolls
 
 ### 4.4 Bulk Item Actions
 - Multi-select list UI for Items and Reading list views.
-- Bulk actions: add/remove tags, set status, toggle favorite, delete, generate outputs.
+- Bulk actions: add/remove tags, set status, toggle favorite, delete, generate outputs via `/api/v1/outputs` using selected `item_ids`.
 - Progress + partial failure reporting; reversible actions where feasible.
 
 ## 5. Backend/API Tasks (Remaining)
 
 - Use `/api/v1/outputs/templates` (DB-backed) as the canonical template editor surface.
 - Watchlists outputs resolve DB templates by name and fall back to legacy file-based watchlists templates when needed.
-- Add bulk update/delete endpoint(s) for content items:
-  - Suggested: `POST /api/v1/items/bulk` with `action` + `item_ids` + payload.
-  - Support tags add/remove, status, favorite, delete (soft/hard).
-  - Return per-item success/error summaries for UI reporting.
-- Add optional bulk helpers for reading list if Items bulk is insufficient:
-  - Suggested: `POST /api/v1/reading/items/bulk` as a thin wrapper.
+- Bulk update/delete endpoints are already available:
+  - `POST /api/v1/items/bulk` with `action` + `item_ids` + payload (tags, status, favorite, delete).
+  - `POST /api/v1/reading/items/bulk` as a thin wrapper alias.
+- Bulk output generation should call `POST /api/v1/outputs` with `template_id` + `item_ids` (no new bulk endpoint required).
 
 ## 6. Dependencies and Constraints
 
 - Existing endpoints:
-  - Reading: `/api/v1/reading/import`, `/api/v1/reading/export`, `/api/v1/reading/items`, `/api/v1/reading/items/{id}`, `/api/v1/reading/items/{id}/highlight`.
+  - Reading: `/api/v1/reading/import`, `/api/v1/reading/export`, `/api/v1/reading/items`, `/api/v1/reading/items/{id}`, `/api/v1/reading/items/{id}/highlight`, `/api/v1/reading/items/bulk`.
   - Highlights: `/api/v1/reading/items/{id}/highlights`, `/api/v1/reading/highlights/{id}`.
-  - Outputs templates: `/api/v1/outputs/templates`, `/api/v1/outputs/templates/{id}/preview`.
+  - Items: `/api/v1/items`, `/api/v1/items/bulk`.
+  - Outputs: `/api/v1/outputs` (requires `template_id` + `item_ids`), `/api/v1/outputs/templates`, `/api/v1/outputs/templates/{id}/preview`.
   - Watchlists templates (legacy fallback): `/api/v1/watchlists/templates`.
 - Collections DB is stored inside per-user `Media_DB_v2.db`.
 - Tests should use UTC for scheduling/time-freezing.
@@ -80,6 +79,7 @@ This PRD tracks the remaining UX delivery work for Content Collections. It rolls
 - Highlights list supports search and color filter; stale highlights are visible.
 - Notes autosave prevents data loss on navigation.
 - Bulk actions show progress and per-item results; errors are visible.
+- Bulk output generation prompts for template selection and returns a generated output artifact or a clear failure state.
 - Template editor supports preview and default assignment in job settings.
 
 ## 8. Test Plan
@@ -88,6 +88,7 @@ This PRD tracks the remaining UX delivery work for Content Collections. It rolls
 - Export: jsonl and zip downloads; filter retention; large lists.
 - Highlights: create/edit/delete; stale highlight state; persistence on reload.
 - Bulk actions: mixed-success scenarios; undo flow when supported.
+- Bulk output generation: template selection, output creation success, output creation failures.
 - Notes: dirty indicator and autosave behavior across navigation.
 
 ## 9. Open Questions

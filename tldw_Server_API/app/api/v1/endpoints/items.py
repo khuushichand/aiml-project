@@ -208,6 +208,7 @@ def _content_item_to_schema(row: ContentItemRow) -> Item:
     return Item(
         id=int(item_id),
         content_item_id=int(row.id),
+        media_id=(int(row.media_id) if row.media_id is not None else None),
         title=row.title or "Untitled",
         url=row.url,
         domain=domain or "",
@@ -256,6 +257,7 @@ def _media_row_to_item(row, *, db, domain_filter: Optional[str]) -> Optional[Ite
     return Item(
         id=int(row.get("id")),
         content_item_id=None,
+        media_id=int(row.get("id")),
         title=row.get("title") or "Untitled",
         url=url,
         domain=dom,

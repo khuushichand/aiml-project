@@ -759,6 +759,7 @@ _HAS_CHUNKING = False
 _HAS_NOTES_GRAPH = False
 _HAS_READING_HIGHLIGHTS = False
 _HAS_KANBAN = False
+_HAS_DATA_TABLES = False
 
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 
@@ -861,6 +862,27 @@ else:
     except Exception as _o_err:
         logger.warning(f"Outputs endpoints unavailable; skipping import: {_o_err}")
         _HAS_OUTPUTS = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.collections_feeds import router as collections_feeds_router
+
+        _HAS_COLLECTIONS_FEEDS = True
+    except Exception as _cf_err:
+        logger.warning(f"Collections feeds endpoints unavailable; skipping import: {_cf_err}")
+        _HAS_COLLECTIONS_FEEDS = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
+
+        _HAS_FILES = True
+    except ImportError as _files_err:
+        logger.warning(f"Files endpoints unavailable; skipping import: {_files_err}")
+        _HAS_FILES = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
+
+        _HAS_DATA_TABLES = True
+    except ImportError as _dt_err:
+        logger.warning(f"Data tables endpoints unavailable; skipping import: {_dt_err}")
+        _HAS_DATA_TABLES = False
     try:
         from tldw_Server_API.app.api.v1.endpoints.reading_highlights import router as reading_highlights_router
 
@@ -1881,9 +1903,17 @@ async def lifespan(app: FastAPI):
     cleanup_task = None
     chatbooks_cleanup_task = None
     core_jobs_task = None
+    files_jobs_task = None
+    data_tables_jobs_task = None
+    prompt_studio_jobs_task = None
+    privilege_snapshot_task = None
     audio_jobs_task = None
     media_ingest_jobs_task = None
     chatbooks_cleanup_stop_event = None
+    files_jobs_stop_event = None
+    data_tables_jobs_stop_event = None
+    prompt_studio_jobs_stop_event = None
+    privilege_snapshot_stop_event = None
     media_ingest_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
@@ -1899,6 +1929,33 @@ async def lifespan(app: FastAPI):
             create_from_settings_for_user as _create_vs_from_settings,
         )
         from tldw_Server_API.app.core.config import settings as _app_settings
+
+        def _env_flag(key: str, default: bool) -> bool:
+            raw = _os.getenv(key)
+            if raw is None or str(raw).strip() == "":
+                return bool(default)
+            return str(raw).strip().lower() in {"true", "1", "yes", "y", "on"}
+
+        def _route_default(route_key: str, *, default_stable: bool = True) -> bool:
+            try:
+                if globals().get("_TEST_MODE"):
+                    return False
+            except Exception:
+                return False
+            try:
+                return bool(route_enabled(route_key, default_stable=default_stable))
+            except Exception:
+                return bool(default_stable)
+
+        _sidecar_mode = _env_flag("TLDW_WORKERS_SIDECAR_MODE", False)
+
+        def _should_start_worker(flag_key: str, route_key: str, *, default_stable: bool = True) -> bool:
+            if _sidecar_mode:
+                return False
+            return _env_flag(flag_key, _route_default(route_key, default_stable=default_stable))
+
+        if _sidecar_mode:
+            logger.info("Sidecar worker mode enabled; in-process Jobs workers are disabled")
 
         # Use per-user evaluations DB for cleanup; default to single-user ID
         _single_uid = int(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
@@ -1975,6 +2032,8 @@ async def lifespan(app: FastAPI):
             "y",
             "on",
         }
+        if _sidecar_mode:
+            _core_worker_enabled = False
         if _is_core and _core_worker_enabled:
             core_jobs_stop_event = _asyncio.Event()
             core_jobs_task = _asyncio.create_task(_run_cb_jobs(core_jobs_stop_event))
@@ -1983,6 +2042,74 @@ async def lifespan(app: FastAPI):
             logger.info("Core Jobs worker (Chatbooks) disabled by backend selection or flag")
     except Exception as e:
         logger.warning(f"Failed to start core Jobs worker (Chatbooks): {e}")
+
+    # File Artifacts Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.File_Artifacts.jobs_worker import run_file_artifacts_jobs_worker as _run_files_jobs
+
+        _enabled = _should_start_worker("FILES_JOBS_WORKER_ENABLED", "files")
+        if _enabled:
+            files_jobs_stop_event = _asyncio.Event()
+            files_jobs_task = _asyncio.create_task(_run_files_jobs(files_jobs_stop_event))
+            logger.info("File Artifacts Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("File Artifacts Jobs worker disabled by flag (FILES_JOBS_WORKER_ENABLED)")
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
+        logger.warning(f"Failed to start File Artifacts Jobs worker: {e}")
+
+    # Data Tables Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Data_Tables.jobs_worker import run_data_tables_jobs_worker as _run_data_tables_jobs
+
+        _enabled = _should_start_worker("DATA_TABLES_JOBS_WORKER_ENABLED", "data-tables")
+        if _enabled:
+            data_tables_jobs_stop_event = _asyncio.Event()
+            data_tables_jobs_task = _asyncio.create_task(_run_data_tables_jobs(data_tables_jobs_stop_event))
+            logger.info("Data Tables Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Data Tables Jobs worker disabled by flag (DATA_TABLES_JOBS_WORKER_ENABLED)")
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
+        logger.warning(f"Failed to start Data Tables Jobs worker: {e}")
+
+    # Prompt Studio Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.services.jobs_worker import (
+            run_prompt_studio_jobs_worker as _run_prompt_studio_jobs,
+        )
+
+        _enabled = _should_start_worker("PROMPT_STUDIO_JOBS_WORKER_ENABLED", "prompt-studio")
+        if _enabled:
+            prompt_studio_jobs_stop_event = _asyncio.Event()
+            prompt_studio_jobs_task = _asyncio.create_task(_run_prompt_studio_jobs(prompt_studio_jobs_stop_event))
+            logger.info("Prompt Studio Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Prompt Studio Jobs worker disabled by flag (PROMPT_STUDIO_JOBS_WORKER_ENABLED)")
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
+        logger.warning(f"Failed to start Prompt Studio Jobs worker: {e}")
+
+    # Privilege snapshot worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.privilege_snapshot_worker import (
+            run_privilege_snapshot_worker as _run_priv_snapshot,
+        )
+
+        _enabled = _should_start_worker("PRIVILEGE_SNAPSHOT_WORKER_ENABLED", "privileges")
+        if _enabled:
+            privilege_snapshot_stop_event = _asyncio.Event()
+            privilege_snapshot_task = _asyncio.create_task(_run_priv_snapshot(privilege_snapshot_stop_event))
+            logger.info("Privilege snapshot worker started with explicit stop_event signal")
+        else:
+            logger.info("Privilege snapshot worker disabled by flag (PRIVILEGE_SNAPSHOT_WORKER_ENABLED)")
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
+        logger.warning(f"Failed to start privilege snapshot worker: {e}")
 
     # Embeddings Vector Compactor (soft-delete propagation)
     try:
@@ -2006,7 +2133,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         from tldw_Server_API.app.services.audio_jobs_worker import run_audio_jobs_worker as _run_audio_jobs
 
-        _enabled = _os.getenv("AUDIO_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        _enabled = _should_start_worker("AUDIO_JOBS_WORKER_ENABLED", "audio-jobs")
         if _enabled:
             audio_jobs_stop_event = _asyncio.Event()
             audio_jobs_task = _asyncio.create_task(_run_audio_jobs(audio_jobs_stop_event))
@@ -2022,7 +2149,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         from tldw_Server_API.app.services.media_ingest_jobs_worker import run_media_ingest_jobs_worker as _run_media_jobs
 
-        _enabled = _os.getenv("MEDIA_INGEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        _enabled = _should_start_worker("MEDIA_INGEST_JOBS_WORKER_ENABLED", "media")
         if _enabled:
             media_ingest_jobs_stop_event = _asyncio.Event()
             media_ingest_jobs_task = _asyncio.create_task(_run_media_jobs(media_ingest_jobs_stop_event))
@@ -2043,6 +2170,8 @@ async def lifespan(app: FastAPI):
         _enabled = _os.getenv("EVALUATIONS_ABTEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
         if not _enabled:
             _enabled = _os.getenv("EVALS_ABTEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if _sidecar_mode:
+            _enabled = False
         if _enabled:
             evals_abtest_jobs_stop_event = _asyncio.Event()
             evals_abtest_jobs_task = _asyncio.create_task(_run_abtest_jobs(evals_abtest_jobs_stop_event))
@@ -2406,6 +2535,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Outputs purge scheduler: {e}")
 
+    # Start File artifacts export GC scheduler (expired export cleanup)
+    try:
+        _enable_files_export_gc = _env_os.getenv("FILES_EXPORT_GC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        if not _enable_files_export_gc:
+            logger.info("File artifacts export GC scheduler disabled (FILES_EXPORT_GC_ENABLED != true)")
+        else:
+            from tldw_Server_API.app.services.file_artifacts_export_gc_service import (
+                start_file_artifacts_export_gc_scheduler,
+            )
+
+            _files_gc_task = await start_file_artifacts_export_gc_scheduler()
+            if _files_gc_task:
+                logger.info("File artifacts export GC scheduler started")
+    except Exception as e:  # noqa: BLE001 - startup/shutdown guard; log and continue
+        logger.warning(f"Failed to start File artifacts export GC scheduler: {e}")
+
     # Start Jobs prune scheduler (daily maintenance)
     try:
         _enable_jobs_prune = _env_os.getenv("JOBS_PRUNE_ENFORCE", "false").lower() in {"1", "true", "yes", "on"}
@@ -2643,6 +2788,50 @@ async def lifespan(app: FastAPI):
                     core_jobs_task.cancel()
             else:
                 core_jobs_task.cancel()
+        if "files_jobs_task" in locals() and files_jobs_task:
+            # Prefer graceful stop via explicit stop_event
+            if "files_jobs_stop_event" in locals() and files_jobs_stop_event:
+                try:
+                    files_jobs_stop_event.set()
+                    await _asyncio.wait_for(files_jobs_task, timeout=5.0)
+                    logger.info("File Artifacts Jobs worker stopped via stop_event")
+                except Exception:  # noqa: BLE001 - startup/shutdown guard; log and continue
+                    files_jobs_task.cancel()
+            else:
+                files_jobs_task.cancel()
+        if "data_tables_jobs_task" in locals() and data_tables_jobs_task:
+            # Prefer graceful stop via explicit stop_event
+            if "data_tables_jobs_stop_event" in locals() and data_tables_jobs_stop_event:
+                try:
+                    data_tables_jobs_stop_event.set()
+                    await _asyncio.wait_for(data_tables_jobs_task, timeout=5.0)
+                    logger.info("Data Tables Jobs worker stopped via stop_event")
+                except Exception:
+                    data_tables_jobs_task.cancel()
+            else:
+                data_tables_jobs_task.cancel()
+        if "prompt_studio_jobs_task" in locals() and prompt_studio_jobs_task:
+            # Prefer graceful stop via explicit stop_event
+            if "prompt_studio_jobs_stop_event" in locals() and prompt_studio_jobs_stop_event:
+                try:
+                    prompt_studio_jobs_stop_event.set()
+                    await _asyncio.wait_for(prompt_studio_jobs_task, timeout=5.0)
+                    logger.info("Prompt Studio Jobs worker stopped via stop_event")
+                except Exception:
+                    prompt_studio_jobs_task.cancel()
+            else:
+                prompt_studio_jobs_task.cancel()
+        if "privilege_snapshot_task" in locals() and privilege_snapshot_task:
+            # Prefer graceful stop via explicit stop_event
+            if "privilege_snapshot_stop_event" in locals() and privilege_snapshot_stop_event:
+                try:
+                    privilege_snapshot_stop_event.set()
+                    await _asyncio.wait_for(privilege_snapshot_task, timeout=5.0)
+                    logger.info("Privilege snapshot worker stopped via stop_event")
+                except Exception:
+                    privilege_snapshot_task.cancel()
+            else:
+                privilege_snapshot_task.cancel()
         if "audio_jobs_task" in locals() and audio_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "audio_jobs_stop_event" in locals() and audio_jobs_stop_event:
@@ -2679,6 +2868,8 @@ async def lifespan(app: FastAPI):
             claims_task.cancel()
         if "jobs_prune_task" in locals() and jobs_prune_task:
             jobs_prune_task.cancel()
+        if "_files_gc_task" in locals() and _files_gc_task:
+            _files_gc_task.cancel()
         if "embeddings_compactor_task" in locals() and embeddings_compactor_task:
             if "embeddings_compactor_stop_event" in locals() and embeddings_compactor_stop_event:
                 try:
@@ -3281,6 +3472,10 @@ OPENAPI_TAGS = [
         },
     },
     {"name": "notes", "description": "Notes and knowledge management."},
+    {
+        "name": "data-tables",
+        "description": "Data table generation jobs and CRUD.",
+    },
     {
         "name": "notes-graph",
         "description": "Graph of notes, tags, and sources.",
@@ -4516,6 +4711,24 @@ elif _MINIMAL_TEST_APP:
     except Exception as _outputs_min_err:
         logger.debug(f"Skipping outputs router in minimal test app: {_outputs_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.collections_feeds import router as collections_feeds_router
+
+        app.include_router(collections_feeds_router, prefix=f"{API_V1_PREFIX}", tags=["collections-feeds"])
+    except Exception as _feeds_min_err:
+        logger.debug(f"Skipping collections_feeds router in minimal test app: {_feeds_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
+
+        app.include_router(files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
+    except ImportError as _files_min_err:
+        logger.debug(f"Skipping files router in minimal test app: {_files_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
+
+        app.include_router(data_tables_router, prefix=f"{API_V1_PREFIX}", tags=["data-tables"])
+    except ImportError as _dt_min_err:
+        logger.debug(f"Skipping data_tables router in minimal test app: {_dt_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.reading_highlights import router as reading_highlights_router
 
         app.include_router(reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])
@@ -4908,6 +5121,10 @@ else:
         _include_if_enabled(
             "outputs-templates", outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"]
         )
+    if _HAS_COLLECTIONS_FEEDS and "collections_feeds_router" in locals():
+        _include_if_enabled(
+            "collections-feeds", collections_feeds_router, prefix=f"{API_V1_PREFIX}", tags=["collections-feeds"]
+        )
     try:
         # Optional outputs artifacts endpoint
         from tldw_Server_API.app.api.v1.endpoints.outputs import router as _outputs_router
@@ -4915,6 +5132,20 @@ else:
         _include_if_enabled("outputs", _outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
     except Exception as _e:
         logger.warning(f"Outputs endpoint not available: {_e}")
+    try:
+        # Optional files artifacts endpoint
+        from tldw_Server_API.app.api.v1.endpoints.files import router as _files_router
+
+        _include_if_enabled("files", _files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
+    except ImportError as _e:
+        logger.warning(f"Files endpoint not available: {_e}")
+    try:
+        # Optional data tables endpoint
+        from tldw_Server_API.app.api.v1.endpoints.data_tables import router as _data_tables_router
+
+        _include_if_enabled("data-tables", _data_tables_router, prefix=f"{API_V1_PREFIX}", tags=["data-tables"])
+    except ImportError as _e:
+        logger.warning(f"Data tables endpoint not available: {_e}")
     if "embeddings_router" in locals():
         _include_if_enabled("embeddings", embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
     if "vector_stores_router" in locals():

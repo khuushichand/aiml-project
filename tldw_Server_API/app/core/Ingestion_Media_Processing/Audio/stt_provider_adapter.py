@@ -9,13 +9,16 @@ dependencies. Transcription methods will be layered on gradually.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Callable
 
 from tldw_Server_API.app.core.config import get_stt_config
+from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 
 try:
@@ -32,6 +35,31 @@ except Exception:  # pragma: no cover - defensive fallback for minimal envs
 
 
 _SUPPORTED_PARAKEET_VARIANTS = {"standard", "onnx", "mlx", "cuda"}
+
+
+def _raise_if_cancelled(cancel_check: Optional[Callable[[], bool]]) -> None:
+    if cancel_check is None:
+        return
+    try:
+        result = cancel_check()
+        if inspect.isawaitable(result):
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None and loop.is_running():
+                raise CancelCheckError(
+                    "cancel_check must be synchronous; received awaitable while event loop is running"
+                )
+            should_cancel = asyncio.run(result)
+        else:
+            should_cancel = bool(result)
+    except CancelCheckError:
+        raise
+    except Exception as exc:
+        raise CancelCheckError(f"cancel_check failed: {exc}") from exc
+    if should_cancel:
+        raise TranscriptionCancelled("Cancelled by user")
 
 
 def _normalize_parakeet_variant(raw: Optional[str]) -> str:
@@ -122,6 +150,7 @@ class SttProviderAdapter(ABC):
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
         base_dir: Optional[Path] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         """
         Perform a batch transcription and return a normalized artifact.
@@ -164,6 +193,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
         base_dir: Optional[Path] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         # We reuse the core speech_to_text helper so behavior stays aligned
         # with existing REST/media ingestion flows.
@@ -181,6 +211,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
             selected_lang = language or None
 
         model_name = model or "distil-large-v3"
+        _raise_if_cancelled(cancel_check)
         result = fw_speech_to_text(
             audio_path,
             whisper_model=model_name,
@@ -192,16 +223,13 @@ class FasterWhisperAdapter(SttProviderAdapter):
             initial_prompt=prompt,
             task=task,
             base_dir=base_dir,
+            cancel_check=cancel_check,
         )
 
         segments_list, detected_lang = result
         # Strip Whisper metadata header so callers see only user content
         segments_for_response = strip_whisper_metadata_header(segments_list)
-        text = " ".join(
-            str(seg.get("Text", "")).strip()
-            for seg in segments_for_response
-            if isinstance(seg, dict)
-        )
+        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_for_response if isinstance(seg, dict))
 
         return {
             "text": text,
@@ -242,6 +270,7 @@ class ParakeetAdapter(SttProviderAdapter):
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
         base_dir: Optional[Path] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         # Parakeet batch flows are routed through speech_to_text's Parakeet
         # branch by encoding the model name (e.g. "parakeet-standard").
@@ -259,6 +288,7 @@ class ParakeetAdapter(SttProviderAdapter):
             model_name, _ = _resolve_default_model_for_provider(self.name.value, stt_cfg)
             if not model_name:
                 model_name = "parakeet-standard"
+        _raise_if_cancelled(cancel_check)
         segments_list, lang = speech_to_text(
             audio_path,
             whisper_model=model_name,
@@ -267,12 +297,9 @@ class ParakeetAdapter(SttProviderAdapter):
             diarize=False,
             return_language=True,
             base_dir=base_dir,
+            cancel_check=cancel_check,
         )
-        text = " ".join(
-            str(seg.get("Text", "")).strip()
-            for seg in segments_list
-            if isinstance(seg, dict)
-        )
+        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_list if isinstance(seg, dict))
         return {
             "text": text,
             "language": language or lang,
@@ -312,6 +339,7 @@ class CanaryAdapter(SttProviderAdapter):
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
         base_dir: Optional[Path] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (  # type: ignore
             transcribe_with_canary,
@@ -324,19 +352,21 @@ class CanaryAdapter(SttProviderAdapter):
             # Enforce that local audio paths stay within base_dir for path safety.
             safe_path = resolve_safe_local_path(path_obj, base_dir)
             if safe_path is None:
-                raise ValueError(f"Audio path rejected outside base_dir: {audio_path}")
+                raise BadRequestError(f"Audio path rejected outside base_dir: {audio_path}")
             path_obj = safe_path
 
+        _raise_if_cancelled(cancel_check)
         try:
             audio_np, sample_rate = sf.read(str(path_obj))
         except Exception as e:
-            raise ValueError(f"Failed to read audio file {path_obj}: {e}") from e
+            raise BadRequestError(f"Failed to read audio file {path_obj}: {e}") from e
         if not isinstance(audio_np, np.ndarray):
             audio_np = np.array(audio_np, dtype="float32")
 
         # For Canary we mirror the create_transcription behavior: language
         # controls ASR language, task="translate" can be interpreted by the
         # underlying helper (if supported).
+        _raise_if_cancelled(cancel_check)
         text = transcribe_with_canary(
             audio_np,
             sample_rate,
@@ -389,12 +419,14 @@ class Qwen2AudioAdapter(SttProviderAdapter):
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
         base_dir: Optional[Path] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
             speech_to_text,
         )
 
         model_name = model or "qwen2audio"
+        _raise_if_cancelled(cancel_check)
         segments_list, lang = speech_to_text(
             audio_path,
             whisper_model=model_name,
@@ -403,12 +435,9 @@ class Qwen2AudioAdapter(SttProviderAdapter):
             diarize=False,
             return_language=True,
             base_dir=base_dir,
+            cancel_check=cancel_check,
         )
-        text = " ".join(
-            str(seg.get("Text", "")).strip()
-            for seg in segments_list
-            if isinstance(seg, dict)
-        )
+        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_list if isinstance(seg, dict))
         return {
             "text": text,
             "language": language or lang,
@@ -448,6 +477,7 @@ class ExternalAdapter(SttProviderAdapter):
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
         base_dir: Optional[Path] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (  # type: ignore
             transcribe_with_external_provider,
@@ -459,6 +489,7 @@ class ExternalAdapter(SttProviderAdapter):
             provider_name = model_id.split(":", 1)[1] or "default"
 
         # Pass base_dir so external providers validate local paths consistently.
+        _raise_if_cancelled(cancel_check)
         text = transcribe_with_external_provider(
             audio_path,
             provider_name=provider_name,

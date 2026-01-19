@@ -1,0 +1,5426 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for the tldw_server project">
+      
+      
+      
+        <link rel="canonical" href="https://rmusser01.github.io/tldw_server/Workflows_RAG_Config_Optimization/">
+      
+      
+        <link rel="prev" href="../Workflows_Runbook/">
+      
+      
+        <link rel="next" href="../Workflows_Embeddings_ABTest/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>RAG Config Optimization - tldw Server Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../css/timeago.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#workflow-optimize-rag-settings-against-a-baseline-qa-set" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="tldw Server Docs" class="md-header__button md-logo" aria-label="tldw Server Docs" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tldw Server Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              RAG Config Optimization
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-hidden="true"  type="radio" name="__palette" id="__palette_1">
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/rmusser01/tldw_server" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    rmusser01/tldw_server
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../Overview/Feature_Status/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Overview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../Workflows_PRD/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Workflows
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../API-related/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../Code_Documentation/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Code
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../Deployment/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Deployment
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../Env_Vars/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Environment Variables
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../Evaluations/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Evaluations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../Monitoring/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Monitoring
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../User_Guides/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../RELEASE_NOTES/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Release Notes
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../MCP/Unified_Overview/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  MCP Unified
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="tldw Server Docs" class="md-nav__button md-logo" aria-label="tldw Server Docs" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    tldw Server Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/rmusser01/tldw_server" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    rmusser01/tldw_server
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Overview/Feature_Status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflows
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workflows
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Workflows_PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflows PRD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Workflows_Runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RAG Config Optimization
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RAG Config Optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#api-only-end-to-end-via-evaluations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API-only: End-to-End via Evaluations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="API-only: End-to-End via Evaluations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#embeddings-settings-per-user-collections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Embeddings settings (per-user collections)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-dataset-path-inline-qa-nothing-stored-in-datasets-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No-Dataset Path (Inline QA, nothing stored in datasets table)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflows-single-run-automation-ad-hoc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflows: Single-Run Automation (Ad-hoc)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-tablesvlm-and-agentic-toggles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced: Tables/VLM and Agentic Toggles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ready-to-paste-evaluation-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ready-to-Paste Evaluation JSON
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ad-hoc-schedule-rag-grid-and-embeddings-ab-inline-qa-keyword-collections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ad-hoc + Schedule: RAG grid and Embeddings A/B (Inline QA, Keyword Collections)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ad-hoc + Schedule: RAG grid and Embeddings A/B (Inline QA, Keyword Collections)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#auth-tips-ad-hoc-and-scheduled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth Tips (Ad-hoc and Scheduled)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Outputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tips-for-effective-grids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tips for effective grids
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-options-reference-pass-through" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced Options Reference (Pass-through)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Workflows_Embeddings_ABTest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embeddings A/B Test
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Workflows_Performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Workflows_Examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples & CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Workflows_Debugging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../API-related/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/API_Design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/API_Notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Endpoints_Feature_Map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Endpoints Feature Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/API_README/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API README
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/API_Tags_Index/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Tag Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Admin_RBAC_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin RBAC API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Audio_Transcription_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audio Transcription API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Audio_Jobs_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audio Jobs API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/AuthNZ-API-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AuthNZ API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Notes_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Notes API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Reading_List_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reading List API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Collections_Feeds_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Collections Feeds API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Chat_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chat API Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Chat_Module_Integration_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chat Module Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Chatbook_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chatbook API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Chatbook_Features_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chatbook Features API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Chunking_Templates_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chunking Templates API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Chunking_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chunking API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Embeddings_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embeddings API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Embeddings_Module_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embeddings Module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Embeddings-API-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embeddings API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Evaluations_API_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluations API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Evaluations_API_Unified_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluations API (Unified)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/OCR_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OCR API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_26" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_26" id="__nav_4_26_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_26_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_26">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Legacy
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Old_API_Map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Old API Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/tldw_Evaluations_API_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluations API (tldw legacy)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Prompt_Studio_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prompt Studio API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Providers_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Providers API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/RAG_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RAG API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/RAG-API-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RAG API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Orgs_Billing_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Orgs & Billing API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Transcript_Segmentation_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transcript Segmentation API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/User_Registration_API_Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Registration API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API-related/Watchlists_API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Watchlists API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../Code_Documentation/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Code
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Chat_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chat Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Chatbook_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chatbook Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Chunking_Templates_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chunking Templates Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Chunking-Module/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chunking Module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Code_Map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Database/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_8" id="__nav_5_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Databases
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Databases
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Databases/ChaChaNotes_DB/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ChaChaNotes DB
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Databases/Media_DB_v2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Media DB v2
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Embeddings-Documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embeddings Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Evaluations_Developer_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluations Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Ingestion_Media_Processing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Ingestion_Pipeline_Audio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestion Pipeline - Audio
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Ingestion_Pipeline_Documents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestion Pipeline - Documents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Ingestion_Pipeline_Ebooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestion Pipeline - Ebooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Ingestion_Pipeline_MediaWiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestion Pipeline - MediaWiki
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Ingestion_Pipeline_PDF/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestion Pipeline - PDF
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Ingestion_Pipeline_Video/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestion Pipeline - Video
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Pieces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pieces
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Proposition_Chunking_and_Evals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proposition Chunking and Evals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Claims_API_and_Schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Claims API and Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Answer_Time_Claims_Engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Answer-Time Claims Engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Code_Documentation/Docs_Site_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Site Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Development/DB-Backends-Query-FTS-Guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DB Backends - Placeholders & FTS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../Deployment/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Deployment
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/First_Time_Production_Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    First-Time Production Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/Long_Term_Admin_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-Term Admin Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/Postgres_Content_Mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PostgreSQL Content Mode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/Postgres_Migration_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PostgreSQL Migration Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/Postgres_Backups/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PostgreSQL Backups
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/Embeddings-Deployment-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embeddings Deployment Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/Reverse_Proxy_Examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reverse Proxy Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/Proxy_Overlays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxy Overlays (Compose)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Env_Vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Environment Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../Evaluations/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluations
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Evaluations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Evaluations/Smoke_Test_Checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Smoke Test Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Evaluations/Unified_Evaluations_Readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unified Evaluations Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../Monitoring/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Monitoring
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Monitoring/Audio_Concurrency_and_Metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audio Concurrency & Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Monitoring/Metrics_Cheatsheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics Cheatsheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../User_Guides/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guides
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_10" id="__nav_10_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Media_to_RAG_Evals_Workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Media→Embeddings→RAG→Evals Workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/WebUI_Vector_Backends/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WebUI - Vector Backends
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Usage_Module/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage Module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Authentication_Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/BYOK_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BYOK User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Backups_Using_Litestream/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backups using Litestream
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Chatbook_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chatbook User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Chunking_Templates_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chunking Templates User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/CLI_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Evaluations_Deployment_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluations Deployment Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Evaluations_End_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluations End User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Evaluations_Production_Deployment_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluations Production Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Evaluations_User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluations User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Installation-Setup-Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation & Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Multi-User_Deployment_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-User Deployment Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Organizations_and_Sharing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Organizations and Sharing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Organization_Administration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Organization Administration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Production_Hardening_Checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Production Hardening Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Prompt_Engineering_Notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prompt Engineering Notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/RAG_Deployment_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RAG Deployment Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/RAG_Production_Configuration_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RAG Production Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Setting_up_a_local_LLM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setting up a local LLM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/TTS_Getting_Started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TTS Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/Chatterbox_TTS_Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chatterbox TTS Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../User_Guides/User_Guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RELEASE_NOTES/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Unified
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    MCP Unified
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MCP/Unified_Overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MCP/Unified_Client_Snippets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client Snippets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MCP/Tool_Catalogs_Quick_Reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool Catalogs (Quick Ref)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#api-only-end-to-end-via-evaluations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API-only: End-to-End via Evaluations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="API-only: End-to-End via Evaluations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#embeddings-settings-per-user-collections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Embeddings settings (per-user collections)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-dataset-path-inline-qa-nothing-stored-in-datasets-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No-Dataset Path (Inline QA, nothing stored in datasets table)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflows-single-run-automation-ad-hoc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflows: Single-Run Automation (Ad-hoc)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-tablesvlm-and-agentic-toggles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced: Tables/VLM and Agentic Toggles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ready-to-paste-evaluation-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ready-to-Paste Evaluation JSON
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ad-hoc-schedule-rag-grid-and-embeddings-ab-inline-qa-keyword-collections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ad-hoc + Schedule: RAG grid and Embeddings A/B (Inline QA, Keyword Collections)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ad-hoc + Schedule: RAG grid and Embeddings A/B (Inline QA, Keyword Collections)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#auth-tips-ad-hoc-and-scheduled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth Tips (Ad-hoc and Scheduled)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Outputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tips-for-effective-grids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tips for effective grids
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-options-reference-pass-through" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced Options Reference (Pass-through)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/rmusser01/tldw_server/edit/main/Workflows_RAG_Config_Optimization.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/rmusser01/tldw_server/raw/main/Workflows_RAG_Config_Optimization.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="workflow-optimize-rag-settings-against-a-baseline-qa-set">Workflow: Optimize RAG Settings Against a Baseline QA Set<a class="headerlink" href="#workflow-optimize-rag-settings-against-a-baseline-qa-set" title="Permanent link">&para;</a></h1>
+<p>Goal: given a specified corpus and a baseline set of QA pairs, automatically search for the most effective Retrieval + Reranking + Answer settings, then capture a reproducible preset for day-to-day use.</p>
+<p>Two ways to run this:
+- API-only (pure Evaluations endpoints; simple and robust)
+- Workflows Ad-hoc Run (wraps the same steps in a single workflow run you can schedule/monitor)</p>
+<p>Prerequisites
+- Server running on <code>http://127.0.0.1:8000</code>
+- Auth: <code>X-API-KEY</code> (single-user) or <code>Authorization: Bearer &lt;token&gt;</code>
+- Corpus: already ingested and embedded for the target user (see User Guides → Media→Embeddings→RAG→Evals Workflow)
+- Baseline QA pairs: a JSON array like:
+  <div class="highlight"><pre><span></span><code><span class="p">[</span>
+<span class="w">  </span><span class="p">{</span><span class="nt">&quot;question&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;What is a residual connection?&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;answer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;It helps gradients flow and stabilizes very deep nets.&quot;</span><span class="p">},</span>
+<span class="w">  </span><span class="p">{</span><span class="nt">&quot;question&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;List datasets in the paper&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;answer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ImageNet, CIFAR-10/100, ...&quot;</span><span class="p">}</span>
+<span class="p">]</span>
+</code></pre></div></p>
+<h2 id="api-only-end-to-end-via-evaluations">API-only: End-to-End via Evaluations<a class="headerlink" href="#api-only-end-to-end-via-evaluations" title="Permanent link">&para;</a></h2>
+<p>1) Create a dataset
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/evaluations/datasets<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;name&quot;: &quot;qa_ds_1&quot;,</span>
+<span class="s1">        &quot;description&quot;: &quot;Baseline QA set&quot;,</span>
+<span class="s1">        &quot;samples&quot;: [</span>
+<span class="s1">          {&quot;input&quot;: {&quot;question&quot;: &quot;What is a residual connection?&quot;}, &quot;expected&quot;: {&quot;answer&quot;: &quot;It helps gradients flow and stabilizes very deep nets.&quot;}},</span>
+<span class="s1">          {&quot;input&quot;: {&quot;question&quot;: &quot;List datasets in the paper&quot;}, &quot;expected&quot;: {&quot;answer&quot;: &quot;ImageNet, CIFAR-10/100&quot;}}</span>
+<span class="s1">        ]</span>
+<span class="s1">      }&#39;</span>
+</code></pre></div></p>
+<p>2) Create an evaluation with rag_pipeline (grid search)
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/evaluations/<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;name&quot;: &quot;rag_cfg_search&quot;,</span>
+<span class="s1">        &quot;eval_type&quot;: &quot;model_graded&quot;,</span>
+<span class="s1">        &quot;eval_spec&quot;: {</span>
+<span class="s1">          &quot;sub_type&quot;: &quot;rag_pipeline&quot;,</span>
+<span class="s1">          &quot;rag_pipeline&quot;: {</span>
+<span class="s1">            &quot;dataset_id&quot;: &quot;&lt;DATASET_ID&gt;&quot;,</span>
+<span class="s1">            &quot;search_strategy&quot;: &quot;grid&quot;,</span>
+<span class="s1">            &quot;chunking&quot;: {&quot;include_siblings&quot;: [false, true]},</span>
+<span class="s1">            &quot;retrievers&quot;: [</span>
+<span class="s1">              {&quot;search_mode&quot;: [&quot;hybrid&quot;], &quot;hybrid_alpha&quot;: [0.5, 0.7], &quot;top_k&quot;: [8, 12]}</span>
+<span class="s1">            ],</span>
+<span class="s1">            &quot;rerankers&quot;: [</span>
+<span class="s1">              {&quot;strategy&quot;: [&quot;flashrank&quot;, &quot;cross_encoder&quot;], &quot;top_k&quot;: [10]}</span>
+<span class="s1">            ],</span>
+<span class="s1">            &quot;rag&quot;: {&quot;model&quot;: [&quot;gpt-4o-mini&quot;], &quot;max_tokens&quot;: [300]},</span>
+<span class="s1">            &quot;advanced&quot;: {&quot;fts_level&quot;: &quot;chunk&quot;, &quot;enable_citations&quot;: false, &quot;timeout_seconds&quot;: 30}</span>
+<span class="s1">            &quot;aggregation_weights&quot;: {&quot;rag_overall&quot;: 1.0, &quot;retrieval_diversity&quot;: 0.1}</span>
+<span class="s1">          }</span>
+<span class="s1">        }</span>
+<span class="s1">      }&#39;</span>
+</code></pre></div></p>
+<p>3) Start a run and poll results
+<div class="highlight"><pre><span></span><code><span class="c1"># Start</span>
+curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/evaluations/&lt;EVAL_ID&gt;/runs<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;target_model&quot;: &quot;openai&quot;}&#39;</span>
+
+<span class="c1"># Poll</span>
+curl<span class="w"> </span>-sS<span class="w"> </span>http://127.0.0.1:8000/api/v1/evaluations/runs/&lt;RUN_ID&gt;<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq
+</code></pre></div>
+Results include <code>leaderboard</code> and <code>best</code>. Use <code>best.config</code> to reproduce or save as a preset.</p>
+<p>4) Save the winning preset
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/evaluations/rag/pipeline/presets<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;name&quot;: &quot;baseline_hybrid_xenc&quot;, &quot;config&quot;: &lt;PASTE best.config JSON&gt;}&#39;</span>
+</code></pre></div></p>
+<p>Optional: Ephemeral collections and cleanup
+- If you prefer isolating the evaluation corpus, set <code>index_namespace</code> in <code>rag_pipeline</code>, which builds ephemeral collections and cleans them with <code>POST /api/v1/evaluations/rag/pipeline/cleanup</code>.</p>
+<h3 id="embeddings-settings-per-user-collections">Embeddings settings (per-user collections)<a class="headerlink" href="#embeddings-settings-per-user-collections" title="Permanent link">&para;</a></h3>
+<ul>
+<li>For ingestion-time embedding, use <code>generate_embeddings=true</code> and optionally <code>embedding_provider</code>/<code>embedding_model</code> in <code>/api/v1/media/add</code>.</li>
+<li>To embed existing media:</li>
+<li>Batch: <code>POST /api/v1/media/embeddings/batch</code> with <code>media_ids</code>, <code>provider</code>, <code>model</code>, <code>chunk_size</code>, <code>chunk_overlap</code>.</li>
+<li>Single: <code>POST /api/v1/media/{media_id}/embeddings</code> and poll <code>/{media_id}/embeddings/status</code>.
+These write to per-user collections (e.g., <code>user_1_media_embeddings</code>) used by RAG retrieval.</li>
+</ul>
+<h3 id="no-dataset-path-inline-qa-nothing-stored-in-datasets-table">No-Dataset Path (Inline QA, nothing stored in datasets table)<a class="headerlink" href="#no-dataset-path-inline-qa-nothing-stored-in-datasets-table" title="Permanent link">&para;</a></h3>
+<p>If you don’t want to create a dataset record, embed your QA pairs inline in the evaluation itself using <code>rag_pipeline.dataset</code>. This keeps everything self-contained with no rows in the datasets table.</p>
+<p>Create the evaluation with inline QA samples (and optional <code>advanced</code> block for full pipeline options):
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/evaluations/<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;name&quot;: &quot;rag_cfg_search_inline&quot;,</span>
+<span class="s1">        &quot;eval_type&quot;: &quot;model_graded&quot;,</span>
+<span class="s1">        &quot;eval_spec&quot;: {</span>
+<span class="s1">          &quot;sub_type&quot;: &quot;rag_pipeline&quot;,</span>
+<span class="s1">          &quot;rag_pipeline&quot;: {</span>
+<span class="s1">            &quot;dataset&quot;: [</span>
+<span class="s1">              {&quot;input&quot;: {&quot;question&quot;: &quot;What is a residual connection?&quot;}, &quot;expected&quot;: {&quot;answer&quot;: &quot;It helps gradients flow and stabilizes very deep nets.&quot;}},</span>
+<span class="s1">              {&quot;input&quot;: {&quot;question&quot;: &quot;List datasets in the paper&quot;}, &quot;expected&quot;: {&quot;answer&quot;: &quot;ImageNet, CIFAR-10/100&quot;}}</span>
+<span class="s1">            ],</span>
+<span class="s1">            &quot;search_strategy&quot;: &quot;grid&quot;,</span>
+<span class="s1">            &quot;retrievers&quot;: [{&quot;search_mode&quot;: [&quot;hybrid&quot;], &quot;hybrid_alpha&quot;: [0.5, 0.7], &quot;top_k&quot;: [8, 12]}],</span>
+<span class="s1">            &quot;rerankers&quot;: [{&quot;strategy&quot;: [&quot;flashrank&quot;, &quot;cross_encoder&quot;], &quot;top_k&quot;: [10]}],</span>
+<span class="s1">            &quot;rag&quot;: {&quot;model&quot;: [&quot;gpt-4o-mini&quot;], &quot;max_tokens&quot;: [300]},</span>
+<span class="s1">            &quot;advanced&quot;: {&quot;fts_level&quot;: &quot;chunk&quot;, &quot;include_sibling_chunks&quot;: true, &quot;enable_enhanced_chunking&quot;: true, &quot;timeout_seconds&quot;: 30}</span>
+<span class="s1">          }</span>
+<span class="s1">        }</span>
+<span class="s1">      }&#39;</span>
+</code></pre></div></p>
+<p>Then start a run and poll results as usual (steps 3-4 above). The evaluation holds the QA inline; no dataset row is created.</p>
+<p>Alternative: keep your evaluation static and supply QA only when starting a run (no eval changes). Provide <code>dataset_override</code> in the run body:
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/evaluations/&lt;EVAL_ID&gt;/runs<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;target_model&quot;: &quot;openai&quot;,</span>
+<span class="s1">        &quot;dataset_override&quot;: {</span>
+<span class="s1">          &quot;samples&quot;: [</span>
+<span class="s1">            {&quot;input&quot;: {&quot;question&quot;: &quot;What is a residual connection?&quot;}, &quot;expected&quot;: {&quot;answer&quot;: &quot;It helps gradients flow and stabilizes very deep nets.&quot;}},</span>
+<span class="s1">            {&quot;input&quot;: {&quot;question&quot;: &quot;List datasets in the paper&quot;}, &quot;expected&quot;: {&quot;answer&quot;: &quot;ImageNet, CIFAR-10/100&quot;}}</span>
+<span class="s1">          ]</span>
+<span class="s1">        }</span>
+<span class="s1">      }&#39;</span>
+</code></pre></div>
+This evaluates without creating a dataset record and without embedding QA in the evaluation definition.</p>
+<h2 id="workflows-single-run-automation-ad-hoc">Workflows: Single-Run Automation (Ad-hoc)<a class="headerlink" href="#workflows-single-run-automation-ad-hoc" title="Permanent link">&para;</a></h2>
+<p>Use a self-contained workflow that performs: create dataset → create evaluation → start run → (optional) save preset.</p>
+<p>1) Prepare the ad-hoc definition (definition.json)
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optimize-rag-config&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;on_completion_webhook&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;steps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;log_start&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;log&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Starting RAG config optimization&quot;</span><span class="p">}},</span>
+
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;create_dataset&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;webhook&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/evaluations/datasets&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;headers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;Content-Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;application/json&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;X-API-KEY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{{ inputs.api_key }}&quot;</span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{{ inputs.dataset_name }}&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Baseline QA&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;samples&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{{</span><span class="w"> </span><span class="err">i</span><span class="kc">n</span><span class="err">pu</span><span class="kc">ts</span><span class="err">.qa_samples</span><span class="w"> </span><span class="err">|</span><span class="w"> </span><span class="kc">t</span><span class="err">ojso</span><span class="kc">n</span><span class="w"> </span><span class="p">}}</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;capture&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dataset&quot;</span>
+<span class="w">    </span><span class="p">}},</span>
+
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;create_eval&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;webhook&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/evaluations/&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;headers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;Content-Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;application/json&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;X-API-KEY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{{ inputs.api_key }}&quot;</span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;rag_cfg_search&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;eval_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;model_graded&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;eval_spec&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">&quot;sub_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;rag_pipeline&quot;</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">&quot;rag_pipeline&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">&quot;dataset_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{{ steps.create_dataset.response.id }}&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">&quot;search_strategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;grid&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">&quot;chunking&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;include_siblings&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">]},</span>
+<span class="w">            </span><span class="nt">&quot;retrievers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;search_mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;hybrid&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;hybrid_alpha&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="mf">0.7</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;top_k&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">]}],</span>
+<span class="w">            </span><span class="nt">&quot;rerankers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;strategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;flashrank&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;cross_encoder&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;top_k&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">10</span><span class="p">]}],</span>
+<span class="w">            </span><span class="nt">&quot;rag&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;{{ inputs.rag_model }}&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;max_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">300</span><span class="p">]}</span>
+<span class="w">          </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;capture&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;evaluation&quot;</span>
+<span class="w">    </span><span class="p">}},</span>
+
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;start_run&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;webhook&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/evaluations/{{ steps.create_eval.response.id }}/runs&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;headers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;Content-Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;application/json&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;X-API-KEY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{{ inputs.api_key }}&quot;</span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;target_model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;openai&quot;</span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;capture&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;run&quot;</span>
+<span class="w">    </span><span class="p">}},</span>
+
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;delay&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;delay&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;milliseconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5000</span><span class="p">}},</span>
+
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;fetch_run&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;webhook&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/evaluations/runs/{{ steps.start_run.response.id }}&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GET&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;headers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;X-API-KEY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{{ inputs.api_key }}&quot;</span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;capture&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;run_state&quot;</span>
+<span class="w">    </span><span class="p">}},</span>
+
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;maybe_save_preset&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;webhook&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/evaluations/rag/pipeline/presets&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;headers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;Content-Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;application/json&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;X-API-KEY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{{ inputs.api_key }}&quot;</span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{{ inputs.preset_name }}&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{{</span><span class="w"> </span><span class="err">s</span><span class="kc">te</span><span class="err">ps.</span><span class="kc">fet</span><span class="err">ch_ru</span><span class="kc">n</span><span class="err">.respo</span><span class="kc">nse</span><span class="err">.resul</span><span class="kc">ts</span><span class="err">.bes</span><span class="kc">t</span><span class="err">.co</span><span class="kc">nf</span><span class="err">ig</span><span class="w"> </span><span class="err">|</span><span class="w"> </span><span class="kc">t</span><span class="err">ojso</span><span class="kc">n</span><span class="w"> </span><span class="p">}}</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+Notes:
+- The engine templates values from <code>inputs</code>. The <code>capture</code> fields make later steps reference earlier JSON responses (e.g., <code>steps.create_dataset.response.id</code>).
+- If egress is restricted, allow localhost in egress policy.
+- For long runs, replace the single <code>delay</code>+<code>fetch_run</code> with a polling loop (or rely on Evaluations webhooks).</p>
+<p>2) Run ad-hoc with inputs
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/workflows/run?mode=async&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;definition&quot;: &#39;</span><span class="s2">&quot;</span><span class="k">$(</span>cat<span class="w"> </span>definition.json<span class="k">)</span><span class="s2">&quot;</span><span class="s1">&#39;,</span>
+<span class="s1">        &quot;inputs&quot;: {</span>
+<span class="s1">          &quot;api_key&quot;: &quot;&#39;</span><span class="nv">$API_KEY</span><span class="s1">&#39;&quot;,</span>
+<span class="s1">          &quot;dataset_name&quot;: &quot;qa_ds_1&quot;,</span>
+<span class="s1">          &quot;qa_samples&quot;: [</span>
+<span class="s1">            {&quot;input&quot;: {&quot;question&quot;: &quot;What is a residual connection?&quot;}, &quot;expected&quot;: {&quot;answer&quot;: &quot;It helps gradients flow and stabilizes very deep nets.&quot;}},</span>
+<span class="s1">            {&quot;input&quot;: {&quot;question&quot;: &quot;List datasets in the paper&quot;}, &quot;expected&quot;: {&quot;answer&quot;: &quot;ImageNet, CIFAR-10/100&quot;}}</span>
+<span class="s1">          ],</span>
+<span class="s1">          &quot;rag_model&quot;: &quot;gpt-4o-mini&quot;,</span>
+<span class="s1">          &quot;preset_name&quot;: &quot;baseline_hybrid_xenc&quot;</span>
+<span class="s1">        }</span>
+<span class="s1">      }&#39;</span>
+</code></pre></div></p>
+<h2 id="advanced-tablesvlm-and-agentic-toggles">Advanced: Tables/VLM and Agentic Toggles<a class="headerlink" href="#advanced-tablesvlm-and-agentic-toggles" title="Permanent link">&para;</a></h2>
+<p>For table-heavy corpora or scans, enable table processing and Vision-assisted late chunking. Pair that with post-verification and bounded adaptive re-runs to improve robustness on low confidence.</p>
+<p>Use these keys under <code>rag_pipeline.advanced</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;fts_level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;chunk&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;enable_table_processing&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;table_method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;markdown&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;enable_vlm_late_chunking&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;vlm_backend&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gpt-4o&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;vlm_detect_tables_only&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;vlm_max_pages&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;enable_post_verification&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;adaptive_rerun_on_low_confidence&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;adaptive_rerun_include_generation&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;adaptive_rerun_time_budget_sec&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;timeout_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;highlight_results&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Scope retrieval to a keyword collection using <code>retriever.keyword_filter</code> (e.g., <code>collection:tables-demo</code>). Example retriever block:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;search_mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;hybrid&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;hybrid_alpha&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="mf">0.7</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;top_k&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">8</span><span class="p">,</span><span class="mi">12</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;keyword_filter&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;collection:tables-demo&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;fts_level&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;chunk&quot;</span><span class="p">]}</span>
+</code></pre></div>
+<h2 id="ready-to-paste-evaluation-json">Ready-to-Paste Evaluation JSON<a class="headerlink" href="#ready-to-paste-evaluation-json" title="Permanent link">&para;</a></h2>
+<p>An inline-QA RAG grid with VLM late chunking and agentic toggles is provided at <code>Samples/Evals/rag_grid_inline_qa.json</code>. Post it directly:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/evaluations/<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span>@Samples/Evals/rag_grid_inline_qa.json
+</code></pre></div>
+<p>Then start a run as usual:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/evaluations/&lt;EVAL_ID&gt;/runs<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;target_model&quot;: &quot;openai&quot;}&#39;</span>
+</code></pre></div>
+<h2 id="ad-hoc-schedule-rag-grid-and-embeddings-ab-inline-qa-keyword-collections">Ad-hoc + Schedule: RAG grid and Embeddings A/B (Inline QA, Keyword Collections)<a class="headerlink" href="#ad-hoc-schedule-rag-grid-and-embeddings-ab-inline-qa-keyword-collections" title="Permanent link">&para;</a></h2>
+<p>Use the combined sample workflow at <code>Samples/Workflows/rag_and_embeddings_opt.workflow.json</code>. It:
+- Creates a RAG inline-QA evaluation constrained by your <code>keyword_filter</code> collection
+- Starts the RAG run
+- Searches media by keywords to derive <code>media_ids</code>
+- Creates and starts an Embeddings A/B test against those IDs</p>
+<p>Notes:
+- The Workflows <code>webhook</code> step supports <code>method</code>, <code>headers</code>, and <code>body</code> with minimal templating.
+- Inject structured JSON from the workflow context using <code>JSON:&lt;path&gt;</code> references:
+  - <code>JSON:inputs.qa_samples</code>
+  - <code>JSON:inputs.keyword_filter</code>
+  - <code>JSON:prev.response_json.items|pluck:id</code> (pluck a field from a list)
+- Provide the API key at run time via <code>secrets</code> (preferred) or set <code>inputs.api_key</code> in the definition.</p>
+<p>Run the ad-hoc once with inline inputs/secrets:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/workflows/run?mode=async&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;definition&quot;: &#39;</span><span class="s2">&quot;</span><span class="k">$(</span>cat<span class="w"> </span>Samples/Workflows/rag_and_embeddings_opt.workflow.json<span class="k">)</span><span class="s2">&quot;</span><span class="s1">&#39;,</span>
+<span class="s1">        &quot;inputs&quot;: {</span>
+<span class="s1">          &quot;keyword_filter&quot;: [&quot;collection:tables-demo&quot;],</span>
+<span class="s1">          &quot;qa_samples&quot;: [</span>
+<span class="s1">            {&quot;input&quot;: {&quot;question&quot;: &quot;What is a residual connection?&quot;}, &quot;expected&quot;: {&quot;answer&quot;: &quot;It helps gradients flow and stabilizes deep networks.&quot;}}</span>
+<span class="s1">          ]</span>
+<span class="s1">        },</span>
+<span class="s1">        &quot;secrets&quot;: {&quot;api_key&quot;: &quot;&#39;</span><span class="nv">$API_KEY</span><span class="s1">&#39;&quot;}</span>
+<span class="s1">      }&#39;</span>
+</code></pre></div>
+<p>Schedule it nightly at 02:00 using the Workflows scheduler (first, save the workflow):</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Save and capture workflow id</span>
+<span class="nv">WF_ID</span><span class="o">=</span><span class="k">$(</span>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/workflows<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span>@Samples/Workflows/rag_and_embeddings_opt.workflow.json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>.id<span class="k">)</span>
+
+<span class="c1"># Create a schedule (skip overlaps, UTC)</span>
+curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8000/api/v1/scheduler/workflows<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-KEY: </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;workflow_id&quot;: &#39;</span><span class="s2">&quot;</span><span class="nv">$WF_ID</span><span class="s2">&quot;</span><span class="s1">&#39;,</span>
+<span class="s1">        &quot;name&quot;: &quot;rag+embeddings nightly&quot;,</span>
+<span class="s1">        &quot;cron&quot;: &quot;0 2 * * *&quot;,</span>
+<span class="s1">        &quot;timezone&quot;: &quot;UTC&quot;,</span>
+<span class="s1">        &quot;inputs&quot;: {&quot;keyword_filter&quot;: [&quot;collection:tables-demo&quot;]},</span>
+<span class="s1">        &quot;run_mode&quot;: &quot;async&quot;,</span>
+<span class="s1">        &quot;enabled&quot;: true</span>
+<span class="s1">      }&#39;</span>
+</code></pre></div>
+<h3 id="auth-tips-ad-hoc-and-scheduled">Auth Tips (Ad-hoc and Scheduled)<a class="headerlink" href="#auth-tips-ad-hoc-and-scheduled" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Ad-hoc (multi-user): pass a short-lived JWT via <code>secrets.jwt</code> in the run request. Steps use:</li>
+<li><code>Authorization: {{ secrets.jwt and ('Bearer ' ~ secrets.jwt) or '' }}</code></li>
+<li>
+<p><code>X-API-KEY: {{ secrets.api_key or inputs.api_key or '' }}</code> (for single-user)</p>
+</li>
+<li>
+<p>Scheduled runs: set environment fallbacks on the server:</p>
+</li>
+<li><code>WORKFLOWS_DEFAULT_BEARER_TOKEN</code> for multi-user</li>
+<li><code>WORKFLOWS_DEFAULT_API_KEY</code> for single-user</li>
+<li>
+<p>Optional sanity validation before first outbound call (per run):</p>
+<ul>
+<li><code>WORKFLOWS_VALIDATE_DEFAULT_AUTH=true</code></li>
+<li>Optional base override: <code>WORKFLOWS_INTERNAL_BASE_URL=http://127.0.0.1:8000</code></li>
+<li>The engine uses <code>GET /api/v1/workflows/auth/check</code> to verify the token once.</li>
+</ul>
+</li>
+<li>
+<p>Virtual keys for schedules: mint a short-lived JWT (scope=workflows) and set it as <code>WORKFLOWS_DEFAULT_BEARER_TOKEN</code>.</p>
+</li>
+<li><code>POST /api/v1/workflows/auth/virtual-key</code> (admin; multi-user)<ul>
+<li>body: <code>{ "ttl_minutes": 60, "scope": "workflows", "schedule_id": "..." }</code></li>
+<li>returns <code>{ token, expires_at, scope, schedule_id }</code></li>
+</ul>
+</li>
+<li>For stricter isolation, consider enforcing <code>scope == 'workflows'</code> and matching <code>schedule_id</code> in downstream endpoints.</li>
+</ul>
+<h2 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The evaluation run’s <code>results</code> contain a <code>leaderboard</code> and a <code>best</code> object with the best performing configuration.</li>
+<li>Saving a preset lets you reuse the winning config in production/search endpoints and the WebUI.</li>
+</ul>
+<h2 id="tips-for-effective-grids">Tips for effective grids<a class="headerlink" href="#tips-for-effective-grids" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Start small for latency: 2-3 values per knob; expand only after first signal.</li>
+<li>Retrieval: try <code>hybrid_alpha</code> in [0.5, 0.7, 0.8], <code>top_k</code> in [8, 12, 16].</li>
+<li>Rerankers: <code>flashrank</code> (fast) vs <code>cross_encoder</code> (higher quality); cap <code>rerank_top_k</code> ≈ 10-20.</li>
+<li>Long docs: prefer <code>fts_level=chunk</code>, <code>include_sibling_chunks=true</code>.</li>
+<li>If tables matter: enable VLM late chunking in RAG/agentic strategies.</li>
+</ul>
+<h2 id="advanced-options-reference-pass-through">Advanced Options Reference (Pass-through)<a class="headerlink" href="#advanced-options-reference-pass-through" title="Permanent link">&para;</a></h2>
+<p>These keys are accepted under <code>rag_pipeline.advanced</code> and are passed directly to the unified RAG pipeline. Use them to fine-tune retrieval, reranking, generation, and guardrails.</p>
+<ul>
+<li>Search/Expansion/Cache</li>
+<li><code>expand_query: bool</code> - enable query expansion.</li>
+<li><code>expansion_strategies: string[]</code> - acronym|synonym|domain|entity.</li>
+<li><code>spell_check: bool</code> - correct typos before retrieval.</li>
+<li><code>enable_cache: bool</code> - semantic/rewrite cache.</li>
+<li><code>cache_threshold: number</code> - similarity threshold for cache hits.</li>
+<li>
+<p><code>adaptive_cache: bool</code> - smarter cache policy per query.</p>
+</li>
+<li>
+<p>Security/Filters</p>
+</li>
+<li><code>enable_security_filter: bool</code> - enable policy checks.</li>
+<li><code>detect_pii: bool</code> - detect personally identifiable information.</li>
+<li><code>redact_pii: bool</code> - redact PII in contexts/answers.</li>
+<li><code>sensitivity_level: "public"|"internal"|"confidential"|"restricted"</code> - policy level.</li>
+<li>
+<p><code>content_filter: bool</code> - content safety filtering.</p>
+</li>
+<li>
+<p>Tables/VLM</p>
+</li>
+<li><code>enable_table_processing: bool</code> - parse/serialize tables.</li>
+<li><code>table_method: "markdown"|"html"|"hybrid"</code> - output format for table serialization.</li>
+<li><code>enable_vlm_late_chunking: bool</code> - vision-assisted chunking of PDFs/images late in pipeline.</li>
+<li><code>vlm_backend: string</code> - VLM model/provider (e.g., gpt-4o).</li>
+<li><code>vlm_detect_tables_only: bool</code> - only detect tables (faster); otherwise detect figures too.</li>
+<li><code>vlm_max_pages: number|null</code> - maximum analyzed pages.</li>
+<li>
+<p><code>vlm_late_chunk_top_k_docs: number</code> - how many docs to VLM-chunk.</p>
+</li>
+<li>
+<p>Context/Chunking</p>
+</li>
+<li><code>enable_enhanced_chunking: bool</code> - retrieval-time chunk expansion helpers.</li>
+<li><code>chunk_type_filter: string[]</code> - filter chunk types: text|code|table|list.</li>
+<li><code>enable_parent_expansion: bool</code> - include parent chunk context.</li>
+<li><code>parent_context_size: number</code> - characters from parent.</li>
+<li><code>include_parent_document: bool</code> - include a parent document preview.</li>
+<li><code>sibling_window: number</code> - neighbor chunk window size.</li>
+<li>
+<p><code>include_sibling_chunks: bool</code> - include neighbor chunks (note: if <code>chunking.include_siblings</code> is set, it takes precedence over this advanced value in the grid execution).</p>
+</li>
+<li>
+<p>Advanced Retrieval</p>
+</li>
+<li><code>enable_multi_vector_passages: bool</code> - split passages into sub-spans.</li>
+<li><code>mv_span_chars: number</code> - characters per span.</li>
+<li><code>mv_stride: number</code> - sliding stride.</li>
+<li><code>mv_max_spans: number</code> - span cap per doc.</li>
+<li><code>mv_flatten_to_spans: bool</code> - treat spans as top-level units.</li>
+<li>
+<p><code>enable_numeric_table_boost: bool</code> - boost numeric/table content.</p>
+</li>
+<li>
+<p>Reranking Extras</p>
+</li>
+<li><code>reranking_model: string</code> - model id/path (e.g., GGUF or HF id) for rerank.</li>
+<li><code>rerank_min_relevance_prob: number|null</code> - threshold gate for two-tier rerankers.</li>
+<li>
+<p><code>rerank_sentinel_margin: number|null</code> - margin for sentinel filtering.</p>
+</li>
+<li>
+<p>Citations &amp; Guardrails</p>
+</li>
+<li><code>enable_citations: bool</code> - enable citation generation.</li>
+<li><code>citation_style: "apa"|"mla"|"chicago"|"harvard"|"ieee"</code>.</li>
+<li><code>include_page_numbers: bool</code> - include page numbers in citations.</li>
+<li><code>enable_chunk_citations: bool</code> - per-chunk citation annotations.</li>
+<li><code>strict_extractive: bool</code> - constrain model to extractive answers.</li>
+<li><code>require_hard_citations: bool</code> - enforce hard citation evidence.</li>
+<li><code>enable_numeric_fidelity: bool</code> - numeric accuracy guardrails.</li>
+<li>
+<p><code>numeric_fidelity_behavior: "continue"|"ask"|"decline"|"retry"</code> - behavior on numeric uncertainty.</p>
+</li>
+<li>
+<p>Generation Extras</p>
+</li>
+<li><code>enable_abstention: bool</code> - allow the model to abstain.</li>
+<li><code>abstention_behavior: "continue"|"ask"|"decline"</code> - behavior when abstaining.</li>
+<li><code>enable_multi_turn_synthesis: bool</code> - multi-pass synthesis.</li>
+<li><code>synthesis_time_budget_sec: number|null</code> - synthesis time budget.</li>
+<li><code>synthesis_draft_tokens: number|null</code> - draft step token budget.</li>
+<li>
+<p><code>synthesis_refine_tokens: number|null</code> - refine step token budget.</p>
+</li>
+<li>
+<p>Post-Verification / Adaptive</p>
+</li>
+<li><code>enable_post_verification: bool</code> - verify/model-check the answer.</li>
+<li><code>adaptive_max_retries: number</code> - max adaptive loops.</li>
+<li><code>adaptive_unsupported_threshold: number</code> - unsupported content threshold.</li>
+<li><code>adaptive_max_claims: number</code> - claims extraction limit.</li>
+<li><code>adaptive_time_budget_sec: number|null</code> - total verification budget.</li>
+<li><code>low_confidence_behavior: "continue"|"ask"|"decline"</code> - gating policy for low confidence.</li>
+<li><code>adaptive_advanced_rewrites: bool|null</code> - allow deeper query rewrites.</li>
+<li><code>adaptive_rerun_on_low_confidence: bool</code> - bounded re-run.</li>
+<li><code>adaptive_rerun_include_generation: bool</code> - rerun generation as well.</li>
+<li><code>adaptive_rerun_bypass_cache: bool</code> - bypass caches for the rerun.</li>
+<li><code>adaptive_rerun_time_budget_sec: number|null</code> - rerun budget.</li>
+<li>
+<p><code>adaptive_rerun_doc_budget: number|null</code> - rerun doc cap.</p>
+</li>
+<li>
+<p>Observability / Performance</p>
+</li>
+<li><code>enable_monitoring: bool</code> - internal metrics.</li>
+<li><code>enable_observability: bool</code> - tracing/telemetry.</li>
+<li><code>trace_id: string</code> - propagate a trace id.</li>
+<li><code>enable_performance_analysis: bool</code> - extra perf probes.</li>
+<li>
+<p><code>timeout_seconds: number</code> - per-query timeout.</p>
+</li>
+<li>
+<p>Namespace &amp; UX</p>
+</li>
+<li><code>index_namespace: string</code> - ephemeral collection namespace for the run (combine with <code>cleanup_collections</code> at the top level of <code>rag_pipeline</code>).</li>
+<li><code>highlight_results: bool</code> - annotate highlights in results.</li>
+<li><code>highlight_query_terms: bool</code> - highlight matched terms.</li>
+<li><code>track_cost: bool</code> - record estimated cost.</li>
+<li>
+<p><code>debug_mode: bool</code> - verbose debug.</p>
+</li>
+<li>
+<p>Claims &amp; Factuality</p>
+</li>
+<li><code>enable_claims: bool</code> - enable claims extraction/verification.</li>
+<li><code>claim_extractor: string|null</code> - model/provider for extraction.</li>
+<li><code>claim_verifier: string|null</code> - model/provider for verification.</li>
+<li><code>claims_top_k: number|null</code> - documents per claim.</li>
+<li><code>claims_conf_threshold: number|null</code> - min confidence.</li>
+<li><code>claims_max: number|null</code> - maximum claims per answer.</li>
+<li><code>nli_model: string|null</code> - NLI model for fact-checking.</li>
+<li>
+<p><code>claims_concurrency: number|null</code> - parallelism cap.</p>
+</li>
+<li>
+<p>Date/Media Filtering</p>
+</li>
+<li><code>enable_date_filter: bool</code> - enable date range filter.</li>
+<li><code>date_range: object</code> - e.g., {"from": "2024-01-01", "to": "2024-12-31"}.</li>
+<li><code>filter_media_types: string[]</code> - restrict to media types.</li>
+</ul>
+<p>Hints
+- Retrieval-level <code>fts_level</code> and <code>keyword_filter</code> are set in the <code>retrievers</code> block; <code>fts_level</code> is not part of <code>advanced</code> (it’s passed via the retriever). If both <code>chunking.include_siblings</code> and <code>advanced.include_sibling_chunks</code> are provided, the chunking block takes precedence during the grid run.</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="January 19, 2026 07:56:46 UTC"><span class="timeago" datetime="2026-01-19T07:56:46+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="January 19, 2026 07:56:46 UTC">2026-01-19</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Created">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="October 18, 2025 03:55:38 UTC"><span class="timeago" datetime="2025-10-18T03:55:38+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="October 18, 2025 03:55:38 UTC">2025-10-18</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../Workflows_Runbook/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Runbook">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Runbook
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../Workflows_Embeddings_ABTest/" class="md-footer__link md-footer__link--next" aria-label="Next: Embeddings A/B Test">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Embeddings A/B Test
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      © 2024 tldw_Server - v0.1.0 - <a href="https://github.com/rmusser01/tldw_server">GitHub</a>
+
+    </div>
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/rmusser01/tldw_server" target="_blank" rel="noopener" title="GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tabs", "navigation.top", "navigation.tracking", "navigation.indexes", "navigation.footer", "content.code.copy", "content.action.edit", "content.action.view"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "v0.1.0"}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../js/timeago.min.js"></script>
+      
+        <script src="../js/timeago_mkdocs_material.js"></script>
+      
+    
+  </body>
+</html>

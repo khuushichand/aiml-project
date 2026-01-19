@@ -793,7 +793,28 @@ class EvaluationsDatabase:
         if desired not in {"sqlalchemy", "repo"}:
             self._abtest_store = None
             return
-        if self.backend_type != BackendType.SQLITE:
+        db_url = None
+        if self.backend_type == BackendType.SQLITE:
+            db_url = self.db_path
+        elif self.backend_type == BackendType.POSTGRESQL and self.backend is not None:
+            cfg = self.backend.config
+            raw = getattr(cfg, "connection_string", None)
+            if isinstance(raw, str) and "://" in raw:
+                db_url = raw
+            else:
+                try:
+                    from urllib.parse import quote_plus
+                    user = cfg.pg_user or "tldw_user"
+                    password = cfg.pg_password or ""
+                    host = cfg.pg_host or "localhost"
+                    port = cfg.pg_port or 5432
+                    database = cfg.pg_database or "tldw"
+                    sslmode = cfg.pg_sslmode or "prefer"
+                    auth = f"{user}:{quote_plus(password)}" if password else user
+                    db_url = f"postgresql://{auth}@{host}:{port}/{database}?sslmode={sslmode}"
+                except Exception:
+                    db_url = None
+        if not db_url:
             self._abtest_store = None
             return
         try:
@@ -801,7 +822,7 @@ class EvaluationsDatabase:
                 get_embeddings_abtest_store,
             )
 
-            self._abtest_store = get_embeddings_abtest_store(self.db_path)
+            self._abtest_store = get_embeddings_abtest_store(db_url)
             logger.debug("Embeddings A/B tests using SQLAlchemy repository backend")
         except Exception as exc:
             self._abtest_store = None
@@ -998,6 +1019,43 @@ class EvaluationsDatabase:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM embedding_abtest_arms WHERE test_id = ? ORDER BY arm_index ASC", (test_id,))
             return [dict(r) for r in cursor.fetchall()]
+
+    def find_reusable_abtest_arm(
+        self,
+        *,
+        test_id: str,
+        collection_hash: str,
+        created_by: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        if not collection_hash or not created_by:
+            return None
+        if self._abtest_store:
+            return self._abtest_store.find_reusable_abtest_arm(
+                test_id=test_id,
+                collection_hash=collection_hash,
+                created_by=created_by,
+            )
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT a.*
+                FROM embedding_abtest_arms a
+                JOIN embedding_abtests t ON t.test_id = a.test_id
+                WHERE a.collection_hash = ?
+                  AND a.status = 'ready'
+                  AND a.collection_name IS NOT NULL
+                  AND t.created_by = ?
+                  AND a.test_id <> ?
+                ORDER BY t.created_at DESC
+                LIMIT 1
+                """,
+                (collection_hash, created_by, test_id),
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        return None
 
     def get_abtest_queries(self, test_id: str) -> List[Dict[str, Any]]:
         if self._abtest_store:

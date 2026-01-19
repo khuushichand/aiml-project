@@ -33,7 +33,6 @@ curl -X POST http://127.0.0.1:8000/api/v1/media/add \
 
 Notes and tips:
 - `media_type`: `audio|video|pdf|document|ebook|email|code`
-- New: `json` - treat JSON files as plaintext content while preserving a distinct media type. Useful for storing config snippets alongside corpus items and tagging them via `keywords` for collection-level runs (e.g., `keywords: projectX, eval-config`).
 - Hierarchical chunking: set `hierarchical_chunking=true` to prefer structure-aware splitting for long docs.
 - You may also ingest by URL(s) via `urls=[...]` form fields.
 - The response includes DB identifiers; you’ll need the `media_id` for embeddings.
@@ -279,6 +278,6 @@ print(r.json())
 ---
 
 See also:
-- RAG API Guide: `API-related/RAG-API-Guide.md`
-- Evaluations API (Unified): `API-related/Evaluations_API_Unified_Reference.md`
+- RAG API Guide: `Docs/Published/API-related/RAG-API-Guide.md`
+- Evaluations API (Unified): `Docs/Published/API-related/Evaluations_API_Unified_Reference.md`
 - RAG Deployment/Production guides under User Guides

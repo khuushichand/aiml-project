@@ -52,7 +52,12 @@ providers:
     codec_repo: "neuphonic/neucodec"                 # or neucodec-onnx-decoder
     codec_device: "cpu"
     sample_rate: 24000
+    auto_download: false                             # Offline-first; enable explicitly to allow downloads
 ```
+
+Notes:
+- `auto_download` is disabled by default for NeuTTS to keep the path offline.
+- Set `providers.neutts.auto_download: true` (or `TTS_AUTO_DOWNLOAD=1`) if you want HF downloads when local files are missing.
 
 ### Re-enabling NeuTTS after setup (opt-in)
 

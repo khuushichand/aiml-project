@@ -27,6 +27,19 @@ tldw_Server_API/app/core/Ingestion_Media_Processing/
 └── XML_Ingestion_Lib.py         # Legacy XML import helper (DB-writing)
 ```
 
+- Submodule docs and references:
+  - `Audio/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Audio.md))
+  - `Books/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Ebooks.md))
+  - `Claims/` ([docs](Docs/Code_Documentation/Claims_Extraction.md))
+  - `MediaWiki/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md))
+  - `OCR/` ([docs](Docs/API-related/OCR_API_Documentation.md))
+  - `PDF/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_PDF.md))
+  - `Plaintext/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Documents.md))
+  - `Video/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Video.md))
+  - `Media_Update_lib.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/Media_Update_lib.py))
+  - `Upload_Sink.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/Upload_Sink.py))
+  - `XML_Ingestion_Lib.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/XML_Ingestion_Lib.py))
+
 ## Validation & Security: `Upload_Sink.py`
 
 - Core types:
@@ -63,10 +76,36 @@ Base prefix: `/api/v1/media`
   - `POST /ingest-web-content` - Multi-mode scraping (individual, sitemap, url_level, recursive) with optional analysis/chunking and persistence.
   - `POST /process-web-scraping` - Process scraping jobs without persistence.
 
+### Media Item Details
+
+- `GET  /api/v1/media/{id}` - Retrieve rich media details
+  - Query params:
+    - `include_content` (bool, default: true): include main content text
+    - `include_versions` (bool, default: true): include versions list
+    - `include_version_content` (bool, default: false): include per-version content
+  - Response: unified `MediaDetailResponse` (also used by PUT and POST version endpoints)
+
 Notes
 - API does not accept provider API keys in requests; credentials are read from server configuration.
 - Audio/Video processing requires ffmpeg in PATH.
 - Chunking uses the v2 chunker via `improved_chunking_process` (structure-aware/hierarchical templates supported).
+
+## `/media/add` Persistence Helpers
+
+The `/api/v1/media/add` endpoint no longer implements its pipeline directly
+inside the legacy `_legacy_media.py` module. Instead it uses core helpers
+under `tldw_Server_API.app.core.Ingestion_Media_Processing.persistence`:
+
+- `add_media_persist(...)` – entry point used by `endpoints/media/add.py`; prepares request context and delegates into `add_media_orchestrate(...)`.
+- `add_media_orchestrate(...)` – orchestrates TempDir management, upload saving, quota checks, per-type dispatch, and final status selection for `/media/add`.
+- `process_batch_media(...)` – canonical batch helper for audio/video items; wraps `Video_DL_Ingestion_Lib.process_videos` and `Audio_Files.process_audio_files` and then calls `persist_primary_av_item(...)` to write results to the Media DB.
+- `process_document_like_item(...)` – canonical helper for document-like items (PDFs, documents/HTML/XML/RTF/DOCX, ebooks, JSON, emails and email archives); performs download/validation, processor dispatch, and then calls `persist_doc_item_and_children(...)`.
+- `persist_primary_av_item(...)` / `persist_doc_item_and_children(...)` – handle Media DB writes and ingestion-time claims persistence via `Claims_Extraction.claims_utils.persist_claims_if_applicable(...)`, keeping envelopes (`status`, `input_ref`, `processing_source`, `media_type`, `content`/`transcript`, `chunks`, `analysis`, `claims`, `db_id`, `db_message`, `media_uuid`) consistent across A/V and document flows.
+
+The legacy `_legacy_media.py` file is now a compatibility shim that exposes
+shared constants, Pydantic forms, and thin delegates for tests and older
+imports; `/media` business logic lives in the core helpers and modular
+endpoints under `api/v1/endpoints/media/`.
 
 ## Audio Ingestion: `Audio/`
 
@@ -121,7 +160,7 @@ Chunking integration
 
 - Evented pipeline:
   - `import_mediawiki_dump(file_path, wiki_name, namespaces=None, skip_redirects=False, chunk_options_override=None, progress_callback=None, store_to_db=True, store_to_vector_db=True, api_name_vector_db=None, api_key_vector_db=None) -> Iterator[Dict[str, Any]]`.
-  - Emits `progress_total`, `progress_item`, `item_result`, and final `summary` events. When `store_to_db=True`, it persists via a `MediaDatabase` instance (e.g., `db = create_media_database(...); db.add_media_with_keywords(...)`); vector store saving is scaffolded; some parts are placeholders.
+- Emits `progress_total`, `progress_item`, `item_result`, and final `summary` events. When `store_to_db=True`, it persists via a `MediaDatabase` instance (e.g., `db = create_media_database(...); db.add_media_with_keywords(...)`); vector store saving uses ChromaDBManager with embeddings configured from the MediaWiki embeddings settings, with `api_name_vector_db`/`api_key_vector_db` overriding the provider/model or API key as needed.
 - Safety: filename/path validation, checkpointing (atomic save/cleanup), chunking (`optimized_chunking`).
 
 ## Claims Extraction: `Claims/`
@@ -356,7 +395,7 @@ for ev in events:
 ## Notes & Limitations
 
 - HTML/XML sanitization in `Upload_Sink.py` are placeholders (return original content with a warning).
-- MediaWiki vector store saving is scaffolded but not fully implemented in the current code.
+- MediaWiki vector store saving is implemented via ChromaDBManager; it requires embeddings configuration, and when embeddings are unavailable vector store saving is skipped with a warning while the rest of ingestion proceeds.
 - `XML_Ingestion_Lib.py` follows an older pattern that writes to DB directly; newer endpoints prefer DB-agnostic processors.
 - Some modules rely on optional dependencies; functions degrade gracefully with warnings when a dependency is absent.
 - Ingestion-time claim extraction is available and wired in the embeddings pipeline (see `ChromaDB_Library.py`) behind `ENABLE_INGESTION_CLAIMS`; it is not run for every add-media path by default.

@@ -154,6 +154,7 @@ class ChatbookService:
 
     @classmethod
     def _get_export_retention_seconds(cls) -> int:
+        """Return export retention duration in seconds (defaults to 24 hours)."""
         raw_hours = os.getenv("CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS", "24")
         try:
             hours = int(raw_hours)
@@ -165,6 +166,7 @@ class ChatbookService:
 
     @classmethod
     def _get_download_ttl_seconds(cls) -> int:
+        """Return download link TTL in seconds, bounded by export retention."""
         ttl = cls._get_env_int("CHATBOOKS_URL_TTL_SECONDS", 0)
         if ttl <= 0:
             ttl = cls._get_export_retention_seconds()
@@ -172,10 +174,21 @@ class ChatbookService:
 
     @classmethod
     def _get_export_expiry(cls, now: datetime) -> datetime:
+        """Compute export expiry timestamp from a reference time."""
         return now + timedelta(seconds=cls._get_export_retention_seconds())
 
     @classmethod
     def _get_download_expiry(cls, now: datetime, export_expires_at: datetime) -> datetime:
+        """
+        Compute download link expiry, capped by export expiry.
+
+        Args:
+            now: Current time used as the TTL anchor.
+            export_expires_at: Timestamp when the export itself expires.
+
+        Returns:
+            Expiration timestamp for the download link.
+        """
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         if export_expires_at.tzinfo is None:
@@ -186,6 +199,7 @@ class ChatbookService:
 
     @classmethod
     def _get_binary_limits_bytes(cls) -> Dict[str, int]:
+        """Parse per-type binary size limits from env JSON (MB -> bytes)."""
         raw = os.getenv("CHATBOOKS_BINARY_LIMITS_MB", "").strip()
         if not raw:
             return {}
@@ -210,6 +224,7 @@ class ChatbookService:
 
     @staticmethod
     def _resolve_binary_limit(limits: Dict[str, int], *keys: str) -> Optional[int]:
+        """Return the first matching size limit for the provided keys."""
         for key in keys:
             limit = limits.get(key)
             if limit is not None:
@@ -218,6 +233,7 @@ class ChatbookService:
 
     @staticmethod
     def _build_export_filename(name: str, timestamp: str) -> str:
+        """Build a safe, length-limited export filename."""
         safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in name)
         if not safe_name:
             safe_name = "chatbook"
@@ -311,6 +327,81 @@ class ChatbookService:
             logger.warning(f"TODO(chatbooks): {message}")
             self._todo_messages.add(message)
 
+    def _resolve_import_archive_path(self, file_ref: Union[str, Path]) -> Path:
+        """Resolve and validate a chatbook archive path within temp/imports directories."""
+        ref = str(file_ref or "").strip()
+        if not ref:
+            raise ValidationError("Chatbook file path is required", field="file_path")
+
+        base_dirs = [("import", self.import_dir.resolve()), ("temp", self.temp_dir.resolve())]
+        base_map = dict(base_dirs)
+        ref_path = Path(ref)
+        base_hint: Optional[str] = None
+
+        if not (ref_path.is_absolute() or (ref_path.drive and ref_path.root)):
+            token_parts = ref.split("/", 1)
+            if token_parts[0] in base_map:
+                base_hint = token_parts[0]
+                if len(token_parts) == 1 or not token_parts[1]:
+                    raise ValidationError("Chatbook file path is required", field="file_path")
+                ref_path = Path(token_parts[1])
+
+        bases_to_check = base_dirs
+        if base_hint is not None:
+            bases_to_check = [(base_hint, base_map[base_hint])]
+
+        candidates: List[Tuple[str, Path, Path]] = []
+        if ref_path.is_absolute() or (ref_path.drive and ref_path.root):
+            for base_name, base in bases_to_check:
+                candidates.append((base_name, base, ref_path))
+        else:
+            for base_name, base in bases_to_check:
+                candidates.append((base_name, base, base / ref_path))
+
+        for _base_name, base, candidate in candidates:
+            exists = False
+            try:
+                exists = candidate.exists()
+            except OSError as exc:
+                logger.debug("Chatbooks import: exists check failed for base {}: {}", _base_name, exc)
+                exists = False
+            if exists:
+                try:
+                    resolved = candidate.resolve(strict=True)
+                except OSError as exc:
+                    logger.debug("Chatbooks import: resolve(strict=True) failed for base {}: {}", _base_name, exc)
+                    continue
+                try:
+                    resolved.relative_to(base)
+                except ValueError:
+                    continue
+                return resolved
+            try:
+                resolved = candidate.resolve(strict=False)
+            except OSError as exc:
+                logger.debug("Chatbooks import: resolve(strict=False) failed for base {}: {}", _base_name, exc)
+                continue
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                continue
+
+        raise SecurityError("Chatbook file path is outside allowed import directories")
+
+    def _build_import_file_token(self, resolved_path: Path) -> str:
+        """Return a tokenized relative path for import job payloads."""
+        base_dirs = [("import", self.import_dir.resolve()), ("temp", self.temp_dir.resolve())]
+        for base_name, base in base_dirs:
+            try:
+                return f"{base_name}/{resolved_path.relative_to(base).as_posix()}"
+            except Exception:
+                continue
+        logger.debug(
+            "Chatbooks: path {} not under import/temp dirs; using filename only",
+            resolved_path,
+        )
+        return resolved_path.name
+
     def _get_prompts_db(self) -> Optional["PromptsDatabase"]:
         """Lazily initialize and cache the prompts database."""
         if PromptsDatabase is None:
@@ -375,6 +466,17 @@ class ChatbookService:
         if isinstance(value, datetime):
             return value.isoformat()
         return value
+
+    @staticmethod
+    def _convert_datetimes(obj: Any) -> Any:
+        """Recursively convert datetime values to ISO 8601 strings."""
+        if isinstance(obj, dict):
+            return {k: ChatbookService._convert_datetimes(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [ChatbookService._convert_datetimes(item) for item in obj]
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return obj
 
     @staticmethod
     def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -1185,6 +1287,7 @@ class ChatbookService:
             # Write manifest asynchronously
             manifest_path = work_dir / "manifest.json"
             async def _write_manifest() -> None:
+                """Write the current manifest to disk as formatted JSON."""
                 async with aiofiles.open(manifest_path, 'w', encoding='utf-8') as f:
                     await f.write(json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False))
             await _write_manifest()
@@ -1400,6 +1503,13 @@ class ChatbookService:
                     + ", ".join(sorted(set(requested)))
                 ), None
 
+        try:
+            resolved_path = self._resolve_import_archive_path(file_path)
+        except Exception as exc:
+            logger.warning(f"Chatbooks import rejected file path: {exc}")
+            return False, "Invalid or potentially malicious archive file", None
+        file_token = self._build_import_file_token(resolved_path)
+
         if async_mode:
             # Create job and run asynchronously
             job_id = None
@@ -1408,7 +1518,8 @@ class ChatbookService:
                     "domain": "chatbooks",
                     "job_type": "import",
                     "user_id": self.user_id,
-                    "path": file_path,
+                    "path": file_token,
+                    "file_token": file_token,
                     "import_media": import_media,
                     "import_embeddings": import_embeddings,
                     "conflict_resolution": str(conflict_resolution.value if hasattr(conflict_resolution, 'value') else conflict_resolution),
@@ -1426,7 +1537,7 @@ class ChatbookService:
                 job_id=job_id,
                 user_id=self.user_id,
                 status=ImportStatus.PENDING,
-                chatbook_path=file_path
+                chatbook_path=file_token
             )
 
             # Store job in database
@@ -1441,7 +1552,7 @@ class ChatbookService:
                     payload = {
                         "action": "import",
                         "chatbooks_job_id": job_id,
-                        "file_path": file_path,
+                        "file_token": file_token,
                         "content_selections": {k.value if hasattr(k, 'value') else str(k): v for k, v in (content_selections or {}).items()},
                         "conflict_resolution": conflict_resolution.value if hasattr(conflict_resolution, 'value') else str(conflict_resolution),
                         "prefix_imported": bool(prefix_imported),
@@ -1462,7 +1573,7 @@ class ChatbookService:
                     logger.warning(f"Failed to enqueue import job into core Jobs: {e}")
             else:
                 task = asyncio.create_task(self._import_chatbook_async(
-                    job_id, file_path, content_selections,
+                    job_id, str(resolved_path), content_selections,
                     conflict_resolution, prefix_imported,
                     import_media, import_embeddings
                 ))
@@ -1475,7 +1586,7 @@ class ChatbookService:
             # Return (success, message, warnings)
             return await asyncio.to_thread(
                 self._import_chatbook_sync,
-                file_path, content_selections,
+                str(resolved_path), content_selections,
                 conflict_resolution, prefix_imported,
                 import_media, import_embeddings
             )
@@ -1494,6 +1605,13 @@ class ChatbookService:
         """
         extract_dir: Optional[Path] = None
         try:
+            try:
+                resolved_path = self._resolve_import_archive_path(file_path)
+            except Exception as exc:
+                logger.warning(f"Chatbooks import rejected file path: {exc}")
+                return False, "Invalid or potentially malicious archive file", None
+            file_path = str(resolved_path)
+
             # Validate file first via centralized validator
             from .chatbook_validators import ChatbookValidator
             ok, err = ChatbookValidator.validate_zip_file(file_path)
@@ -1752,7 +1870,7 @@ class ChatbookService:
         finally:
             # Ensure original import archive is removed for async mode
             try:
-                fp = Path(file_path)
+                fp = self._resolve_import_archive_path(file_path)
                 if fp.exists() and fp.is_file():
                     fp.unlink()
             except Exception as _e:
@@ -1770,6 +1888,13 @@ class ChatbookService:
         """
         extract_dir: Optional[Path] = None
         try:
+            try:
+                resolved_path = self._resolve_import_archive_path(file_path)
+            except Exception as exc:
+                logger.warning(f"Chatbooks preview rejected file path: {exc}")
+                return None, "Invalid or potentially malicious archive file"
+            file_path = str(resolved_path)
+
             # Defense-in-depth: validate the archive before extraction
             try:
                 from .chatbook_validators import ChatbookValidator
@@ -1998,13 +2123,13 @@ class ChatbookService:
                     else:
                         ok, msg, _ = await asyncio.to_thread(
                             self._import_chatbook_sync,
-                            payload.get("file_path"), cs,
+                            (payload.get("file_token") or payload.get("file_path")), cs,
                             conflict_res,
                             bool(payload.get("prefix_imported", False)),
                             import_media,
                             import_embeddings,
                         )
-                    import_archive = payload.get("file_path")
+                    import_archive = payload.get("file_token") or payload.get("file_path")
                     ij = self._get_import_job(chatbooks_job_id)
                     if ok:
                         if ij and ij.status != ImportStatus.CANCELLED:
@@ -2033,7 +2158,7 @@ class ChatbookService:
                         )
                     if import_archive:
                         try:
-                            archive_path = Path(import_archive)
+                            archive_path = self._resolve_import_archive_path(import_archive)
                             if archive_path.exists() and archive_path.is_file():
                                 archive_path.unlink()
                         except Exception as exc:
@@ -2861,16 +2986,7 @@ class ChatbookService:
                     continue
 
                 # Convert datetime objects to strings for JSON serialization
-                def convert_datetimes(obj):
-                    if isinstance(obj, dict):
-                        return {k: convert_datetimes(v) for k, v in obj.items()}
-                    elif isinstance(obj, list):
-                        return [convert_datetimes(item) for item in obj]
-                    elif isinstance(obj, datetime):
-                        return obj.isoformat()
-                    return obj
-
-                wb_data_serializable = convert_datetimes(wb_data)
+                wb_data_serializable = self._convert_datetimes(wb_data)
 
                 # Write world book file
                 wb_file = wb_dir / f"world_book_{wb_id}.json"
@@ -2915,16 +3031,7 @@ class ChatbookService:
                     continue
 
                 # Convert datetime objects to strings for JSON serialization
-                def convert_datetimes(obj):
-                    if isinstance(obj, dict):
-                        return {k: convert_datetimes(v) for k, v in obj.items()}
-                    elif isinstance(obj, list):
-                        return [convert_datetimes(item) for item in obj]
-                    elif isinstance(obj, datetime):
-                        return obj.isoformat()
-                    return obj
-
-                dict_data_serializable = convert_datetimes(dict_data)
+                dict_data_serializable = self._convert_datetimes(dict_data)
 
                 # Write dictionary file
                 dict_file = dict_dir / f"dictionary_{dict_id}.json"
@@ -4113,6 +4220,12 @@ class ChatbookService:
             True if valid
         """
         try:
+            try:
+                resolved_path = self._resolve_import_archive_path(file_path)
+            except Exception as exc:
+                raise ValidationError("Invalid or potentially malicious archive file", field="file_path") from exc
+            file_path = str(resolved_path)
+
             with zipfile.ZipFile(file_path, 'r') as zf:
                 # Check for manifest
                 if 'manifest.json' not in zf.namelist():
@@ -4154,7 +4267,8 @@ class ChatbookService:
             manifest = None
             if is_valid:
                 try:
-                    with zipfile.ZipFile(file_path, 'r') as zf:
+                    resolved_path = self._resolve_import_archive_path(file_path)
+                    with zipfile.ZipFile(resolved_path, 'r') as zf:
                         manifest_data = zf.read('manifest.json')
                         manifest = json.loads(manifest_data)
                 except Exception as mf_err:
@@ -4366,6 +4480,7 @@ class ChatbookService:
     async def _create_zip_archive_async(self, work_dir: Path, output_path: Path):
         """Create ZIP archive of the chatbook asynchronously with compression limits."""
         def _create_archive():
+            """Write the ZIP archive, enforcing per-file and total size limits."""
             per_file_limit, total_limit = self._get_archive_limits()
             with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
                 total_size = 0

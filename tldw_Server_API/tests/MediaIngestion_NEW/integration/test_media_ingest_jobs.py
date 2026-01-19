@@ -94,3 +94,43 @@ def test_media_ingest_jobs_file_staging_payload(
     assert Path(payload["source"]).exists()
 
     shutil.rmtree(payload["temp_dir"], ignore_errors=True)
+
+
+def test_media_ingest_jobs_list_by_batch(
+    test_client,
+    auth_headers,
+    monkeypatch,
+    tmp_path,
+):
+    _set_jobs_db(monkeypatch, tmp_path)
+
+    upload_path = tmp_path / "batch.txt"
+    upload_path.write_text("batch ingest", encoding="utf-8")
+
+    data = {
+        "media_type": "document",
+        "urls": "https://example.com/doc-1",
+    }
+    files = [("files", ("batch.txt", upload_path.read_bytes(), "text/plain"))]
+    resp = test_client.post(
+        "/api/v1/media/ingest/jobs",
+        data=data,
+        files=files,
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    batch_id = body.get("batch_id")
+    assert batch_id
+    job_ids = {job["id"] for job in body.get("jobs", [])}
+    assert len(job_ids) == 2
+
+    list_resp = test_client.get(
+        f"/api/v1/media/ingest/jobs?batch_id={batch_id}",
+        headers=auth_headers,
+    )
+    assert list_resp.status_code == 200, list_resp.text
+    list_body = list_resp.json()
+    assert list_body.get("batch_id") == batch_id
+    listed_ids = {job["id"] for job in list_body.get("jobs", [])}
+    assert listed_ids == job_ids

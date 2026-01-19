@@ -73,10 +73,39 @@ Egress & Outbound Policy (global + Workflows)
 - `JOBS_DB_URL`: Postgres DSN for Jobs backend; falls back to SQLite when unset.
 - `JOBS_*`: Lease/renew/metrics settings (see repo `Env_Vars.md`).
   - Common toggles include `JOBS_WEBHOOKS_*`, `JOBS_INTEGRITY_SWEEP_*`, `JOBS_METRICS_*`.
+- `TLDW_WORKERS_SIDECAR_MODE`: When true, skip in-process Jobs workers so you can run them as sidecars (`true|false`, default `false`).
+- `MEDIA_INGEST_JOBS_WORKER_ENABLED`: Start the in-process media ingest jobs worker on app startup (`true|false`, default follows route policy for `media`).
+- `FILES_JOBS_WORKER_ENABLED`: Start the in-process file artifacts jobs worker on app startup (`true|false`, default follows route policy for `files`); otherwise run `python -m tldw_Server_API.app.core.File_Artifacts.jobs_worker`.
+- `PROMPT_STUDIO_JOBS_WORKER_ENABLED`: Start the in-process Prompt Studio jobs worker on app startup (`true|false`, default follows route policy for `prompt-studio`).
+- `PRIVILEGE_SNAPSHOT_WORKER_ENABLED`: Start the in-process privilege snapshot jobs worker on app startup (`true|false`, default follows route policy for `privileges`).
 - `EMBEDDINGS_JOBS_QUEUE`: Queue for embeddings stage jobs (default `default`).
 - `EMBEDDINGS_ROOT_JOBS_QUEUE`: Queue for embeddings root jobs (default `low` when stage queue is not `low`).
 - `EMBEDDINGS_JOBS_WORKER_ID`: Worker identifier for embeddings jobs (default `embeddings-jobs-<pid>`).
 - `EMBEDDINGS_JOBS_EXPOSE_PROGRESS`: Include progress fields in public embeddings jobs responses (`true|false`, default `false`).
+
+## Data Tables
+- `DATA_TABLES_JOBS_WORKER_ENABLED`: Start the in-process data tables jobs worker on app startup (`true|false`, default follows route policy for `data-tables`).
+- `DATA_TABLES_JOBS_QUEUE`: Queue for data table generation jobs (default `default`).
+- `DATA_TABLES_JOBS_WORKER_ID`: Worker identifier for data tables jobs (default `data-tables-jobs-<pid>`).
+- `DATA_TABLES_JOBS_LEASE_SECONDS`: Lease duration for data tables jobs (default `60`).
+- `DATA_TABLES_JOBS_RENEW_JITTER_SECONDS`: Lease renew jitter in seconds (default `5`).
+- `DATA_TABLES_JOBS_RENEW_THRESHOLD_SECONDS`: Renew threshold in seconds (default `10`).
+- `DATA_TABLES_JOBS_BACKOFF_BASE_SECONDS`: Base retry backoff in seconds (default `2`).
+- `DATA_TABLES_JOBS_BACKOFF_MAX_SECONDS`: Max retry backoff in seconds (default `30`).
+- `DATA_TABLES_JOBS_RETRY_BACKOFF_SECONDS`: Backoff for retryable errors (default `10`).
+- `DATA_TABLES_DEFAULT_MAX_ROWS`: Default max rows per table when request omits `max_rows` (default `200`).
+- `DATA_TABLES_MAX_ROWS`: Hard cap on generated rows per table (default `2000`).
+- `DATA_TABLES_MAX_SOURCE_CHARS`: Per-source character cap used when building prompts (default `12000`).
+- `DATA_TABLES_MAX_TOTAL_SOURCE_CHARS`: Aggregate character cap across all sources (default `60000`).
+- `DATA_TABLES_MAX_SNAPSHOT_CHARS`: Per-chunk snapshot text cap for rag_query sources (default `8000`).
+- `DATA_TABLES_MAX_PROMPT_CHARS`: Total prompt size cap (default `24000`).
+- `DATA_TABLES_CHAT_BATCH_SIZE`: Batch size when loading chat messages (default `250`).
+- `DATA_TABLES_CHAT_MAX_MESSAGES`: Maximum chat messages loaded per source (default `1500`).
+- `DATA_TABLES_LLM_MAX_TOKENS`: LLM response token budget for table generation (default `2000`).
+- `DATA_TABLES_LLM_TEMPERATURE`: LLM temperature for table generation (default `0.2`).
+
+## Chat
+- `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
 
 ## Chatbooks
 - `CHATBOOKS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).
@@ -92,7 +121,7 @@ Egress & Outbound Policy (global + Workflows)
 - `CHATBOOKS_IMPORT_DICT_STRICT`: When true, skip dictionaries with fatal validation errors instead of importing with warnings.
 
 ## Audio Quotas & Workers
-- `AUDIO_JOBS_WORKER_ENABLED`: Start the in-process Audio Jobs worker on app startup (`true|false`).
+- `AUDIO_JOBS_WORKER_ENABLED`: Start the in-process Audio Jobs worker on app startup (`true|false`, default follows route policy for `audio-jobs`).
 - `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition heuristic for fair scheduling (`true|false`).
 - `AUDIO_QUOTA_USE_REDIS`: Store active streams/jobs counters in Redis for multi-instance fairness. Defaults to true when `REDIS_URL` is set.
 - `REDIS_URL`: Redis connection string (e.g., `redis://localhost:6379`).
@@ -132,6 +161,12 @@ Monitoring & Telemetry
 - `WORKFLOWS_INTERNAL_BASE_URL`: Base URL for validation requests; defaults to `http://127.0.0.1:8000`.
 - `WORKFLOWS_MINT_VIRTUAL_KEYS`: `true|false` - when enabled, the scheduler mints a short-lived scoped JWT (`scope=workflows`) per scheduled run and injects it as `secrets.jwt`.
 - `WORKFLOWS_VIRTUAL_KEY_TTL_MIN`: TTL (minutes) for per-run tokens; default `15`.
+
+## Workflows (File Access)
+- `WORKFLOWS_FILE_BASE_DIR`: Base directory for workflow `file://` access. Relative paths resolve from the project root; defaults to the per-user base dir under `USER_DB_BASE_DIR` (with a `Databases/` fallback).
+- `WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS`: `true|false` - allow workflow file access outside the per-user base dir, but only under allowlisted base directories (default `false`).
+- `WORKFLOWS_FILE_ALLOWLIST`: Comma-separated list of allowed base directories for unsafe file access; relative paths resolve from the project root.
+- `WORKFLOWS_FILE_ALLOWLIST_<TENANT>`: Optional per-tenant override (uppercase, `-` replaced by `_`); when set, it replaces the global allowlist for that tenant.
 
 ## Health Probes (CI smoke)
 - The smoke lifecycle script probes health endpoints in this order: `/healthz`, `/api/v1/healthz`, `/health`, `/api/v1/health`, `/ready`, `/api/v1/health/ready`.

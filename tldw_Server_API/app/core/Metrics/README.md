@@ -156,6 +156,10 @@ export METRICS_SAMPLE_RATE=1.0
 - `circuit_breaker_state` - Circuit breaker state (gauge)
 - `circuit_breaker_trips_total` - Circuit breaker trips (counter)
 
+### File Artifacts Metrics
+- `file_artifacts_operations_total` - File artifact create/export operations (counter)
+  - Labels: `operation` (create|export), `status` (success|failure|enqueued), `file_type`, `export_format`, `reason`
+
 ### Streaming Metrics
 - SSE
   - `sse_enqueue_to_yield_ms` (histogram, milliseconds)

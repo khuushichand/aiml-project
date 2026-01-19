@@ -65,6 +65,12 @@ Example PromQL:
 - `embedding_cache_size`: Gauge of current embedding cache size.
 - `active_embedding_requests`: Gauge of in-flight embedding requests.
 
+## Embeddings A/B testing
+- `embeddings_abtest_arm_builds_total{status,provider,model}`: Counter of arm collection builds (`built|reused|failed`).
+- `embeddings_abtest_arm_build_duration_seconds{status,provider,model}`: Histogram of collection build duration.
+- `embeddings_abtest_runs_total{status}`: Counter of test runs (`completed|failed`).
+- `embeddings_abtest_run_duration_seconds{status}`: Histogram of test run duration.
+
 ## Uploads & Storage
 - `uploads_total{user_id,media_type}`: Counter of uploaded files.
 - `upload_bytes_total{user_id,media_type}`: Counter of uploaded bytes.

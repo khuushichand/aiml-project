@@ -1,3 +1,4 @@
+
 # PostgreSQL Content Migration Guide
 
 This document explains how to migrate existing SQLite content databases to PostgreSQL using the
@@ -8,14 +9,15 @@ workflow jobs.
 
 ## Prerequisites
 
-- `<USER_DB_BASE_DIR>` is defined in `tldw_Server_API.app.core.config` (set via the `USER_DB_BASE_DIR` environment variable or `Config_Files/config.txt`); when unset it defaults to `Databases/user_databases/` under the project root.
-- Back up all SQLite databases for each user (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, and `<USER_DB_BASE_DIR>/<user_id>/workflows/workflows.db` if workflows are stored per-user), plus `Databases/Analytics.db`. If your deployment uses a shared workflows SQLite file (for example `workflows_path=Databases/workflows.db` in `Config_Files/config.txt`), back up `Databases/workflows.db` once outside the per-user list.
+- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, `Databases/Analytics.db`). If you have multiple users, repeat for each `<user_id>`.
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
 - Configure the server once against PostgreSQL so the schema exists. The easiest option is to set
   `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API; it will create all tables and
   FTS artefacts, then shut the server down before migrating data.
+
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 ## Step 1 - Prepare connection details
 
@@ -30,8 +32,6 @@ export PGUSER=tldw_user
 export PGPASSWORD=super-secret
 ```
 
-For production, use a `~/.pgpass` file (with `0600` permissions) or a secrets manager instead of exporting `PGPASSWORD`.
-
 ## Step 2 - Run the migration utility
 
 Invoke the migration module with paths to your existing SQLite databases. Provide `--content-sqlite`
@@ -40,41 +40,47 @@ for the main media database and optionally pass `--chacha-sqlite`, `--analytics-
 same pass.
 
 ```bash
-python -m tldw_Server_API.app.core.DB_Management.migration_tools \
-      --content-sqlite <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db \
-      --chacha-sqlite <USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db \
-      --analytics-sqlite Databases/Analytics.db \
-      --workflows-sqlite Databases/workflows.db \
-      --pg-host "$PGHOST" \
-      --pg-port "$PGPORT" \
-      --pg-database "$PGDATABASE" \
-      --pg-user "$PGUSER" \
-      --pg-password "$PGPASSWORD" \
-      --batch-size 500
-```
+# Repeat per user_id (single-user installs typically use the fixed default user_id).
+if [ -z "${USER_DB_BASE_DIR}" ]; then
+  echo "Error: USER_DB_BASE_DIR is not set." >&2
+  exit 1
+fi
+if [ ! -d "${USER_DB_BASE_DIR}" ]; then
+  echo "Error: USER_DB_BASE_DIR (${USER_DB_BASE_DIR}) is not a directory." >&2
+  exit 1
+fi
 
-For multi-user deployments, repeat the command for each user directory. Run these migrations
-sequentially; do not run multiple instances in parallel because the tool deletes rows before copying
-data. Use `--user-id` to scope deletions and inserts per user; when set, the tool issues scoped
-DELETE statements (not TRUNCATE) per user in dependency order. To auto-discover
-user IDs from the filesystem safely:
+for user_path in "${USER_DB_BASE_DIR}"/*; do
+  [ -d "${user_path}" ] || { echo "Skipping non-directory entry: ${user_path}" >&2; continue; }
+  user_id="$(basename "${user_path}")"
+  media_db="${user_path}/Media_DB_v2.db"
+  chacha_db="${user_path}/ChaChaNotes.db"
 
-```bash
-while IFS= read -r -d '' USER_DIR; do
-  USER_ID=$(basename "$USER_DIR")
-  python -m tldw_Server_API.app.core.DB_Management.migration_tools \
-        --content-sqlite "$USER_DIR/Media_DB_v2.db" \
-        --chacha-sqlite "$USER_DIR/ChaChaNotes.db" \
-        --analytics-sqlite Databases/Analytics.db \
-        --workflows-sqlite Databases/workflows.db \
-        --user-id "$USER_ID" \
-        --pg-host "$PGHOST" \
-        --pg-port "$PGPORT" \
-        --pg-database "$PGDATABASE" \
-        --pg-user "$PGUSER" \
-        --pg-password "$PGPASSWORD" \
-        --batch-size 500
-done < <(find "$USER_DB_BASE_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+  if [ ! -r "${media_db}" ]; then
+    echo "Warning: missing or unreadable Media_DB_v2.db for user ${user_id} (${media_db}). Skipping." >&2
+    continue
+  fi
+
+  migration_args=(
+    --content-sqlite "${media_db}"
+    --analytics-sqlite Databases/Analytics.db
+    --workflows-sqlite Databases/workflows.db
+    --pg-host "$PGHOST"
+    --pg-port "$PGPORT"
+    --pg-database "$PGDATABASE"
+    --pg-user "$PGUSER"
+    --pg-password "$PGPASSWORD"
+    --batch-size 500
+  )
+  if [ -r "${chacha_db}" ]; then
+    migration_args+=(--chacha-sqlite "${chacha_db}")
+  else
+    echo "Warning: missing or unreadable ChaChaNotes.db for user ${user_id} (${chacha_db}). Skipping." >&2
+    continue
+  fi
+
+  python -m tldw_Server_API.app.core.DB_Management.migration_tools "${migration_args[@]}"
+done
 ```
 
 The script performs the following actions for each supplied database:
@@ -101,7 +107,11 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
   ```
 
   ```bash
-  sqlite3 <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db 'SELECT COUNT(*) FROM Media;'
+  for user_id in $(ls -1 "$USER_DB_BASE_DIR"); do
+    [ -d "$USER_DB_BASE_DIR/$user_id" ] || continue
+    echo "User $user_id:"
+    sqlite3 "${USER_DB_BASE_DIR}/${user_id}/Media_DB_v2.db" 'SELECT COUNT(*) FROM media;'
+  done
   sqlite3 Databases/workflows.db 'SELECT COUNT(*) FROM workflow_runs;'
   ```
 
@@ -140,19 +150,17 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
    export TLDW_PG_DATABASE=$PGDATABASE
    export TLDW_PG_USER=$PGUSER
    export TLDW_PG_PASSWORD=$PGPASSWORD
-   # Optional overrides for connection pooling
-   export TLDW_DB_POOL_SIZE=15
-   export TLDW_DB_POOL_TIMEOUT=30
-   export WORKFLOWS_SQLITE_POOL_SIZE=10
-   # Or set in Config_Files/config.txt under [Database]:
-   # pool_size, max_overflow, pool_timeout
+   # Optional overrides for workflow connection pooling
+    export TLDW_WORKFLOW_DB_POOL_SIZE=15
+    export TLDW_WORKFLOW_DB_MAX_OVERFLOW=30
+    export TLDW_WORKFLOW_DB_TIMEOUT=30
    ```
 
 2. Remove or archive the old SQLite files once you are confident the migration succeeded.
 
 3. Restart the API/WebUI stack. On startup the service should log that it is using PostgreSQL for
-   Media, ChaChaNotes, Analytics, and Workflows. Monitor `/api/v1/workflows/runs` (or engine
-   metrics for queue depth) to ensure pending runs are processed.
+   Media, ChaChaNotes, Analytics, and Workflows. Monitor `/api/v1/workflows/status` to ensure the
+   runtime heartbeat updates and that queue depth drops as pending runs are processed.
 
 ## Troubleshooting
 

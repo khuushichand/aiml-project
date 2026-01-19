@@ -2,7 +2,7 @@
 
 ## Overview
 
-Processes MediaWiki XML dumps and yields structured events: total count, per-page results, and summary. Supports optional persistence to the primary DB and vector store (scaffolded). Includes checkpointing to resume after interruption.
+Processes MediaWiki XML dumps and yields structured events: total count, per-page results, and summary. Supports optional persistence to the primary DB and vector store. Includes checkpointing to resume after interruption.
 
 ## Primary Function
 
@@ -18,7 +18,7 @@ Module: `tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wik
 - skip_redirects: ignore redirect pages.
 - chunk_options_override: currently only `max_size` is honored by the module-local chunker; other keys (e.g., `method`, `overlap`) are ignored here.
 - store_to_db: persist via a real DB instance - e.g., `db = create_media_database(client_id="mediawiki_import"); db.add_media_with_keywords(...)` - with `media_type="mediawiki_page"` and URL `mediawiki:{wiki_name}:{quoted_title}`.
-- store_to_vector_db: scaffolded; code includes a placeholder for chunk vectorization.
+- store_to_vector_db: generate embeddings and persist page chunks to ChromaDB (per-user collection).
 
 ### Event Stream
 
@@ -60,7 +60,7 @@ Accepted form fields for both endpoints:
 - `namespaces_str` (str, optional, e.g., `"0,1"`)
 - `skip_redirects` (bool, default `true`)
 - `chunk_max_size` (int, default from config; used as `max_size`)
-- `api_name_vector_db` / `api_key_vector_db` (optional; used only by ingest when vector storage is enabled)
+- `api_name_vector_db` / `api_key_vector_db` (optional; override the configured embeddings provider/model and API key when vector storage is enabled)
 
 ### curl Examples
 
@@ -114,7 +114,7 @@ curl -N -s \
 ## Error Handling & Notes
 
 - Skips pages via checkpointing when resuming; removes checkpoint on success.
-- Vector store integration is currently scaffolded (placeholder calls only).
+- Vector store integration generates embeddings via the configured provider/model and writes chunk vectors to ChromaDB.
 - Streaming responses use `application/x-ndjson` with one JSON object per line.
 - Security hardening is covered by tests: see `tldw_Server_API/tests/test_mediawiki_security.py`.
 

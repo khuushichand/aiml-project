@@ -25,7 +25,10 @@ from tldw_Server_API.app.api.v1.schemas.outputs_templates_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.core.Chat.prompt_template_manager import safe_render
+from tldw_Server_API.app.services.outputs_service import (
+    build_items_context_from_content_items,
+    render_output_template,
+)
 from datetime import datetime
 import json
 
@@ -303,12 +306,21 @@ async def preview_output_template(
         if payload.item_ids:
             items = _build_items_context_from_media_ids(media_db, payload.item_ids, payload.limit)
         elif payload.run_id is not None:
-            mids = _select_media_ids_for_run(media_db, payload.run_id, payload.limit)
-            items = _build_items_context_from_media_ids(media_db, mids, payload.limit) if mids else []
+            items = []
+            try:
+                rows, _ = db.list_content_items(run_id=payload.run_id, page=1, size=payload.limit)
+                items = build_items_context_from_content_items(rows)
+            except Exception as exc:
+                logger.opt(exception=True).warning(
+                    f"Content items lookup failed for run_id={payload.run_id}, falling back to media IDs: {exc}"
+                )
+                items = []
+            if not items:
+                mids = _select_media_ids_for_run(media_db, payload.run_id, payload.limit)
+                items = _build_items_context_from_media_ids(media_db, mids, payload.limit) if mids else []
         else:
-            # TODO: run-based selection will be resolved post-jobs implementation
-            # For now, provide samples if only run_id provided
-            items_count = 5 if payload.run_id else 3
+            # Provide samples when no selection is provided.
+            items_count = 3
             items = [
                 {
                     "title": f"Sample Article {i+1}",
@@ -334,6 +346,6 @@ async def preview_output_template(
             "tags": sorted({t for it in items for t in it.get("tags", []) if isinstance(it.get("tags", []), list)}),
         }
 
-    rendered = safe_render(row.body, context)
+    rendered = render_output_template(row.body, context)
     fmt = row.format if row.format in ("md", "html") else "md"
     return TemplatePreviewResponse(rendered=rendered, format=fmt)

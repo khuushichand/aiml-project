@@ -1,0 +1,80 @@
+from pathlib import Path
+
+import pytest
+
+from tldw_Server_API.app.core.Setup import setup_manager
+
+
+def _write_config(tmp_path: Path, base_dir: str) -> Path:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_path = config_dir / "config.txt"
+    config_path.write_text(
+        "[TTS-Settings]\n"
+        f"USER_DB_BASE_DIR = {base_dir}\n",
+        encoding="utf-8",
+    )
+    return config_dir
+
+
+def _patch_project_root(monkeypatch, project_root: Path) -> None:
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / "Databases").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(setup_manager, "get_project_root", lambda: str(project_root))
+
+
+def test_user_db_base_dir_update_rejects_outside_allowed_roots(monkeypatch, tmp_path):
+    config_dir = _write_config(tmp_path, "Databases/user_databases")
+    monkeypatch.setenv("TLDW_CONFIG_DIR", str(config_dir))
+    _patch_project_root(monkeypatch, tmp_path / "project")
+
+    outside = tmp_path / "project" / "Other" / "user_dbs"
+    with pytest.raises(ValueError, match="USER_DB_BASE_DIR"):
+        setup_manager.update_config(
+            {"TTS-Settings": {"USER_DB_BASE_DIR": str(outside)}},
+            create_backup=False,
+        )
+
+
+def test_user_db_base_dir_update_allows_default_root(monkeypatch, tmp_path):
+    config_dir = _write_config(tmp_path, "Databases/user_databases")
+    monkeypatch.setenv("TLDW_CONFIG_DIR", str(config_dir))
+    _patch_project_root(monkeypatch, tmp_path / "project")
+
+    allowed = tmp_path / "project" / "Databases" / "user_dbs_alt"
+    setup_manager.update_config(
+        {"TTS-Settings": {"USER_DB_BASE_DIR": str(allowed)}},
+        create_backup=False,
+    )
+
+    updated = (config_dir / "config.txt").read_text(encoding="utf-8")
+    assert f"USER_DB_BASE_DIR = {allowed}" in updated
+
+
+def test_user_db_base_dir_update_allows_env_allowlist(monkeypatch, tmp_path):
+    config_dir = _write_config(tmp_path, "Databases/user_databases")
+    monkeypatch.setenv("TLDW_CONFIG_DIR", str(config_dir))
+    _patch_project_root(monkeypatch, tmp_path / "project")
+
+    allow_root = tmp_path / "external"
+    monkeypatch.setenv("USER_DB_BASE_DIR_ALLOWED_ROOTS", str(allow_root))
+    allowed = allow_root / "user_dbs"
+    setup_manager.update_config(
+        {"TTS-Settings": {"USER_DB_BASE_DIR": str(allowed)}},
+        create_backup=False,
+    )
+
+    updated = (config_dir / "config.txt").read_text(encoding="utf-8")
+    assert f"USER_DB_BASE_DIR = {allowed}" in updated
+
+
+def test_user_db_base_dir_update_rejects_relative_escape(monkeypatch, tmp_path):
+    config_dir = _write_config(tmp_path, "Databases/user_databases")
+    monkeypatch.setenv("TLDW_CONFIG_DIR", str(config_dir))
+    _patch_project_root(monkeypatch, tmp_path / "project")
+
+    with pytest.raises(ValueError, match="Relative USER_DB_BASE_DIR"):
+        setup_manager.update_config(
+            {"TTS-Settings": {"USER_DB_BASE_DIR": "../outside"}},
+            create_backup=False,
+        )

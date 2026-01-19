@@ -22,7 +22,7 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 ## 2) Install dependencies
 
-Prefer pyproject-based installs with extras:
+Prefer installing via the project’s pyproject extras:
 
 ```bash
 # Core server
@@ -35,7 +35,7 @@ pip install -e .
 ```
 
 Notes:
-- Some optional features (OCR backends, GPU variants) have extra steps noted in their docs.
+- Some optional features (OCR backends, GPU variants) have extra steps noted in their respective docs.
 - Ensure FFmpeg is installed via your OS package manager (e.g., `brew install ffmpeg`, `apt-get install ffmpeg`).
 
 ## 3) Configure authentication
@@ -184,7 +184,7 @@ curl -s http://127.0.0.1:8000/api/v1/embeddings \
   }'
 ```
 
-More detail on local backends and llama.cpp flags: [Docs/Code_Documentation/Local_LLM.md](../../Code_Documentation/Local_LLM.md).
+More detail on local backends and llama.cpp flags: [Setting up a local LLM](Setting_up_a_local_LLM.md).
 
 ## 6) Optional: Text-to-Speech (TTS)
 
@@ -222,13 +222,13 @@ Notes:
 - Local providers do not auto-download unless you set `TTS_AUTO_DOWNLOAD=1`.
 - Use `GET /api/v1/audio/voices/catalog` to list available voices.
 
-More detail: [Docs/Published/User_Guides/TTS_Getting_Started.md](TTS_Getting_Started.md).
+More detail: [Docs/User_Guides/TTS_Getting_Started.md](TTS_Getting_Started.md).
 
 ## 7) Optional: Speech-to-Text (STT)
 
 For STT setup and testing, use the dedicated guide and API reference:
-- [Docs/Getting-Started-STT_and_TTS.md](../../Getting-Started-STT_and_TTS.md)
-- [Docs/Published/API-related/Audio_Transcription_API.md](../API-related/Audio_Transcription_API.md)
+- [Docs/Getting-Started-STT_and_TTS.md](../Getting-Started-STT_and_TTS.md)
+- [Docs/API-related/Audio_Transcription_API.md](../API-related/Audio_Transcription_API.md)
 
 Quick STT verification:
 
@@ -255,6 +255,17 @@ Tip: You can also use the convenience script from the repo root:
 ./start-webui.sh
 ```
 
+Optional: run the API + Jobs workers as separate processes (sidecar mode):
+
+```bash
+./start-sidecars.sh
+```
+
+Notes:
+- Sets `TLDW_WORKERS_SIDECAR_MODE=true` so the API process skips in-process workers.
+- Default list lives in `Docs/Deployment/sidecar_workers_manifest.json` (regen via `python Helper_Scripts/Deployment/generate_sidecar_files.py`).
+- Customize the worker list with `TLDW_SIDECAR_WORKERS=chatbooks,files,data_tables,prompt_studio,privilege_snapshots,audio,media_ingest,evals_abtest` or point to a different manifest with `TLDW_WORKERS_MANIFEST=/path/to/manifest.json`.
+
 ## 9) Verify
 
 - Health: `GET http://127.0.0.1:8000/health` should return `{ "status": "healthy" }`
@@ -264,12 +275,37 @@ Tip: You can also use the convenience script from the repo root:
 
 - “ffmpeg not found”: Ensure FFmpeg is installed and available on PATH.
 - Auth errors: Confirm `.env` is loaded and `AUTH_MODE`/keys are correctly set.
-- SQLite locks: Prefer PostgreSQL for multi-user production. Ensure proper shutdown before restarting.
+- SQLite locks: In-process jobs plus multiple Uvicorn workers can increase contention. Prefer sidecar workers or PostgreSQL for production and heavy workloads.
 - Port 8000 in use: Stop the other process or change the port (`--port 8001`).
 
 ## Next Steps
 
 - Read the User Guide for common tasks: `User_Guide.md`
-- Set a default LLM provider: see "Default LLM Provider" in `User_Guide.md`
 - Configure providers and test chat/embeddings via the WebUI and `/docs`
 - See Production Hardening and Multi-User Deployment guides for production use
+
+## Optional: Tokenizer strategy (Chat Dictionaries & World Books)
+
+The server estimates tokens when enforcing budgets in Chat Dictionary and World Book processing. You can adjust this strategy at runtime:
+
+- `GET /api/v1/config/tokenizer` → view current mode (`whitespace` or `char_approx`) and divisor
+- `PUT /api/v1/config/tokenizer` → update mode and divisor (in-memory; not persisted)
+
+Example:
+```
+GET /api/v1/config/tokenizer
+{
+  "mode": "whitespace",
+  "divisor": 4
+}
+
+PUT /api/v1/config/tokenizer
+{
+  "mode": "char_approx",
+  "divisor": 4
+}
+```
+
+To set defaults, you can also add environment or config values:
+- `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`
+- `TOKEN_CHAR_APPROX_DIVISOR`: integer (default `4`)

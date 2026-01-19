@@ -1,5 +1,6 @@
 site_name: tldw Server Docs
 site_description: Documentation for the tldw_server project
+site_url: https://rmusser01.github.io/tldw_server/
 repo_url: https://github.com/rmusser01/tldw_server
 repo_name: rmusser01/tldw_server
 edit_uri: edit/main/
@@ -35,6 +36,7 @@ plugins:
   - search
   - git-revision-date-localized:
       enable_git_follow: false
+      strict: false
       fallback_to_build_date: true
       enable_creation_date: true
       type: timeago
@@ -88,6 +90,8 @@ nav:
       - Audio Jobs API: API-related/Audio_Jobs_API.md
       - AuthNZ API Guide: API-related/AuthNZ-API-Guide.md
       - Notes API: API-related/Notes_API_Documentation.md
+      - Reading List API: API-related/Reading_List_API.md
+      - Collections Feeds API: API-related/Collections_Feeds_API.md
       - Chat API Documentation: API-related/Chat_API_Documentation.md
       - Chat Module Integration: API-related/Chat_Module_Integration_Guide.md
       - Chatbook API: API-related/Chatbook_API_Documentation.md

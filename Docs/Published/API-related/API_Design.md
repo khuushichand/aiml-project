@@ -24,8 +24,7 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
 
 ## Resource Map (Current)
 - Authentication & Users
-  - `/api/v1/auth/*` (login, refresh, logout)
-  - `/api/v1/register` (registration)
+  - `/api/v1/auth/*` (login, refresh, logout, register)
   - `/api/v1/users/*` (profile, password, sessions, storage)
 - Chat (OpenAI-compatible)
   - `/api/v1/chat/completions`
@@ -42,6 +41,7 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
 - RAG (Unified)
   - `/api/v1/rag/search` (hybrid FTS5 + embeddings + re-ranking)
   - `/api/v1/rag/capabilities`
+  - Convenience: `/api/v1/rag/simple` and `/api/v1/rag/advanced`
 - Embeddings & Vector Stores (OpenAI-compatible)
   - `/api/v1/embeddings`
   - `/api/v1/vector-stores/*` (indexes, vectors, batches)
@@ -92,7 +92,7 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
 ## Representative Endpoints
 - Auth & Users
   - `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`
-  - `POST /api/v1/register`
+  - `POST /api/v1/auth/register`
   - `GET /api/v1/users/me`, `PUT /api/v1/users/me`
 - Chat
   - `POST /api/v1/chat/completions`

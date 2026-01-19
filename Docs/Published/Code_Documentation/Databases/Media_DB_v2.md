@@ -62,7 +62,7 @@ def __init__(self, db_path: Union[str, Path], client_id: str, *, backend: Option
     *   `config (Optional[ConfigParser])`: Optional configuration to help resolve backend when not provided.
 *   **Raises**:
     *   `ValueError`: If `client_id` is empty or `None`.
-    *   `DatabaseError`: If the database directory cannot be created, connection fails, or schema initialization/migration fails.
+    *   `DatabaseError`: If initialization or schema setup fails.
     *   `SchemaError`: If the existing database schema version is newer than what the code supports, or if migration fails.
 
 Backend selection:
@@ -141,6 +141,7 @@ pg_pool_timeout = 30.0
 # sqlite_foreign_keys = true
 # backup_path = ./tldw_DB_Backups/
 ```
+    *   `SchemaError`: If the existing database schema version is newer than what the code supports, or if migration fails.
 
 ### Connection Management
 
@@ -216,7 +217,6 @@ These methods modify the database content. They typically operate within a trans
     *   Generates a content hash.
     *   Associates keywords (via `update_keywords_for_media`).
     *   Creates an initial `DocumentVersion` (via `create_document_version`).
-    *   Accepts optional `safe_metadata` JSON for version-scoped metadata.
     *   If `chunks` are provided, they are saved as `UnvectorizedMediaChunks` (old ones deleted on overwrite).
     *   Updates `media_fts`. Logs 'create'/'update' for Media, and relies on called methods for other sync events.
     *   `ingestion_date`: Defaults to current time if `None`.
@@ -564,6 +564,7 @@ The current database schema consists of the following main tables:
 *   **`DocumentVersions`**: Stores historical versions of a media item's content, with associated `prompt`, `analysis_content`, and `safe_metadata` (JSON). Includes UUID and sync metadata.
 *   **`Claims`**: Stores factual claims extracted at ingestion time, attached to a media chunk (with indices/spans, extractor metadata, confidence). Maintained with FTS via triggers.
 *   **`sync_log`**: Records all CUD (Create, Update, Delete) operations, as well as link/unlink operations on entities, along with `client_id`, `timestamp`, `version`, and an optional `payload` (JSON of changed data).
+*   **`ChunkingTemplates`**: Stores reusable chunking templates (JSON) with metadata, tags, ownership, and soft-delete/version metadata.
 *   **FTS Tables**:
     *   **`media_fts`**: FTS5 virtual table for full-text searching `Media.title` and `Media.content`.
     *   **`keyword_fts`**: FTS5 virtual table for full-text searching `Keywords.keyword`.

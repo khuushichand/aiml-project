@@ -27,7 +27,7 @@ def seeded_db(tmp_path, monkeypatch):
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
 
     try:
-        yield
+        yield template_dir
     finally:
         if prev_base_dir is not None:
             settings.USER_DB_BASE_DIR = prev_base_dir
@@ -53,3 +53,36 @@ def test_seed_watchlists_templates_into_outputs(seeded_db):
     items_again, total_again = cdb_again.list_output_templates(q=None, limit=50, offset=0)
     names = [tpl.name for tpl in items_again]
     assert names.count("seeded") == 1
+
+
+def test_output_templates_search_case_insensitive_sqlite(seeded_db):
+    cdb = CollectionsDatabase.for_user(user_id=902)
+    cdb.create_output_template(
+        name="CaseTemplate",
+        type_="summary",
+        format_="md",
+        body="Body",
+        description="Mixed Case Template",
+        is_default=False,
+    )
+    items, total = cdb.list_output_templates(q="casetemplate", limit=10, offset=0)
+    assert total >= 1
+    assert any(tpl.name == "CaseTemplate" for tpl in items)
+
+
+def test_seed_watchlists_templates_refresh_updates_output_templates(seeded_db):
+    template_dir = seeded_db
+    cdb = CollectionsDatabase.for_user(user_id=903)
+    seeded = cdb.get_output_template_by_name("seeded")
+    assert seeded.body == "Seeded {{ title }}"
+    assert seeded.description == "Seeded template"
+
+    (template_dir / "seeded.md").write_text("Updated {{ title }}", encoding="utf-8")
+    (template_dir / "seeded.meta.json").write_text(json.dumps({"description": "Updated template"}), encoding="utf-8")
+
+    cdb_refresh = CollectionsDatabase.for_user(user_id=903)
+    refreshed = cdb_refresh.get_output_template_by_name("seeded")
+    assert refreshed.body == "Updated {{ title }}"
+    assert refreshed.description == "Updated template"
+    meta = json.loads(refreshed.metadata_json or "{}")
+    assert meta.get("seeded_from") == "watchlists_templates"

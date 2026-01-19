@@ -1,6 +1,6 @@
 # Workflows PRD (Curated)
 
-This document summarizes the Product Requirements for the Workflows module as of v0.1 with forward-looking notes for v0.2. For the full living design, see `../Design/Workflows_PRD.md`.
+This document summarizes the Product Requirements for the Workflows module as of v0.1 with forward-looking notes for v0.2. For the full living design, see `../Product/Workflows_PRD.md`.
 
 ## Scope
 
@@ -9,12 +9,14 @@ This document summarizes the Product Requirements for the Workflows module as of
 - Events (HTTP/WS), artifacts (list/manifest/download)
 - Webhook lifecycle with signing and DLQ
 - SQLite (default) and PostgreSQL (recommended) backends
+- Limited fan-out via `map` step (single-process, bounded concurrency)
 
 ### Control Flow Routing
 
 - `branch` step: templated condition with `true_next` / `false_next` targets (if/else).
 - Per-step `on_success` / `on_failure` jump targets for linear success/failure splits.
 - Adapter-returned `{"__next__": "step_id", "__status__": ...}` to programmatically choose the next step.
+- `map` step: fan-out over a list, run a nested step, and aggregate results.
 
 ## Validation Modes (Artifacts)
 
@@ -29,6 +31,11 @@ This document summarizes the Product Requirements for the Workflows module as of
 - Resume → `running` + `run_resumed`; continues from current step
 - Cancel → sets cancel flag, best-effort terminate subprocesses, `run_cancelled`
 - Adapters check `ctx.is_cancelled()`; control endpoints are idempotent
+
+## Human Steps
+
+- `wait_for_human`/`wait_for_approval` require `assigned_to_user_id`
+- `on_timeout` routes to the configured step; if unset, the run fails on timeout
 
 ## Webhooks
 

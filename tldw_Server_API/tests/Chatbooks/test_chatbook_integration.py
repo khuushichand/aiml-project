@@ -3,7 +3,6 @@ Integration tests for Chatbook service using real test database.
 No mocking - uses actual components.
 """
 import pytest
-import tempfile
 import json
 import zipfile
 import os
@@ -11,6 +10,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 import asyncio
+from uuid import uuid4
 
 from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
 from tldw_Server_API.app.core.Chatbooks.chatbook_models import (
@@ -30,6 +30,14 @@ def manifest_to_dict(manifest):
     if hasattr(manifest.version, 'value'):
         data['version'] = manifest.version.value
     return data
+
+
+def stage_export_for_import(service: ChatbookService, export_path: str) -> str:
+    """Copy an export into the chatbooks temp directory for safe import."""
+    src = Path(export_path)
+    staged = service.temp_dir / f"import_{uuid4().hex}_{src.name}"
+    shutil.copy2(src, staged)
+    return str(staged)
 
 
 @pytest.fixture
@@ -89,9 +97,9 @@ def service(test_db, tmp_path):
 
 
 @pytest.fixture
-def sample_chatbook_file(tmp_path):
+def sample_chatbook_file(service):
     """Create a sample chatbook file for import tests."""
-    chatbook_path = tmp_path / "sample.chatbook"
+    chatbook_path = service.temp_dir / f"sample_{uuid4().hex}.chatbook"
 
     manifest = ChatbookManifest(
         version=ChatbookVersion.V1,
@@ -238,9 +246,9 @@ class TestChatbookIntegration:
         assert result["manifest"] is not None
         assert result["error"] is None
 
-    def test_validate_invalid_file(self, service, tmp_path):
+    def test_validate_invalid_file(self, service):
         """Test validating an invalid file."""
-        invalid_file = tmp_path / "invalid.txt"
+        invalid_file = service.temp_dir / f"invalid_{uuid4().hex}.txt"
         invalid_file.write_text("Not a chatbook")
 
         result = service.validate_chatbook_file(str(invalid_file))
@@ -351,8 +359,9 @@ class TestChatbookIntegration:
         assert export_path is not None
 
         # Now import it back (with rename to avoid conflicts)
+        import_path = stage_export_for_import(service, export_path)
         import_result = await service.import_chatbook(
-            file_path=export_path,
+            file_path=import_path,
             conflict_resolution="rename"
         )
 

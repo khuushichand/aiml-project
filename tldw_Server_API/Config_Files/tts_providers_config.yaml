@@ -170,16 +170,18 @@ providers:
   neutts:
     enabled: false  # Disabled by default; explicitly enable only after completing NeuTTS setup
     # Backbone options:
+    #  - "neuphonic/neutts-nano" (HF transformers)
     #  - "neuphonic/neutts-air" (HF transformers)
-    #  - "neuphonic/neutts-air-q4-gguf" or "neuphonic/neutts-air-q8-gguf" (llama-cpp; enables streaming)
-    backbone_repo: "neuphonic/neutts-air"
+    #  - "neuphonic/neutts-*-q4-gguf" or "neuphonic/neutts-*-q8-gguf" (llama-cpp; enables streaming)
+    backbone_repo: "neuphonic/neutts-nano"
     backbone_device: "cpu"  # or "gpu" if using llama-cpp with GPU layers
     # Codec options: "neuphonic/neucodec", "neuphonic/distill-neucodec", or "neuphonic/neucodec-onnx-decoder"
     codec_repo: "neuphonic/neucodec"
     codec_device: "cpu"
     sample_rate: 24000
-    # Note: Provide `voice_reference` (base64-encoded audio) and `extra_params.reference_text`
-    # in the request for voice cloning. Optionally pre-compute `extra_params.ref_codes`.
+    auto_download: false  # Default to offline-first; enable explicitly to allow downloads
+    # Note: Use stored `custom:<voice_id>` voices by default. For ad-hoc cloning,
+    # provide `voice_reference` (base64-encoded audio) and `extra_params.reference_text`.
 
   # IndexTTS2 Configuration
   index_tts:

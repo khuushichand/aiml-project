@@ -8,6 +8,11 @@ The tldw_server Evaluations API provides a comprehensive, OpenAI-compatible eval
 **Base URL**: `/api/v1/evaluations`
 **Standards**: OpenAI Evals compatible with extensions
 
+Authentication
+- Single-user: `X-API-KEY: <key>`
+- Multi-user: `Authorization: Bearer <JWT>`
+Rate limiting is enforced on core run endpoints (geval, rag, response-quality, propositions, batch).
+
 ## Architecture
 
 ### Core Components
@@ -97,6 +102,26 @@ curl -H "Authorization: Bearer sk-..." https://api.example.com/api/v1/evaluation
 | Basic      | 30          | 50,000     | 50         | $10        |
 | Premium    | 100         | 200,000    | 200        | $50        |
 | Enterprise | Unlimited   | Unlimited  | 1000       | Custom     |
+
+### Rate Limit Response Headers
+Unified evaluation endpoints include standard response headers that surface current limits and remaining allowances:
+
+- X-RateLimit-Tier
+- X-RateLimit-PerMinute-Limit
+- X-RateLimit-PerMinute-Remaining
+- X-RateLimit-Daily-Limit
+- X-RateLimit-Daily-Remaining
+- X-RateLimit-Tokens-Remaining
+- X-RateLimit-Daily-Cost-Remaining
+- X-RateLimit-Monthly-Cost-Remaining
+
+In addition, draft standard headers are provided for compatibility with proxies and SDKs:
+
+- RateLimit-Limit
+- RateLimit-Remaining
+- RateLimit-Reset (seconds until the current minute window resets)
+
+Note: Remaining values are based on the latest limiter decision; actual token/cost usage may adjust after the request completes when providers return precise usage metadata.
 
 ## Core API Endpoints
 
@@ -252,6 +277,55 @@ Not available on the unified router. Poll `GET /api/v1/evaluations/runs/{run_id}
 
 ## Specialized Evaluation Endpoints
 
+### RAG Pipeline Presets
+`POST /api/v1/evaluations/rag/pipeline/presets`
+Create a named RAG pipeline preset.
+
+Request:
+```json
+{ "name": "baseline_hybrid", "config": { "chunking": {"method": "sentences", "size": 8, "overlap": 1}, "retriever": {"mode": "hybrid", "k": 8, "alpha": 0.5}, "reranker": {"provider": "cohere", "model": "rerank-3"}, "rag": {"max_context_tokens": 2000} } }
+```
+
+Responses:
+- `201` PipelinePresetResponse `{ "name": "...", "config": {..}, "created_at": 123, "updated_at": 123 }`
+
+`GET /api/v1/evaluations/rag/pipeline/presets`
+List presets. Response `{ "items": [ {"name": "...", "config": {...}} ], "total": 1 }`
+
+`GET /api/v1/evaluations/rag/pipeline/presets/{name}`
+Get a preset by name.
+
+`DELETE /api/v1/evaluations/rag/pipeline/presets/{name}`
+Delete a preset. Response `204 No Content`.
+
+`POST /api/v1/evaluations/rag/pipeline/cleanup`
+Cleanup ephemeral vector store collections. Response `{ "expired_count": 0, "deleted_count": 0, "errors": [] }`
+
+### Embeddings A/B Tests
+`POST /api/v1/evaluations/embeddings/abtest`
+Create an embeddings A/B test. Request `{ "name": "string", "config": { "arms": [...], "media_ids": [], "chunking": {...}, "retrieval": {...}, "queries": [...] }, "run_immediately": false }`. Response `{ "test_id": "...", "status": "created" }`.
+
+`POST /api/v1/evaluations/embeddings/abtest/{test_id}/run`
+Start execution. Response `{ "test_id": "...", "status": "running", "progress": { } }`.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}`
+Summary: `{ "test_id": "...", "status": "...", "arms": [ {"arm_id":"...","provider":"...","model":"...","metrics": {"ndcg": 0.72}, "latency_ms": {"p50": 30.3} } ] }`.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/results`
+Paginated results. Response `{ "summary": {...}, "results": [ { "result_id": "...", "test_id": "...", "arm_id": "...", "query_id": "...", "ranked_ids": ["..."], "scores": [0.9], "metrics": {"ndcg": 0.72}, "latency_ms": 12.3, "ranked_distances": [0.1], "ranked_metadatas": [{"source": "..."}], "ranked_documents": ["..."], "rerank_scores": [0.7], "created_at": "2026-01-12T00:00:00Z" } ], "page": 1, "page_size": 50, "total": 120 }`.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/significance?metric=ndcg`
+Statistical significance for chosen metric.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/events`
+SSE event stream of progress/updates.
+
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/export?format=json|csv`
+Export results (admin-only).
+
+`DELETE /api/v1/evaluations/embeddings/abtest/{test_id}`
+Delete a test.
+
 ### G-Eval Summarization
 `POST /api/v1/evaluations/geval`
 
@@ -353,7 +427,7 @@ Evaluates general response quality and format compliance.
 ### Batch Evaluation
 `POST /api/v1/evaluations/batch`
 
-Process multiple evaluations in parallel.
+Process multiple evaluations in parallel. Supported `evaluation_type` values: `geval`, `rag`, `response_quality`, `ocr`, `propositions`.
 
 **Request:**
 ```json
@@ -363,6 +437,104 @@ Process multiple evaluations in parallel.
   "parallel_workers": 4,
   "continue_on_error": true
 }
+```
+
+Example (curl):
+```bash
+curl -X POST "http://localhost:8000/api/v1/evaluations/batch" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+        "evaluation_type": "geval",
+        "items": [
+          {
+            "source_text": "The mitochondrion is the powerhouse of the cell.",
+            "summary": "Mitochondria produce energy in cells.",
+            "metrics": ["coherence", "consistency"]
+          },
+          {
+            "source_text": "Deep learning uses neural networks to model complex patterns.",
+            "summary": "Neural networks model complex patterns in deep learning.",
+            "metrics": ["coherence"]
+          }
+        ],
+        "parallel_workers": 2,
+        "continue_on_error": true
+      }'
+```
+
+Example response:
+```json
+{
+  "total_items": 2,
+  "successful": 2,
+  "failed": 0,
+  "results": [
+    {
+      "evaluation_id": "eval_01HXXXX",
+      "status": "completed",
+      "results": {
+        "metrics": {
+          "coherence": {"score": 0.94, "explanation": "Strong logical flow"},
+          "consistency": {"score": 0.91, "explanation": "Consistent details"}
+        },
+        "average_score": 0.925
+      }
+    },
+    {
+      "evaluation_id": "eval_01HYYYY",
+      "status": "completed",
+      "results": {
+        "metrics": {
+          "coherence": {"score": 0.89, "explanation": "Minor clarity issues"}
+        },
+        "average_score": 0.89
+      }
+    }
+  ],
+  "aggregate_metrics": {"coherence": 0.915},
+  "processing_time": 1.82
+}
+```
+
+Additional examples:
+
+Propositions (Jaccard):
+```bash
+curl -X POST "http://localhost:8000/api/v1/evaluations/batch" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+        "evaluation_type": "propositions",
+        "items": [
+          {
+            "extracted": ["Alice founded Acme in 2020", "Bob joined in 2021"],
+            "reference": ["Alice founded Acme in 2020"],
+            "method": "jaccard",
+            "threshold": 0.5
+          }
+        ],
+        "parallel_workers": 1
+      }'
+```
+
+OCR (text-based items):
+```bash
+curl -X POST "http://localhost:8000/api/v1/evaluations/batch" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+        "evaluation_type": "ocr",
+        "items": [
+          {
+            "items": [
+              {"id": "d1", "extracted_text": "hello world", "ground_truth_text": "hello world"}
+            ],
+            "metrics": ["cer", "wer"]
+          }
+        ],
+        "parallel_workers": 1
+      }'
 ```
 
 ### Propositions Evaluation
@@ -380,59 +552,47 @@ Request (example):
 }
 ```
 
+Example (curl):
+```bash
+curl -X POST "http://localhost:8000/api/v1/evaluations/propositions" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+        "extracted": ["Mitochondria produce ATP", "Cells contain nuclei"],
+        "reference": ["Mitochondria produce energy", "Cells contain nuclei"],
+        "method": "semantic",
+        "threshold": 0.7
+      }'
+```
+
+Example response:
+```json
+{
+  "precision": 0.50,
+  "recall": 1.00,
+  "f1": 0.67,
+  "matched": 1,
+  "total_extracted": 2,
+  "total_reference": 2,
+  "claim_density_per_100_tokens": 2.3,
+  "avg_prop_len_tokens": 7.8,
+  "dedup_rate": 0.0,
+  "details": {
+    "matches": [
+      {"extracted": "Cells contain nuclei", "reference": "Cells contain nuclei", "score": 1.0}
+    ],
+    "misses": [
+      {"extracted": "Mitochondria produce ATP", "closest": "Mitochondria produce energy", "score": 0.65}
+    ]
+  },
+  "metadata": {"evaluation_id": "eval_01HZZZZ", "evaluation_time": 0.21}
+}
+```
+
 ### OCR Evaluation
 `POST /api/v1/evaluations/ocr` - Evaluate OCR text quality on provided content
 
 `POST /api/v1/evaluations/ocr-pdf` - Evaluate OCR text quality on uploaded PDF
-
-### RAG Pipeline Presets
-`POST /api/v1/evaluations/rag/pipeline/presets`
-Create a named RAG pipeline preset.
-
-Request:
-```json
-{ "name": "baseline_hybrid", "config": { "chunking": {"method": "sentences", "size": 8, "overlap": 1}, "retriever": {"mode": "hybrid", "k": 8, "alpha": 0.5}, "reranker": {"provider": "cohere", "model": "rerank-3"}, "rag": {"max_context_tokens": 2000} } }
-```
-
-Responses:
-- `201` PipelinePresetResponse `{ "name": "...", "config": {..}, "created_at": 123, "updated_at": 123 }`
-
-`GET /api/v1/evaluations/rag/pipeline/presets`
-List presets. Response `{ "items": [ {"name": "...", "config": {...}} ], "total": 1 }`
-
-`GET /api/v1/evaluations/rag/pipeline/presets/{name}`
-Get a preset by name.
-
-`DELETE /api/v1/evaluations/rag/pipeline/presets/{name}`
-Delete a preset. Response `204 No Content`.
-
-`POST /api/v1/evaluations/rag/pipeline/cleanup`
-Cleanup ephemeral vector store collections. Response `{ "expired_count": 0, "deleted_count": 0, "errors": [] }`
-
-### Embeddings A/B Tests
-`POST /api/v1/evaluations/embeddings/abtest`
-Create an embeddings A/B test. Request `{ "name": "string", "config": { "arms": [...], "media_ids": [], "chunking": {...}, "retrieval": {...}, "queries": [...] }, "run_immediately": false }`. Response `{ "test_id": "...", "status": "created" }`.
-
-`POST /api/v1/evaluations/embeddings/abtest/{test_id}/run`
-Start execution. Response `{ "test_id": "...", "status": "running", "progress": { } }`.
-
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}`
-Summary: `{ "test_id": "...", "status": "...", "arms": [ {"arm_id":"...","provider":"...","model":"...","metrics": {"ndcg": 0.72}, "latency_ms": {"p50": 30.3} } ] }`.
-
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}/results`
-Paginated results. Response `{ "summary": {...}, "results": [ { "result_id": "...", "test_id": "...", "arm_id": "...", "query_id": "...", "ranked_ids": ["..."], "scores": [0.9], "metrics": {"ndcg": 0.72}, "latency_ms": 12.3, "ranked_distances": [0.1], "ranked_metadatas": [{"source": "..."}], "ranked_documents": ["..."], "rerank_scores": [0.7], "created_at": "2026-01-12T00:00:00Z" } ], "page": 1, "page_size": 50, "total": 120 }`.
-
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}/significance?metric=ndcg`
-Statistical significance for chosen metric.
-
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}/events`
-SSE event stream of progress/updates.
-
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}/export?format=json|csv`
-Export results (admin-only).
-
-`DELETE /api/v1/evaluations/embeddings/abtest/{test_id}`
-Delete a test.
 
 ## Webhook Management
 
@@ -517,32 +677,39 @@ Exports metrics in Prometheus format:
 
 Returns current tier, limits, usage, remaining allowance, and reset time.
 
+Responses from evaluation endpoints also include standard `X-RateLimit-*` headers:
+- `X-RateLimit-Tier`
+- `X-RateLimit-PerMinute-Limit`
+- `X-RateLimit-Daily-Limit`
+- `X-RateLimit-Daily-Remaining`
+- `X-RateLimit-Tokens-Remaining`
+- `X-RateLimit-Daily-Cost-Remaining`
+- `X-RateLimit-Monthly-Cost-Remaining`
+
+### Idempotency
+
+For create endpoints, supply `Idempotency-Key` to make requests safe to retry. When a prior successful request with the same key exists (scoped per user and entity type), the API returns the original resource instead of creating a duplicate.
+
+- `POST /api/v1/evaluations` - create evaluation definition
+- `POST /api/v1/evaluations/datasets` - create dataset
+- `POST /api/v1/evaluations/{eval_id}/runs` - create run
+- `POST /api/v1/evaluations/embeddings/abtest` - create embeddings A/B test (scaffold)
+- `POST /api/v1/evaluations/embeddings/abtest/{test_id}/run` - start A/B test (admin-gated)
+
 Example:
-```json
-{
-  "tier": "free",
-  "limits": {
-    "evaluations_per_minute": 60,
-    "evaluations_per_day": 500,
-    "tokens_per_day": 100000,
-    "cost_per_day": 1,
-    "cost_per_month": 10
-  },
-  "usage": {
-    "evaluations_today": 7,
-    "tokens_today": 2200,
-    "cost_today": 0,
-    "cost_month": 0
-  },
-  "remaining": {
-    "daily_evaluations": 493,
-    "daily_tokens": 977800,
-    "daily_cost": 1,
-    "monthly_cost": 10
-  },
-  "reset_at": 1735699200
-}
 ```
+Idempotency-Key: 9c20c0b8-5e5b-42d1-ae6a-6b1ae1a4f3de
+```
+
+Keys are stored server-side and are unique per `{user_id, entity_type, key}`.
+
+### Admin Gating
+
+Some heavy operations (e.g., embeddings A/B test run and export) are admin-gated by default. Control this behavior with the environment variable:
+
+- `EVALS_HEAVY_ADMIN_ONLY=true|false` (default: `true`)
+
+When enabled, non-admin users receive `403` for gated endpoints.
 
 ## Error Handling
 
@@ -621,7 +788,7 @@ def request_json(method, url, payload=None, headers=None):
     with urlopen(req) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
-# Create evaluation (OpenAI-compatible shape)
+# Create evaluation
 payload = {
   "name": "my_eval",
   "eval_type": "model_graded",
@@ -640,6 +807,33 @@ r = request_json(
 
 # Poll run status
 status = request_json("GET", f"{BASE}/runs/{r['id']}", headers=headers)
+```
+
+### Pipeline Presets & Cleanup
+
+Create or update a pipeline preset:
+```bash
+curl -X POST "$BASE/rag/pipeline/presets" \
+  -H "X-API-KEY: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"standard","config": {"retrieval": {"k": 8}}}'
+```
+
+List presets:
+```bash
+curl "$BASE/rag/pipeline/presets" -H "X-API-KEY: $API_KEY"
+```
+
+Cleanup expired ephemeral collections:
+```bash
+curl -X POST "$BASE/rag/pipeline/cleanup" -H "X-API-KEY: $API_KEY"
+```
+
+### Embeddings A/B Test (SSE)
+
+Stream events for a running A/B test:
+```bash
+curl "$BASE/embeddings/abtest/abtest_123/events" -H "X-API-KEY: $API_KEY"
 ```
 
 ## Best Practices
@@ -683,7 +877,7 @@ See CONTRIBUTING.md for guidelines on contributing to the evaluation module.
 
 ---
 
-*Last Updated: 2025*
+*Last Updated: 2024*
 *Version: 1.0.0*
 *Status: Unified Implementation*
 ## History

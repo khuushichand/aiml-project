@@ -22,6 +22,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 
 ## Storage
 - `USER_DB_BASE_DIR`: Base directory for per-user DBs and assets (defined in `tldw_Server_API.app.core.config`). Defaults to `Databases/user_databases` under the repo root; relative paths resolve from repo root and `~` expands. Override via environment variable or `Config_Files/config.txt` as needed.
+- `USER_DB_BASE_DIR_ALLOWED_ROOTS` / `TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS`: Optional allowlist for setup-time changes to `USER_DB_BASE_DIR`. Comma- or colon-separated list of parent directories permitted for the new base.
 - `USER_DB_BASE`: Deprecated alias for `USER_DB_BASE_DIR` (used only by rewrite cache resolution).
 
 ## Testing & CI Controls
@@ -46,7 +47,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `RAG_LLM_RERANK_TIMEOUT_SEC`: Per-document LLM rerank timeout (seconds). Default `10`.
 - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`: Total time budget for LLM reranking per query (seconds). Default `20`.
 - `RAG_LLM_RERANK_MAX_DOCS`: Cap on number of documents scored by LLM reranker per query. Default `20`.
- - `RAG_TRANSFORMERS_RERANKER_MODEL`: Cross-encoder model id for fast reranking (stage 1). Default `BAAI/bge-reranker-v2-m3`.
+- `RAG_TRANSFORMERS_RERANKER_MODEL`: Cross-encoder model id for fast reranking (stage 1). Default `BAAI/bge-reranker-v2-m3`.
 - `RAG_REWRITE_CACHE_PATH`: Optional override for query→rewrite cache JSONL. When unset, cache is per-user under `<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl` (deprecated alias: `USER_DB_BASE`).
 - `RAG_PRECOMPUTED_SPANS_MAX_VECTORS_PER_CORPUS`: Cap on stored span vectors per corpus (default `200000`). Config key: `[RAG] precomputed_spans_max_vectors_per_corpus`.
 - `RAG_PRECOMPUTED_SPANS_MAX_MB_PER_CORPUS`: Cap on precomputed span storage per corpus in MB (default `512`). Config key: `[RAG] precomputed_spans_max_mb_per_corpus`.
@@ -57,9 +58,9 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `RAG_ENABLE_NUMERIC_FIDELITY`: Force-enable numeric fidelity verification of answers (overrides request default). Optional; typically implied by `RAG_GUARDRAILS_STRICT`.
 - `RAG_REQUIRE_HARD_CITATIONS`: Force-enable per-sentence hard citations mapping (overrides request default). Optional; typically implied by `RAG_GUARDRAILS_STRICT`.
 - `RAG_NUMERIC_FIDELITY_BEHAVIOR`: Default behavior when numeric values are not verified in sources: `continue` | `ask` | `decline` | `retry`. Default `ask` when strict mode is active.
- - `RAG_PAYLOAD_EXEMPLAR_SAMPLING`: Sampling rate (0..1) to record redacted payload exemplars when adaptive check fails (default `0.05`).
- - `RAG_PAYLOAD_EXEMPLAR_PATH`: Optional path for payload exemplars JSONL sink (default `Databases/observability/rag_payload_exemplars.jsonl`).
- - `RAG_PERSONALIZATION_HALF_LIFE_DAYS`: Half-life for decay of per-user priors (default `7`).
+- `RAG_PAYLOAD_EXEMPLAR_SAMPLING`: Sampling rate (0..1) to record redacted payload exemplars when adaptive check fails (default `0.05`).
+- `RAG_PAYLOAD_EXEMPLAR_PATH`: Optional path for payload exemplars JSONL sink (default `Databases/observability/rag_payload_exemplars.jsonl`).
+- `RAG_PERSONALIZATION_HALF_LIFE_DAYS`: Half-life for decay of per-user priors (default `7`).
 - `RAG_PERSONALIZATION_WEIGHT`: Additive weight applied to prior during boosting (default `0.1`).
 
 ### RAG Quality Evaluations (Nightly)
@@ -129,8 +130,12 @@ Notes:
 - `JOBS_LEASE_RENEW_SECONDS`: Renewal cadence while a worker processes a job (default `30`).
 - `JOBS_LEASE_RENEW_JITTER_SECONDS`: Jitter (seconds) applied to renewals to avoid herd behavior (default `5`).
 - `JOBS_LEASE_MAX_SECONDS`: Cap for acquire/renew lease seconds (default `3600`).
+- `TLDW_WORKERS_SIDECAR_MODE`: When true, skip in-process Jobs workers so you can run them as sidecars (`true|false`, default `false`).
 - `EVALUATIONS_ABTEST_JOBS_WORKER_ENABLED`: Enable the in-process Embeddings A/B Jobs worker (`true|false`, default `false`). Alias: `EVALS_ABTEST_JOBS_WORKER_ENABLED`.
 - `EVALUATIONS_JOBS_QUEUE`: Queue name for evaluations jobs (default `default`). Alias: `EVALS_JOBS_QUEUE`.
+- `FILES_JOBS_WORKER_ENABLED`: Enable the in-process file artifacts jobs worker (`true|false`, default follows route policy for `files`). When false, run `python -m tldw_Server_API.app.core.File_Artifacts.jobs_worker`.
+- `PROMPT_STUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Prompt Studio jobs worker (`true|false`, default follows route policy for `prompt-studio`).
+- `PRIVILEGE_SNAPSHOT_WORKER_ENABLED`: Enable the in-process privilege snapshot jobs worker (`true|false`, default follows route policy for `privileges`).
 
 ## Embeddings Jobs
 - `EMBEDDINGS_JOBS_BACKEND`: Backend is fixed to "core"; this environment variable exists for compatibility and is ignored.
@@ -144,6 +149,29 @@ Notes:
 - `EMBEDDINGS_JOBS_BACKOFF_MAX_SECONDS`: Max retry backoff in seconds (default `30`).
 - `EMBEDDINGS_JOBS_RETRY_BACKOFF_SECONDS`: Backoff for retryable errors (default `10`).
 - `EMBEDDINGS_JOBS_EXPOSE_PROGRESS`: Include `progress_percent`/`total_chunks` in public jobs responses (`true|false`, default `false`).
+
+## Data Tables Jobs
+- `DATA_TABLES_JOBS_WORKER_ENABLED`: Enable the in-process data tables jobs worker (`true|false`, default follows route policy for `data-tables`). When false, run `python -m tldw_Server_API.app.core.Data_Tables.jobs_worker`.
+- `DATA_TABLES_JOBS_QUEUE`: Queue for data table generation jobs (default `default`).
+- `DATA_TABLES_JOBS_WORKER_ID`: Worker identifier for data tables jobs (default `data-tables-jobs-<pid>`).
+- `DATA_TABLES_JOBS_LEASE_SECONDS`: Lease duration for data tables jobs (default `60`).
+- `DATA_TABLES_JOBS_RENEW_JITTER_SECONDS`: Lease renew jitter in seconds (default `5`).
+- `DATA_TABLES_JOBS_RENEW_THRESHOLD_SECONDS`: Renew threshold in seconds (default `10`).
+- `DATA_TABLES_JOBS_BACKOFF_BASE_SECONDS`: Base retry backoff in seconds (default `2`).
+- `DATA_TABLES_JOBS_BACKOFF_MAX_SECONDS`: Max retry backoff in seconds (default `30`).
+- `DATA_TABLES_JOBS_RETRY_BACKOFF_SECONDS`: Backoff for retryable errors (default `10`).
+
+## Data Tables Generation Limits
+- `DATA_TABLES_DEFAULT_MAX_ROWS`: Default max rows per table when request omits `max_rows` (default `200`).
+- `DATA_TABLES_MAX_ROWS`: Hard cap on generated rows per table (default `2000`).
+- `DATA_TABLES_MAX_SOURCE_CHARS`: Per-source character cap used when building prompts (default `12000`).
+- `DATA_TABLES_MAX_TOTAL_SOURCE_CHARS`: Aggregate character cap across all sources (default `60000`).
+- `DATA_TABLES_MAX_SNAPSHOT_CHARS`: Per-chunk snapshot text cap for rag_query sources (default `8000`).
+- `DATA_TABLES_MAX_PROMPT_CHARS`: Total prompt size cap (default `24000`).
+- `DATA_TABLES_CHAT_BATCH_SIZE`: Batch size when loading chat messages (default `250`).
+- `DATA_TABLES_CHAT_MAX_MESSAGES`: Maximum chat messages loaded per source (default `1500`).
+- `DATA_TABLES_LLM_MAX_TOKENS`: LLM response token budget for table generation (default `2000`).
+- `DATA_TABLES_LLM_TEMPERATURE`: LLM temperature for table generation (default `0.2`).
 
 ## Chatbooks
 - `CHATBOOKS_JOBS_BACKEND`: Backend is fixed to "core"; this environment variable exists for compatibility and is ignored.
@@ -159,9 +187,12 @@ Notes:
 - `CHATBOOKS_IMPORT_DICT_STRICT`: When true, skip dictionaries with fatal validation errors instead of importing with warnings.
 
 ## Audio Jobs
-- `AUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Audio Jobs worker (`true|false`, default `false`). When true, the worker starts at app startup and polls the Jobs backend for the `audio` domain pipeline stages.
+- `AUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Audio Jobs worker (`true|false`, default follows route policy for `audio-jobs`). When true, the worker starts at app startup and polls the Jobs backend for the `audio` domain pipeline stages.
 - `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition for fairness across users (`true|false`, default `false`). When enabled, the worker preferentially acquires jobs for owners under their concurrent-job caps.
 - `AUDIO_QUOTA_USE_REDIS`: Use Redis for distributed audio concurrency tracking (`true|false`, default `true` when `REDIS_URL` is set). Falls back to in-process counters when disabled or unavailable.
+
+## Media Ingest Jobs
+- `MEDIA_INGEST_JOBS_WORKER_ENABLED`: Enable the in-process media ingest jobs worker (`true|false`, default follows route policy for `media`). When true, the worker starts at app startup and polls the Jobs backend for the `media_ingest` domain.
 
 Pytest markers
 - `-m jobs`: Run all core Jobs tests (SQLite + PG-gated).
@@ -209,6 +240,7 @@ Config file support (optional):
 ## Chat / WebUI
 - `CHAT_SAVE_DEFAULT`: Persist new chats by default (`true|false`).
 - `DEFAULT_CHAT_SAVE`: Legacy alias; same as above.
+- `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
 
 ### Tokenizer (Chat Dictionaries & World Books)
 - `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`
@@ -314,6 +346,12 @@ Quick start (local dev):
 - `POINTS_MODE`: `sglang` or `transformers` (default: auto).
 - `POINTS_SGLANG_URL`: SGLang chat/completions endpoint (e.g., `http://127.0.0.1:8081/v1/chat/completions`).
 - `POINTS_SGLANG_MODEL`: Model name in SGLang server (e.g., `WePoints`).
+
+## Workflows (File Access)
+- `WORKFLOWS_FILE_BASE_DIR`: Base directory for workflow `file://` access. Relative paths resolve from the project root; defaults to the per-user base dir under `USER_DB_BASE_DIR` (with a `Databases/` fallback).
+- `WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS`: `true|false` - allow workflow file access outside the per-user base dir, but only under allowlisted base directories (default `false`).
+- `WORKFLOWS_FILE_ALLOWLIST`: Comma- or newline-separated list of allowed base directories for unsafe file access; relative paths resolve from the project root.
+- `WORKFLOWS_FILE_ALLOWLIST_<TENANT>`: Optional per-tenant override (uppercase, `-` replaced by `_`); when set, it replaces the global allowlist for that tenant (comma- or newline-separated).
 
 ## Scheduler
 - `SCHEDULER_DATABASE_URL`: Database URL for the core task scheduler. Defaults to `sqlite:///PROJECT_ROOT/Databases/scheduler.db` (test mode uses a per-process temp file). Set this to place the scheduler DB alongside other DBs.

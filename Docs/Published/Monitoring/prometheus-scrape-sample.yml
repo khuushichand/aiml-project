@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'tldw_server'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['localhost:8000']  # Replace with service DNS or host:port
+
+# Optional: if you want to scrape the JSON exporter as well (not recommended for Prometheus)
+#  - job_name: 'tldw_server_json'
+#    metrics_path: /api/v1/metrics/text
+#    static_configs:
+#      - targets: ['localhost:8000']
+
+# If running behind reverse proxy or non-default path, you can use relabeling to rewrite paths.
+# relabel_configs examples:
+#    relabel_configs:
+#      - source_labels: [__address__]
+#        regex: '(.+):([0-9]+)'
+#        target_label: instance
+#        replacement: '$1'

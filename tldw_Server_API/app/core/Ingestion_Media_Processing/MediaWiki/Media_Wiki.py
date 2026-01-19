@@ -26,6 +26,7 @@ import yaml
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 from tldw_Server_API.app.core.Utils.Utils import logging
 try:  # Optional embeddings dependencies
     from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
@@ -49,7 +50,7 @@ def load_mediawiki_import_config():
     # Verify the path is within the project structure
     project_root = base_dir.parent.parent.parent.parent.resolve()
     if not str(config_path).startswith(str(project_root)):
-        raise ValueError("Config file path is outside project directory")
+        raise InvalidStoragePathError("Config file path is outside project directory")
 
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
@@ -60,6 +61,8 @@ media_wiki_import_config = load_mediawiki_import_config()
 logger = _base_logger.bind(component="mediawiki_import")
 _STDOUT_HANDLER_ID: Optional[int] = None
 _FILE_HANDLER_ID: Optional[int] = None
+ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS = frozenset({".xml", ".xml.bz2", ".xml.gz", ".bz2", ".gz"})
+MAX_MEDIAWIKI_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024  # 10GB limit
 
 
 def get_safe_log_path(log_filename: str) -> Optional[Path]:
@@ -173,34 +176,19 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
         Resolved safe Path object
 
     Raises:
-        ValueError: If path is invalid or attempts traversal
+        InvalidStoragePathError: If path is invalid or attempts traversal
     """
     try:
         # Check for null bytes which can truncate paths
         if '\x00' in file_path:
-            raise ValueError("Null byte in path")
+            raise InvalidStoragePathError("Null byte in path")
 
         # Additional checks for suspicious patterns first
         if '../' in file_path or '..' + os.sep in file_path:
-            raise ValueError("Path traversal attempt detected")
+            raise InvalidStoragePathError("Path traversal attempt detected")
 
-        # Convert to Path and resolve to absolute path
-        path = Path(file_path).resolve()
-
-        # Check if path exists
-        if not path.exists():
-            raise ValueError("File does not exist")
-
-        # Check if it's a file (not a directory or symlink to directory)
-        if not path.is_file():
-            raise ValueError("Path is not a regular file")
-
-        # Check for symlink attacks
-        if path.is_symlink():
-            # Resolve the symlink and check if it's within allowed directory
-            real_path = path.resolve()
-            if allowed_dir and not str(real_path).startswith(str(allowed_dir)):
-                raise ValueError("Symlink points outside allowed directory")
+        # Convert to Path for symlink inspection before resolution
+        orig_path = Path(file_path)
 
         # Default to current working directory if no allowed_dir specified
         if allowed_dir is None:
@@ -208,26 +196,55 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
             # Default to allowing files in current directory and subdirectories
             allowed_dir = Path.cwd()
 
+        # Check for symlink attacks
+        if orig_path.is_symlink():
+            # Resolve the symlink and check if it's within allowed directory
+            real_path = orig_path.resolve()
+            allowed_resolved = Path(allowed_dir).resolve()
+            try:
+                common_path = os.path.commonpath([str(real_path), str(allowed_resolved)])
+                if common_path != str(allowed_resolved):
+                    raise InvalidStoragePathError("Symlink points outside allowed directory")
+            except ValueError as exc:
+                raise InvalidStoragePathError("Symlink points outside allowed directory") from exc
+
+        # Resolve to absolute path for subsequent checks
+        path = orig_path.resolve()
+
+        # Check if path exists
+        if not path.exists():
+            raise InvalidStoragePathError("File does not exist")
+
+        # Check if it's a file (not a directory or symlink to directory)
+        if not path.is_file():
+            raise InvalidStoragePathError("Path is not a regular file")
+
         allowed = Path(allowed_dir).resolve()
         # Use os.path.commonpath for secure path containment check
         try:
             common_path = os.path.commonpath([str(path), str(allowed)])
             if common_path != str(allowed):
-                raise ValueError("Access denied: Path is outside allowed directory")
-        except ValueError:
+                raise InvalidStoragePathError("Access denied: Path is outside allowed directory")
+        except ValueError as exc:
             # Paths are on different drives (Windows) or otherwise incomparable
-            raise ValueError("Access denied: Path is outside allowed directory")
+            raise InvalidStoragePathError("Access denied: Path is outside allowed directory") from exc
+
+        lower_path = str(path).lower()
+        if not any(lower_path.endswith(ext.lower()) for ext in ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS):
+            raise InvalidStoragePathError("File extension is not allowed")
 
         # Check file size to prevent processing huge files
-        max_file_size = 1024 * 1024 * 1024  # 1GB limit
+        max_file_size = MAX_MEDIAWIKI_FILE_SIZE_BYTES
         if path.stat().st_size > max_file_size:
-            raise ValueError("File size exceeds maximum allowed size")
+            raise InvalidStoragePathError("File size exceeds maximum allowed size")
 
         return path
-    except (ValueError, OSError) as e:
+    except (InvalidStoragePathError, OSError) as e:
         # Log the error internally but don't expose the path in the error message
         logger.error(f"Path validation failed: {e}")
-        raise ValueError(f"Invalid file path: {str(e).replace(file_path, '[REDACTED]')}")
+        raise InvalidStoragePathError(
+            f"Invalid file path: {str(e).replace(file_path, '[REDACTED]')}"
+        ) from e
 
 
 def sanitize_wiki_name(wiki_name: str) -> str:
@@ -296,10 +313,10 @@ def get_safe_checkpoint_path(wiki_name: str, checkpoint_dir: Optional[Path] = No
         base_resolved = base_dir.resolve()
         common_path = os.path.commonpath([str(checkpoint_resolved), str(base_resolved)])
         if common_path != str(base_resolved):
-            raise ValueError("Invalid checkpoint path")
-    except ValueError:
+            raise InvalidStoragePathError("Invalid checkpoint path")
+    except ValueError as exc:
         # Paths are on different drives (Windows) or otherwise incomparable
-        raise ValueError("Invalid checkpoint path")
+        raise InvalidStoragePathError("Invalid checkpoint path") from exc
 
     return checkpoint_path
 
@@ -318,57 +335,61 @@ def _open_dump_file_text(safe_path: Path):
     return open(safe_path, mode='rt', encoding='utf-8', errors='ignore')
 
 
-def parse_mediawiki_dump(file_path: str, namespaces: List[int] = None, skip_redirects: bool = False) -> Iterator[
-    Dict[str, Any]]:
+def parse_mediawiki_dump(
+    file_path: Union[str, Path],
+    namespaces: Optional[List[int]] = None,
+    skip_redirects: bool = False,
+    allowed_dir: Optional[Path] = None,
+    *,
+    prevalidated_path: Optional[Path] = None,
+) -> Iterator[Dict[str, Any]]:
     # Validate file path
-    # Restrict access to the directory containing the file (e.g., API temp dir)
-    try:
-        allowed_dir = Path(file_path).resolve().parent
-    except Exception:
-        allowed_dir = None
-    safe_path = validate_file_path(file_path, allowed_dir=allowed_dir)
+    safe_path = prevalidated_path if prevalidated_path is not None else validate_file_path(
+        str(file_path),
+        allowed_dir=allowed_dir,
+    )
     # Use context manager for file operations to prevent resource leaks
     with _open_dump_file_text(safe_path) as f:
         dump = mwxml.Dump.from_file(f)
-    for page in dump.pages:
-        if skip_redirects and page.redirect:
-            continue
-        if namespaces and page.namespace not in namespaces:
-            continue
+        for page in dump.pages:
+            if skip_redirects and page.redirect:
+                continue
+            if namespaces and page.namespace not in namespaces:
+                continue
 
-        for revision in page:  # mwxml revisions are an iterator
-            wikicode = mwparserfromhell.parse(revision.text or "")  # Ensure text is not None
-            plain_text = wikicode.strip_code()
-            # Normalize timestamp to a timezone-aware datetime when possible
-            _ts = getattr(revision, "timestamp", None)
-            if isinstance(_ts, datetime):
-                if _ts.tzinfo is None:
-                    timestamp_obj = _ts.replace(tzinfo=timezone.utc)
+            for revision in page:  # mwxml revisions are an iterator
+                wikicode = mwparserfromhell.parse(revision.text or "")  # Ensure text is not None
+                plain_text = wikicode.strip_code()
+                # Normalize timestamp to a timezone-aware datetime when possible
+                _ts = getattr(revision, "timestamp", None)
+                if isinstance(_ts, datetime):
+                    if _ts.tzinfo is None:
+                        timestamp_obj = _ts.replace(tzinfo=timezone.utc)
+                    else:
+                        timestamp_obj = _ts
+                elif _ts is not None:
+                    # Attempt to parse from string representation (e.g., 'YYYY-MM-DDTHH:MM:SSZ')
+                    try:
+                        ts_str = str(_ts)
+                        ts_str = ts_str.replace('Z', '+00:00')
+                        timestamp_obj = datetime.fromisoformat(ts_str)
+                        if timestamp_obj.tzinfo is None:
+                            timestamp_obj = timestamp_obj.replace(tzinfo=timezone.utc)
+                    except Exception:
+                        timestamp_obj = datetime.now(timezone.utc)
                 else:
-                    timestamp_obj = _ts
-            elif _ts is not None:
-                # Attempt to parse from string representation (e.g., 'YYYY-MM-DDTHH:MM:SSZ')
-                try:
-                    ts_str = str(_ts)
-                    ts_str = ts_str.replace('Z', '+00:00')
-                    timestamp_obj = datetime.fromisoformat(ts_str)
-                    if timestamp_obj.tzinfo is None:
-                        timestamp_obj = timestamp_obj.replace(tzinfo=timezone.utc)
-                except Exception:
+                    # Fallback timestamp if revision has none
                     timestamp_obj = datetime.now(timezone.utc)
-            else:
-                # Fallback timestamp if revision has none
-                timestamp_obj = datetime.now(timezone.utc)
 
-            yield {
-                "title": page.title,
-                "content": plain_text,
-                "namespace": page.namespace,
-                "page_id": page.id,
-                "revision_id": revision.id,
-                "timestamp": timestamp_obj  # Store as datetime object
-            }
-        logging.debug(f"Yielded page: {page.title}")
+                yield {
+                    "title": page.title,
+                    "content": plain_text,
+                    "namespace": page.namespace,
+                    "page_id": page.id,
+                    "revision_id": revision.id,
+                    "timestamp": timestamp_obj  # Store as datetime object
+                }
+            logging.debug(f"Yielded page: {page.title}")
 
 
 def optimized_chunking(text: str, chunk_options: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -778,7 +799,7 @@ def load_checkpoint(file_path: str) -> int:
     # Validate checkpoint file path
     try:
         safe_path = validate_file_path(file_path)
-    except ValueError:
+    except InvalidStoragePathError:
         # File doesn't exist yet, which is fine for checkpoints
         return 0
 
@@ -796,11 +817,11 @@ def load_checkpoint(file_path: str) -> int:
 def save_checkpoint(file_path: str, last_processed_id: int):
     # Check for null bytes
     if '\x00' in str(file_path):
-        raise ValueError("Null byte in checkpoint path")
+        raise InvalidStoragePathError("Null byte in checkpoint path")
 
     # Validate the path is safe before any operations
     if '../' in str(file_path) or '..' + os.sep in str(file_path):
-        raise ValueError("Path traversal attempt in checkpoint file")
+        raise InvalidStoragePathError("Path traversal attempt in checkpoint file")
 
     # Convert to Path and resolve
     safe_path = Path(file_path).resolve()
@@ -813,9 +834,9 @@ def save_checkpoint(file_path: str, last_processed_id: int):
     try:
         common_path = os.path.commonpath([str(safe_path), str(checkpoints_dir)])
         if common_path != str(checkpoints_dir):
-            raise ValueError("Checkpoint file must be within checkpoints directory")
-    except ValueError:
-        raise ValueError("Invalid checkpoint file path")
+            raise InvalidStoragePathError("Checkpoint file must be within checkpoints directory")
+    except ValueError as exc:
+        raise InvalidStoragePathError("Invalid checkpoint file path") from exc
 
     # Use atomic write to prevent partial writes and race conditions
     safe_path.parent.mkdir(parents=True, exist_ok=True)
@@ -846,17 +867,15 @@ def import_mediawiki_dump(
         store_to_db: bool = True,
         store_to_vector_db: bool = True,
         api_name_vector_db: Optional[str] = None,
-        api_key_vector_db: Optional[str] = None
+        api_key_vector_db: Optional[str] = None,
+        allowed_dir: Optional[Path] = None,
 ) -> Iterator[Dict[str, Any]]:
     try:
         # Sanitize wiki_name and validate file_path
         safe_wiki_name = sanitize_wiki_name(wiki_name)
-        # Restrict validation to the directory containing the uploaded file
-        try:
-            _allowed_dir = Path(file_path).resolve().parent
-        except Exception:
-            _allowed_dir = None
-        safe_file_path = validate_file_path(file_path, allowed_dir=_allowed_dir)
+        # Restrict validation to the provided base directory if available
+        resolved_allowed_dir = Path(allowed_dir).resolve() if allowed_dir is not None else None
+        safe_file_path = validate_file_path(str(file_path), allowed_dir=resolved_allowed_dir)
 
         logging.info(
             f"Importing MediaWiki dump: {safe_file_path} for wiki: {safe_wiki_name}. StoreDB: {store_to_db}, StoreVector: {store_to_vector_db}")
@@ -869,13 +888,25 @@ def import_mediawiki_dump(
         if store_to_db:  # Checkpoints only make sense if we are saving progress to DB
             last_processed_id = load_checkpoint(str(checkpoint_file))
 
-        total_pages = count_pages(file_path, namespaces, skip_redirects)
+        total_pages = count_pages(
+            safe_file_path,
+            namespaces,
+            skip_redirects,
+            allowed_dir=resolved_allowed_dir,
+            prevalidated_path=safe_file_path,
+        )
         processed_pages_count = 0
 
         yield {"type": "progress_total", "total_pages": total_pages,
                "message": f"Found {total_pages} pages to process for '{wiki_name}'."}
 
-        for item_dict in parse_mediawiki_dump(file_path, namespaces, skip_redirects):
+        for item_dict in parse_mediawiki_dump(
+            safe_file_path,
+            namespaces,
+            skip_redirects,
+            allowed_dir=resolved_allowed_dir,
+            prevalidated_path=safe_file_path,
+        ):
             current_page_id = item_dict.get('page_id', 0)
             current_title = item_dict.get('title', 'Unknown Title')
 
@@ -947,24 +978,30 @@ def import_mediawiki_dump(
         yield {"type": "error", "message": f"Error during import: {str(e)}"}
 
 
-def count_pages(file_path: str, namespaces: List[int] = None, skip_redirects: bool = False) -> int:
+def count_pages(
+    file_path: Union[str, Path],
+    namespaces: Optional[List[int]] = None,
+    skip_redirects: bool = False,
+    allowed_dir: Optional[Path] = None,
+    *,
+    prevalidated_path: Optional[Path] = None,
+) -> int:
     count = 0
     try:
         # Validate file path
-        try:
-            allowed_dir = Path(file_path).resolve().parent
-        except Exception:
-            allowed_dir = None
-        safe_path = validate_file_path(file_path, allowed_dir=allowed_dir)
+        safe_path = prevalidated_path if prevalidated_path is not None else validate_file_path(
+            str(file_path),
+            allowed_dir=allowed_dir,
+        )
         # Use context manager for file operations to prevent resource leaks
         with _open_dump_file_text(safe_path) as f:
             dump = mwxml.Dump.from_file(f)
-        for page in dump.pages:
-            if skip_redirects and page.redirect:
-                continue
-            if namespaces and page.namespace not in namespaces:
-                continue
-            count += 1
+            for page in dump.pages:
+                if skip_redirects and page.redirect:
+                    continue
+                if namespaces and page.namespace not in namespaces:
+                    continue
+                count += 1
     except Exception as e:
         logger.error(f"Error counting pages in MediaWiki dump {file_path}: {str(e)}", exc_info=True)
         return 0  # Return 0 if counting fails

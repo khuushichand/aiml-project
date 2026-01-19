@@ -12,6 +12,7 @@ import time
 import threading
 import hashlib
 import re
+from pathlib import Path
 from functools import wraps
 from typing import Any, Dict, List, Optional
 #
@@ -53,8 +54,9 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     log_model_evicted,
     log_memory_limit_exceeded,
 )
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.config import rg_policy_path, resolve_repo_relative_path
+from tldw_Server_API.app.core.Utils.path_utils import safe_join
 
 #
 ########################################################################################################################
@@ -77,6 +79,11 @@ COMMIT_HASHES: Dict[str, str] = {
 }
 
 _CACHE_SUBDIR_PATTERN = re.compile(r"[^0-9A-Za-z_.-]+")
+_ALLOWLIST_ENV_VAR = "EMBEDDINGS_STORAGE_ALLOWLIST_ROOT"
+_allowlist_root_env = (os.environ.get(_ALLOWLIST_ENV_VAR) or "").strip()
+_EMBEDDINGS_STORAGE_ALLOWLIST_ROOT = Path(
+    _allowlist_root_env or resolve_repo_relative_path("models")
+).resolve(strict=False)
 
 
 def _get_http_status_from_exception(exc: Exception) -> Optional[int]:
@@ -136,6 +143,90 @@ def _model_cache_subdir_name(model_id: str) -> str:
     return f"{sanitized}-{digest}"
 
 
+def _log_rejected_path(
+    label: str,
+    value: str,
+    reason: str,
+    *,
+    resolved: Optional[str] = None,
+    base: Optional[str] = None,
+) -> None:
+    """Log and count a rejected storage path value with optional context."""
+    trimmed = (value or "").strip()
+    if len(trimmed) > 200:
+        trimmed = trimmed[:200] + "..."
+    log_counter(
+        "embeddings_storage_path_rejected",
+        labels={"label": label, "reason": reason},
+    )
+    if resolved or base:
+        logger.warning(
+            "Rejected {}: {} ({}) resolved={} base={}",
+            label,
+            trimmed,
+            reason,
+            resolved or "",
+            base or "",
+        )
+        return
+    logger.warning("Rejected {}: {} ({})", label, trimmed, reason)
+
+
+def _normalize_model_storage_base_dir(base_dir: str) -> str:
+    """Normalize and validate embedding storage base dir under the allowlist root."""
+    base_dir_str = str(base_dir or "").strip()
+    if not base_dir_str:
+        _log_rejected_path("model_storage_base_dir", base_dir_str, "empty")
+        raise InvalidStoragePathError("model_storage_base_dir must be a non-empty string.")
+    if "\x00" in base_dir_str:
+        _log_rejected_path("model_storage_base_dir", base_dir_str, "nul_byte")
+        raise InvalidStoragePathError("model_storage_base_dir contains invalid characters.")
+    resolved = Path(resolve_repo_relative_path(base_dir_str)).resolve(strict=False)
+    try:
+        resolved.relative_to(_EMBEDDINGS_STORAGE_ALLOWLIST_ROOT)
+    except ValueError as exc:
+        _log_rejected_path(
+            "model_storage_base_dir",
+            base_dir_str,
+            "outside_allowlist",
+            resolved=str(resolved),
+            base=str(_EMBEDDINGS_STORAGE_ALLOWLIST_ROOT),
+        )
+        raise InvalidStoragePathError(
+            f"model_storage_base_dir must be within {_EMBEDDINGS_STORAGE_ALLOWLIST_ROOT}."
+        ) from exc
+    return str(resolved)
+
+
+def _safe_model_storage_subdir(base_dir: str, subpath: str, label: str) -> str:
+    """Resolve and validate a storage subpath under base_dir."""
+    if not isinstance(subpath, str) or not subpath.strip():
+        _log_rejected_path(label, str(subpath), "empty", base=base_dir)
+        raise InvalidStoragePathError(f"{label} must be a non-empty relative path.")
+    if "\x00" in subpath:
+        _log_rejected_path(label, subpath, "nul_byte", base=base_dir)
+        raise InvalidStoragePathError(f"{label} contains invalid characters.")
+
+    def _path_error(_: Exception | None) -> Exception:
+        candidate = ""
+        try:
+            candidate = os.path.abspath(os.path.join(base_dir, subpath))
+        except Exception:
+            candidate = ""
+        _log_rejected_path(
+            label,
+            subpath,
+            "outside_base_dir",
+            resolved=candidate or None,
+            base=base_dir,
+        )
+        return InvalidStoragePathError(
+            f"{label} must be a relative path within model_storage_base_dir."
+        )
+
+    return safe_join(base_dir, subpath, error_factory=_path_error)
+
+
 def resolve_model_storage_base_dir(
     embedding_settings: Optional[Dict[str, Any]] = None,
     default: Optional[str] = None,
@@ -159,7 +250,8 @@ def resolve_model_storage_base_dir(
 
     try:
         configured_dir = settings.get("EMBEDDINGS_MODEL_STORAGE_DIR")
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to read EMBEDDINGS_MODEL_STORAGE_DIR from settings: {}", exc)
         configured_dir = None
     if configured_dir:
         return str(configured_dir)
@@ -311,7 +403,7 @@ class HFModelCfg(BaseModelCfg):
 class ONNXModelCfg(BaseModelCfg):
     provider: str = "onnx"
     onnx_storage_dir_subpath: str = "onnx_models"
-    onnx_providers: List[str] = ["CPUExecutionProvider"]
+    onnx_providers: List[str] = Field(default_factory=lambda: ["CPUExecutionProvider"])
 
 
 class OpenAIModelCfg(BaseModelCfg):
@@ -1535,8 +1627,8 @@ def create_embeddings_batch(
     model_id_to_use = resolved_key
 
     provider = model_spec.provider
-    # Ensure model_storage_base_dir exists
-    base_dir = embedding_service_config.model_storage_base_dir
+    # Ensure model_storage_base_dir exists and stays under the allowlist root
+    base_dir = _normalize_model_storage_base_dir(embedding_service_config.model_storage_base_dir)
     os.makedirs(base_dir, exist_ok=True)
 
     EMBEDDINGS_REQUESTS.labels(provider=provider, model_id=model_id_to_use).inc()
@@ -1556,11 +1648,19 @@ def create_embeddings_batch(
                     logger.info(f"HuggingFace model ID {model_id_to_use} not in cache. Initializing.")
 
                     # Setup cache directory
-                    hf_cache_dir = os.path.join(base_dir, model_spec.hf_cache_dir_subpath)
+                    hf_cache_dir = _safe_model_storage_subdir(
+                        base_dir,
+                        model_spec.hf_cache_dir_subpath,
+                        "hf_cache_dir_subpath",
+                    )
                     os.makedirs(hf_cache_dir, exist_ok=True)
 
                     cache_subdir = _model_cache_subdir_name(model_id_to_use)
-                    model_cache_dir = os.path.join(hf_cache_dir, cache_subdir)
+                    model_cache_dir = _safe_model_storage_subdir(
+                        hf_cache_dir,
+                        cache_subdir,
+                        "model_cache_dir",
+                    )
 
                     # Check resource limits before loading - use actual path if available
                     estimated_size = estimate_model_size(model_id_to_use, model_cache_dir)
@@ -1616,10 +1716,18 @@ def create_embeddings_batch(
                 if model_id_to_use not in embedding_models:
                     logger.info(f"ONNX model ID {model_id_to_use} not in cache. Initializing.")
 
-                    onnx_root_dir = os.path.join(base_dir, model_spec.onnx_storage_dir_subpath)
+                    onnx_root_dir = _safe_model_storage_subdir(
+                        base_dir,
+                        model_spec.onnx_storage_dir_subpath,
+                        "onnx_storage_dir_subpath",
+                    )
                     os.makedirs(onnx_root_dir, exist_ok=True)
                     cache_subdir = _model_cache_subdir_name(model_id_to_use)
-                    onnx_model_path = os.path.join(onnx_root_dir, cache_subdir)
+                    onnx_model_path = _safe_model_storage_subdir(
+                        onnx_root_dir,
+                        cache_subdir,
+                        "onnx_model_cache_dir",
+                    )
 
                     # Check resource limits before loading - use actual path if available
                     estimated_size = estimate_model_size(model_id_to_use, onnx_model_path)

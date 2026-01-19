@@ -16,8 +16,10 @@ from app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import (
     validate_file_path,
     sanitize_wiki_name,
     get_safe_checkpoint_path,
-    get_safe_log_path
+    get_safe_log_path,
+    import_mediawiki_dump,
 )
+from app.core.exceptions import InvalidStoragePathError
 
 
 class TestPathTraversalProtection:
@@ -26,21 +28,94 @@ class TestPathTraversalProtection:
     def test_null_byte_in_file_path(self):
 
         """Test that null bytes in file paths are rejected."""
-        with pytest.raises(ValueError, match="Null byte"):
+        with pytest.raises(InvalidStoragePathError, match="Null byte"):
             validate_file_path("/etc/passwd\x00.txt")
 
     def test_path_traversal_dots(self):
 
         """Test that path traversal with .. is blocked."""
-        with pytest.raises(ValueError, match="Path traversal"):
+        with pytest.raises(InvalidStoragePathError, match="Path traversal"):
             validate_file_path("../../../etc/passwd")
 
     def test_path_traversal_absolute(self):
 
         """Test that absolute paths outside allowed dir are blocked."""
         # This should fail with access denied or file not exist
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidStoragePathError):
             validate_file_path("/etc/passwd")
+
+    def test_import_rejects_outside_allowed_base(self, tmp_path: Path):
+
+        """Test that import rejects files outside the allowed base directory."""
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "dump.xml"
+        outside_file.write_text("<mediawiki></mediawiki>")
+
+        events = list(
+            import_mediawiki_dump(
+                file_path=str(outside_file),
+                wiki_name="TestWiki",
+                store_to_db=False,
+                store_to_vector_db=False,
+                allowed_dir=allowed_dir,
+            )
+        )
+
+        error_events = [event for event in events if event.get("type") == "error"]
+        assert error_events
+        assert "outside allowed directory" in error_events[0].get("message", "").lower()
+
+    def test_import_accepts_inside_allowed_base(self, tmp_path: Path):
+
+        """Test that import accepts files within the allowed base directory."""
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        inside_file = allowed_dir / "dump.xml"
+        inside_file.write_text(
+            """
+<mediawiki xmlns="http://www.mediawiki.org/xml/export-0.10/" version="0.10" xml:lang="en">
+  <siteinfo>
+    <sitename>TestWiki</sitename>
+    <dbname>testwiki</dbname>
+    <base>http://example.org/wiki/Main_Page</base>
+    <generator>MediaWiki 1.42</generator>
+    <case>first-letter</case>
+  </siteinfo>
+  <page>
+    <title>Allowed Page</title>
+    <ns>0</ns>
+    <id>1</id>
+    <revision>
+      <id>11</id>
+      <timestamp>2024-10-08T12:34:56Z</timestamp>
+      <contributor><username>Tester</username><id>100</id></contributor>
+      <comment>init</comment>
+      <model>wikitext</model>
+      <format>text/x-wiki</format>
+      <text xml:space="preserve">Allowed content.</text>
+      <sha1>dummy</sha1>
+    </revision>
+  </page>
+</mediawiki>
+            """.strip()
+        )
+
+        events = list(
+            import_mediawiki_dump(
+                file_path=str(inside_file),
+                wiki_name="TestWiki",
+                store_to_db=False,
+                store_to_vector_db=False,
+                allowed_dir=allowed_dir,
+            )
+        )
+
+        error_events = [event for event in events if event.get("type") == "error"]
+        assert not error_events
+        assert any(event.get("type") == "summary" for event in events)
 
     def test_wiki_name_null_byte(self):
 
@@ -91,11 +166,11 @@ class TestPathTraversalProtection:
 
         """Test that checkpoint paths are protected."""
         # Test path traversal in wiki name
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidStoragePathError):
             get_safe_checkpoint_path("../evil")
 
         # Test null byte in wiki name
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidStoragePathError):
             get_safe_checkpoint_path("test\x00wiki")
 
     def test_checkpoint_path_valid(self):
@@ -150,7 +225,7 @@ class TestPathTraversalProtection:
             symlink.symlink_to(outside_file)
 
             # This should fail because symlink points outside allowed dir
-            with pytest.raises(ValueError):
+            with pytest.raises(InvalidStoragePathError):
                 validate_file_path(str(symlink), allowed_dir)
 
     def test_file_size_limit(self):
@@ -174,7 +249,7 @@ class TestPathTraversalProtection:
         """Test that error messages don't disclose sensitive paths."""
         try:
             validate_file_path("/etc/shadow/../passwd")
-        except ValueError as e:
+        except InvalidStoragePathError as e:
             error_msg = str(e)
             # Check that the actual path is not in the error message
             assert "/etc/shadow" not in error_msg

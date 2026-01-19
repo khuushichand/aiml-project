@@ -94,10 +94,10 @@ max_overflow = 10
 Ensure database directories have proper permissions:
 
 ```bash
-# Create secure database directory
-sudo mkdir -p /var/lib/tldw/databases
+# Create secure database directories (per-user)
+sudo mkdir -p /var/lib/tldw/user_databases/<user_id>
 sudo chown -R tldw:tldw /var/lib/tldw
-sudo chmod 750 /var/lib/tldw/databases
+sudo chmod 750 /var/lib/tldw/user_databases
 ```
 
 ## Performance Tuning
@@ -244,7 +244,7 @@ AND resolved = FALSE
 ORDER BY timestamp DESC;
 ```
 
-## Monitoring & Metrics {#monitoring--metrics}
+## Monitoring & Metrics
 
 ### 1. Enable Metrics Collection
 

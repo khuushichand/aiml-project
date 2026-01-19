@@ -20,12 +20,12 @@ The Chunking Templates API provides a powerful way to define, manage, and apply 
 http://localhost:8000/api/v1/chunking/templates
 ```
 
-## Authentication
+## Auth + Rate Limits
 
 Authentication is required and follows the server’s AuthNZ mode:
 - Single-user mode: include `X-API-KEY: <your_key>` header
 - Multi-user mode: include `Authorization: Bearer <JWT>` header
-The same requirements apply to all endpoints documented below.
+The same requirements apply to all endpoints documented below. Standard limits apply; template operations are lightweight and subject to standard RPM.
 
 ## Endpoints
 
@@ -66,7 +66,6 @@ List all available chunking templates with optional filtering.
   "total": 1
 }
 ```
-
 
 #### Example Request
 
@@ -154,6 +153,24 @@ Create a new chunking template.
 
 #### Response
 
+Status: 201 Created
+
+```json
+{
+  "id": 2,
+  "uuid": "660e8400-e29b-41d4-a716-446655440001",
+  "name": "custom_template",
+  "description": "My custom chunking template",
+  "template_json": "{...}",
+  "is_builtin": false,
+  "tags": ["custom", "example"],
+  "created_at": "2024-01-24T11:00:00Z",
+  "updated_at": "2024-01-24T11:00:00Z",
+  "version": 1,
+  "user_id": "user123"
+}
+```
+
 #### Example (hierarchical boundaries)
 
 Create a template that enables hierarchical splitting with custom chapter/appendix boundaries:
@@ -187,26 +204,6 @@ curl -X POST "http://localhost:8000/api/v1/chunking/templates" \
 Notes:
 - Allowed flags: only `i` and `m`.
 - Limits: max 20 rules; max pattern length 256 chars.
-
-#### Response
-
-Status: 201 Created
-
-```json
-{
-  "id": 2,
-  "uuid": "660e8400-e29b-41d4-a716-446655440001",
-  "name": "custom_template",
-  "description": "My custom chunking template",
-  "template_json": "{...}",
-  "is_builtin": false,
-  "tags": ["custom", "example"],
-  "created_at": "2024-01-24T11:00:00Z",
-  "updated_at": "2024-01-24T11:00:00Z",
-  "version": 1,
-  "user_id": "user123"
-}
-```
 
 ### 4. Update Template
 
@@ -435,6 +432,29 @@ The system comes with several pre-configured templates:
 - **Features**: Preserves code blocks and headers
 - **Tags**: code, documentation, technical, programming
 
+## Diagnostics Headers
+
+The templates endpoints emit optional diagnostic headers to help operators identify DB capability mismatches. These are present on list/create/apply/update/delete responses.
+
+- `X-Template-DB-Class`: Fully-qualified class name of the DB dependency instance used by the endpoint (e.g., `tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase`).
+- `X-Template-DB-Capability`: `native` if the DB provides native template methods; `fallback` if the endpoint is using an in-memory fallback store due to missing methods.
+- `X-Template-DB-Missing`: Comma-separated list of missing DB methods (e.g., `create_chunking_template,get_chunking_template`).
+- `X-Template-DB-Hint`: A short suggestion to ensure the correct DB class is wired: `Ensure Media_DB_v2.MediaDatabase is used: tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase`.
+
+When you see `fallback`, templates are still functional (created/updated/applied) in-memory for the current process, but will not persist across server restarts. To fix this, ensure the dependency provider returns a `Media_DB_v2.MediaDatabase` instance.
+
+Example (curl):
+
+```
+curl -s -D - http://localhost:8000/api/v1/chunking/templates | head
+HTTP/1.1 200 OK
+X-Template-DB-Class: tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase
+X-Template-DB-Capability: native
+...
+```
+
+If you see `fallback` and missing methods, review the DI wiring at `tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py` and ensure your override (in tests) or production container uses `Media_DB_v2.MediaDatabase`.
+
 ### 3. chat_conversation
 - **Description**: Template for processing chat conversations
 - **Method**: Sentences
@@ -645,7 +665,7 @@ curl -X POST "http://localhost:8000/api/v1/chunking/templates" \
   }'
 ```
 
-Shared utility for Python examples (used in Examples 2 and 3):
+### Example 2: Processing a Research Paper
 
 ```python
 import json
@@ -661,11 +681,7 @@ def request_json(method, url, payload):
     )
     with urlopen(req) as resp:
         return json.loads(resp.read().decode("utf-8"))
-```
 
-### Example 2: Processing a Research Paper
-
-```python
 # Apply the academic_paper template
 result = request_json(
     "POST",
@@ -693,6 +709,20 @@ for i, chunk in enumerate(chunks):
 ### Example 3: Batch Processing with Templates
 
 ```python
+import json
+from urllib.request import Request, urlopen
+
+def request_json(method, url, payload):
+    data = json.dumps(payload).encode("utf-8")
+    req = Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    with urlopen(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
 documents = [
     {"type": "academic_paper", "text": "..."},
     {"type": "code_documentation", "text": "..."},

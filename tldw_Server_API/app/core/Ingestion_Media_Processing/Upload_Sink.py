@@ -3,11 +3,13 @@
 #              validate their safety and integrity, and perform sanitization.
 #
 import copy
+import html
 import mimetypes
 import os
 import shutil
 import stat
 import tempfile
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Optional, Dict, Set, Union, Tuple
 #
@@ -26,7 +28,6 @@ except ImportError:  # yara rules are optional; disable malware scanning if miss
     yara = None
 import zipfile
 import tarfile
-import re
 #
 # Local Imports (adjust path as per your project structure)
 from tldw_Server_API.app.core.config import loaded_config_data, MAGIC_FILE_PATH
@@ -233,6 +234,125 @@ def _resolve_media_type_key(filename: Union[str, Path]) -> Optional[str]:
         if media_key:
             return media_key
     return None
+
+
+HTML_DANGEROUS_TAGS: Set[str] = {"script", "style", "noscript"}
+
+
+class _HTMLBlockStripper(HTMLParser):
+    """Strip specified tag blocks and optionally remove all tags without regex."""
+
+    def __init__(self, drop_tags: Set[str], keep_tags: bool, strip_comments: bool = True) -> None:
+        super().__init__(convert_charrefs=False)
+        self._drop_tags = {tag.lower() for tag in drop_tags}
+        self._keep_tags = keep_tags
+        self._strip_comments = strip_comments
+        self._drop_stack: List[str] = []
+        self._parts: List[str] = []
+
+    def get_output(self) -> str:
+        return "".join(self._parts)
+
+    def _append(self, text: str) -> None:
+        self._parts.append(text)
+
+    def _format_start_tag(
+        self,
+        tag: str,
+        attrs: List[Tuple[str, Optional[str]]],
+        self_closing: bool = False,
+    ) -> str:
+        parts = [f"<{tag}"]
+        for name, value in attrs:
+            if value is None:
+                parts.append(f" {name}")
+            else:
+                parts.append(f' {name}="{html.escape(value, quote=True)}"')
+        parts.append(" />" if self_closing else ">")
+        return "".join(parts)
+
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        tag_lower = tag.lower()
+        if tag_lower in self._drop_tags:
+            self._drop_stack.append(tag_lower)
+            return
+        if self._drop_stack:
+            return
+        if self._keep_tags:
+            self._append(self._format_start_tag(tag, attrs))
+        else:
+            self._append(" ")
+
+    def handle_startendtag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        if tag.lower() in self._drop_tags or self._drop_stack:
+            return
+        if self._keep_tags:
+            self._append(self._format_start_tag(tag, attrs, self_closing=True))
+        else:
+            self._append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_lower = tag.lower()
+        if tag_lower in self._drop_tags:
+            if self._drop_stack and self._drop_stack[-1] == tag_lower:
+                self._drop_stack.pop()
+            return
+        if self._drop_stack:
+            return
+        if self._keep_tags:
+            self._append(f"</{tag}>")
+        else:
+            self._append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if self._drop_stack:
+            return
+        self._append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        if self._drop_stack:
+            return
+        self._append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if self._drop_stack:
+            return
+        self._append(f"&#{name};")
+
+    def handle_comment(self, data: str) -> None:
+        if self._strip_comments or self._drop_stack:
+            return
+        if self._keep_tags:
+            self._append(f"<!--{data}-->")
+
+    def handle_decl(self, decl: str) -> None:
+        if self._drop_stack:
+            return
+        if self._keep_tags and not self._strip_comments:
+            self._append(f"<!{decl}>")
+
+    def handle_pi(self, data: str) -> None:
+        if self._drop_stack:
+            return
+        if self._keep_tags and not self._strip_comments:
+            self._append(f"<?{data}>")
+
+
+def _drop_html_blocks(html_content: str, drop_tags: Set[str]) -> str:
+    """Remove dangerous tag blocks and comments while preserving other markup."""
+    parser = _HTMLBlockStripper(drop_tags=drop_tags, keep_tags=True, strip_comments=True)
+    parser.feed(html_content)
+    parser.close()
+    return parser.get_output()
+
+
+def _strip_html_tags(html_content: str, drop_tags: Set[str]) -> str:
+    """Strip all HTML tags and comments to plain text."""
+    parser = _HTMLBlockStripper(drop_tags=drop_tags, keep_tags=False, strip_comments=True)
+    parser.feed(html_content)
+    parser.close()
+    return parser.get_output()
+
 
 class FileValidator:
     def __init__(self, yara_rules_path: Optional[str] = None, custom_media_configs: Optional[Dict] = None):
@@ -914,13 +1034,8 @@ class FileValidator:
                         pass
                 preprocessed = str(soup)
             except Exception:
-                # Fallback: regex-based removal for script/style blocks
                 try:
-                    import re as _re
-                    preprocessed = _re.sub(r"<script[^>]*>.*?</script\b[^>]*>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
-                    preprocessed = _re.sub(r"<style[^>]*>.*?</style\b[^>]*>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
-                    preprocessed = _re.sub(r"<noscript[^>]*>.*?</noscript\b[^>]*>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
-                    preprocessed = _re.sub(r"<!--.*?-->", " ", preprocessed, flags=_re.DOTALL)
+                    preprocessed = _drop_html_blocks(preprocessed, HTML_DANGEROUS_TAGS)
                 except Exception:
                     preprocessed = html_content
 
@@ -962,7 +1077,7 @@ class FileValidator:
                     _pre = preprocessed  # type: ignore[name-defined]
                 except Exception:
                     _pre = html_content
-                return re.sub(r"<[^>]+>", " ", _pre)
+                return _strip_html_tags(_pre, HTML_DANGEROUS_TAGS)
             except Exception:
                 # As a last resort, return the original content
                 return html_content

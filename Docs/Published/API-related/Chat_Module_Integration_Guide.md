@@ -193,11 +193,11 @@ if not allowed:
 ## Testing Integration
 
 ### Unit Testing
-Each module has comprehensive unit tests:
-- `tests/AuthNZ/test_jwt_service.py`
-- `tests/Utils/test_image_validation.py`
-- `tests/DB_Management/test_transaction_utils.py`
-- `tests/Chat/test_streaming_utils.py`
+Representative tests can be added following the project’s pytest patterns. Current repository test coverage is evolving; use the suggested paths below as guidance when creating tests for new or refactored modules:
+- `tests/AuthNZ/` for AuthNZ helpers
+- `tests/Utils/` for utility modules (e.g., image validation)
+- `tests/DB_Management/` for transactional helpers
+- `tests/Chat/` for chat streaming and handlers
 
 ### Integration Testing
 ```python

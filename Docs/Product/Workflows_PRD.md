@@ -2,7 +2,7 @@
 
 ## Objective
 
-Add a first-class Workflows module enabling users to define, run, and monitor multi-step processes that compose existing tldw_server capabilities. Support async background (agentic) and synchronous (guided review) execution with human-in-the-loop steps. v0.1 is linear-only to ship safely with solid reliability and security foundations.
+Add a first-class Workflows module enabling users to define, run, and monitor multi-step processes that compose existing tldw_server capabilities. Support async background (agentic) and synchronous (guided review) execution with human-in-the-loop steps. v0.1 prioritizes reliability with explicit routing (on_success/on_failure, branch) and limited fan-out rather than full DAGs.
 
 ## Outcome
 
@@ -11,12 +11,12 @@ A minimal DSL, execution engine, APIs, and WebUI hooks to create and execute wor
 ## Implementation Snapshot (current)
 
 - Engine: Linear execution with per-step retries, timeouts, pause/resume, cooperative cancel, durable checkpoints, leases/heartbeats, and orphan reaper.
-- Steps implemented: `prompt`, `rag_search`, `media_ingest`, `mcp_tool`, `webhook`, `wait_for_human`.
+- Steps implemented: `prompt`, `rag_search`, `media_ingest`, `mcp_tool`, `webhook`, `wait_for_human`, `wait_for_approval`, `branch`, `map`, `delay`, `log`, `tts`, `stt_transcribe`, `embed`, `translate`, `rss_fetch`, `policy_check`, `notify`, `diff_change_detector`.
 - Concurrency: In-process scheduler with per-tenant and per-workflow limits (env: `WORKFLOWS_TENANT_CONCURRENCY` default 2; `WORKFLOWS_WORKFLOW_CONCURRENCY` default 1).
 - Streaming/events: WS at `/api/v1/workflows/ws` with JWT + run-level auth; HTTP polling supported; strict `event_seq` ordering.
 - Storage: SQLite (WAL) in `Databases/workflows.db`; supports `DATABASE_URL_WORKFLOWS` for SQLite URIs; runs optionally record `tokens_input|tokens_output|cost_usd`.
 - Subprocess lifecycle: For subprocess steps, record `pid/pgid/workdir/stdout/stderr`; engine-driven cancellation escalates process-group termination; logs tails attached to events/metadata.
-- Artifacts: `workflow_artifacts` table and `GET /api/v1/workflows/runs/{run_id}/artifacts` endpoint available (v0.2 surface).
+- Artifacts: `workflow_artifacts` table and `GET /api/v1/workflows/runs/{run_id}/artifacts` endpoint available.
 - Security: Tenant isolation on reads; definition size/step limits; webhook + HTTP ingest egress allowlist/private IP blocking; HMAC signing for webhooks; ad-hoc run rate limits.
 - Sync UX: `mode=sync|async` both execute server-side; UI reattaches by `run_id` and event replay for guided flows.
 
@@ -27,14 +27,14 @@ A minimal DSL, execution engine, APIs, and WebUI hooks to create and execute wor
 - Human review: Explicit “wait_for_human” steps with approve/reject and input capture.
 - Observability: Run/step status, event stream, logs, artifacts, and error details.
 - Safety & control: AuthNZ, rate limits, retries, timeouts, idempotency, versioning.
- - Security: SSRF/egress controls for webhooks/tools; WS auth; CSRF in WebUI.
+- Security: SSRF/egress controls for webhooks/tools; WS auth; CSRF in WebUI.
 
 ## Non-Goals (v0.1)
 
 - Full BPMN: No complex BPMN editors or arbitrary sub-process nesting.
 - Arbitrary code: No user-supplied Python execution in-process.
 - Distributed workers: Single-process/default in-app worker only (pluggable later).
-- Branching/parallelism: v0.1 is linear only; conditionals/parallelism in v0.2.
+- Full parallel DAGs: No fan-in/fan-out DAG execution beyond the limited `map` step.
 
 ## Personas & Use Cases
 
@@ -45,8 +45,8 @@ A minimal DSL, execution engine, APIs, and WebUI hooks to create and execute wor
 
 ## Scope (v0.1 MVP)
 
-- Workflow definition: JSON/YAML schema with steps and templated inputs. Linear transitions only (no branch).
-- Step types (v0.1): `media_ingest`, `prompt`, `rag_search`, `mcp_tool`, `webhook`, `wait_for_human`.
+- Workflow definition: JSON/YAML schema with steps and templated inputs. Explicit routing via `on_success`/`on_failure` and the `branch` step.
+- Step types (v0.1): `media_ingest`, `prompt`, `rag_search`, `mcp_tool`, `webhook`, `wait_for_human`, `wait_for_approval`, `branch`, `map`, `delay`, `log`, `tts`, `stt_transcribe`, `embed`, `translate`, `rss_fetch`, `policy_check`, `notify`, `diff_change_detector`.
 - Execution modes: `mode=async|sync` with resumable state for async; session-guided sync.
 - Engine: Linear pipeline with retries, timeouts, durable checkpoints, leases/heartbeats.
 - APIs: Immutable versioned definitions; run, status, pause/resume/cancel; approve/reject human steps; retry failed run; event stream.
@@ -54,9 +54,8 @@ A minimal DSL, execution engine, APIs, and WebUI hooks to create and execute wor
 
 ## Out of Scope (later)
 
-- Branch step and conditionals (v0.2) with a minimal JSONLogic-like expression subset.
-- STT/TTS adapters (v0.2) and artifact storage/metrics promotion to first-class.
-- Parallel/foreach: Fan-out/fan-in, foreach loops (v0.2).
+- Advanced branching/conditions beyond the current `branch` step (JSONLogic-like).
+- Full parallel/foreach fan-out/fan-in beyond the limited `map` step.
 - Schedules/triggers: Time-based schedules, inbound webhook triggers (v0.2).
 - Advanced cost controls: Budgets/quotas enforcement (v0.2).
 - Graph editor: Visual DAG builder (v0.3).
@@ -91,8 +90,8 @@ Tables (SQLite default; Postgres supported). All include `tenant_id` for isolati
 
 - Format: Pydantic-backed JSON (YAML accepted, converted to JSON).
 - Templating: Jinja SandboxedEnvironment with a strict whitelist of filters/functions; no imports; no attribute access to unsafe objects; bounded render time. Example: `{{ steps.extract_summary.outputs.text }}`.
-- Transitions: Linear flow with `on_success` and optional `on_failure` to next step ids. No `branch` in v0.1.
-- Controls: `retry` (max_attempts, backoff with jitter), `timeout_seconds`. Human review uses explicit `wait_for_human` step (no `requires_approval`).
+- Transitions: `on_success`/`on_failure` routing plus the `branch` step; adapters may return `{"__next__": "step_id"}` to override routing.
+- Controls: `retry` (max_attempts, backoff with jitter), `timeout_seconds`, optional `on_timeout` for human steps. Human review uses explicit `wait_for_human`/`wait_for_approval` steps (no `requires_approval`).
 
 Example (abridged):
 
@@ -128,9 +127,15 @@ Example (abridged):
 - mcp_tool: Calls MCP tool by `tool_name` with JSON args; returns result payload. Sensitive tools may require explicit allowlisting per workflow.
 - webhook: POST to external HTTP endpoint with payload; records response. Enforce HTTPS, allowlist, HMAC signing, timeouts, no redirects by default.
 - wait_for_human: Blocks until approval/reject with optional edited payload. Supports `form_schema`, `assigned_to_user_id`, and `on_timeout`. Default behavior in v0.1 is to wait indefinitely until action, unless a `timeout_seconds` is configured.
+- wait_for_approval: Blocks until approve/reject with minimal payload (approval-only UX).
+- branch: Evaluate a templated condition and route to `true_next`/`false_next`.
+- map: Fan-out over a list, run a nested step, and aggregate results.
 - media_ingest: Downloads/ingests URLs or local paths via `/app/core/Ingestion_Media_Processing/`; extracts text/metadata, chunks, and optionally indexes into RAG.
+- tts: Text-to-speech synthesis with artifact output.
+- stt_transcribe: Transcribe audio to text with optional diarization.
+- Other supported steps: `delay`, `log`, `process_media`, `embed`, `translate`, `rss_fetch`, `policy_check`, `notify`, `diff_change_detector`.
 
-Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
+Note: advanced branching (JSONLogic-like), full parallelism, and broader adapters remain v0.2+.
 
 ## Execution Semantics
 
@@ -218,10 +223,8 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
 - Approve/reject human step: `POST /api/v1/workflows/runs/{run_id}/steps/{step_id}/{approve|reject}` (body: optional edits)
 - (v0.2) Reassign/expire human step: `POST /api/v1/workflows/runs/{run_id}/steps/{step_id}/reassign|expire`
 - Artifacts: `GET /api/v1/workflows/runs/{run_id}/artifacts`
-- Options discovery: `GET /api/v1/workflows/options/chunkers` - returns the chunker registry (names, versions, parameter schemas, defaults) from `Ingestion_Media_Processing`.
-  - Versioning: Response includes `name`, `versions` (semver), and parameter schemas per version. Workflow definitions must pin `chunker.name` and `chunker.version` exactly in v0.1.
- - Options discovery: `GET /api/v1/workflows/options/chunkers` - returns the chunker registry (names, versions, parameter schemas, defaults) from `Ingestion_Media_Processing`.
- - Options discovery: Reuse `GET /api/v1/rag/capabilities` to populate builder UI with supported search modes, strategies, and defaults; no extra workflows-specific endpoint needed.
+- Options discovery: `GET /api/v1/workflows/options/chunkers` returns the core_chunking contract (methods, defaults, parameter schema). Version is static (`1.0.0`); multi-version registry pinning is deferred.
+- Options discovery: Reuse `GET /api/v1/rag/capabilities` to populate builder UI with supported search modes, strategies, and defaults; no extra workflows-specific endpoint needed.
 
 ## Schemas (key Pydantic models)
 
@@ -336,12 +339,12 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
  - Sync recovery: Simulate WS disconnect/reconnect; ensure event replay via `since=event_seq` and UI resubscribe restores state.
  - Cancellation: Verify cooperative cancel and forceful termination of subprocess-backed steps; ensure no orphan processes.
  - Ad-hoc limits: Definition size/step count enforcement at API; reject oversize with 413/422.
- - Chunker registry: Pinning to `name@version` resolves; unknown versions rejected; params validated against schema.
+ - Chunking contract: Validate core_chunking method names and optional version (`1.0.0`); multi-version registry pinning deferred.
 
 ## Rollout Plan
 
-- Stage 1 (MVP): Linear workflows, prompt/rag/mcp_tool/wait_for_human/webhook, async+sync, APIs, minimal UI.
-- Stage 2: Branch step, tts/transcribe adapters, artifacts, metrics (tokens/cost), templates.
+- Stage 1 (MVP): Routed linear workflows (branch/on_success/on_failure), map (limited), prompt/rag/mcp_tool/wait_for_human/webhook, async+sync, APIs, artifacts, minimal UI.
+- Stage 2: TTS/transcribe adapters, metrics (tokens/cost), templates.
 - Stage 3: Triggers (on media ingest, schedule), foreach/parallel (limited), budgets/quotas.
 
 ## Success Metrics
@@ -367,7 +370,7 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
  - Sources: RSS/Atom feed expansion to URL lists? MediaWiki API vs dump-only?
  - Storage: Allow external object storage (S3/GCS) targets for large downloads in v0.1?
 - Naming: Follow existing repository naming (`tldw_Server_API`) for now; standardize later.
- - Chunker registry: Surface parameter schemas with versioning; how to handle upgrades without breaking saved definitions?
+ - Chunking versions: Multi-version registry pinning deferred; revisit upgrade strategy post-v0.1.
 
 ## Example Templates (v0.1)
 
@@ -385,10 +388,10 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
   - download: `{ enabled: true, ydl_format?: string, prefer_best?: true, max_filesize_mb?: 2048, cookies_file?: string, proxy?: string, retries?: 3 }` (safe subset passed to yt-dlp).
   - ffmpeg: `{ start_time?: "00:00:00", duration?: null, audio_bitrate?: "128k", sample_rate?: 16000 }` (applies when relevant).
   - extraction: `{ extract_text: true, ocr?: false, language?: "auto", include_images?: false }`.
-  - chunking: Either a preset or a registry-based chunker:
-    - Preset: `{ strategy: "token|sentence|semantic|page|markdown|html_dom|regex|none", max_tokens?, overlap? }`
-    - Registry: `{ name: "<registered_chunker>", version: "x.y.z", params: { ... } }` where `<registered_chunker>` is any chunker exposed by the registry. Parameters validated against the schema for the pinned version.
-    - Hierarchical: `{ strategy: "hierarchical", hierarchical: { levels: [ { strategy?: "token|sentence|semantic|page|markdown|html_dom|regex|none", name?: "<registered_chunker>", version?: "x.y.z", params?: {...} }, ... ], link_parents?: true, embed_level?: "leaf|all" } }`
+  - chunking: Either a preset or the core_chunking contract:
+    - Preset: `{ strategy: "<method>", max_tokens?, overlap? }` where `<method>` is a core_chunking method (see `GET /api/v1/workflows/options/chunkers`).
+    - Core chunking: `{ name: "<method>", version?: "1.0.0", params: { ... } }` where `<method>` is a core_chunking method.
+    - Hierarchical: `{ strategy: "hierarchical", hierarchical: { levels: [ { strategy?: "<method>", name?: "<method>", version?: "1.0.0", params?: {...} }, ... ], link_parents?: true, embed_level?: "leaf|all" } }`
   - indexing: `{ index_in_rag: true, embedding_model?: string, batch_size?: 64, collection?: string, preserve_hierarchy?: true, embed_level?: "leaf|all", expand_parents_on_retrieval?: true }`.
   - transcribe: `{ enabled?: false, engine?: "faster_whisper|nemo|qwen2audio", language?: "auto", diarize?: false }` (if audio/video; can also be separate step).
   - metadata: `{ title?: string, tags?: [string], source?: string, author?: string }`.
@@ -414,7 +417,7 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
   - Enforce size/duration caps; fail early with clear error codes.
   - Sanitize HTML if requested; strip active content.
   - Never execute arbitrary yt-dlp `--exec` or shell hooks; whitelist options only.
-  - Chunkers must come from the ingestion chunker registry; unknown names are rejected; `params` validated against the registry schema (no code execution).
+  - Chunker names must match core_chunking methods; unknown names are rejected (no code execution).
 
 - Example config:
 
@@ -520,14 +523,14 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
 
 ## Acceptance Criteria
 
-- Engine: Implemented - linear workflows with retries, timeouts, durable checkpoints, leases/heartbeats, and safe resume; pause/cancel semantics enforced.
+- Engine: Implemented - workflows with explicit routing, retries, timeouts, durable checkpoints, leases/heartbeats, and safe resume; pause/cancel semantics enforced.
 - APIs: Implemented - versioned immutable definitions; run lifecycle; retry failed runs; events with `event_seq`; WS with JWT and run-level auth; idempotency key support.
-- Media ingest: Workflows support all chunking options exposed by `Ingestion_Media_Processing` via a chunker registry (including hierarchical); pass-through `params` validated against registry; outputs include hierarchy links.
-- Chunking registry: Chunker discovery endpoint returns versioned schemas; workflow definitions pin `name` and `version`; engine persists `chunker_version` in outputs.
+- Media ingest: Workflows support core_chunking methods (including hierarchical); chunker names validated; outputs include `chunker_version`.
+- Chunker options: Discovery endpoint returns the core_chunking contract; multi-version registry pinning is deferred.
 - Sync UX: Guided sync runs are re-attachable after disconnect via `run_id` and event replay; no progress lost while waiting for human action.
 - Cancellation: Implemented - subprocess-backed steps record pid/pgid and are terminated via process-group escalation; non-killable steps honor cancellation flag and timeouts.
 - Ad-hoc security: Implemented - size/steps/config limits; endpoint can be disabled via config; stricter rate limits applied.
 - RAG: `rag_search` integrates with the unified RAG API: supports FTS/vector/hybrid with `hybrid_alpha`, reranking (flashrank/cross_encoder/hybrid), caching, table processing, citations, and sibling inclusion (`include_sibling_chunks`). Parent expansion/grouped hierarchical returns are targeted for v0.2.
 - Security: Webhook/tool SSRF protections, egress allowlists, HMAC signing, and idempotency headers; CSRF and CSP in WebUI.
-- WebUI: Pending - API/WS ready; run detail timeline, approvals, and live updates supported server-side.
+- WebUI: Legacy WebUI includes a minimal Workflows tab (definitions, runs, approvals, events); Next.js UI remains pending.
 - Docs: This PRD and quickstart examples added under Docs/Design when implemented.

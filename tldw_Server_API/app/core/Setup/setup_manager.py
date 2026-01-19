@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from loguru import logger
 
 from tldw_Server_API.app.core.config_paths import resolve_config_file, resolve_config_root
+from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
 SETUP_SECTION = "Setup"
 CONFIG_FILENAME = "config.txt"
@@ -37,6 +38,13 @@ PLACEHOLDER_VALUES = {
     "TestPassword123!",
     "change-me-in-production",
 }
+
+_USER_DB_BASE_DIR_SECTION = "TTS-Settings"
+_USER_DB_BASE_DIR_KEY = "USER_DB_BASE_DIR"
+_USER_DB_BASE_DIR_ALLOWED_ROOT_ENVS = (
+    "USER_DB_BASE_DIR_ALLOWED_ROOTS",
+    "TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS",
+)
 
 _remote_access_hook: Optional[Callable[[bool], None]] = None
 
@@ -286,6 +294,95 @@ def _infer_type(raw_value: str) -> str:
     except ValueError:
         pass
     return "string"
+
+
+def _split_allowed_roots(raw: str) -> List[str]:
+    if not raw:
+        return []
+    parts: List[str] = []
+    for chunk in raw.split(os.pathsep):
+        for entry in chunk.split(","):
+            entry = entry.strip()
+            if entry:
+                parts.append(entry)
+    return parts
+
+
+def _normalize_root_path(raw: str, *, project_root: Path) -> Optional[Path]:
+    value = str(raw).strip()
+    if not value:
+        return None
+    try:
+        candidate = Path(value).expanduser()
+    except Exception:
+        candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = (project_root / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    return candidate
+
+
+def _normalize_user_db_base_dir_candidate(raw: Any, *, project_root: Path) -> Path:
+    value = str(raw).strip()
+    if not value:
+        raise ValueError("USER_DB_BASE_DIR must not be empty")
+    try:
+        candidate = Path(value).expanduser()
+    except Exception:
+        candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = (project_root / candidate).resolve()
+        try:
+            candidate.relative_to(project_root)
+        except ValueError as exc:
+            raise ValueError("Relative USER_DB_BASE_DIR must stay within the project root") from exc
+    else:
+        candidate = candidate.resolve()
+    return candidate
+
+
+def _collect_allowed_user_db_base_roots(parser: ConfigParser, *, project_root: Path) -> List[Path]:
+    roots: List[Path] = []
+
+    default_root = (project_root / "Databases").resolve()
+    roots.append(default_root)
+
+    current_raw = parser.get(_USER_DB_BASE_DIR_SECTION, _USER_DB_BASE_DIR_KEY, fallback="").strip()
+    if current_raw:
+        try:
+            current_base = _normalize_user_db_base_dir_candidate(current_raw, project_root=project_root)
+        except ValueError:
+            current_base = None
+        if current_base is not None:
+            parent = current_base.parent
+            if parent not in roots:
+                roots.append(parent)
+
+    for env_name in _USER_DB_BASE_DIR_ALLOWED_ROOT_ENVS:
+        raw = os.getenv(env_name)
+        for entry in _split_allowed_roots(raw or ""):
+            allowed_root = _normalize_root_path(entry, project_root=project_root)
+            if allowed_root is None:
+                continue
+            if allowed_root not in roots:
+                roots.append(allowed_root)
+
+    return roots
+
+
+def _validate_user_db_base_dir_update(parser: ConfigParser, new_value: Any) -> None:
+    project_root = Path(get_project_root()).resolve()
+    candidate = _normalize_user_db_base_dir_candidate(new_value, project_root=project_root)
+    allowed_roots = _collect_allowed_user_db_base_roots(parser, project_root=project_root)
+    if allowed_roots and not any(candidate.is_relative_to(root) for root in allowed_roots):
+        allowed_str = ", ".join(str(root) for root in allowed_roots)
+        raise ValueError(
+            "USER_DB_BASE_DIR must be under one of the allowed roots. "
+            f"Allowed roots: {allowed_str}. "
+            "Set USER_DB_BASE_DIR_ALLOWED_ROOTS and/or "
+            "TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS to allow additional locations."
+        )
 
 
 def _is_sensitive_key(key: str) -> bool:
@@ -551,6 +648,9 @@ def _validate_updates(parser: ConfigParser, updates: Dict[str, Dict[str, Any]]) 
 
             current_value = parser.get(section, key, fallback="")
             expected_type = _infer_type(current_value)
+
+            if section == _USER_DB_BASE_DIR_SECTION and key == _USER_DB_BASE_DIR_KEY:
+                _validate_user_db_base_dir_update(parser, new_value)
 
             # Accept any string when expected type is string
             if expected_type == "string":

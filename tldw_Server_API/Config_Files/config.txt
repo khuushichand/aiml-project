@@ -11,6 +11,10 @@ allow_remote_webui_access = false
 # Provide CIDR ranges or individual IPs, comma-separated
 webui_ip_allowlist =
 
+[Files]
+# Max inline export size (bytes) for file artifacts. Default: 262144 (256KB).
+inline_max_bytes = 262144
+
 [ACP]
 # Command used to launch the ACP runner (tldw-agent-acp).
 runner_command = go
@@ -80,6 +84,9 @@ streaming_max_response_size_mb = 10
 # For queued streaming requests, bound the internal per-request channel size
 # to limit memory use and apply backpressure. Default: 100
 chat_stream_channel_maxsize = 100
+# Include tldw_* metadata (conversation/message IDs) in chat SSE streaming chunks.
+# Env override: CHAT_STREAM_INCLUDE_METADATA
+chat_stream_include_metadata = true
 chat_save_default = False
 inject_assistant_name = true
 conversation_creation_max_retries = 3
@@ -893,6 +900,11 @@ skip_audio_prevalidation = false
 # with sufficient capacity, backups, and appropriate filesystem ACLs.
 # If unset, the server falls back to Databases/user_databases under
 # the project root.
+# Setup-time updates to USER_DB_BASE_DIR are constrained to an allowlist.
+# Default allowlist includes the project Databases directory and the parent of the
+# current USER_DB_BASE_DIR.
+# Add extra roots via USER_DB_BASE_DIR_ALLOWED_ROOTS and/or
+# TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS (comma- or colon-separated); values are merged.
 USER_DB_BASE_DIR = Databases/user_databases
 
 local_tts_device = cpu

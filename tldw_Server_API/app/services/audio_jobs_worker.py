@@ -350,3 +350,10 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     await finish_job(int(owner))  # type: ignore[arg-type]
             except Exception as e:
                 logger.warning(f"Failed to release job slot: {e}")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_audio_jobs_worker())
+    except KeyboardInterrupt:
+        pass

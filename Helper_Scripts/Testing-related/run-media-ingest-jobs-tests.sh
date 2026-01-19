@@ -53,19 +53,39 @@ export OTEL_SDK_DISABLED="${OTEL_SDK_DISABLED:-true}"
 
 cd "${REPO_ROOT}"
 
-python -m pytest -q \
-  tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_jobs_endpoint.py \
-  tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_jobs_worker.py \
-  tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_ingest_jobs.py \
-  "${PYTEST_ARGS[@]}"
-
-if [[ ${FULL_TRACE_CONTEXT} -eq 1 ]]; then
+if [[ ${#PYTEST_ARGS[@]} -gt 0 ]]; then
   python -m pytest -q \
-    tldw_Server_API/tests/Logging/test_trace_context.py \
+    tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_jobs_endpoint.py \
+    tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_jobs_worker.py \
+    tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_cancellation.py \
+    tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_ingest_jobs.py \
     "${PYTEST_ARGS[@]}"
 else
   python -m pytest -q \
-    tldw_Server_API/tests/Logging/test_trace_context.py \
-    -k "media_ingest_jobs_submit_propagates_request_id" \
-    "${PYTEST_ARGS[@]}"
+    tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_jobs_endpoint.py \
+    tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_jobs_worker.py \
+    tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_cancellation.py \
+    tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_ingest_jobs.py
+fi
+
+if [[ ${FULL_TRACE_CONTEXT} -eq 1 ]]; then
+  if [[ ${#PYTEST_ARGS[@]} -gt 0 ]]; then
+    python -m pytest -q \
+      tldw_Server_API/tests/Logging/test_trace_context.py \
+      "${PYTEST_ARGS[@]}"
+  else
+    python -m pytest -q \
+      tldw_Server_API/tests/Logging/test_trace_context.py
+  fi
+else
+  if [[ ${#PYTEST_ARGS[@]} -gt 0 ]]; then
+    python -m pytest -q \
+      tldw_Server_API/tests/Logging/test_trace_context.py \
+      -k "media_ingest_jobs_submit_propagates_request_id" \
+      "${PYTEST_ARGS[@]}"
+  else
+    python -m pytest -q \
+      tldw_Server_API/tests/Logging/test_trace_context.py \
+      -k "media_ingest_jobs_submit_propagates_request_id"
+  fi
 fi

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
-from typing import Optional
+from typing import Any, Optional
 
 
 class VideoProcessingError(Exception):
@@ -24,12 +24,24 @@ class JSONDecodeError(Exception):
     """Raised when a response expected to be JSON cannot be decoded or is invalid."""
 
 
+class BadRequestError(ValueError):
+    """Raised when a caller provides invalid arguments for an operation."""
+
+
 class StreamingProtocolError(Exception):
     """Raised for streaming protocol violations (e.g., malformed SSE)."""
 
 
 class DownloadError(Exception):
     """Raised when a download fails or post-download validation fails (checksum, size)."""
+
+
+class TranscriptionCancelled(RuntimeError):
+    """Raised when transcription/conversion is cancelled."""
+
+
+class CancelCheckError(RuntimeError):
+    """Raised when a cancellation check fails unexpectedly."""
 
 
 class SecurityAlertWebhookError(Exception):
@@ -126,6 +138,30 @@ class InvalidSecretRedactionParametersError(ValueError):
         super().__init__(message)
 
 
+class FileArtifactsError(Exception):
+    """Base exception for file artifact operations."""
+
+    def __init__(self, code: str, detail: Any | None = None) -> None:
+        super().__init__(code)
+        self.code = code
+        self.detail = detail
+
+
+class FileArtifactsValidationError(FileArtifactsError):
+    """Raised when file artifacts payload validation fails."""
+
+
+class AdapterInitializationError(FileArtifactsError):
+    """Raised when a file adapter fails to initialize."""
+
+    def __init__(self, name: str, spec: Any, exc: Exception) -> None:
+        message = f"Failed to initialize adapter '{name}' (spec={spec!r}): {exc}"
+        super().__init__("adapter_initialization_failed", detail=message)
+        self.adapter_name = name
+        self.spec = spec
+        self.original_exception = exc
+
+
 class ResourceNotFoundError(Exception):
     """Generic resource-not-found error for domain-level lookups."""
 
@@ -151,6 +187,26 @@ class ServiceInitializationError(Exception):
 
 class ServiceInitializationTimeoutError(ServiceInitializationError):
     """Raised when a service initialization exceeds its timeout."""
+
+
+class DataTablesJobError(RuntimeError):
+    """Raised for data table job processing failures."""
+
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        if backoff_seconds is not None:
+            self.backoff_seconds = backoff_seconds
+
+
+class FileArtifactsJobError(RuntimeError):
+    """Raised for file artifact job processing failures."""
+
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        if backoff_seconds is not None:
+            self.backoff_seconds = backoff_seconds
 
 
 class WorkflowAdapterError(Exception):

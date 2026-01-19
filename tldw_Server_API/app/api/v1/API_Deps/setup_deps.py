@@ -1,9 +1,10 @@
 """Dependencies for protecting setup endpoints.
 
 By default we restrict mutating setup actions to local requests only (loopback).
-Set the environment variable ``TLDW_SETUP_ALLOW_REMOTE=1`` to disable this guard
-for special scenarios (e.g., when accessing the setup UI through a reverse proxy
-on a trusted network). In tests, Starlette's TestClient reports host as
+Set the environment variable ``TLDW_SETUP_ALLOW_REMOTE=1`` (or config
+``allow_remote_setup_access=true``) to permit remote access. Remote callers must
+authenticate as admin; loopback requests remain allowed without admin checks.
+In tests, Starlette's TestClient reports host as
 ``testclient``; this value is treated as local unless an ``X-Forwarded-For``
 header is provided.
 """
@@ -14,13 +15,11 @@ import ipaddress
 import os
 import time
 from configparser import ConfigParser
-from typing import Optional
 
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.core.Setup import setup_manager
-
 
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 # Treat these as local hostnames for the Host header check.
@@ -29,16 +28,48 @@ LOCAL_HOST_HEADERS = {"localhost", "127.0.0.1", "::1", "testserver"}
 _FALSEY_ENV_VALUES = {"0", "false", "no", "off", "n"}
 
 _CONFIG_REMOTE_CACHE_TTL = 30.0  # seconds
-_config_remote_cached: Optional[bool] = None
+_config_remote_cached: bool | None = None
 _config_remote_cached_at = 0.0
 
 
-def reset_remote_access_cache(value: Optional[bool] = None) -> None:
+async def _require_admin_for_remote(request: Request) -> None:
+    """Enforce admin-level authorization for remote setup access.
+
+    Principals satisfying any of these conditions are permitted:
+    - ``principal.is_admin`` is truthy (full admin privileges)
+    - Single-user mode principal (bootstrapped local user)
+    - Has "admin" role AND ``SYSTEM_CONFIGURE`` permission
+
+    Raises:
+        HTTPException: 403 Forbidden if the principal lacks required privileges.
+    """
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
+    from tldw_Server_API.app.core.AuthNZ.principal_model import is_single_user_principal
+
+    principal = await get_auth_principal(request)
+    if principal.is_admin or is_single_user_principal(principal):
+        return
+
+    roles = {str(role).lower() for role in (principal.roles or [])}
+    if "admin" not in roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required for remote setup.",
+        )
+    if SYSTEM_CONFIGURE not in (principal.permissions or []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: missing system.configure",
+        )
+
+
+def reset_remote_access_cache(value: bool | None = None) -> None:
     """Reset the cached remote access flag (test helper/administrative hook)."""
     _set_remote_access_cache(value)
 
 
-def _set_remote_access_cache(value: Optional[bool]) -> None:
+def _set_remote_access_cache(value: bool | None) -> None:
     global _config_remote_cached, _config_remote_cached_at
     if value is None:
         _config_remote_cached = None
@@ -75,9 +106,9 @@ def _first_forwarded_ip(request: Request) -> str | None:
     try:
         # header can be comma-separated list of IPs; take the first hop
         first = raw.split(",", 1)[0].strip()
-        return first or None
     except Exception:  # noqa: BLE001
         return None
+    return first or None
 
 
 def _is_loopback_host(host: str | None) -> bool:
@@ -110,10 +141,7 @@ def _has_proxy_headers(request: Request) -> bool:
         "x-forwarded-proto",
     )
     headers = request.headers
-    for key in proxy_headers:
-        if key in headers or key.title() in headers:
-            return True
-    return False
+    return any(key in headers for key in proxy_headers)
 
 
 def _host_header_is_local(request: Request) -> bool:
@@ -140,10 +168,36 @@ def _host_header_is_local(request: Request) -> bool:
     return hostname in LOCAL_HOST_HEADERS
 
 
+def _is_local_setup_request(
+    *,
+    method: str,
+    path: str,
+    has_proxy_headers: bool,
+    client_is_local: bool,
+    forwarded_is_local: bool,
+    host_header_is_local: bool,
+) -> bool:
+    """Return True when a setup request should be treated as local-only."""
+    if method == "GET" and path.endswith("/api/v1/setup/config"):
+        if not host_header_is_local:
+            return False
+        if not has_proxy_headers and client_is_local:
+            return True
+        if has_proxy_headers and client_is_local and forwarded_is_local:
+            return True
+        return False
+
+    if has_proxy_headers:
+        return client_is_local and forwarded_is_local and host_header_is_local
+
+    return client_is_local and host_header_is_local
+
+
 async def require_local_setup_access(request: Request) -> None:
     """Guard mutating setup operations so they can only be called locally.
 
-    Bypass when ``TLDW_SETUP_ALLOW_REMOTE`` is set to a truthy value.
+    When remote access is enabled, local requests are still allowed while
+    remote requests require admin authorization.
 
     Special-case: Allow GET /api/v1/setup/config when the request targets
     localhost (by Host header or client IP), even if proxy headers are present.
@@ -152,10 +206,6 @@ async def require_local_setup_access(request: Request) -> None:
     """
     allow_remote_env = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
     allow_remote_config = _config_allows_remote()
-    if allow_remote_env or allow_remote_config:
-        if allow_remote_config and not allow_remote_env:
-            logger.info("Remote setup access permitted via config.txt (allow_remote_setup_access=true)")
-        return
 
     path = (request.url.path or "").lower()
     method = (request.method or "").upper()
@@ -166,12 +216,31 @@ async def require_local_setup_access(request: Request) -> None:
     client_is_local = _is_loopback_host(client_host)
     forwarded_is_local = _is_loopback_host(forwarded_ip)
     host_header_is_local = _host_header_is_local(request)
+    is_local_request = _is_local_setup_request(
+        method=method,
+        path=path,
+        has_proxy_headers=has_proxy_headers,
+        client_is_local=client_is_local,
+        forwarded_is_local=forwarded_is_local,
+        host_header_is_local=host_header_is_local,
+    )
+
+    if allow_remote_env or allow_remote_config:
+        if allow_remote_config and not allow_remote_env:
+            logger.info("Remote setup access permitted via config.txt (allow_remote_setup_access=true)")
+        if is_local_request:
+            return
+        await _require_admin_for_remote(request)
+        return
 
     # Permit GET to setup config snapshot only if effectively local.
     # If proxy headers are present, require both the proxy connection and forwarded IP to be loopback.
     if method == "GET" and path.endswith("/api/v1/setup/config"):
         if not host_header_is_local:
-            logger.warning("Blocked GET to setup config due to non-local Host header: %s", request.headers.get("host"))
+            logger.warning(
+                "Blocked GET to setup config due to non-local Host header: {}",
+                request.headers.get("host"),
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Setup access is restricted to local requests. Host header must target localhost.",
@@ -182,7 +251,7 @@ async def require_local_setup_access(request: Request) -> None:
             logger.debug("Allowing proxied localhost GET to /api/v1/setup/config with loopback client and forwarded IP")
             return
         logger.warning(
-            "Blocked proxied GET to setup config from client=%s forwarded=%s (local=%s/%s)",
+            "Blocked proxied GET to setup config from client={} forwarded={} (local={}/{})",
             client_host,
             forwarded_ip,
             client_is_local,
@@ -199,7 +268,7 @@ async def require_local_setup_access(request: Request) -> None:
     if has_proxy_headers:
         if not (client_is_local and forwarded_is_local and host_header_is_local):
             logger.warning(
-                "Blocked setup access via proxy (client=%s, forwarded=%s, host_local=%s)",
+                "Blocked setup access via proxy (client={}, forwarded={}, host_local={})",
                 client_host,
                 forwarded_ip,
                 host_header_is_local,
@@ -216,7 +285,7 @@ async def require_local_setup_access(request: Request) -> None:
     if client_is_local and host_header_is_local:
         return
 
-    logger.warning("Blocked remote setup access from host=%s", client_host)
+    logger.warning("Blocked remote setup access from host={}", client_host)
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail=(
@@ -243,7 +312,7 @@ def _config_allows_remote() -> bool:
         parser = ConfigParser()
         parser.read(config_path, encoding="utf-8")
         allow_remote = parser.getboolean("Setup", "allow_remote_setup_access", fallback=False)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort config read should not block setup access checks
         logger.debug("Unable to read allow_remote_setup_access from config.txt", exc_info=True)
 
     _set_remote_access_cache(allow_remote)

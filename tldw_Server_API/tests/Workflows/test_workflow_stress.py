@@ -115,6 +115,7 @@ def test_stress_step_heartbeat(workflows_dual_backend_db):
     step_run_id = f"step-{uuid.uuid4().hex[:8]}"
     db.create_step_run(
         step_run_id=step_run_id,
+        tenant_id="stress-tenant",
         run_id=run_id,
         step_id="noop",
         name="Heartbeat",

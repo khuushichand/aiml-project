@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import re
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +28,24 @@ from tldw_Server_API.app.core.http_client import afetch
 
 
 READING_DEFAULT_STATUS = "saved"
-_HTML_TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
+
+
+def _contains_html_tag(raw: str) -> bool:
+    """Return True when raw includes a tag-like "<a>" sequence."""
+    if not raw:
+        return False
+    tag_started = False
+    length = len(raw)
+    for idx, ch in enumerate(raw):
+        if tag_started:
+            if ch == ">":
+                return True
+            continue
+        if ch == "<" and idx + 1 < length:
+            next_char = raw[idx + 1]
+            if ("A" <= next_char <= "Z") or ("a" <= next_char <= "z"):
+                tag_started = True
+    return False
 
 
 def _utcnow_iso() -> str:
@@ -90,7 +106,7 @@ class ReadingService:
     @staticmethod
     def _sanitize_html_content(raw: str) -> tuple[str, Optional[str]]:
         """Sanitize HTML input and return (text, clean_html) when HTML is detected."""
-        if not raw or not _HTML_TAG_RE.search(raw):
+        if not _contains_html_tag(raw):
             return raw, None
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
@@ -658,10 +674,6 @@ class ReadingService:
                 skipped += 1
                 continue
             tags = item.tags or []
-            if merge_tags:
-                existing = self.collections.get_content_item_by_url(url)
-                if existing:
-                    tags = sorted(set(existing.tags + tags))
             metadata_payload = {"source": "reading_import"}
             metadata_payload.update(item.metadata or {})
             try:
@@ -672,7 +684,7 @@ class ReadingService:
                     url=url,
                     canonical_url=url,
                     domain=None,
-                    title=item.title or url,
+                    title=item.title or None,
                     summary=None,
                     notes=item.notes,
                     content_hash=None,
@@ -687,6 +699,8 @@ class ReadingService:
                     source_id=None,
                     read_at=item.read_at,
                     tags=tags,
+                    merge_tags=merge_tags,
+                    preserve_existing_on_null=True,
                 )
                 if row.is_new:
                     imported += 1

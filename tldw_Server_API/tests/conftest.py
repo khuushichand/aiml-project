@@ -6,6 +6,7 @@ Registers shared test plugins and provides common fixtures.
 
 pytest_plugins = ["tldw_Server_API.tests._plugins.http_client_patch_guard"]
 
+from collections.abc import Callable
 import os
 from pathlib import Path
 try:
@@ -61,6 +62,7 @@ try:
 except Exception:
     pass
 import logging
+import weakref
 # Dump lingering non-daemon threads at exit to avoid silent hangs
 import threading
 import atexit
@@ -75,6 +77,67 @@ except Exception:
     # Best-effort; tracing is optional
     pass
 import pytest
+
+
+_AIOSQLITE_CONNECTIONS: "weakref.WeakSet[object]" = weakref.WeakSet()
+_AIOSQLITE_ORIG_CONNECT = None
+
+
+def _install_aiosqlite_tracking() -> None:
+    global _AIOSQLITE_ORIG_CONNECT
+    if _AIOSQLITE_ORIG_CONNECT is not None:
+        return
+    try:
+        import aiosqlite  # type: ignore
+    except Exception:
+        return
+    _AIOSQLITE_ORIG_CONNECT = aiosqlite.connect
+
+    async def _tracked_connect(*args, **kwargs):
+        conn = await _AIOSQLITE_ORIG_CONNECT(*args, **kwargs)
+        try:
+            _AIOSQLITE_CONNECTIONS.add(conn)
+        except Exception:
+            pass
+        return conn
+
+    try:
+        aiosqlite.connect = _tracked_connect  # type: ignore[assignment]
+        aiosqlite.connect.__wrapped__ = _AIOSQLITE_ORIG_CONNECT  # type: ignore[attr-defined]
+    except Exception:
+        _AIOSQLITE_ORIG_CONNECT = None
+
+
+async def _close_tracked_aiosqlite_connections() -> None:
+    try:
+        import aiosqlite  # type: ignore
+    except Exception:
+        return
+    conns = list(_AIOSQLITE_CONNECTIONS)
+    if not conns:
+        return
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    for conn in conns:
+        try:
+            loop = getattr(conn, "_loop", None)
+            if loop and loop is not current_loop and loop.is_running():
+                try:
+                    future = asyncio.run_coroutine_threadsafe(conn.close(), loop)
+                    await asyncio.wrap_future(future)
+                    continue
+                except Exception:
+                    pass
+            await conn.close()
+        except Exception:
+            try:
+                stop_future = conn.stop()
+                if stop_future is not None:
+                    await asyncio.wrap_future(stop_future)
+            except Exception:
+                pass
 
 
 _AUTH_ENV_BASELINE_KEYS = (
@@ -432,6 +495,7 @@ def pytest_configure(config):  # pragma: no cover - registration only
         config.addinivalue_line("markers", "stt_golden: real-audio STT adapter golden tests (opt-in via TLDW_STT_GOLDEN_ENABLE=1)")
     except Exception:
         pass
+    _install_aiosqlite_tracking()
 
 
 @pytest.fixture(scope="function")
@@ -479,6 +543,20 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
         try:
             from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
             _run_cleanup(_reset_db_pool())
+        except Exception:
+            pass
+        try:
+            from tldw_Server_API.app.core.Scheduler import stop_global_scheduler as _stop_global_scheduler
+            _run_cleanup(_stop_global_scheduler())
+        except Exception:
+            pass
+        try:
+            from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler as _get_wf_scheduler
+            _run_cleanup(_get_wf_scheduler().stop())
+        except Exception:
+            pass
+        try:
+            _run_cleanup(_close_tracked_aiosqlite_connections())
         except Exception:
             pass
         try:
@@ -632,6 +710,73 @@ def client_user_only(client_with_single_user):
     """Shorthand fixture that returns only the TestClient from client_with_single_user."""
     client, _ = client_with_single_user
     return client
+
+
+@pytest.fixture()
+def data_tables_app_factory(monkeypatch) -> Callable[[Path], tuple["FastAPI", Path]]:
+    """Create FastAPI apps wired for data table endpoints with test auth and DB overrides."""
+    from fastapi import FastAPI
+
+    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+    apps: list[FastAPI] = []
+
+    async def _override_user() -> User:
+        return User(id=1, username="tester", email=None, is_active=True, is_admin=True)
+
+    async def _override_principal(request=None) -> AuthPrincipal:
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="test-user",
+            token_type="single_user",
+            jti=None,
+            roles=["admin"],
+            permissions=["media.create", "media.read", "media.update", "media.delete"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        return principal
+
+    def _build_app(db_path: Path) -> tuple[FastAPI, Path]:
+        monkeypatch.setenv("TEST_MODE", "1")
+        jobs_db_path = db_path.parent / "jobs.db"
+        monkeypatch.setenv("JOBS_DB_PATH", str(jobs_db_path))
+
+        app = FastAPI()
+        app.include_router(data_tables_router, prefix="/api/v1", tags=["data-tables"])
+
+        async def _override_db():
+            override_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
+            try:
+                yield override_db
+            finally:
+                override_db.close_connection()
+
+        app.dependency_overrides[get_request_user] = _override_user
+        app.dependency_overrides[get_auth_principal] = _override_principal
+        app.dependency_overrides[get_media_db_for_user] = _override_db
+        apps.append(app)
+        return app, jobs_db_path
+
+    yield _build_app
+
+    for app in apps:
+        app.dependency_overrides.clear()
 
 
 # Global session teardown to prevent test-run hangs from lingering executors/threads

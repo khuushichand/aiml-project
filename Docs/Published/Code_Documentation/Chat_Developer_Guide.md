@@ -49,7 +49,7 @@ Related:
 2. `chat_helpers.py` and endpoint logic build the internal payload, apply defaults, and optionally enrich messages with:
    - Character info (system prompts, world books) when requested
    - Chat dictionaries (keyword substitutions, token budgeting)
-3. The endpoint uses lightweight helpers in `chat_service.py` and delegates to `chat_orchestrator.chat_api_call(...)`. Provider routing/validation comes from the adapter + capability registries; new code should import `chat_orchestrator` directly.
+3. The endpoint uses `chat_service` helpers and delegates to `chat_orchestrator.chat_api_call(...)`. Provider routing/validation comes from the adapter + capability registries; new code should import from `chat_orchestrator` directly.
 4. `LLM_Calls/*` executes the provider-specific request (cloud or local APIs). Streaming responses are normalized to SSE frames via `streaming_utils`.
 5. `chat_exceptions` ensures errors from providers, validation, or networking are translated to module exceptions and proper HTTP responses.
 6. `chat_metrics` records counters, latencies, sizes, and success/failure labels.
@@ -60,7 +60,7 @@ Related:
   - `adapter_registry` maps provider keys (e.g., `openai`, `anthropic`, `groq`, `mistral`) to adapter classes in `core/LLM_Calls/providers`.
   - `capability_registry` defines supported request fields, aliases, and blocked fields per provider.
 - `provider_config.py` remains for legacy compatibility only (deprecated, no authoritative mappings).
-- At app startup, `main.py` seeds the `provider_manager` from the adapter registry for health/fallback.
+- At app startup, `main.py` seeds the `provider_manager` from the adapter registry to avoid drift with endpoint mappings.
 
 Provider selection notes:
 - Requests may specify models with a provider prefix (e.g., `anthropic/claude-opus-4.1`). The endpoint extracts the provider and model automatically.
@@ -107,10 +107,10 @@ Provider selection notes:
 
 ## Rate Limiting & Queuing
 
-- `rate_limiter.py` exposes a `RateLimitConfig` and `initialize_rate_limiter()` called on app startup (see `main.py`), and is enforced in the chat endpoint.
-- `request_queue.py` exists for back-pressure and concurrency control; it is initialized in `main.py` but not yet wired into the chat endpoint (integration planned).
-- Apply limits to high-cost routes (completions, tools) and consider per-user/per-IP strategies.
-- In `TEST_MODE=true`, the rate limiter’s key function bypasses client IP to avoid false positives in tests.
+- Chat rate limiter (`core/Chat/rate_limiter.py`) provides global, per-user, per-conversation, and tokens/minute controls and is enforced in the endpoint.
+- RBAC guard: the endpoint includes `Depends(rbac_rate_limit("chat.create"))` to scope/limit access by permission.
+- Optional queued execution: set `CHAT_QUEUED_EXECUTION=true` to route calls through `request_queue` for cooperative back-pressure.
+- TEST_MODE supports deterministic overrides via `TEST_CHAT_*` env vars (e.g., `TEST_CHAT_PER_USER_RPM`) with burst defaulting to 1.0.
 
 ## Metrics & Tracing
 
@@ -142,10 +142,9 @@ Provider selection notes:
 - Unit tests:
   - Schema validation: `tldw_Server_API/tests/Chat/test_chat_request_schemas.py` and `tldw_Server_API/tests/Chat_NEW/unit/test_chat_schemas.py`
   - Chat service/orchestrator: `tldw_Server_API/tests/Chat/unit/test_chat_service_fallback.py` and `tldw_Server_API/tests/Chat/unit/test_chat_service_normalization.py`
-  - Prompt templates: `tldw_Server_API/tests/Chat/test_prompt_template_manager.py`
   - Dispatch shape/mapping: update tests when changing adapter/capability registries
 - Integration tests:
-  - Endpoint flow for `/api/v1/chat/completions`: `tldw_Server_API/tests/Chat/test_chat_completions_integration.py`, `tldw_Server_API/tests/Chat/test_chat_endpoint.py`, `tldw_Server_API/tests/Chat/test_chat_endpoint_integration.py`
+  - Endpoint flow for `/api/v1/chat/completions`: `tldw_Server_API/tests/Chat/test_chat_endpoint_integration.py`, `tldw_Server_API/tests/Chat/test_chat_completions_integration.py`
   - Streaming normalization: `tldw_Server_API/tests/Chat/test_chat_endpoint_streaming_normalization.py`
   - Consider provider mocks for deterministic behavior
 
@@ -157,8 +156,73 @@ Provider selection notes:
 - Be careful when altering schema constraints; downstream clients (UI and tools) rely on them.
 
 Additional endpoint behavior to note:
-- Non-stream responses include `tldw_conversation_id` in the JSON body for ease of client-side state tracking.
- - Streaming responses use SSE with an initial `stream_start` event, OpenAI-style `data:` deltas, periodic heartbeats, and a `stream_end` event on completion.
+- Non-stream responses include `tldw_conversation_id` in the JSON body for client-side state tracking.
+- Streaming responses send a `stream_start` event and normalized `data:` deltas; periodic heartbeats keep connections alive; a `stream_end` event is emitted on success.
+
+### Streaming Example (Unified SSE with Metrics Labels)
+
+When using the unified streaming abstraction, instantiate `SSEStream` with optional labels to tag emitted metrics (low-cardinality keys like `component` and `endpoint` are recommended):
+
+```python
+from fastapi.responses import StreamingResponse
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+
+async def chat_stream_endpoint():
+    stream = SSEStream(
+        heartbeat_interval_s=10,
+        heartbeat_mode="data",
+        labels={"component": "chat", "endpoint": "chat_stream"},
+    )
+
+    async def gen():
+        # feed stream in background (e.g., provider-normalized lines or deltas)
+        async for line in stream.iter_sse():
+            yield line
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+```
+
+### Provider Control Pass-through (Advanced)
+
+Some providers emit meaningful SSE control lines (e.g., `event: ...`, `id: ...`, `retry: ...`). By default, normalization drops these. When clients or adapters depend on them, enable pass-through per endpoint and optionally filter/rename controls:
+
+```python
+from fastapi.responses import StreamingResponse
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+
+def _control_filter(name: str, value: str):
+    # Example: rename event to a standard value; drop ids
+    if name.lower() == "event":
+        return ("event", "provider_event")
+    if name.lower() == "id":
+        return None
+    return (name, value)
+
+async def chat_stream_passthru():
+    stream = SSEStream(
+        heartbeat_interval_s=10,
+        provider_control_passthru=True,
+        control_filter=_control_filter,
+        labels={"component": "chat", "endpoint": "chat_stream"},
+    )
+
+    async def gen():
+        async for line in stream.iter_sse():
+            yield line
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+```
+
+
+## Rate Limiting
+
+- Resource Governor (RG) middleware (production) provides ingress request limits via policy + route_map.
+- Chat limiter enforces per-user, per-conversation, and tokens-per-minute limits and is the primary control.
+- RBAC dependency guards `chat.create`.
 
 ---
 

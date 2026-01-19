@@ -503,11 +503,13 @@ components:
           default: true
         tags:
           type: array
+          maxItems: 50
           items:
             type: string
           example: ["backup", "weekly"]
         categories:
           type: array
+          maxItems: 20
           items:
             type: string
           example: ["work", "research"]

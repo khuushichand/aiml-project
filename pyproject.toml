@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 ###########################
 [project]
 name = "tldw-server"
-version = "0.1.14"
+version = "0.1.16"
 description = "A comprehensive research assistant and media analysis platform - Too Long; Didn't Watch Server"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -57,6 +57,8 @@ dependencies = [
   "loguru>=0.7.0",
   "lxml>=4.9.0",
   "numpy>=1.24.0",
+  "icalendar>=5.0.0",
+  "openpyxl>=3.1.2",
   "pandas>=2.0.0",
   "passlib>=1.7.0",
   "prometheus-client",

@@ -83,8 +83,12 @@ def _normalize_user_db_base_dir(raw_path: Path) -> Path:
         candidate = raw_path
 
     if not candidate.is_absolute():
-        project_root = Path(get_project_root())
+        project_root = Path(get_project_root()).resolve()
         candidate = (project_root / candidate).resolve()
+        try:
+            candidate.relative_to(project_root)
+        except ValueError as exc:
+            raise InvalidStoragePathError("invalid_path") from exc
     else:
         candidate = candidate.resolve()
     return candidate
@@ -212,6 +216,7 @@ class DatabasePaths:
     WORKFLOWS_SUBDIR = "workflows"
     PROMPT_STUDIO_SUBDIR = "prompt_studio_dbs"
     OUTPUTS_SUBDIR = "outputs"
+    OUTPUTS_TEMP_SUBDIR = "outputs_tmp"
     CHROMA_SUBDIR = "chroma_storage"
     VECTOR_STORE_SUBDIR = "vector_store"
     VOICES_SUBDIR = "voices"
@@ -313,7 +318,13 @@ class DatabasePaths:
         _ensure_dir(prompts_dir, label="prompts")
 
         if salt:
-            return prompts_dir / f"user_prompts_v2_{salt}.sqlite"
+            safe_salt = normalize_output_storage_filename(
+                salt,
+                allow_absolute=False,
+                reject_relative_with_separators=True,
+                expand_user=False,
+            )
+            return prompts_dir / f"user_prompts_v2_{safe_salt}.sqlite"
         return prompts_dir / DatabasePaths.PROMPTS_DB_NAME
 
     @staticmethod
@@ -405,6 +416,14 @@ class DatabasePaths:
         return outputs_dir
 
     @staticmethod
+    def get_user_temp_outputs_dir(user_id: Optional[UserId]) -> Path:
+        """Get the path to the user's transient outputs directory."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        outputs_dir = user_dir / DatabasePaths.OUTPUTS_TEMP_SUBDIR
+        _ensure_dir(outputs_dir, label="temp outputs")
+        return outputs_dir
+
+    @staticmethod
     def get_user_chroma_dir(
         user_id: Optional[UserId],
         *,
@@ -433,6 +452,7 @@ class DatabasePaths:
         _ensure_dir(voices_dir / "uploads", label="voice uploads")
         _ensure_dir(voices_dir / "processed", label="voice processed")
         _ensure_dir(voices_dir / "temp", label="voice temp")
+        _ensure_dir(voices_dir / "metadata", label="voice metadata")
         return voices_dir
 
     @staticmethod

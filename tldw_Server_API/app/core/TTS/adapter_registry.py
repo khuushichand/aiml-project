@@ -800,8 +800,16 @@ class TTSAdapterFactory:
         "neutts": TTSProvider.NEUTTS,
         "neutts-air": TTSProvider.NEUTTS,
         "neuphonic/neutts-air": TTSProvider.NEUTTS,
+        "neutts-nano": TTSProvider.NEUTTS,
+        "neuphonic/neutts-nano": TTSProvider.NEUTTS,
         "neutts-air-q4-gguf": TTSProvider.NEUTTS,
         "neutts-air-q8-gguf": TTSProvider.NEUTTS,
+        "neuphonic/neutts-air-q4-gguf": TTSProvider.NEUTTS,
+        "neuphonic/neutts-air-q8-gguf": TTSProvider.NEUTTS,
+        "neutts-nano-q4-gguf": TTSProvider.NEUTTS,
+        "neutts-nano-q8-gguf": TTSProvider.NEUTTS,
+        "neuphonic/neutts-nano-q4-gguf": TTSProvider.NEUTTS,
+        "neuphonic/neutts-nano-q8-gguf": TTSProvider.NEUTTS,
 
         # Supertonic models (canonical + aliases)
         "tts-supertonic-1": TTSProvider.SUPERTONIC,

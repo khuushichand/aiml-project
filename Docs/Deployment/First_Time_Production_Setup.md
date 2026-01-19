@@ -8,6 +8,7 @@ This guide walks you through a secure, production-ready first deployment of tldw
 Related documents
 - Reverse proxy examples (Nginx/Traefik): `Docs/Deployment/Reverse_Proxy_Examples.md`
 - Postgres migration: `Docs/Deployment/Postgres_Migration_Guide.md`
+- Sidecar workers (systemd/launchd): `Docs/Deployment/Sidecar_Workers.md`
 - Metrics and Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
 - Environment variables reference: `Env_Vars.md`
 - General installation (local/dev): `Docs/Published/User_Guides/Installation-Setup-Guide.md`
@@ -80,7 +81,7 @@ Step A3 - First-time setup (optional wizard)
 - The server exposes a local-only setup flow at `/setup` when enabled.
 - Check status: `curl http://127.0.0.1:8000/api/v1/setup/status`
 - If `enabled` and `needs_setup` are true, open `http://127.0.0.1:8000/setup` on the host.
-- Behind a proxy, do not expose `/setup` publicly. If you must reach it remotely on a trusted network, set `TLDW_SETUP_ALLOW_REMOTE=1` temporarily and remove it afterward.
+- Behind a proxy, do not expose `/setup` publicly. If you must reach it remotely on a trusted network, set `TLDW_SETUP_ALLOW_REMOTE=1` temporarily and remove it afterward, and authenticate as an admin (admin role + `system.configure` permission, or the single-user API key).
 
 Step A4 - Add TLS and reverse proxy
 - Terminate TLS at the proxy; forward to `app:8000`.
@@ -100,6 +101,7 @@ open http://127.0.0.1:8000/webui/
 Notes
 - For multi-user production, keep Postgres running via the `postgres` service in the Compose file. Back up its volume.
 - To scale CPU workers: set `UVICORN_WORKERS` via the app environment and rebuild or override in Compose.
+- If you run multiple Uvicorn workers with SQLite, enable sidecar jobs (`TLDW_WORKERS_SIDECAR_MODE=true`) or migrate to Postgres to reduce lock contention.
 
 ## 4) Option B - Bare-Metal (systemd + Nginx)
 

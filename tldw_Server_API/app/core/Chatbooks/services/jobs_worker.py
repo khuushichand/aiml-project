@@ -16,7 +16,7 @@ Payload fields:
 - name, description, author, tags, categories
 - content_selections: {content_type: [ids]}
 - include_media, media_quality, include_embeddings, include_generated_content
-- file_path, conflict_resolution, prefix_imported, import_media, import_embeddings
+- file_token (preferred) or file_path (legacy), conflict_resolution, prefix_imported, import_media, import_embeddings
 
 Usage:
   python -m tldw_Server_API.app.core.Chatbooks.services.jobs_worker
@@ -194,12 +194,19 @@ async def _handle_import(service: ChatbookService, payload: Dict[str, Any], job_
 
     selections = _map_content_selections(payload.get("content_selections") or {})
     conflict_resolution = _parse_conflict_resolution(payload.get("conflict_resolution", "skip"))
-    file_path = payload.get("file_path")
-    if not file_path or not str(file_path).strip():
-        raise ChatbooksJobError("Missing file_path for import job", retryable=False)
+    file_ref = payload.get("file_token") or payload.get("file_path")
+    if not file_ref or not str(file_ref).strip():
+        raise ChatbooksJobError("Missing file reference for import job", retryable=False)
+    try:
+        resolved_path = service._resolve_import_archive_path(file_ref)
+    except Exception as exc:
+        raise ChatbooksJobError("Invalid or potentially malicious archive file", retryable=False) from exc
+    resolved_file_path = str(resolved_path or "").strip()
+    if not resolved_file_path:
+        raise ChatbooksJobError("Invalid or potentially malicious archive file", retryable=False)
     ok, msg, warnings = await asyncio.to_thread(
         service._import_chatbook_sync,
-        str(file_path),
+        resolved_file_path,
         selections,
         conflict_resolution,
         bool(payload.get("prefix_imported", False)),

@@ -30,11 +30,21 @@ Parameter glossary:
 - `start_date`/`end_date`: ISO-8601 range bounds for analytics.
 - `bucket_granularity`: `day` or `week` for analytics buckets.
 
-## Authentication
+## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`
 - Backward-compatible header alias: `Token: Bearer <JWT>` is accepted.
+- Standard limits apply; heavy operations (streaming, tool calls) count toward per-user RPM/TPM.
 - If authentication is required and missing/invalid, the endpoint returns `401`.
+
+Slash commands:
+- When enabled, user messages starting with `/command` are intercepted and
+  processed by the Chat command router before reaching the LLM.
+- Global enable/disable:
+  - Env: `CHAT_COMMANDS_ENABLED=1`
+  - Config: `[Chat-Commands] commands_enabled = true` in `Config_Files/config.txt`
+- Per-request behavior can be adjusted via `slash_command_injection_mode` on
+  the request (`system`, `preface`, or `replace`).
 
 ## Request
 Follows OpenAI-style chat payload with extensions.
@@ -42,10 +52,14 @@ Follows OpenAI-style chat payload with extensions.
 Key fields:
 - `model` (string): Target model. May be prefixed as `provider/model` (e.g., `anthropic/claude-sonnet-4.5`).
 - `messages` (array): Conversation turns. Supports roles `system`, `user`, `assistant`, `tool`.
-  - User message `content` may be a string or a list of parts: text and base64 data URI `image_url`.
+  - User message `content` may be a string or a list of parts: text and base64 data URI `image_url`
+    using `data:image/...;base64,...` only (HTTP/HTTPS image URLs are not accepted).
 - `stream` (bool): If true, returns Server-Sent Events (SSE) for streaming.
 - `api_provider` (string, optional): Overrides provider selection. Server default used if omitted.
 - `prompt_template_name` (string, optional): Apply a named prompt template (alphanumeric, `_`, `-`).
+- Conversation history controls (optional):
+  - `history_message_limit` (int): How many past messages to load (default set by server; see Chat-Module config).
+  - `history_message_order` (`asc`|`desc`): Oldest-first vs newest-first ordering when loading history.
 - Common sampling params (provider-dependent): `temperature`, `top_p`, `max_tokens`, `n`, `frequency_penalty`, `presence_penalty`, `logprobs`, `top_logprobs`, `logit_bias`.
 - Tools: `tools`, `tool_choice` (provider-dependent tool/function calling). `tool_choice` requires `tools` or the request is rejected.
 - `response_format`: `{ "type": "text" | "json_object" }` (provider-dependent).
@@ -126,14 +140,18 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
 ## Provider Selection
 - If `model` includes a provider prefix (`provider/model`), that provider is used unless `api_provider` is explicitly set.
 - If no provider is specified, the server uses `DEFAULT_LLM_PROVIDER`.
-- Provider API keys are sourced from environment (`.env`) or `tldw_Server_API/Config_Files/config.txt`.
+- API key loading (precedence high → low):
+  - Environment variables (e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
+  - Dotenv files in project root or `Config_Files`: `.env` and `.ENV` (both names supported, non-overriding by default).
+  - `tldw_Server_API/Config_Files/config.txt` under `[API]` (e.g., `openai_api_key=...`).
 - Optional failover: when enabled via server config, the Chat module may fallback to a healthy provider on upstream errors (disabled by default for stability).
+  - Config key: `[Chat-Module] enable_provider_fallback = True` (default: `False`)
 
 ## Streaming Behavior
 - Media type: `text/event-stream`.
 - Heartbeats: Sent periodically (default 30s) to keep connections alive.
 - Idle timeout: Default 300s of inactivity ends the stream with an error event.
-- Completion: Upstream `[DONE]` or natural stream end closes the SSE.
+- Completion: The server emits a single `data: [DONE]` at the end of a successful or error-shortened stream. Duplicate terminal markers are suppressed.
 
 Config keys (Chat-Module):
 - `streaming_idle_timeout_seconds` (default 300)
@@ -148,11 +166,10 @@ data: {"choices":[{"delta":{"content":"Hello"}}]}
 
 : heartbeat 2025-01-01T00:00:30Z
 
-event: stream_end
-data: {"conversation_id":"<id>","success":true,"timestamp":"<iso>"}
+data: [DONE]
 ```
 
-Errors during streaming are emitted as SSE `data:` frames with an `{"error": {"message": "..."}}` payload.
+Errors during streaming are emitted as SSE `data:` frames with an `{"error": {"message": "..."}}` payload; the server then terminates with a single `data: [DONE]`.
 
 Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum client compatibility.
 
@@ -178,6 +195,7 @@ Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum cl
   - Config file (`Config_Files/config.txt`): `[Chat-Module] chat_save_default = True` (or `default_save_to_db = True`)
   - Fallback legacy default: `[Auto-Save] save_character_chats`
 - Stored content includes text and validated/decoded images. Invalid images are saved as placeholders to preserve turn continuity.
+- Persistence guard: When `save_to_db=true` but no valid character/chat context is present (e.g., missing `character_id`/`conversation_id`), the server safely disables persistence for that request and returns a normal response. A warning is logged; no partial/invalid writes occur.
 
 ### Persistence Behavior
 
@@ -194,7 +212,8 @@ Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum cl
 
 
 ## Validation & Limits
-- Images: Accepts `image/png`, `image/jpeg`, `image/webp`. Base64 data URI validation; default max base64 payload ≈ 3MB.
+- Images: Accepts `image/png`, `image/jpeg`, `image/webp`. Images must be supplied as base64 `data:image/...;base64,...`
+  URIs; external HTTP/HTTPS image URLs are not supported for chat messages. Default max base64 payload ≈ 3MB.
 - Messages: Default max messages per request: 1000.
 - Text: Default per-message text limit: 400,000 characters.
 - Images per request: Default max: 10.
@@ -212,13 +231,24 @@ Image message example:
 ```
 
 ## Errors
+
+### Non-streaming (`stream = false`)
 - `400` Invalid request (schema, limits, bad params)
 - `401` Missing/invalid authentication
 - `404` Resource not found (e.g., invalid character reference)
 - `409` Conflict while persisting
-- `429` Rate limit exceeded
+- `413` Request payload too large (e.g., too many messages/images, text too long)
+- `429` Rate limit exceeded (endpoint or upstream)
+- `500` Internal server error (unexpected failure)
 - `502`/`504` Upstream provider error/timeout
-- `503` Service/configuration issue (e.g., missing API key)
+- `503` Service/configuration issue (e.g., missing API key, busy queue)
+
+### Streaming (`stream = true`)
+- HTTP status is usually `200` for successful connection establishment.
+- Provider or validation errors are surfaced as SSE frames:
+  - `data: {"error": {"message": "...", "type": "<ErrorClass>"}}`
+  - followed by `data: [DONE]`
+- Catastrophic failures before streaming starts (e.g., auth, grossly invalid body) still return HTTP errors as above.
 
 ## Rate Limiting
 Configurable under `[Chat-Module]` in `Config_Files/config.txt`:
@@ -228,9 +258,24 @@ Configurable under `[Chat-Module]` in `Config_Files/config.txt`:
 - `rate_limit_tokens_per_minute`
 When exceeded, the endpoint returns `429`.
 
+Queued execution (optional):
+- Enable job-queue processing for chat calls to smooth bursts.
+- Env: `CHAT_QUEUED_EXECUTION=1` or config `[Chat-Module] queued_execution = True`
+- Related settings when enabled: `max_queue_size`, `max_concurrent_requests`
+
 ## Observability
 - Metrics: Tracks request size, LLM latency, streaming chunks/heartbeats, DB transactions, and image processing.
 - Audit: When enabled, logs API request metadata (user_id, request_id, model/provider, streaming) via the unified audit service.
+- Logging: The server never logs API keys by default. For troubleshooting in non-production environments, you can enable masked key logging by setting `ALLOW_MASKED_KEY_LOG=true`. When enabled, logs may include a masked form of the key (first/last 4 chars). Do not enable in production.
+
+Image metrics now track per-image sizes when multiple images are included in a single user message.
+
+### Queue Diagnostics (Admins)
+- Endpoints (read-only operational state):
+  - `GET /api/v1/chat/queue/status` - Queue size, concurrency, processed/rejected counts
+  - `GET /api/v1/chat/queue/activity?limit=50` - Recent processed job summaries (most recent last)
+- RBAC: Requires permission `system.logs` via `AuthPrincipal` claims (applies to both single-user and multi-user profiles).
+- Intended for administrators/operations; avoid exposing in multi-tenant environments without RBAC.
 
 ## WebUI
 - Location: `/webui` → Chat Completions tab.
@@ -248,7 +293,53 @@ Supporting endpoints for discovering providers and models:
 - `GET /api/v1/llm/models` - Flat list of `<provider>/<model>` values
 - `GET /api/v1/llm/models/metadata` - Flattened model capability metadata
 
+## Commercial Tests
+- Scope: Optional integration tests for supported providers (OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, Qwen, HuggingFace, Mistral, Bedrock, OpenRouter) and local backends (llama.cpp, Kobold, Ollama, Oobabooga, TabbyAPI, vLLM). Disabled by default to avoid accidental network calls. The exact set is determined at runtime from configuration.
+- Opt-in flag: Set `RUN_COMMERCIAL_CHAT_TESTS=true` in your environment or `.env`.
+- Keys: Provide real API keys via env, `.env`/`.ENV` (repo root or `tldw_Server_API/Config_Files/`), or `Config_Files/config.txt` `[API]` entries. Mock/test keys (e.g., `sk-mock...`, `test-...`) are ignored by the tests.
+- Network: Ensure outbound network access when running these tests.
+
+Quick key sanity check (no secrets printed):
+```python
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
+keys = get_api_keys()
+k = keys.get('openai') or ''
+print({'openai_present': bool(k), 'length': len(k), 'masked': (k[:4]+'...'+k[-4:]) if k else None})
+```
+
+Run all commercial integration tests (Chat only):
+```bash
+export RUN_COMMERCIAL_CHAT_TESTS=true
+export OPENAI_API_KEY="<real-openai-key>"  # plus others as needed
+python -m pytest tldw_Server_API/tests/Chat -m "integration and external_api" -v
+```
+
+Target a specific OpenAI templating test:
+```bash
+python -m pytest tldw_Server_API/tests/Chat/test_chat_completions_integration.py::test_commercial_provider_with_template_and_char_data_openai_integration -v
+```
+
+Notes:
+- Streaming test in this file is currently marked `@pytest.mark.skip` due to TestClient SSE limitations; unit tests cover streaming, and you can verify manually with `curl -N`.
+- The providers list is dynamically filtered at runtime; tests are skipped if no eligible provider has a usable key.
+
 ## Notes & Limitations
 - Provider failover is disabled by default for production stability (can be enabled in `[Chat-Module]`).
 - Images in chat messages must be base64 data URIs within `image_url.url` (PNG, JPEG, WEBP).
 - The API returns `tldw_conversation_id` in non-streaming responses to let clients maintain context.
+
+## Troubleshooting
+- Keys not detected for a provider (e.g., OpenAI): verify env and dotenv files.
+  - Check presence via `GET /api/v1/llm/providers` - the provider appears only when a usable key/base URL is configured.
+  - The loader reads `.env`/`.ENV` from project root and `tldw_Server_API/Config_Files/`, plus `[API]` keys in `config.txt`.
+- Quick Python sanity check (no secrets printed):
+  ```python
+  from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
+  keys = get_api_keys()
+  k = keys.get('openai') or ''
+  print({
+    'openai_present': bool(k),
+    'length': len(k),
+    'masked': (k[:4] + '...' + k[-4:]) if k else None
+  })
+  ```

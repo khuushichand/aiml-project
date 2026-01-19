@@ -145,6 +145,8 @@ The unified service also manages auxiliary tables used by evaluation features:
   - `embedding_abtest_arms`: per-arm provider/model settings and stats
   - `embedding_abtest_queries`: queries and optional ground-truth ids
   - `embedding_abtest_results`: per-arm per-query results/metrics/latency
+  - Persistence: SQLite uses the SQLAlchemy repository (`embeddings_abtest_repository.py`) with `create_all` (no separate migrations yet); Postgres falls back to the legacy adapter. Override with `EVALS_ABTEST_PERSISTENCE`.
+  - v2 highlights: Jobs backend with retry/backoff, deterministic collection reuse via hashing, allowlist/quota enforcement at API/worker, structured logs + Prometheus metrics, stable JSON/CSV export schema.
 
 ## Internal API Usage
 
@@ -741,4 +743,4 @@ evaluation = await svc.create_evaluation(
 - [Unified API Reference](../API-related/Evaluations_API_Unified_Reference.md)
 - [User Guide](../User_Guides/Evaluations_User_Guide.md)
 - [OpenAI Evals](https://github.com/openai/evals) - Compatible format
-- [Smoke Test Checklist](../Evaluations/Smoke_Test_Checklist.md)
+- [Test Suite](/tests/Evaluations/) - Example implementations

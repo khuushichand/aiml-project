@@ -1,0 +1,46 @@
+import { ChatDocuments } from "@/models/ChatTypes"
+
+type WebSearch = {
+  search_engine: string
+  search_url: string
+  search_query: string
+  search_results: {
+    title: string
+    link: string
+  }[]
+}
+export type Message = {
+  isBot: boolean
+  name: string
+  message: string
+  sources: any[]
+  images?: string[]
+  search?: WebSearch
+  messageType?: string
+  clusterId?: string
+  modelId?: string
+  parentMessageId?: string | null
+  createdAt?: number
+  id?: string
+  generationInfo?: any
+  reasoning_time_taken?: number
+  modelImage?: string
+  modelName?: string
+  documents?: ChatDocuments
+  serverMessageId?: string
+  serverMessageVersion?: number
+  variants?: MessageVariant[]
+  activeVariantIndex?: number
+}
+
+export type MessageVariant = {
+  id?: string
+  message: string
+  sources?: any[]
+  images?: string[]
+  generationInfo?: any
+  reasoning_time_taken?: number
+  createdAt?: number
+  serverMessageId?: string
+  serverMessageVersion?: number
+}

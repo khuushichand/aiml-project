@@ -83,7 +83,7 @@ Top navigation groups features into tabs. Notable areas include:
 - Authentication failures: verify mode and token type (API key vs JWT) and ensure the token is set in Global Settings.
 - FFmpeg errors: install FFmpeg and ensure it’s on PATH.
 - Provider errors: confirm API keys and model names; check logs for rate limits.
-- Database locks (SQLite): close other processes or switch to PostgreSQL for multi-user deployments.
+- Database locks (SQLite): avoid multiple Uvicorn workers with in-process jobs; use sidecar workers or PostgreSQL for multi-user/heavy workloads.
 
 ## Feedback & Contributing
 
