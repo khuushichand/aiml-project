@@ -15,7 +15,7 @@ https://www.reddit.com/r/LocalLLaMA/comments/1n8flne/how_can_i_reduce_the_first_
 ```
 
 https://github.com/resemble-ai/chatterbox
-https://github.com/neuphonic/neutts
+
 https://github.com/ekwek1/soprano?tab=readme-ov-file#installation
 https://huggingface.co/kyutai
 https://huggingface.co/Echo9Zulu/Kokoro-82M-FP16-OpenVINO
@@ -25,6 +25,10 @@ https://github.com/nari-labs/dia2
 https://github.com/NVIDIA/personaplex?tab=readme-ov-file
 https://github.com/kyutai-labs/pocket-tts
 https://github.com/supertone-inc/supertonic
+https://github.com/k2-fsa/ZipVoice
+
+
+
 Pocket TTS Voice cloning
 ```python
 """Run voice cloning with local weights."""

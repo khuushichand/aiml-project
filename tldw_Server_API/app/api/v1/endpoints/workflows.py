@@ -1820,17 +1820,8 @@ async def get_run_events(
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
     is_admin = bool(getattr(current_user, "is_admin", False))
-    step_run = db.get_latest_step_run(run_id=run_id, step_id=step_id)
-    if not step_run:
-        raise HTTPException(status_code=404, detail="Step run not found")
-    assigned_to = step_run.get("assigned_to")
-    user_id = str(current_user.id)
-    if not is_admin:
-        if assigned_to:
-            if str(assigned_to) != user_id:
-                raise HTTPException(status_code=404, detail="Run not found")
-        elif str(run.user_id) != user_id:
-            raise HTTPException(status_code=404, detail="Run not found")
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
     # Normalize types to lower-case for consistency with UI filter chips
     types_norm = [t.strip() for t in (types or []) if str(t).strip()]
     # Cursor token overrides since

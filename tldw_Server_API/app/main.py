@@ -863,6 +863,13 @@ else:
         logger.warning(f"Outputs endpoints unavailable; skipping import: {_o_err}")
         _HAS_OUTPUTS = False
     try:
+        from tldw_Server_API.app.api.v1.endpoints.collections_feeds import router as collections_feeds_router
+
+        _HAS_COLLECTIONS_FEEDS = True
+    except Exception as _cf_err:
+        logger.warning(f"Collections feeds endpoints unavailable; skipping import: {_cf_err}")
+        _HAS_COLLECTIONS_FEEDS = False
+    try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         _HAS_FILES = True
@@ -4704,6 +4711,12 @@ elif _MINIMAL_TEST_APP:
     except Exception as _outputs_min_err:
         logger.debug(f"Skipping outputs router in minimal test app: {_outputs_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.collections_feeds import router as collections_feeds_router
+
+        app.include_router(collections_feeds_router, prefix=f"{API_V1_PREFIX}", tags=["collections-feeds"])
+    except Exception as _feeds_min_err:
+        logger.debug(f"Skipping collections_feeds router in minimal test app: {_feeds_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         app.include_router(files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
@@ -5107,6 +5120,10 @@ else:
     if _HAS_OUTPUT_TEMPLATES and "outputs_templates_router" in locals():
         _include_if_enabled(
             "outputs-templates", outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"]
+        )
+    if _HAS_COLLECTIONS_FEEDS and "collections_feeds_router" in locals():
+        _include_if_enabled(
+            "collections-feeds", collections_feeds_router, prefix=f"{API_V1_PREFIX}", tags=["collections-feeds"]
         )
     try:
         # Optional outputs artifacts endpoint

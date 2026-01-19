@@ -118,6 +118,26 @@ _hash_content = hash_text_sha256
 _word_count = word_count
 
 
+def _resolve_collections_origin(
+    source_settings: Optional[Dict[str, Any]],
+    job_output_prefs: Optional[Dict[str, Any]],
+    *,
+    default: str = "watchlist",
+) -> str:
+    for cfg in (source_settings, job_output_prefs):
+        if not isinstance(cfg, dict):
+            continue
+        origin = cfg.get("collections_origin")
+        if isinstance(origin, str) and origin.strip():
+            return origin.strip()
+        nested = cfg.get("collections")
+        if isinstance(nested, dict):
+            origin = nested.get("origin")
+            if isinstance(origin, str) and origin.strip():
+                return origin.strip()
+    return default
+
+
 def _select_sources_for_scope(db: WatchlistsDatabase, scope: Dict[str, Any]) -> List[SourceRow]:
     """Resolve sources given a job scope.
 
@@ -358,6 +378,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         settings = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
                     except Exception:
                         settings = {}
+                    collections_origin = _resolve_collections_origin(settings, job_output_prefs)
                     rss_limit = int(settings.get("limit", 50)) if isinstance(settings.get("limit", 50), int) else 50
                     # Effective history/backfill options: merge job output_prefs.history over source.settings.history
                     history_cfg = settings.get("history") if isinstance(settings.get("history"), dict) else {}
@@ -648,11 +669,12 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             "run_id": run.id,
                             "media_uuid": ingested_media_uuid,
                             "tags": tags_for_item,
+                            "origin": collections_origin,
                         }
                         item_row = None
                         try:
                             item_row = collections_db.upsert_content_item(
-                                origin="watchlist",
+                                origin=collections_origin,
                                 origin_type=str(src.source_type or ""),
                                 origin_id=int(src.id),
                                 url=article.get("url") or link,
@@ -684,7 +706,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                         item_id=item_row.id,
                                         content=content_text,
                                         metadata={
-                                            "origin": "watchlist",
+                                            "origin": collections_origin,
                                             "job_id": job_id,
                                             "run_id": run.id,
                                             "tags": tags_for_item,
@@ -737,6 +759,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         settings = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
                     except Exception:
                         settings = {}
+                    collections_origin = _resolve_collections_origin(settings, job_output_prefs)
 
                     scrape_rules = settings.get("scrape_rules") if isinstance(settings.get("scrape_rules"), dict) else None
                     prefetched_by_url: Dict[str, Dict[str, Any]] = {}
@@ -937,13 +960,14 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             "run_id": run.id,
                             "media_uuid": ingested_media_uuid,
                             "tags": tags_for_item,
+                            "origin": collections_origin,
                         }
                         if prefetch and (prefetch.get("published") or prefetch.get("published_raw")):
                             metadata_payload["prefetch_published"] = prefetch.get("published") or prefetch.get("published_raw")
                         item_row = None
                         try:
                             item_row = collections_db.upsert_content_item(
-                                origin="watchlist",
+                                origin=collections_origin,
                                 origin_type=str(src.source_type or ""),
                                 origin_id=int(src.id),
                                 url=article.get("url") or page_url,
@@ -975,7 +999,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                         item_id=item_row.id,
                                         content=content_text,
                                         metadata={
-                                            "origin": "watchlist",
+                                            "origin": collections_origin,
                                             "job_id": job_id,
                                             "run_id": run.id,
                                             "tags": tags_for_item,
