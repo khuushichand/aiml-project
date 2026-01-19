@@ -84,6 +84,8 @@ const ImportSection: React.FC = () => {
   const importInProgress = useCollectionsStore((s) => s.importInProgress)
   const importError = useCollectionsStore((s) => s.importError)
   const importResult = useCollectionsStore((s) => s.importResult)
+  const importJobId = useCollectionsStore((s) => s.importJobId)
+  const importJobStatus = useCollectionsStore((s) => s.importJobStatus)
   const importWizardStep = useCollectionsStore((s) => s.importWizardStep)
 
   const setImportSource = useCollectionsStore((s) => s.setImportSource)
@@ -91,6 +93,8 @@ const ImportSection: React.FC = () => {
   const setImportInProgress = useCollectionsStore((s) => s.setImportInProgress)
   const setImportError = useCollectionsStore((s) => s.setImportError)
   const setImportResult = useCollectionsStore((s) => s.setImportResult)
+  const setImportJobId = useCollectionsStore((s) => s.setImportJobId)
+  const setImportJobStatus = useCollectionsStore((s) => s.setImportJobStatus)
   const setImportWizardStep = useCollectionsStore((s) => s.setImportWizardStep)
   const resetImportWizard = useCollectionsStore((s) => s.resetImportWizard)
 
@@ -101,6 +105,8 @@ const ImportSection: React.FC = () => {
     setImportFile(null)
     setImportError(null)
     setImportResult(null)
+    setImportJobId(null)
+    setImportJobStatus(null)
     setImportWizardStep("upload")
   }
 
@@ -112,26 +118,80 @@ const ImportSection: React.FC = () => {
     }
     setImportInProgress(true)
     setImportError(null)
+    setImportResult(null)
+    setImportJobId(null)
+    setImportJobStatus(null)
 
+    let jobStarted = false
     try {
-      const result = await api.importReadingList({
+      const job = await api.importReadingList({
         source: importSource,
         file
       })
-      setImportResult(result)
-      setImportWizardStep("result")
-      message.success(
-        t("collections:import.success", "Imported {{count}} items", {
-          count: result.imported
-        })
-      )
+      setImportJobId(String(job.job_id))
+      setImportJobStatus(job.status)
+      jobStarted = true
+      message.success(t("collections:import.started", "Import started"))
     } catch (error: any) {
       setImportError(error?.message || "Import failed")
       message.error(error?.message || "Import failed")
     } finally {
-      setImportInProgress(false)
+      setImportInProgress(jobStarted)
     }
   }
+
+  useEffect(() => {
+    if (!importJobId || !importInProgress) return
+
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const job = await api.getReadingImportJob(importJobId)
+        if (cancelled) return
+        setImportJobStatus(job.status)
+        if (job.status === "completed") {
+          if (job.result) {
+            setImportResult(job.result)
+            setImportWizardStep("result")
+            message.success(
+              t("collections:import.success", "Imported {{count}} items", {
+                count: job.result.imported
+              })
+            )
+          } else {
+            setImportError(t("collections:import.missingResult", "Import completed without results"))
+          }
+          setImportInProgress(false)
+          return
+        }
+        if (job.status === "failed" || job.status === "cancelled" || job.status === "quarantined") {
+          setImportError(job.error_message || "Import failed")
+          setImportInProgress(false)
+        }
+      } catch (error: any) {
+        if (cancelled) return
+        setImportError(error?.message || "Failed to fetch import status")
+        setImportInProgress(false)
+      }
+    }
+
+    poll()
+    const interval = window.setInterval(poll, 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [
+    api,
+    importJobId,
+    importInProgress,
+    setImportError,
+    setImportInProgress,
+    setImportJobStatus,
+    setImportResult,
+    setImportWizardStep,
+    t
+  ])
 
   const stepItems = [
     { title: t("collections:import.steps.source", "Source") },

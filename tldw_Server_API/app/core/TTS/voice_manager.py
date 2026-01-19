@@ -82,7 +82,7 @@ VOICE_RATE_LIMITS = {
 DEFAULT_NEUTTS_VOICE_ID = "default"
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_NEUTTS_VOICE_PATH = (
-    _REPO_ROOT / "Helper_Scripts" / "Audio" / "Sample_Voices" / "Sample_Voice_1.mp3"
+    _REPO_ROOT / "Helper_Scripts" / "Audio" / "Sample_Voices" / "Sample_Voice_1.wav"
 )
 DEFAULT_NEUTTS_VOICE_TEXT_PATH = DEFAULT_NEUTTS_VOICE_PATH.with_suffix(".txt")
 
@@ -295,7 +295,21 @@ class VoiceManager:
 
         Uses DatabasePaths to resolve `<USER_DB_BASE_DIR>/<user_id>/voices`.
         """
-        return DatabasePaths.get_user_voices_dir(user_id)
+        voices_dir = DatabasePaths.get_user_voices_dir(user_id)
+        sample_root = DEFAULT_NEUTTS_VOICE_PATH.parent.resolve()
+        try:
+            voices_dir.resolve().relative_to(sample_root)
+        except ValueError:
+            return voices_dir
+        fallback_base = (_REPO_ROOT / "Databases" / "user_databases").resolve()
+        logger.warning(
+            "Voices directory resolved under Sample_Voices; falling back to %s",
+            fallback_base,
+        )
+        return DatabasePaths.get_user_voices_dir(
+            user_id,
+            base_dir_override=fallback_base,
+        )
 
     def get_user_voice_metadata_path(self, user_id: int, voice_id: str) -> Path:
         """Get the metadata path for a stored voice reference."""

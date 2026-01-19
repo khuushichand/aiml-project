@@ -455,6 +455,200 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     return {"text": rendered}
 
 
+async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute an LLM chat completion via the adapter registry.
+
+    Config (subset; additional keys passed through):
+      - provider/api_provider/api_endpoint: str
+      - model: str (optional for local providers)
+      - prompt: str (templated) or messages: list[dict] (templated)
+      - system_message/system/system_prompt: str (templated)
+      - temperature, top_p, max_tokens, stop, tools, tool_choice, response_format, seed
+      - stream: bool (optional)
+      - include_response: bool (default false)
+    Output:
+      - text: str
+      - metadata: token_usage/cost if available
+      - response: raw provider response (optional)
+    """
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+    from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
+    import json as _json
+    import os as _os
+
+    def _render_str(val: Any) -> Any:
+        if isinstance(val, str):
+            try:
+                return _tmpl(val, context) or val
+            except Exception:
+                return val
+        return val
+
+    def _render_message(msg: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(msg, dict):
+            out = dict(msg)
+            if isinstance(out.get("content"), str):
+                out["content"] = _render_str(out["content"])
+            return out
+        if isinstance(msg, str):
+            return {"role": "user", "content": _render_str(msg)}
+        return None
+
+    provider_raw = (
+        config.get("provider")
+        or config.get("api_provider")
+        or config.get("api_endpoint")
+        or DEFAULT_LLM_PROVIDER
+    )
+    provider = str(_render_str(provider_raw) or "").strip().lower()
+    if not provider:
+        raise AdapterError("missing_provider")
+
+    model = config.get("model") or config.get("model_id")
+    model = _render_str(model) if model is not None else None
+
+    system_message = (
+        config.get("system_message")
+        or config.get("system")
+        or config.get("system_prompt")
+    )
+    system_message = _render_str(system_message) if system_message is not None else None
+    if isinstance(system_message, str) and not system_message.strip():
+        system_message = None
+
+    messages_cfg = config.get("messages") or config.get("messages_payload")
+    prompt = config.get("prompt") or config.get("input") or config.get("template")
+    messages: List[Dict[str, Any]] = []
+
+    if messages_cfg is None:
+        if not prompt:
+            raise AdapterError("missing_prompt")
+        rendered_prompt = _render_str(str(prompt))
+        messages = [{"role": "user", "content": rendered_prompt}]
+    elif isinstance(messages_cfg, str):
+        raw = _render_str(messages_cfg)
+        parsed = None
+        try:
+            parsed = _json.loads(raw)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            for item in parsed:
+                rendered = _render_message(item)
+                if rendered:
+                    messages.append(rendered)
+        elif str(raw).strip():
+            messages = [{"role": "user", "content": raw}]
+        if not messages:
+            raise AdapterError("missing_messages")
+    elif isinstance(messages_cfg, list):
+        for item in messages_cfg:
+            rendered = _render_message(item)
+            if rendered:
+                messages.append(rendered)
+        if not messages:
+            raise AdapterError("missing_messages")
+    else:
+        raise AdapterError("invalid_messages")
+
+    # Short-circuit in tests to avoid outbound LLM calls
+    if _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+        preview = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+                preview = msg["content"]
+                break
+        if not preview:
+            try:
+                preview = str(messages[-1].get("content") or "")
+            except Exception:
+                preview = ""
+        return {
+            "text": preview,
+            "provider": provider,
+            "model": model,
+            "simulated": True,
+        }
+
+    stream = bool(config.get("stream", False))
+    include_response = bool(config.get("include_response", False))
+
+    call_args: Dict[str, Any] = {
+        "api_endpoint": provider,
+        "messages_payload": messages,
+        "system_message": system_message,
+        "model": model,
+        "stream": stream,
+        "temperature": config.get("temperature"),
+        "top_p": config.get("top_p"),
+        "max_tokens": config.get("max_tokens"),
+        "max_completion_tokens": config.get("max_completion_tokens"),
+        "stop": config.get("stop"),
+        "tools": config.get("tools"),
+        "tool_choice": config.get("tool_choice"),
+        "response_format": config.get("response_format"),
+        "seed": config.get("seed"),
+        "n": config.get("n"),
+        "logit_bias": config.get("logit_bias"),
+        "user": config.get("user") or context.get("user_id"),
+        "api_key": _render_str(config.get("api_key")) if config.get("api_key") is not None else None,
+    }
+    # Drop None values for cleaner adapter inputs
+    call_args = {k: v for k, v in call_args.items() if v is not None}
+
+    if stream:
+        stream_iter = await perform_chat_api_call_async(**call_args)
+        text = ""
+        async for line in stream_iter:
+            if not line:
+                continue
+            raw = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
+            raw = raw.strip()
+            if not raw:
+                continue
+            if raw.lower() == "data: [done]":
+                break
+            if raw.startswith("data:"):
+                payload = raw[5:].strip()
+                try:
+                    data = _json.loads(payload)
+                except Exception:
+                    data = None
+                if isinstance(data, dict):
+                    choices = data.get("choices") or []
+                    if choices:
+                        delta = choices[0].get("delta") or {}
+                        chunk = delta.get("content")
+                        if isinstance(chunk, str) and chunk:
+                            text += chunk
+                            try:
+                                if callable(context.get("append_event")):
+                                    context["append_event"]("llm_stream", {"delta": chunk})
+                            except Exception:
+                                pass
+                    continue
+            # Fallback: treat as plain text chunk
+            text += raw
+        return {"text": text, "streamed": True}
+
+    response = await perform_chat_api_call_async(**call_args)
+    text = _extract_openai_content(response) or ""
+    out: Dict[str, Any] = {"text": text}
+    metadata: Dict[str, Any] = {}
+    if isinstance(response, dict):
+        usage = response.get("usage")
+        if isinstance(usage, dict):
+            metadata["token_usage"] = usage
+        if "cost_usd" in response:
+            metadata["cost_usd"] = response.get("cost_usd")
+    if metadata:
+        out["metadata"] = metadata
+    if include_response:
+        out["response"] = response
+    return out
+
+
 async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a RAG search via the unified pipeline with minimal required args.
 
@@ -2118,6 +2312,63 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     return {"results": results, "count": len(results)}
 
 
+def _normalize_str_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        return [s.strip() for s in raw.split(",") if s.strip()]
+    if isinstance(value, (list, tuple, set)):
+        out = []
+        for item in value:
+            if item is None:
+                continue
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
+    return [str(value).strip()]
+
+
+def _extract_mcp_policy(context: Dict[str, Any]) -> Dict[str, Any]:
+    policy = context.get("workflow_mcp_policy")
+    if not isinstance(policy, dict):
+        policy = None
+    if policy is None:
+        meta = context.get("workflow_metadata")
+        if isinstance(meta, dict):
+            candidate = meta.get("mcp") or meta.get("mcp_policy")
+            if isinstance(candidate, dict):
+                policy = candidate
+    return policy or {}
+
+
+def _tool_matches_allowlist(tool_name: str, allowlist: List[str]) -> bool:
+    if not allowlist:
+        return True
+    if "*" in allowlist:
+        return True
+    for entry in allowlist:
+        if entry == tool_name:
+            return True
+        if entry.endswith("*") and tool_name.startswith(entry[:-1]):
+            return True
+    return False
+
+
+def _extract_tool_scopes(tool_def: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(tool_def, dict):
+        return []
+    raw = tool_def.get("scopes") or tool_def.get("scope")
+    if raw is None:
+        meta = tool_def.get("metadata") or {}
+        if isinstance(meta, dict):
+            raw = meta.get("scopes") or meta.get("scope") or meta.get("capabilities") or meta.get("capability")
+    return _normalize_str_list(raw)
+
+
 async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Execute an MCP tool via the unified server registry.
 
@@ -2131,6 +2382,11 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
     arguments = config.get("arguments") or {}
     if not tool_name:
         return {"error": "missing_tool_name"}
+    policy = _extract_mcp_policy(context)
+    allowlist = _normalize_str_list(policy.get("allowlist") or policy.get("allowed_tools"))
+    if allowlist and not _tool_matches_allowlist(tool_name, allowlist):
+        raise AdapterError("mcp_tool_not_allowed")
+    allowed_scopes = _normalize_str_list(policy.get("scopes") or policy.get("allow_scopes") or policy.get("capabilities"))
     server = get_mcp_server()
     # Find module by tool registry
     module_id = server.module_registry._tool_registry.get(tool_name)  # type: ignore[attr-defined]
@@ -2151,6 +2407,24 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
                     continue
         except Exception:
             pass
+    tool_def = None
+    if module is not None:
+        try:
+            tool_defs = await module.get_tools()
+            for tool in tool_defs:
+                if tool.get("name") == tool_name:
+                    tool_def = tool
+                    break
+        except Exception:
+            pass
+    required_scopes = _extract_tool_scopes(tool_def)
+    if required_scopes:
+        if not allowed_scopes:
+            raise AdapterError("mcp_tool_scope_denied")
+        if "*" not in allowed_scopes:
+            missing = [s for s in required_scopes if s not in allowed_scopes]
+            if missing:
+                raise AdapterError("mcp_tool_scope_denied")
     if module is None:
         # Test-friendly fallback for echo
         if tool_name == "echo":

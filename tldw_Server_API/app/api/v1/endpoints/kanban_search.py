@@ -55,6 +55,7 @@ from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
+    kanban_rate_limit,
 )
 
 
@@ -154,10 +155,8 @@ def _execute_search(
     """
     # Get vector search if available (for vector/hybrid modes)
     vector_search: Optional[KanbanVectorSearch] = None
-    if search_mode in ["vector", "hybrid"] and is_vector_search_available():
-        # Note: In production, this would use embedding_config from app settings
-        # For now, vector search gracefully falls back to FTS
-        vector_search = None  # Will be configured when embedding config is available
+    if search_mode in ["vector", "hybrid"]:
+        vector_search = db.get_vector_search()
 
     # Perform search based on mode
     if search_mode == "fts" or search_mode not in ["fts", "vector", "hybrid"]:
@@ -411,7 +410,8 @@ def _perform_hybrid_search(
     "/search",
     response_model=SearchResponse,
     summary="Search cards",
-    description="Search cards using FTS5 full-text search."
+    description="Search cards using FTS5 full-text search.",
+    dependencies=[Depends(kanban_rate_limit("kanban.search"))]
 )
 async def search_cards_get(
     q: str = Query(..., min_length=1, max_length=500, description="Search query"),
@@ -473,7 +473,8 @@ async def search_cards_get(
     "/search",
     response_model=SearchResponse,
     summary="Search cards (POST)",
-    description="Search cards using FTS5 full-text search with request body."
+    description="Search cards using FTS5 full-text search with request body.",
+    dependencies=[Depends(kanban_rate_limit("kanban.search"))]
 )
 async def search_cards_post(
     request: SearchRequest,
@@ -510,17 +511,23 @@ async def search_cards_post(
     summary="Get search status",
     description="Get the status of search capabilities and scoring configuration."
 )
-async def search_status() -> Dict[str, Any]:
+async def search_status(
+    db: KanbanDB = Depends(get_kanban_db_for_user)
+) -> Dict[str, Any]:
     """
     Get the status of search capabilities.
 
     Returns information about which search modes are available and
     the current hybrid search scoring weights.
     """
+    vector_search = db.get_vector_search()
+    vector_enabled = bool(vector_search and vector_search.available)
+    vector_backend = is_vector_search_available()
     return {
         "fts_available": True,  # Always available (SQLite FTS5)
-        "vector_available": is_vector_search_available(),
-        "hybrid_available": is_vector_search_available(),
+        "vector_available": vector_enabled,
+        "vector_backend_available": vector_backend,
+        "hybrid_available": vector_enabled,
         "default_mode": "fts",
         "supported_modes": ["fts", "vector", "hybrid"],
         "scoring_weights": {

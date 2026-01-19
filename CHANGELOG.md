@@ -17,7 +17,20 @@ and this project adheres to Some kind of Versioning
 
 
 
-## [0.1.16] 2026-01-19
+## [0.1.18] 2026-01-X
+
+### Added
+Slides Module
+
+### Changed
+- Workflows Module
+
+### Removed
+
+### Fixed
+
+
+## [0.1.17] 2026-01-19
 
 ### Added
 - File Artifacts System: Comprehensive implementation of file artifact management with support for multiple export formats (iCalendar, Markdown tables, HTML tables, XLSX, data tables) including export lifecycle management, garbage collection, and validation

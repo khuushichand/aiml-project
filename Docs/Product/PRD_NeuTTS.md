@@ -24,11 +24,11 @@ tldw_server supports multiple TTS providers with OpenAI-compatible endpoints. Ne
 - Per-request `voice_reference` + `extra_params.reference_text` is allowed as an optional override.
 - Stored references can persist `reference_text` and provider artifacts (e.g., NeuTTS `ref_codes`) via `/api/v1/audio/voices/encode`.
 - `extra_params.reference_text` and `extra_params.ref_codes` are accepted per request and override stored metadata when provided.
-- Bundle a default reference voice from `/Helper_Scripts/Audio/Sample_Voices/Sample_Voice_1.mp3`.
+- Bundle a default reference voice from `/Helper_Scripts/Audio/Sample_Voices/Sample_Voice_1.wav`.
 - Store reference audio and codes using the existing voice manager filesystem pattern under per-user voices directories.
 - Automatic model download is disabled by default.
 - Streaming output format defaults to PCM s16le, 24kHz, mono for widest compatibility.
-- For NeuTTS streaming, WAV is not supported because current WAV streaming buffers until finalize; treat WAV as non-streaming or reject when `stream=true`.
+- For NeuTTS streaming, WAV is not supported because current WAV streaming buffers until finalize; allow PCM/MP3/OPUS and reject WAV when `stream=true`.
 
 ## User Stories
 
@@ -52,11 +52,11 @@ tldw_server supports multiple TTS providers with OpenAI-compatible endpoints. Ne
 - Output requirements:
   - Sample rate: 24kHz output.
   - Non-streaming responses follow existing `response_format` values.
-  - Streaming responses default to PCM s16le, 24kHz, mono; WAV chunks optional.
+  - Streaming responses default to PCM s16le, 24kHz, mono; MP3/OPUS are also supported (WAV is not).
 - Streaming:
   - Streaming supported only for GGUF backbones.
   - Clear error if streaming is requested with non-GGUF backbones.
-  - For NeuTTS, validate `response_format` when `stream=true` and restrict to PCM (or other truly streaming formats). WAV must be rejected or coerced to non-streaming.
+  - For NeuTTS, validate `response_format` when `stream=true` and allow PCM/MP3/OPUS (or other truly streaming formats). WAV must be rejected or coerced to non-streaming.
 - Caching:
   - Reuse loaded backbone and codec per worker.
   - Optional cache for reference codes by voice ID.
@@ -124,7 +124,7 @@ Optional per-request override example:
 - Stored reference audio is kept per user; metadata includes `reference_text` and provider artifacts.
 - `custom:` voice IDs resolve to stored audio + metadata; per-request values override stored metadata.
 - Storage is adapter-neutral so future TTS providers can reuse stored references.
-- Default voice assets ship from `/Helper_Scripts/Audio/Sample_Voices/Sample_Voice_1.mp3` and are registered on first use.
+- Default voice assets ship from `/Helper_Scripts/Audio/Sample_Voices/Sample_Voice_1.wav` and are registered on first use.
 
 ## Configuration
 
@@ -161,7 +161,7 @@ Optional per-request override example:
 ## Streaming Limitations
 
 - NeuTTS streaming is supported only for GGUF backbones (llama-cpp).
-- WAV is not considered a true streaming format in the current stack because headers are finalized at the end; for NeuTTS `stream=true`, allow PCM (and other truly streaming formats) only.
+- WAV is not considered a true streaming format in the current stack because headers are finalized at the end; for NeuTTS `stream=true`, allow PCM/MP3/OPUS (and other truly streaming formats) only.
 
 ## Observability
 
@@ -217,7 +217,7 @@ Optional per-request override example:
 **Status**: Not Started
 
 ### Stage 2: Voice storage + default voice
-**Goal**: Store NeuTTS reference audio, ref_text, and ref_codes using the existing voice manager filesystem layout and register a default voice from `/Helper_Scripts/Audio/Sample_Voices/Sample_Voice_1.mp3`.
+**Goal**: Store NeuTTS reference audio, ref_text, and ref_codes using the existing voice manager filesystem layout and register a default voice from `/Helper_Scripts/Audio/Sample_Voices/Sample_Voice_1.wav`.
 **Scope/Deliverables**:
 - Persist per-voice metadata for `reference_text` and `ref_codes`.
 - Add default voice registration on first use or service startup.
@@ -237,7 +237,7 @@ Optional per-request override example:
 **Goal**: Enforce GGUF-only streaming and allow PCM streaming only for NeuTTS.
 **Scope/Deliverables**:
 - Validate streaming requests against GGUF capability.
-- Enforce PCM (or other truly streaming formats) for NeuTTS streaming.
+- Enforce PCM/MP3/OPUS (or other truly streaming formats) for NeuTTS streaming.
 - Reject WAV streaming or coerce to non-streaming.
 **Key Tasks**:
 - Check `request.stream` with NeuTTS capability and gate non-GGUF backbones.
@@ -245,7 +245,7 @@ Optional per-request override example:
 - Ensure PCM streaming path uses normalized int16 chunk output.
 **Dependencies**:
 - NeuTTS streaming implementation uses `infer_stream` for GGUF only.
-**Success Criteria**: `stream=true` with non-GGUF models fails fast; PCM streams successfully; WAV streaming is rejected or coerced to non-streaming.
+**Success Criteria**: `stream=true` with non-GGUF models fails fast; PCM/MP3/OPUS streams successfully; WAV streaming is rejected or coerced to non-streaming.
 **Tests**: Streaming tests for GGUF path; negative tests for non-GGUF streaming and WAV streaming.
 **Status**: Not Started
 

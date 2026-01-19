@@ -208,6 +208,7 @@ class DatabasePaths:
     WORKFLOWS_DB_NAME = "workflows.db"
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
     KANBAN_DB_NAME = "Kanban.db"
+    SLIDES_DB_NAME = "Slides.db"
 
     # Subdirectories
     PROMPTS_SUBDIR = "prompts_user_dbs"
@@ -225,6 +226,7 @@ class DatabasePaths:
     CHATBOOKS_EXPORTS_SUBDIR = "exports"
     CHATBOOKS_IMPORTS_SUBDIR = "imports"
     CHATBOOKS_TEMP_SUBDIR = "temp"
+    READING_IMPORTS_SUBDIR = "reading_imports"
 
     @staticmethod
     def get_user_db_base_dir(*, allow_legacy_alias: bool = False) -> Path:
@@ -400,6 +402,12 @@ class DatabasePaths:
         return user_dir / DatabasePaths.KANBAN_DB_NAME
 
     @staticmethod
+    def get_slides_db_path(user_id: Optional[UserId]) -> Path:
+        """Get the path to the user's Slides database."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        return user_dir / DatabasePaths.SLIDES_DB_NAME
+
+    @staticmethod
     def get_prompt_studio_db_path(user_id: Optional[UserId]) -> Path:
         """Get the path to the user's Prompt Studio database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
@@ -444,9 +452,16 @@ class DatabasePaths:
         return vector_dir
 
     @staticmethod
-    def get_user_voices_dir(user_id: Optional[UserId]) -> Path:
+    def get_user_voices_dir(
+        user_id: Optional[UserId],
+        *,
+        base_dir_override: Optional[Union[str, Path]] = None,
+    ) -> Path:
         """Get the path to the user's voices directory (including subdirs)."""
-        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        user_dir = DatabasePaths.get_user_base_directory(
+            user_id,
+            base_dir_override=base_dir_override,
+        )
         voices_dir = user_dir / DatabasePaths.VOICES_SUBDIR
         _ensure_dir(voices_dir, label="voices")
         _ensure_dir(voices_dir / "uploads", label="voice uploads")
@@ -488,6 +503,14 @@ class DatabasePaths:
         return temp_dir
 
     @staticmethod
+    def get_user_reading_imports_dir(user_id: Optional[UserId]) -> Path:
+        """Get the path to the user's reading import staging directory."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        imports_dir = user_dir / DatabasePaths.READING_IMPORTS_SUBDIR
+        _ensure_dir(imports_dir, label="reading imports")
+        return imports_dir
+
+    @staticmethod
     def get_user_rewrite_cache_path(user_id: Optional[UserId]) -> Path:
         """Get the path to the user's rewrite cache file."""
         base_path = DatabasePaths.get_user_db_base_dir(allow_legacy_alias=True)
@@ -520,6 +543,7 @@ class DatabasePaths:
             "workflows": DatabasePaths.get_workflows_db_path(user_id),
             "workflows_scheduler": DatabasePaths.get_workflows_scheduler_db_path(user_id),
             "kanban": DatabasePaths.get_kanban_db_path(user_id),
+            "slides": DatabasePaths.get_slides_db_path(user_id),
         }
 
     @staticmethod

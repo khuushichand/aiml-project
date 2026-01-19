@@ -162,6 +162,17 @@ class TestKanbanVectorSearchHelpers:
         assert "Labels: Bug" in result
         # Should only include "Bug" since others have no valid name
 
+    def test_build_document_with_checklist_items(self, vector_search_instance):
+
+        """Test _build_document includes checklist item names."""
+        card = {
+            "title": "Test Card",
+            "checklist_items": ["First task", "", "Second task"]
+        }
+        result = vector_search_instance._build_document(card)
+        assert "Test Card" in result
+        assert "Checklist: First task; Second task" in result
+
     def test_build_metadata_basic(self, vector_search_instance):
 
         """Test _build_metadata with basic card data."""
@@ -191,6 +202,22 @@ class TestKanbanVectorSearchHelpers:
         assert result["priority"] == "high"
         assert result["due_date"] == "2024-12-31"
         assert result["created_at"] == "2024-01-01T00:00:00"
+
+    def test_build_metadata_with_labels(self, vector_search_instance):
+
+        """Test _build_metadata includes label names when present."""
+        card = {
+            "id": 123,
+            "board_id": 1,
+            "list_id": 5,
+            "labels": [
+                {"id": 1, "name": "Bug"},
+                {"id": 2, "name": "Urgent"},
+                {"id": 3, "name": ""}
+            ]
+        }
+        result = vector_search_instance._build_metadata(card)
+        assert result["labels"] == ["Bug", "Urgent"]
 
     def test_build_metadata_without_optional_fields(self, vector_search_instance):
 

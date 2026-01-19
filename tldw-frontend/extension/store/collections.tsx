@@ -15,7 +15,8 @@ import type {
   TemplateType,
   TemplateFormat,
   ImportSource,
-  ExportFormat as CollectionExportFormat
+  ExportFormat as CollectionExportFormat,
+  ReadingImportJobStatus
 } from "@/types/collections"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,6 +88,8 @@ interface ImportExportState {
   importInProgress: boolean
   importError: string | null
   importResult: { imported: number; updated: number; skipped: number; errors: string[] } | null
+  importJobId: string | null
+  importJobStatus: ReadingImportJobStatus | null
   // Export
   exportFormat: CollectionExportFormat
   exportInProgress: boolean
@@ -176,6 +179,8 @@ interface ImportExportActions {
   setImportInProgress: (inProgress: boolean) => void
   setImportError: (error: string | null) => void
   setImportResult: (result: { imported: number; updated: number; skipped: number; errors: string[] } | null) => void
+  setImportJobId: (jobId: string | null) => void
+  setImportJobStatus: (status: ReadingImportJobStatus | null) => void
   resetImportWizard: () => void
   // Export
   setExportFormat: (format: CollectionExportFormat) => void
@@ -279,6 +284,8 @@ const initialImportExportState: ImportExportState = {
   importInProgress: false,
   importError: null,
   importResult: null,
+  importJobId: null,
+  importJobStatus: null,
   exportFormat: "jsonl",
   exportInProgress: false,
   exportError: null
@@ -483,6 +490,8 @@ export const useCollectionsStore = create<CollectionsState>()((set) => ({
   setImportInProgress: (importInProgress) => set({ importInProgress }),
   setImportError: (importError) => set({ importError }),
   setImportResult: (importResult) => set({ importResult }),
+  setImportJobId: (importJobId) => set({ importJobId }),
+  setImportJobStatus: (importJobStatus) => set({ importJobStatus }),
 
   resetImportWizard: () =>
     set({
@@ -491,6 +500,8 @@ export const useCollectionsStore = create<CollectionsState>()((set) => ({
       importInProgress: false,
       importError: null,
       importResult: null,
+      importJobId: null,
+      importJobStatus: null,
       importWizardStep: "source"
     }),
 

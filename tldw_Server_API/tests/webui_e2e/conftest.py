@@ -76,6 +76,19 @@ def _set_env(overrides: Dict[str, str]) -> Dict[str, Optional[str]]:
     return original
 
 
+def _merge_route_enable(existing: Optional[str], extra: str) -> str:
+    def _split(value: Optional[str]) -> list[str]:
+        if not value:
+            return []
+        return [part.strip() for part in value.replace("\n", ",").split(",") if part.strip()]
+
+    merged = _split(existing)
+    merged.extend(_split(extra))
+    # Preserve order while deduping.
+    deduped = list(dict.fromkeys(merged))
+    return ",".join(deduped)
+
+
 def _restore_env(original: Dict[str, Optional[str]]) -> None:
     for key, value in original.items():
         if value is None:
@@ -108,8 +121,13 @@ def server_url() -> str:
         "SINGLE_USER_API_KEY": os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID"),
         "CSRF_ENABLED": "true",
         "TEST_MODE": "true",
+        "MINIMAL_TEST_APP": "0",
         "EPHEMERAL_CLEANUP_ENABLED": "false",
         "CLAIMS_REBUILD_ENABLED": "false",
+        "ROUTES_ENABLE": _merge_route_enable(
+            os.getenv("ROUTES_ENABLE"),
+            "reading,reading-highlights,watchlists",
+        ),
     }
 
     original_env = _set_env(overrides)

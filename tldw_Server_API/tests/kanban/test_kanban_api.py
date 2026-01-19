@@ -5,6 +5,7 @@ No mocking of internal functions; only dependency override to inject a temp DB.
 """
 
 import importlib
+from datetime import datetime, timezone, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -204,7 +205,11 @@ def test_card_crud(client_with_kanban_db):
     # Get card
     get_resp = client.get(f"/api/v1/kanban/cards/{card_id}")
     assert get_resp.status_code == 200
-    assert get_resp.json()["title"] == "Test Card"
+    card_detail = get_resp.json()
+    assert card_detail["title"] == "Test Card"
+    assert isinstance(card_detail["labels"], list)
+    assert isinstance(card_detail["checklists"], list)
+    assert card_detail["comment_count"] == 0
 
     # Update card
     upd_resp = client.patch(
@@ -245,6 +250,67 @@ def test_card_crud(client_with_kanban_db):
     # Delete and restore
     client.delete(f"/api/v1/kanban/cards/{card_id}")
     client.post(f"/api/v1/kanban/cards/{card_id}/restore")
+
+
+# =============================================================================
+# Activity Endpoints Tests
+# =============================================================================
+
+def test_activity_endpoints_filters(client_with_kanban_db):
+
+    client, db = client_with_kanban_db
+
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Activity Board", "client_id": "board-activity-1"}
+    ).json()
+    lst = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "Activity List", "client_id": "list-activity-1"}
+    ).json()
+    card = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={"title": "Activity Card", "client_id": "card-activity-1"}
+    ).json()
+
+    window_start = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    window_end = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+
+    board_resp = client.get(
+        f"/api/v1/kanban/boards/{board['id']}/activities",
+        params={
+            "created_after": window_start,
+            "created_before": window_end,
+            "action_type": "card_created",
+            "entity_type": "card",
+        },
+    )
+    assert board_resp.status_code == 200
+    assert any(a["action_type"] == "card_created" for a in board_resp.json()["activities"])
+
+    list_resp = client.get(
+        f"/api/v1/kanban/lists/{lst['id']}/activities",
+        params={
+            "created_after": window_start,
+            "created_before": window_end,
+            "action_type": "list_created",
+            "entity_type": "list",
+        },
+    )
+    assert list_resp.status_code == 200
+    assert any(a["action_type"] == "list_created" for a in list_resp.json()["activities"])
+
+    card_resp = client.get(
+        f"/api/v1/kanban/cards/{card['id']}/activities",
+        params={
+            "created_after": window_start,
+            "created_before": window_end,
+            "action_type": "card_created",
+            "entity_type": "card",
+        },
+    )
+    assert card_resp.status_code == 200
+    assert any(a["action_type"] == "card_created" for a in card_resp.json()["activities"])
 
 
 # =============================================================================
@@ -1588,10 +1654,21 @@ def test_card_link_crud(client_with_kanban_db):
     )
     assert delete_resp.status_code == 200
 
-    # Delete link by ID
+    # Delete link by card + link ID
     remaining_links = client.get(f"/api/v1/kanban/cards/{card['id']}/links").json()["links"]
     assert len(remaining_links) == 1
-    delete_by_id_resp = client.delete(f"/api/v1/kanban/links/{remaining_links[0]['id']}")
+    delete_by_card_resp = client.delete(
+        f"/api/v1/kanban/cards/{card['id']}/links/{remaining_links[0]['id']}"
+    )
+    assert delete_by_card_resp.status_code == 200
+
+    # Recreate and delete link by ID
+    recreate_resp = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "note", "linked_id": "note-789"}
+    )
+    assert recreate_resp.status_code == 201
+    delete_by_id_resp = client.delete(f"/api/v1/kanban/links/{recreate_resp.json()['id']}")
     assert delete_by_id_resp.status_code == 200
 
     # Verify all links removed

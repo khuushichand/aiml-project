@@ -70,6 +70,67 @@ class ReadingImportResponse(BaseModel):
     errors: List[str] = Field(default_factory=list)
 
 
+class ReadingImportJobResponse(BaseModel):
+    job_id: int
+    job_uuid: Optional[str] = None
+    status: str
+
+
+class ReadingImportJobStatus(BaseModel):
+    job_id: int
+    job_uuid: Optional[str] = None
+    status: str
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    progress_percent: Optional[float] = None
+    progress_message: Optional[str] = None
+    error_message: Optional[str] = None
+    result: Optional[ReadingImportResponse] = None
+
+
+class ReadingImportJobsListResponse(BaseModel):
+    jobs: List[ReadingImportJobStatus]
+    total: int
+    limit: Optional[int] = None
+    offset: Optional[int] = None
+
+
+class ReadingArchiveCreateRequest(BaseModel):
+    format: Literal["html", "md"] = Field(
+        default="html",
+        description="Archive format (html or md).",
+        example="html",
+    )
+    source: Literal["auto", "clean_html", "text"] = Field(
+        default="auto",
+        description="Source content preference (auto uses clean_html then text).",
+        example="auto",
+    )
+    title: Optional[str] = Field(default=None, max_length=200, description="Optional archive title override")
+    retention_days: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=3650,
+        description="Retention window in days (0 to disable retention).",
+    )
+    retention_until: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp when this archive can be purged.",
+        example="2025-12-31T00:00:00Z",
+    )
+
+
+class ReadingArchiveResponse(BaseModel):
+    output_id: int
+    title: str
+    format: Literal["html", "md"]
+    storage_path: str
+    created_at: Optional[str] = None
+    retention_until: Optional[str] = None
+    download_url: str
+
+
 class ReadingDeleteResponse(BaseModel):
     status: str = Field(example="archived")
     item_id: int = Field(example=123)

@@ -93,8 +93,8 @@ def _install_aiosqlite_tracking() -> None:
         return
     _AIOSQLITE_ORIG_CONNECT = aiosqlite.connect
 
-    async def _tracked_connect(*args, **kwargs):
-        conn = await _AIOSQLITE_ORIG_CONNECT(*args, **kwargs)
+    def _tracked_connect(*args, **kwargs):
+        conn = _AIOSQLITE_ORIG_CONNECT(*args, **kwargs)
         try:
             _AIOSQLITE_CONNECTIONS.add(conn)
         except Exception:

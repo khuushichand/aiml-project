@@ -9,6 +9,7 @@ Provides CRUD operations for Kanban lists including:
 - Reorder lists within a board
 """
 from typing import Optional, List
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
 from loguru import logger
@@ -28,10 +29,14 @@ from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
     ReorderRequest,
     ReorderResponse,
     DetailResponse,
+    ActivitiesListResponse,
+    ActivityResponse,
+    PaginationInfo,
 )
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
+    kanban_rate_limit,
 )
 
 
@@ -44,6 +49,15 @@ def _handle_error(e: Exception) -> HTTPException:
     return handle_kanban_db_error(e)
 
 
+def _to_db_timestamp(value: Optional[datetime]) -> Optional[str]:
+    """Convert datetime to DB-friendly timestamp string."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 # =============================================================================
 # List CRUD Endpoints (nested under /boards/{board_id}/lists)
 # =============================================================================
@@ -53,7 +67,8 @@ def _handle_error(e: Exception) -> HTTPException:
     response_model=ListResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new list",
-    description="Create a new list in a board."
+    description="Create a new list in a board.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.create"))]
 )
 async def create_list(
     board_id: int,
@@ -85,7 +100,8 @@ async def create_list(
     "/boards/{board_id}/lists",
     response_model=ListsListResponse,
     summary="Get all lists in a board",
-    description="Get all lists for a board, ordered by position."
+    description="Get all lists for a board, ordered by position.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.list"))]
 )
 async def get_lists(
     board_id: int,
@@ -116,7 +132,8 @@ async def get_lists(
     "/boards/{board_id}/lists/reorder",
     response_model=ReorderResponse,
     summary="Reorder lists in a board",
-    description="Set the order of lists in a board."
+    description="Set the order of lists in a board.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.reorder"))]
 )
 async def reorder_lists(
     board_id: int,
@@ -145,7 +162,8 @@ async def reorder_lists(
     "/lists/{list_id}",
     response_model=ListResponse,
     summary="Get a list",
-    description="Get a list by ID."
+    description="Get a list by ID.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.get"))]
 )
 async def get_list(
     list_id: int,
@@ -169,7 +187,8 @@ async def get_list(
     "/lists/{list_id}",
     response_model=ListResponse,
     summary="Update a list",
-    description="Update list properties."
+    description="Update list properties.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.update"))]
 )
 async def update_list(
     list_id: int,
@@ -204,7 +223,8 @@ async def update_list(
     "/lists/{list_id}/archive",
     response_model=ListResponse,
     summary="Archive a list",
-    description="Archive a list. Archived lists are hidden from default listings but can be restored."
+    description="Archive a list. Archived lists are hidden from default listings but can be restored.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.update"))]
 )
 async def archive_list(
     list_id: int,
@@ -224,7 +244,8 @@ async def archive_list(
     "/lists/{list_id}/unarchive",
     response_model=ListResponse,
     summary="Unarchive a list",
-    description="Restore an archived list to active status."
+    description="Restore an archived list to active status.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.update"))]
 )
 async def unarchive_list(
     list_id: int,
@@ -248,7 +269,8 @@ async def unarchive_list(
     "/lists/{list_id}",
     response_model=DetailResponse,
     summary="Delete a list",
-    description="Soft-delete a list. The list can be restored within the retention period."
+    description="Soft-delete a list. The list can be restored within the retention period.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.delete"))]
 )
 async def delete_list(
     list_id: int,
@@ -276,7 +298,8 @@ async def delete_list(
     "/lists/{list_id}/restore",
     response_model=ListResponse,
     summary="Restore a deleted list",
-    description="Restore a soft-deleted list."
+    description="Restore a soft-deleted list.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.delete"))]
 )
 async def restore_list(
     list_id: int,
@@ -289,4 +312,49 @@ async def restore_list(
         logger.info(f"Restored list {list_id}")
         return ListResponse(**lst)
     except (NotFoundError, InputError, KanbanDBError) as e:
+        raise _handle_error(e)
+
+
+# =============================================================================
+# Activity Endpoints
+# =============================================================================
+
+@router.get(
+    "/lists/{list_id}/activities",
+    response_model=ActivitiesListResponse,
+    summary="Get list activities",
+    description="Get activity log for a list.",
+    dependencies=[Depends(kanban_rate_limit("kanban.lists.get"))]
+)
+async def get_list_activities(
+    list_id: int,
+    created_after: Optional[datetime] = Query(None, description="Filter by created_at >= timestamp"),
+    created_before: Optional[datetime] = Query(None, description="Filter by created_at <= timestamp"),
+    action_type: Optional[str] = Query(None, description="Filter by action_type"),
+    entity_type: Optional[str] = Query(None, description="Filter by entity_type"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum activities to return"),
+    offset: int = Query(0, ge=0, description="Number of activities to skip"),
+    db: KanbanDB = Depends(get_kanban_db_for_user)
+) -> ActivitiesListResponse:
+    """Get activity log for a list."""
+    try:
+        activities, total = db.get_list_activities(
+            list_id=list_id,
+            created_after=_to_db_timestamp(created_after),
+            created_before=_to_db_timestamp(created_before),
+            action_type=action_type,
+            entity_type=entity_type,
+            limit=limit,
+            offset=offset,
+        )
+        return ActivitiesListResponse(
+            activities=[ActivityResponse(**a) for a in activities],
+            pagination=PaginationInfo(
+                total=total,
+                limit=limit,
+                offset=offset,
+                has_more=(offset + len(activities)) < total
+            )
+        )
+    except (NotFoundError, KanbanDBError) as e:
         raise _handle_error(e)

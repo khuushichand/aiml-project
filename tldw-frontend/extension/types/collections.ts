@@ -241,6 +241,33 @@ export interface ImportResult {
   errors: string[]
 }
 
+export type ReadingImportJobStatus =
+  | "queued"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "quarantined"
+
+export interface ReadingImportJobResponse {
+  job_id: string
+  job_uuid?: string
+  status: ReadingImportJobStatus
+}
+
+export interface ReadingImportJobDetail {
+  job_id: string
+  job_uuid?: string
+  status: ReadingImportJobStatus
+  created_at?: string
+  started_at?: string
+  completed_at?: string
+  progress_percent?: number
+  progress_message?: string
+  error_message?: string
+  result?: ImportResult
+}
+
 export interface ExportRequest {
   format: ExportFormat
   status?: string[]

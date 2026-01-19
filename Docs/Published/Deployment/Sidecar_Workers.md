@@ -21,6 +21,7 @@ Important: set `TLDW_WORKERS_SIDECAR_MODE=true` for the API process so it skips 
 - Privilege snapshots worker: `python -m tldw_Server_API.app.services.privilege_snapshot_worker`
 - Audio jobs worker: `python -m tldw_Server_API.app.services.audio_jobs_worker`
 - Media ingest jobs worker: `python -m tldw_Server_API.app.services.media_ingest_jobs_worker`
+- Reading list import jobs worker: `python -m tldw_Server_API.app.core.Collections.reading_import_jobs_worker`
 - Evaluations embeddings ABTest worker: `python -m tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs_worker`
 - Connectors worker (optional): `python -m tldw_Server_API.app.services.connectors_worker`
 
@@ -31,7 +32,7 @@ Important: set `TLDW_WORKERS_SIDECAR_MODE=true` for the API process so it skips 
 ```
 
 Tunable env vars:
-- `TLDW_SIDECAR_WORKERS=chatbooks,files,data_tables,prompt_studio,privilege_snapshots,audio,media_ingest,evals_abtest`
+- `TLDW_SIDECAR_WORKERS=chatbooks,files,data_tables,prompt_studio,privilege_snapshots,audio,media_ingest,reading_import,evals_abtest`
   (add connectors if you use those jobs)
 - `TLDW_ENV_FILE=/path/to/.env`
 - `TLDW_LOG_DIR=/path/to/logs`

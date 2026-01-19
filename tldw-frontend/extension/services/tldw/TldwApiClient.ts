@@ -2634,7 +2634,8 @@ export class TldwApiClient {
           id: String(highlight.id),
           item_id: String(highlight.item_id),
           color: highlight.color || "yellow",
-          anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
+          anchor_strategy: highlight.anchor_strategy || "fuzzy_quote",
+          state: highlight.state || "active"
         }))
       : []
   }
@@ -2669,7 +2670,8 @@ export class TldwApiClient {
       id: String(highlight.id),
       item_id: String(highlight.item_id),
       color: highlight.color || "yellow",
-      anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
+      anchor_strategy: highlight.anchor_strategy || "fuzzy_quote",
+      state: highlight.state || "active"
     }
   }
 
@@ -2689,7 +2691,8 @@ export class TldwApiClient {
       id: String(highlight.id),
       item_id: String(highlight.item_id),
       color: highlight.color || "yellow",
-      anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
+      anchor_strategy: highlight.anchor_strategy || "fuzzy_quote",
+      state: highlight.state || "active"
     }
   }
 
@@ -2834,10 +2837,10 @@ export class TldwApiClient {
     source: string
     file: File
     merge_tags?: boolean
-  }): Promise<any> {
+  }): Promise<{ job_id: string; job_uuid?: string; status: string }> {
     const buffer = await data.file.arrayBuffer()
     const fileData = Array.from(new Uint8Array(buffer))
-    return await this.upload<any>({
+    return await this.upload<{ job_id: string; job_uuid?: string; status: string }>({
       path: "/api/v1/reading/import",
       method: "POST",
       fileFieldName: "file",
@@ -2850,6 +2853,14 @@ export class TldwApiClient {
         source: data.source,
         merge_tags: data.merge_tags ?? true
       }
+    })
+  }
+
+  async getReadingImportJob(jobId: string): Promise<any> {
+    const path = `/api/v1/reading/import/jobs/${encodeURIComponent(jobId)}` as const
+    return await this.request<any>({
+      path,
+      method: "GET"
     })
   }
 

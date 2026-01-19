@@ -1,5 +1,7 @@
+import asyncio
 import importlib
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -7,11 +9,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Collections.reading_import_jobs import (
+    ReadingImportJobError,
+    handle_reading_import_job,
+    resolve_reading_import_file,
+    stage_reading_import_file,
+)
 from tldw_Server_API.app.core.Collections.reading_importers import (
     parse_instapaper_export,
     parse_pocket_export,
 )
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.config import settings
 
 
@@ -55,6 +65,25 @@ def test_parse_instapaper_export():
     assert item.notes == "Note A"
 
 
+def test_stage_and_resolve_import_file(client_with_user):
+    path = stage_reading_import_file(
+        user_id=222,
+        filename="pocket.json",
+        raw_bytes=b"payload",
+    )
+    try:
+        assert path.exists()
+        resolved = resolve_reading_import_file(222, path.name)
+        assert resolved == path
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_resolve_import_file_rejects_invalid_token(client_with_user):
+    with pytest.raises(ReadingImportJobError):
+        resolve_reading_import_file(222, "../evil.json")
+
+
 @pytest.fixture()
 def client_with_user(monkeypatch):
     async def override_user():
@@ -70,6 +99,9 @@ def client_with_user(monkeypatch):
     prev_base_dir = settings.get("USER_DB_BASE_DIR")
     settings.USER_DB_BASE_DIR = str(base_dir)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    jobs_db_path = base_dir / "jobs.db"
+    monkeypatch.setenv("JOBS_DB_PATH", str(jobs_db_path))
+    os.environ["JOBS_DB_PATH"] = str(jobs_db_path)
 
     from tldw_Server_API.app import main as app_main
 
@@ -89,6 +121,18 @@ def client_with_user(monkeypatch):
                 del settings.USER_DB_BASE_DIR
             except AttributeError:
                 pass
+        os.environ.pop("JOBS_DB_PATH", None)
+
+
+def _run_import_job(job_id: int) -> None:
+    async def _runner() -> None:
+        jm = JobManager()
+        job = jm.get_job(job_id)
+        assert job is not None
+        result = await handle_reading_import_job(job)
+        jm.complete_job(job_id, result=result, enforce=False)
+
+    asyncio.run(_runner())
 
 
 def test_reading_import_and_export(client_with_user):
@@ -110,9 +154,21 @@ def test_reading_import_and_export(client_with_user):
     }
     data = {"source": "pocket", "merge_tags": "true"}
     r = client.post("/api/v1/reading/import", files=files, data=data)
-    assert r.status_code == 200, r.text
+    assert r.status_code == 202, r.text
     body = r.json()
-    assert body["imported"] == 1
+    job_id = body["job_id"]
+    _run_import_job(job_id)
+
+    job_resp = client.get(f"/api/v1/reading/import/jobs/{job_id}")
+    assert job_resp.status_code == 200
+    job_body = job_resp.json()
+    assert job_body["status"] == "completed"
+    assert job_body["result"]["imported"] == 1
+
+    jobs_resp = client.get("/api/v1/reading/import/jobs")
+    assert jobs_resp.status_code == 200
+    jobs_body = jobs_resp.json()
+    assert any(j["job_id"] == job_id for j in jobs_body["jobs"])
 
     r = client.get("/api/v1/reading/items")
     assert r.status_code == 200
@@ -165,7 +221,9 @@ def test_reading_import_preserves_existing_fields(client_with_user):
     }
     data = {"source": "pocket", "merge_tags": "true"}
     r = client.post("/api/v1/reading/import", files=files, data=data)
-    assert r.status_code == 200, r.text
+    assert r.status_code == 202, r.text
+    job_id = r.json()["job_id"]
+    _run_import_job(job_id)
 
     updated = db.get_content_item_by_url(url)
     assert updated is not None
@@ -175,3 +233,67 @@ def test_reading_import_preserves_existing_fields(client_with_user):
     assert updated.word_count == original_word_count
     updated_meta = json.loads(updated.metadata_json or "{}")
     assert updated_meta.get("text") == original_meta.get("text")
+
+
+def test_reading_export_includes_highlights(client_with_user):
+    client = client_with_user
+    content = "Hello world. Highlight me."
+    save_payload = {
+        "url": "https://example.com/highlight",
+        "title": "Highlight Article",
+        "content": content,
+    }
+    r = client.post("/api/v1/reading/save", json=save_payload)
+    assert r.status_code == 200, r.text
+    item_id = r.json()["id"]
+
+    quote = "Highlight me"
+    start_offset = content.index(quote)
+    end_offset = start_offset + len(quote)
+    highlight_payload = {
+        "item_id": item_id,
+        "quote": quote,
+        "start_offset": start_offset,
+        "end_offset": end_offset,
+        "color": "yellow",
+        "note": "Important",
+    }
+    r = client.post(f"/api/v1/reading/items/{item_id}/highlight", json=highlight_payload)
+    assert r.status_code == 200, r.text
+
+    r = client.get("/api/v1/reading/export", params={"format": "jsonl", "include_highlights": "true"})
+    assert r.status_code == 200, r.text
+    rows = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    exported = next(row for row in rows if row["id"] == item_id)
+    highlights = exported.get("highlights") or []
+    assert highlights
+    assert highlights[0]["quote"] == quote
+
+
+def test_reading_archive_creates_output(client_with_user):
+    client = client_with_user
+    save_payload = {
+        "url": "https://example.com/archive",
+        "title": "Archive Article",
+        "content": "Archive content.",
+    }
+    r = client.post("/api/v1/reading/save", json=save_payload)
+    assert r.status_code == 200, r.text
+    item_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/v1/reading/items/{item_id}/archive",
+        json={"format": "html", "retention_days": 1},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["output_id"]
+    assert body["download_url"].endswith(f"/api/v1/outputs/{body['output_id']}/download")
+    assert body["retention_until"] is not None
+
+    output_path = DatabasePaths.get_user_outputs_dir(222) / body["storage_path"]
+    assert output_path.exists()
+
+    download = client.get(body["download_url"])
+    assert download.status_code == 200
+    assert "Archive Article" in download.text

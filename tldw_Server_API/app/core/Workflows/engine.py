@@ -245,6 +245,17 @@ class WorkflowEngine:
         except Exception:
             pass
         context: Dict[str, Any] = {"inputs": inputs, "tenant_id": _tenant}
+        try:
+            meta = definition.get("metadata") if isinstance(definition, dict) else None
+            if isinstance(meta, dict):
+                context["workflow_metadata"] = meta
+            policy = None
+            if isinstance(definition, dict):
+                policy = definition.get("mcp_policy") or definition.get("mcp")
+            if isinstance(policy, dict):
+                context["workflow_mcp_policy"] = policy
+        except Exception:
+            pass
         if _user_id is not None:
             context["user_id"] = _user_id
         # Attach and retain secrets for the lifetime of the run
@@ -613,6 +624,17 @@ class WorkflowEngine:
             "run_id": run_id,
             "user_id": getattr(run, "user_id", None),
         }
+        try:
+            meta = definition.get("metadata") if isinstance(definition, dict) else None
+            if isinstance(meta, dict):
+                context["workflow_metadata"] = meta
+            policy = None
+            if isinstance(definition, dict):
+                policy = definition.get("mcp_policy") or definition.get("mcp")
+            if isinstance(policy, dict):
+                context["workflow_mcp_policy"] = policy
+        except Exception:
+            pass
         if last_outputs:
             context["last"] = last_outputs
         # Mark running
@@ -893,6 +915,7 @@ class WorkflowEngine:
         # Adapter defaults
         defaults = {
             "prompt": 1,
+            "llm": 1,
             "tts": 1,
             "webhook": 1,
             "delay": 0,
@@ -919,10 +942,11 @@ class WorkflowEngine:
         # Per-type caps via env (if provided)
         try:
             caps = {
-                "prompt": os.getenv("WORKFLOWS_MAX_RETRIES_PROMPT"),
-                "tts": os.getenv("WORKFLOWS_MAX_RETRIES_TTS"),
-                "webhook": os.getenv("WORKFLOWS_MAX_RETRIES_WEBHOOK"),
-            }
+            "prompt": os.getenv("WORKFLOWS_MAX_RETRIES_PROMPT"),
+            "llm": os.getenv("WORKFLOWS_MAX_RETRIES_LLM"),
+            "tts": os.getenv("WORKFLOWS_MAX_RETRIES_TTS"),
+            "webhook": os.getenv("WORKFLOWS_MAX_RETRIES_WEBHOOK"),
+        }
             cap_s = caps.get(step_type)
             if cap_s is not None and str(cap_s).strip() != "":
                 cap = max(0, int(cap_s))
@@ -1095,6 +1119,9 @@ class WorkflowEngine:
                     pass
             ctx["add_artifact"] = _add_artifact
 
+        if step_type == "llm":
+            from tldw_Server_API.app.core.Workflows.adapters import run_llm_adapter
+            return await run_llm_adapter(step_cfg, ctx)
         if step_type == "prompt":
             return await run_prompt_adapter(step_cfg, ctx)
         if step_type == "rag_search":

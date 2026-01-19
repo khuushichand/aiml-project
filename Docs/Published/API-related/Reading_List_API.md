@@ -11,7 +11,10 @@ Reading List endpoints support capture, extraction, organization, import/export,
 - `DELETE /api/v1/reading/items/{id}` - soft delete (archived) or hard delete
 - `POST /api/v1/reading/items/{id}/summarize` - summarize an item
 - `POST /api/v1/reading/items/{id}/tts` - generate TTS audio for an item
-- `POST /api/v1/reading/import` - Pocket/Instapaper import (multipart)
+- `POST /api/v1/reading/items/{id}/archive` - create an archive snapshot (HTML/MD)
+- `POST /api/v1/reading/import` - Pocket/Instapaper import (multipart, async job)
+- `GET /api/v1/reading/import/jobs` - list reading import jobs
+- `GET /api/v1/reading/import/jobs/{job_id}` - get reading import job status
 - `GET /api/v1/reading/export` - JSONL or ZIP export
 
 ## Core object: ReadingItem
@@ -173,7 +176,7 @@ Response:
 - Streaming audio bytes (Content-Type based on `response_format`)
 - Non-streaming mode returns raw bytes in the response body
 
-## Import
+## Import (Async)
 
 `POST /api/v1/reading/import` (multipart)
 
@@ -190,6 +193,64 @@ multipart form
   merge_tags = true
 ```
 
+Response (202 Accepted):
+```
+{
+  "job_id": 42,
+  "job_uuid": "b7fbd5a0-3b37-4a2d-b6c2-0d0b9d3a6c1c",
+  "status": "queued"
+}
+```
+
+## Import Jobs
+
+`GET /api/v1/reading/import/jobs`
+
+Response:
+```
+{
+  "jobs": [
+    {
+      "job_id": 42,
+      "job_uuid": "b7fbd5a0-3b37-4a2d-b6c2-0d0b9d3a6c1c",
+      "status": "completed",
+      "created_at": "2025-10-19T09:15:00Z",
+      "completed_at": "2025-10-19T09:15:05Z",
+      "result": {
+        "source": "pocket",
+        "imported": 12,
+        "updated": 3,
+        "skipped": 1,
+        "errors": []
+      }
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+`GET /api/v1/reading/import/jobs/{job_id}`
+
+Response:
+```
+{
+  "job_id": 42,
+  "job_uuid": "b7fbd5a0-3b37-4a2d-b6c2-0d0b9d3a6c1c",
+  "status": "completed",
+  "created_at": "2025-10-19T09:15:00Z",
+  "completed_at": "2025-10-19T09:15:05Z",
+  "result": {
+    "source": "pocket",
+    "imported": 12,
+    "updated": 3,
+    "skipped": 1,
+    "errors": []
+  }
+}
+```
+
 ## Export
 
 `GET /api/v1/reading/export`
@@ -197,8 +258,35 @@ multipart form
 Query params:
 - `format`: `jsonl` (default) or `zip`
 - filters: `status`, `tags`, `favorite`, `q`, `domain`
+- optional flags: `include_metadata`, `include_clean_html`, `include_text`, `include_highlights`
 
 JSONL line example:
 ```
 {"id":123,"url":"https://example.com/article","canonical_url":"https://example.com/article","domain":"example.com","title":"Example Article","summary":"...","notes":null,"status":"saved","favorite":0,"tags":["ai"],"created_at":"2025-10-19T09:15:00Z","updated_at":"2025-10-19T09:15:00Z","read_at":null,"published_at":null,"origin_type":"manual","metadata":{"import_source":"pocket"}}
+```
+
+## Archive
+
+`POST /api/v1/reading/items/{id}/archive`
+
+Request:
+```
+{
+  "format": "html",
+  "source": "auto",
+  "retention_days": 30
+}
+```
+
+Response:
+```
+{
+  "output_id": 101,
+  "title": "Example Article (archive 20251021_120000)",
+  "format": "html",
+  "storage_path": "reading_archive_123_example_article_20251021_120000.html",
+  "created_at": "2025-10-21T12:00:00+00:00",
+  "retention_until": "2025-11-20T12:00:00+00:00",
+  "download_url": "/api/v1/outputs/101/download"
+}
 ```

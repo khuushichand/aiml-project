@@ -11,7 +11,7 @@ A minimal DSL, execution engine, APIs, and WebUI hooks to create and execute wor
 ## Implementation Snapshot (current)
 
 - Engine: Linear execution with per-step retries, timeouts, pause/resume, cooperative cancel, durable checkpoints, leases/heartbeats, and orphan reaper.
-- Steps implemented: `prompt`, `rag_search`, `media_ingest`, `mcp_tool`, `webhook`, `wait_for_human`, `wait_for_approval`, `branch`, `map`, `delay`, `log`, `tts`, `stt_transcribe`, `embed`, `translate`, `rss_fetch`, `policy_check`, `notify`, `diff_change_detector`.
+- Steps implemented: `prompt`, `llm`, `rag_search`, `media_ingest`, `mcp_tool`, `webhook`, `wait_for_human`, `wait_for_approval`, `branch`, `map`, `delay`, `log`, `tts`, `stt_transcribe`, `embed`, `translate`, `rss_fetch`, `policy_check`, `notify`, `diff_change_detector`.
 - Concurrency: In-process scheduler with per-tenant and per-workflow limits (env: `WORKFLOWS_TENANT_CONCURRENCY` default 2; `WORKFLOWS_WORKFLOW_CONCURRENCY` default 1).
 - Streaming/events: WS at `/api/v1/workflows/ws` with JWT + run-level auth; HTTP polling supported; strict `event_seq` ordering.
 - Storage: SQLite (WAL) in `Databases/workflows.db`; supports `DATABASE_URL_WORKFLOWS` for SQLite URIs; runs optionally record `tokens_input|tokens_output|cost_usd`.
@@ -46,7 +46,7 @@ A minimal DSL, execution engine, APIs, and WebUI hooks to create and execute wor
 ## Scope (v0.1 MVP)
 
 - Workflow definition: JSON/YAML schema with steps and templated inputs. Explicit routing via `on_success`/`on_failure` and the `branch` step.
-- Step types (v0.1): `media_ingest`, `prompt`, `rag_search`, `mcp_tool`, `webhook`, `wait_for_human`, `wait_for_approval`, `branch`, `map`, `delay`, `log`, `tts`, `stt_transcribe`, `embed`, `translate`, `rss_fetch`, `policy_check`, `notify`, `diff_change_detector`.
+- Step types (v0.1): `media_ingest`, `prompt`, `llm`, `rag_search`, `mcp_tool`, `webhook`, `wait_for_human`, `wait_for_approval`, `branch`, `map`, `delay`, `log`, `tts`, `stt_transcribe`, `embed`, `translate`, `rss_fetch`, `policy_check`, `notify`, `diff_change_detector`.
 - Execution modes: `mode=async|sync` with resumable state for async; session-guided sync.
 - Engine: Linear pipeline with retries, timeouts, durable checkpoints, leases/heartbeats.
 - APIs: Immutable versioned definitions; run, status, pause/resume/cancel; approve/reject human steps; retry failed run; event stream.
@@ -102,7 +102,7 @@ Example (abridged):
   "inputs": {"doc_path": "string", "questions": ["string"]},
   "steps": [
     {"id":"ingest","type":"rag_search","config":{"query":"{{ inputs.questions[0] }}","top_k":5},"on_success":"draft"},
-    {"id":"draft","type":"prompt","config":{"model":"gpt-4o-mini","prompt":"Summarize:\n{{ steps.ingest.outputs.context }}","max_tokens":512}, "on_success":"review"},
+    {"id":"draft","type":"llm","config":{"model":"gpt-4o-mini","prompt":"Summarize:\n{{ steps.ingest.outputs.context }}","max_tokens":512}, "on_success":"review"},
     {"id":"review","type":"wait_for_human","config":{
         "instructions":"Review the summary. Edit for clarity and approve.",
         "assigned_to_user_id":"{{ inputs.reviewer_id }}",
@@ -122,7 +122,8 @@ Example (abridged):
 
 ## Step Types (v0.1)
 
-- prompt: Calls `LLM_Calls` with template; supports streaming in sync mode; limits via `max_tokens` and `max_output_bytes`.
+- prompt: Renders a Jinja-templated string (no LLM call).
+- llm: Calls `LLM_Calls` with prompt/messages; supports streaming in sync mode; limits via `max_tokens` and `max_output_bytes`.
 - rag_search: Uses `RAG` to fetch contexts; configurable top_k, rerank.
 - mcp_tool: Calls MCP tool by `tool_name` with JSON args; returns result payload. Sensitive tools may require explicit allowlisting per workflow.
 - webhook: POST to external HTTP endpoint with payload; records response. Enforce HTTPS, allowlist, HMAC signing, timeouts, no redirects by default.
@@ -343,7 +344,7 @@ Note: advanced branching (JSONLogic-like), full parallelism, and broader adapter
 
 ## Rollout Plan
 
-- Stage 1 (MVP): Routed linear workflows (branch/on_success/on_failure), map (limited), prompt/rag/mcp_tool/wait_for_human/webhook, async+sync, APIs, artifacts, minimal UI.
+- Stage 1 (MVP): Routed linear workflows (branch/on_success/on_failure), map (limited), llm/prompt/rag/mcp_tool/wait_for_human/webhook, async+sync, APIs, artifacts, minimal UI.
 - Stage 2: TTS/transcribe adapters, metrics (tokens/cost), templates.
 - Stage 3: Triggers (on media ingest, schedule), foreach/parallel (limited), budgets/quotas.
 
@@ -375,11 +376,11 @@ Note: advanced branching (JSONLogic-like), full parallelism, and broader adapter
 ## Example Templates (v0.1)
 
 - Doc Review Guided:
-  - Steps: `rag_search` → `prompt(draft)` → `wait_for_human(edit/approve)` → `webhook(notify)`.
+  - Steps: `rag_search` → `llm(draft)` → `wait_for_human(edit/approve)` → `webhook(notify)`.
 - Prompt Studio Micro Eval (manual):
-  - Steps: `prompt(test case)` → `mcp_tool(score|compare)` → `webhook(report)`.
+  - Steps: `llm(test case)` → `mcp_tool(score|compare)` → `webhook(report)`.
 - URL → Ingest → Summarize:
-  - Steps: `media_ingest(urls)` → `prompt(summarize extracted text)` → `wait_for_human(optional)` → `webhook(notify)`.
+  - Steps: `media_ingest(urls)` → `llm(summarize extracted text)` → `wait_for_human(optional)` → `webhook(notify)`.
 
 ### Media Ingestion/Download Step (spec)
 

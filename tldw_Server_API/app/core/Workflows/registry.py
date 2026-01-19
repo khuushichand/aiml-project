@@ -16,7 +16,8 @@ class StepTypeRegistry:
     def __init__(self) -> None:
         self._steps: Dict[str, StepType] = {
             "media_ingest": StepType("media_ingest", "Ingest and process media (download, extract, chunk, index)"),
-            "prompt": StepType("prompt", "LLM prompt step producing text or JSON output"),
+            "prompt": StepType("prompt", "Render a templated prompt without calling an LLM"),
+            "llm": StepType("llm", "Invoke an LLM chat completion and return text/output"),
             "rag_search": StepType("rag_search", "Run a unified RAG search and return documents"),
             "mcp_tool": StepType("mcp_tool", "Invoke an MCP tool with arguments"),
             "tts": StepType("tts", "Text-to-speech: synthesize audio from text and persist as artifact"),

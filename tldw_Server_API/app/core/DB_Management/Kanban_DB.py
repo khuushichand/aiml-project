@@ -34,7 +34,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from loguru import logger
 
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths, _is_test_context
+from tldw_Server_API.app.core.DB_Management.kanban_vector_search import create_kanban_vector_search
 from tldw_Server_API.app.core.exceptions import StorageUnavailableError
 
 # --- Helper Functions ---
@@ -197,6 +199,8 @@ class KanbanDB:
             raw_user_id,
         )
         self._memory_conn: Optional[_KanbanMemoryConnection] = None
+        self._vector_search = None
+        self._vector_search_initialized = False
 
         # Ensure directory exists
         if not self._is_memory_db:
@@ -262,6 +266,8 @@ class KanbanDB:
 
     def _ensure_schema(self) -> None:
         """Create all tables, indexes, and triggers if they don't exist."""
+        result: Dict[str, Any] = {}
+        result: Dict[str, Any] = {}
         with self._lock:
             conn = self._connect()
             try:
@@ -283,6 +289,14 @@ class KanbanDB:
         resources.
         """
         with self._lock:
+            if self._vector_search is not None:
+                try:
+                    self._vector_search.close()
+                except Exception as e:
+                    logger.warning(f"Error closing Kanban vector search: {e}")
+                finally:
+                    self._vector_search = None
+                    self._vector_search_initialized = False
             if self._memory_conn is None:
                 return
             try:
@@ -763,6 +777,10 @@ END;
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
                     raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                if board["archived"] and not include_archived:
+                    return [], 0
+                if board["archived"] and not include_archived:
+                    return []
 
                 # Check version if provided
                 if expected_version is not None and board["version"] != expected_version:
@@ -842,14 +860,47 @@ END;
                 if not board:
                     raise NotFoundError("Board not found", entity="board", entity_id=board_id)
 
-                now = _utcnow_iso() if archive else None
+                now = _utcnow_iso()
+                archived_at = now if archive else None
+
+                list_rows = conn.execute(
+                    """
+                    SELECT id, name FROM kanban_lists
+                    WHERE board_id = ? AND deleted = 0
+                    """,
+                    (board_id,),
+                ).fetchall()
+                card_rows = conn.execute(
+                    """
+                    SELECT id, list_id, title FROM kanban_cards
+                    WHERE board_id = ? AND deleted = 0
+                    """,
+                    (board_id,),
+                ).fetchall()
                 conn.execute(
                     """
                     UPDATE kanban_boards
                     SET archived = ?, archived_at = ?, version = version + 1, updated_at = ?
                     WHERE id = ?
                     """,
-                    (1 if archive else 0, now, _utcnow_iso(), board_id)
+                    (1 if archive else 0, archived_at, now, board_id)
+                )
+
+                conn.execute(
+                    """
+                    UPDATE kanban_lists
+                    SET archived = ?, archived_at = ?, version = version + 1, updated_at = ?
+                    WHERE board_id = ? AND deleted = 0
+                    """,
+                    (1 if archive else 0, archived_at, now, board_id)
+                )
+                conn.execute(
+                    """
+                    UPDATE kanban_cards
+                    SET archived = ?, archived_at = ?, version = version + 1, updated_at = ?
+                    WHERE board_id = ? AND deleted = 0
+                    """,
+                    (1 if archive else 0, archived_at, now, board_id)
                 )
 
                 # Log activity
@@ -857,6 +908,29 @@ END;
                 self._log_activity_internal(
                     conn, board_id, action, "board", entity_id=board_id
                 )
+                list_action = "list_archived" if archive else "list_unarchived"
+                for lst in list_rows:
+                    self._log_activity_internal(
+                        conn,
+                        board_id,
+                        list_action,
+                        "list",
+                        entity_id=lst["id"],
+                        list_id=lst["id"],
+                        details={"name": lst["name"]},
+                    )
+                card_action = "card_archived" if archive else "card_unarchived"
+                for card in card_rows:
+                    self._log_activity_internal(
+                        conn,
+                        board_id,
+                        card_action,
+                        "card",
+                        entity_id=card["id"],
+                        list_id=card["list_id"],
+                        card_id=card["id"],
+                        details={"title": card["title"]},
+                    )
 
                 conn.commit()
 
@@ -886,18 +960,70 @@ END;
                 if hard_delete:
                     conn.execute("DELETE FROM kanban_boards WHERE id = ?", (board_id,))
                 else:
+                    now = _utcnow_iso()
+                    list_rows = conn.execute(
+                        """
+                        SELECT id, name FROM kanban_lists
+                        WHERE board_id = ? AND deleted = 0
+                        """,
+                        (board_id,),
+                    ).fetchall()
+                    card_rows = conn.execute(
+                        """
+                        SELECT id, list_id, title FROM kanban_cards
+                        WHERE board_id = ? AND deleted = 0
+                        """,
+                        (board_id,),
+                    ).fetchall()
                     conn.execute(
                         """
                         UPDATE kanban_boards
                         SET deleted = 1, deleted_at = ?, version = version + 1, updated_at = ?
                         WHERE id = ?
                         """,
-                        (_utcnow_iso(), _utcnow_iso(), board_id)
+                        (now, now, board_id)
+                    )
+                    conn.execute(
+                        """
+                        UPDATE kanban_lists
+                        SET deleted = 1, deleted_at = ?, version = version + 1, updated_at = ?
+                        WHERE board_id = ? AND deleted = 0
+                        """,
+                        (now, now, board_id)
+                    )
+                    conn.execute(
+                        """
+                        UPDATE kanban_cards
+                        SET deleted = 1, deleted_at = ?, version = version + 1, updated_at = ?
+                        WHERE board_id = ? AND deleted = 0
+                        """,
+                        (now, now, board_id)
                     )
                     # Log activity (only for soft delete, hard delete removes everything)
                     self._log_activity_internal(
                         conn, board_id, "board_deleted", "board", entity_id=board_id
                     )
+                    for lst in list_rows:
+                        self._log_activity_internal(
+                            conn,
+                            board_id,
+                            "list_deleted",
+                            "list",
+                            entity_id=lst["id"],
+                            list_id=lst["id"],
+                            details={"name": lst["name"]},
+                        )
+                    for card in card_rows:
+                        self._log_activity_internal(
+                            conn,
+                            board_id,
+                            "card_deleted",
+                            "card",
+                            entity_id=card["id"],
+                            list_id=card["list_id"],
+                            card_id=card["id"],
+                            details={"title": card["title"]},
+                        )
 
                 conn.commit()
                 return True
@@ -927,19 +1053,72 @@ END;
                 if not board["deleted"]:
                     raise InputError("Board is not deleted")
 
+                now = _utcnow_iso()
+                list_rows = conn.execute(
+                    """
+                    SELECT id, name FROM kanban_lists
+                    WHERE board_id = ? AND deleted = 1
+                    """,
+                    (board_id,),
+                ).fetchall()
+                card_rows = conn.execute(
+                    """
+                    SELECT id, list_id, title FROM kanban_cards
+                    WHERE board_id = ? AND deleted = 1
+                    """,
+                    (board_id,),
+                ).fetchall()
+
                 conn.execute(
                     """
                     UPDATE kanban_boards
                     SET deleted = 0, deleted_at = NULL, version = version + 1, updated_at = ?
                     WHERE id = ?
                     """,
-                    (_utcnow_iso(), board_id)
+                    (now, board_id)
+                )
+                conn.execute(
+                    """
+                    UPDATE kanban_lists
+                    SET deleted = 0, deleted_at = NULL, version = version + 1, updated_at = ?
+                    WHERE board_id = ? AND deleted = 1
+                    """,
+                    (now, board_id)
+                )
+                conn.execute(
+                    """
+                    UPDATE kanban_cards
+                    SET deleted = 0, deleted_at = NULL, version = version + 1, updated_at = ?
+                    WHERE board_id = ? AND deleted = 1
+                    """,
+                    (now, board_id)
                 )
 
                 # Log activity
                 self._log_activity_internal(
                     conn, board_id, "board_restored", "board", entity_id=board_id
                 )
+                for lst in list_rows:
+                    self._log_activity_internal(
+                        conn,
+                        board_id,
+                        "list_restored",
+                        "list",
+                        entity_id=lst["id"],
+                        list_id=lst["id"],
+                        details={"name": lst["name"]},
+                    )
+                for card in card_rows:
+                    self._log_activity_internal(
+                        conn,
+                        board_id,
+                        "card_restored",
+                        "card",
+                        entity_id=card["id"],
+                        list_id=card["list_id"],
+                        card_id=card["id"],
+                        details={"title": card["title"]},
+                    )
 
                 conn.commit()
 
@@ -1119,6 +1298,8 @@ END;
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
                     raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                if board["archived"] and not include_archived:
+                    return []
 
                 conditions = ["l.board_id = ?"]
                 params: List[Any] = [board_id]
@@ -1158,6 +1339,10 @@ END;
                 lst = self._get_list_by_id(conn, list_id)
                 if not lst:
                     raise NotFoundError("List not found", entity="list", entity_id=list_id)
+
+                board = self._get_board_by_id(conn, lst["board_id"])
+                if not board:
+                    raise NotFoundError("Board not found", entity="board", entity_id=lst["board_id"])
 
                 if expected_version is not None and lst["version"] != expected_version:
                     raise ConflictError(
@@ -1265,14 +1450,30 @@ END;
                 if not lst:
                     raise NotFoundError("List not found", entity="list", entity_id=list_id)
 
-                now = _utcnow_iso() if archive else None
+                now = _utcnow_iso()
+                archived_at = now if archive else None
+                card_rows = conn.execute(
+                    """
+                    SELECT id, title FROM kanban_cards
+                    WHERE list_id = ? AND deleted = 0
+                    """,
+                    (list_id,),
+                ).fetchall()
                 conn.execute(
                     """
                     UPDATE kanban_lists
                     SET archived = ?, archived_at = ?, version = version + 1, updated_at = ?
                     WHERE id = ?
                     """,
-                    (1 if archive else 0, now, _utcnow_iso(), list_id)
+                    (1 if archive else 0, archived_at, now, list_id)
+                )
+                conn.execute(
+                    """
+                    UPDATE kanban_cards
+                    SET archived = ?, archived_at = ?, version = version + 1, updated_at = ?
+                    WHERE list_id = ? AND deleted = 0
+                    """,
+                    (1 if archive else 0, archived_at, now, list_id)
                 )
 
                 # Log activity
@@ -1281,6 +1482,18 @@ END;
                     conn, lst["board_id"], action, "list", entity_id=list_id,
                     list_id=list_id, details={"name": lst["name"]}
                 )
+                card_action = "card_archived" if archive else "card_unarchived"
+                for card in card_rows:
+                    self._log_activity_internal(
+                        conn,
+                        lst["board_id"],
+                        card_action,
+                        "card",
+                        entity_id=card["id"],
+                        list_id=list_id,
+                        card_id=card["id"],
+                        details={"title": card["title"]},
+                    )
 
                 conn.commit()
 
@@ -1301,19 +1514,46 @@ END;
                 if hard_delete:
                     conn.execute("DELETE FROM kanban_lists WHERE id = ?", (list_id,))
                 else:
+                    now = _utcnow_iso()
+                    card_rows = conn.execute(
+                        """
+                        SELECT id, title FROM kanban_cards
+                        WHERE list_id = ? AND deleted = 0
+                        """,
+                        (list_id,),
+                    ).fetchall()
                     conn.execute(
                         """
                         UPDATE kanban_lists
                         SET deleted = 1, deleted_at = ?, version = version + 1, updated_at = ?
                         WHERE id = ?
                         """,
-                        (_utcnow_iso(), _utcnow_iso(), list_id)
+                        (now, now, list_id)
+                    )
+                    conn.execute(
+                        """
+                        UPDATE kanban_cards
+                        SET deleted = 1, deleted_at = ?, version = version + 1, updated_at = ?
+                        WHERE list_id = ? AND deleted = 0
+                        """,
+                        (now, now, list_id)
                     )
                     # Log activity (only for soft delete)
                     self._log_activity_internal(
                         conn, lst["board_id"], "list_deleted", "list", entity_id=list_id,
                         list_id=list_id, details={"name": lst["name"]}
                     )
+                    for card in card_rows:
+                        self._log_activity_internal(
+                            conn,
+                            lst["board_id"],
+                            "card_deleted",
+                            "card",
+                            entity_id=card["id"],
+                            list_id=list_id,
+                            card_id=card["id"],
+                            details={"title": card["title"]},
+                        )
                 conn.commit()
                 return True
 
@@ -1331,13 +1571,30 @@ END;
                 if not lst["deleted"]:
                     raise InputError("List is not deleted")
 
+                now = _utcnow_iso()
+                card_rows = conn.execute(
+                    """
+                    SELECT id, title FROM kanban_cards
+                    WHERE list_id = ? AND deleted = 1
+                    """,
+                    (list_id,),
+                ).fetchall()
+
                 conn.execute(
                     """
                     UPDATE kanban_lists
                     SET deleted = 0, deleted_at = NULL, version = version + 1, updated_at = ?
                     WHERE id = ?
                     """,
-                    (_utcnow_iso(), list_id)
+                    (now, list_id)
+                )
+                conn.execute(
+                    """
+                    UPDATE kanban_cards
+                    SET deleted = 0, deleted_at = NULL, version = version + 1, updated_at = ?
+                    WHERE list_id = ? AND deleted = 1
+                    """,
+                    (now, list_id)
                 )
 
                 # Log activity
@@ -1345,6 +1602,17 @@ END;
                     conn, lst["board_id"], "list_restored", "list", entity_id=list_id,
                     list_id=list_id, details={"name": lst["name"]}
                 )
+                for card in card_rows:
+                    self._log_activity_internal(
+                        conn,
+                        lst["board_id"],
+                        "card_restored",
+                        "card",
+                        entity_id=card["id"],
+                        list_id=list_id,
+                        card_id=card["id"],
+                        details={"title": card["title"]},
+                    )
 
                 conn.commit()
 
@@ -1401,6 +1669,7 @@ END;
         card_uuid = _generate_uuid()
         now = _utcnow_iso()
         metadata_json = json.dumps(metadata) if metadata else None
+        card: Optional[Dict[str, Any]] = None
 
         with self._lock:
             conn = self._connect()
@@ -1450,7 +1719,7 @@ END;
 
                 conn.commit()
 
-                return self._get_card_by_id(conn, card_id)
+                card = self._get_card_by_id(conn, card_id)
 
             except sqlite3.IntegrityError as e:
                 if "UNIQUE constraint" in str(e) and "client_id" in str(e):
@@ -1463,12 +1732,84 @@ END;
             finally:
                 conn.close()
 
+        if card:
+            self._sync_vector_index_for_card_id(card["id"])
+        return card
+
     def get_card(self, card_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
         """Get a card by ID."""
         with self._lock:
             conn = self._connect()
             try:
                 return self._get_card_by_id(conn, card_id, include_deleted)
+            finally:
+                conn.close()
+
+    def get_card_with_details(
+        self,
+        card_id: int,
+        include_deleted: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get a card with labels, checklists (including items), and comment count.
+
+        Args:
+            card_id: The card ID.
+            include_deleted: If True, include soft-deleted cards.
+
+        Returns:
+            Card dictionary with labels, checklists, and comment_count included.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                card = self._get_card_by_id(conn, card_id, include_deleted)
+                if not card:
+                    return None
+
+                card["labels"] = self._get_card_labels_for_index(conn, card_id)
+
+                checklist_rows = conn.execute(
+                    """
+                    SELECT id, uuid, card_id, name, position, created_at, updated_at
+                    FROM kanban_checklists
+                    WHERE card_id = ?
+                    ORDER BY position ASC
+                    """,
+                    (card_id,),
+                ).fetchall()
+
+                checklists: List[Dict[str, Any]] = []
+                for row in checklist_rows:
+                    checklist = self._row_to_checklist_dict(row)
+                    item_rows = conn.execute(
+                        """
+                        SELECT id, uuid, checklist_id, name, position, checked, checked_at, created_at, updated_at
+                        FROM kanban_checklist_items
+                        WHERE checklist_id = ?
+                        ORDER BY position ASC
+                        """,
+                        (checklist["id"],),
+                    ).fetchall()
+                    items = [self._row_to_checklist_item_dict(item) for item in item_rows]
+                    total = len(items)
+                    checked = sum(1 for item in items if item["checked"])
+                    checklist["items"] = items
+                    checklist["total_items"] = total
+                    checklist["checked_items"] = checked
+                    checklist["progress_percent"] = round(checked / total * 100) if total > 0 else 0
+                    checklists.append(checklist)
+
+                card["checklists"] = checklists
+
+                cur = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM kanban_comments WHERE card_id = ? AND deleted = 0",
+                    (card_id,),
+                )
+                card["comment_count"] = cur.fetchone()["cnt"]
+
+                return card
+
             finally:
                 conn.close()
 
@@ -1514,7 +1855,7 @@ END;
                 if not include_deleted:
                     sql += " AND c.deleted = 0"
                 if not include_archived:
-                    sql += " AND c.archived = 0"
+                    sql += " AND c.archived = 0 AND b.archived = 0 AND l.archived = 0"
 
                 cur = conn.execute(sql, params)
                 rows = cur.fetchall()
@@ -1586,6 +1927,96 @@ END;
             "metadata": json.loads(row["metadata"]) if row["metadata"] else None
         }
 
+    def _get_vector_search(self) -> Optional[Any]:
+        """Return a cached KanbanVectorSearch instance when available."""
+        with self._lock:
+            if self._vector_search_initialized:
+                return self._vector_search
+            embedding_config = dict(settings.get("EMBEDDING_CONFIG") or {})
+            user_db_base_dir = settings.get("USER_DB_BASE_DIR")
+            if user_db_base_dir:
+                embedding_config["USER_DB_BASE_DIR"] = user_db_base_dir
+            self._vector_search = create_kanban_vector_search(self.user_id, embedding_config)
+            self._vector_search_initialized = True
+            return self._vector_search
+
+    def get_vector_search(self) -> Optional[Any]:
+        """Expose vector search for API use."""
+        return self._get_vector_search()
+
+    def _get_card_labels_for_index(self, conn: sqlite3.Connection, card_id: int) -> List[Dict[str, Any]]:
+        """Fetch labels for a card using an existing connection."""
+        cur = conn.execute(
+            """
+            SELECT l.id, l.uuid, l.board_id, l.name, l.color, l.created_at, l.updated_at
+            FROM kanban_labels l
+            JOIN kanban_card_labels cl ON l.id = cl.label_id
+            WHERE cl.card_id = ?
+            ORDER BY l.name ASC
+            """,
+            (card_id,),
+        )
+        return [self._row_to_label_dict(row) for row in cur.fetchall()]
+
+    def _get_checklist_item_names(self, conn: sqlite3.Connection, card_id: int) -> List[str]:
+        """Fetch checklist item names for a card in display order."""
+        cur = conn.execute(
+            """
+            SELECT ci.name
+            FROM kanban_checklist_items ci
+            JOIN kanban_checklists ch ON ci.checklist_id = ch.id
+            WHERE ch.card_id = ?
+            ORDER BY ch.position ASC, ci.position ASC
+            """,
+            (card_id,),
+        )
+        return [row["name"] for row in cur.fetchall() if row["name"]]
+
+    def _fetch_card_for_vector_indexing(
+        self,
+        conn: sqlite3.Connection,
+        card_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch a card with labels and checklist items for vector indexing."""
+        card = self._get_card_by_id(conn, card_id, include_deleted=True)
+        if not card:
+            return None
+        card["labels"] = self._get_card_labels_for_index(conn, card_id)
+        card["checklist_items"] = self._get_checklist_item_names(conn, card_id)
+        return card
+
+    def _sync_vector_index_for_card_id(self, card_id: int, search: Optional[Any] = None) -> None:
+        """Index or remove a card in vector search based on current state."""
+        vector_search = search or self._get_vector_search()
+        if vector_search is None:
+            return
+        with self._lock:
+            conn = self._connect()
+            try:
+                card = self._fetch_card_for_vector_indexing(conn, card_id)
+            finally:
+                conn.close()
+
+        if not card:
+            vector_search.remove_card(card_id)
+            return
+
+        if card.get("deleted") or card.get("archived"):
+            vector_search.remove_card(card_id)
+            return
+
+        vector_search.index_card(card)
+
+    def _sync_vector_index_for_card_ids(self, card_ids: List[int]) -> None:
+        """Sync vector index for multiple cards."""
+        if not card_ids:
+            return
+        vector_search = self._get_vector_search()
+        if vector_search is None:
+            return
+        for card_id in card_ids:
+            self._sync_vector_index_for_card_id(card_id, search=vector_search)
+
     def list_cards(
         self,
         list_id: int,
@@ -1610,6 +2041,14 @@ END;
                 lst = self._get_list_by_id(conn, list_id)
                 if not lst:
                     raise NotFoundError("List not found", entity="list", entity_id=list_id)
+                if not include_archived:
+                    if lst["archived"]:
+                        return []
+                    board = self._get_board_by_id(conn, lst["board_id"])
+                    if not board:
+                        raise NotFoundError("Board not found", entity="board", entity_id=lst["board_id"])
+                    if board["archived"]:
+                        return []
 
                 conditions = ["c.list_id = ?"]
                 params: List[Any] = [list_id]
@@ -1650,6 +2089,7 @@ END;
         expected_version: Optional[int] = None
     ) -> Dict[str, Any]:
         """Update a card."""
+        card: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1739,10 +2179,14 @@ END;
 
                 conn.commit()
 
-                return self._get_card_by_id(conn, card_id)
+                card = self._get_card_by_id(conn, card_id)
 
             finally:
                 conn.close()
+
+        if card:
+            self._sync_vector_index_for_card_id(card_id)
+        return card
 
     def move_card(
         self,
@@ -1761,6 +2205,7 @@ END;
         Returns:
             The updated card.
         """
+        moved_card: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1808,10 +2253,14 @@ END;
 
                 conn.commit()
 
-                return self._get_card_by_id(conn, card_id)
+                moved_card = self._get_card_by_id(conn, card_id)
 
             finally:
                 conn.close()
+
+        if moved_card:
+            self._sync_vector_index_for_card_id(card_id)
+        return moved_card
 
     def copy_card(
         self,
@@ -1834,6 +2283,7 @@ END;
         Returns:
             The copied card.
         """
+        copied_card: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1902,7 +2352,7 @@ END;
 
                 conn.commit()
 
-                return self._get_card_by_id(conn, new_card_id)
+                copied_card = self._get_card_by_id(conn, new_card_id)
 
             except sqlite3.IntegrityError as e:
                 if "UNIQUE constraint" in str(e) and "client_id" in str(e):
@@ -1914,6 +2364,10 @@ END;
                 raise KanbanDBError(f"Database error: {e}") from e
             finally:
                 conn.close()
+
+        if copied_card:
+            self._sync_vector_index_for_card_id(copied_card["id"])
+        return copied_card
 
     def reorder_cards(self, list_id: int, card_ids: List[int]) -> List[Dict[str, Any]]:
         """
@@ -1968,6 +2422,7 @@ END;
 
     def archive_card(self, card_id: int, archive: bool = True) -> Dict[str, Any]:
         """Archive or unarchive a card."""
+        updated_card: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1995,13 +2450,18 @@ END;
 
                 conn.commit()
 
-                return self._get_card_by_id(conn, card_id)
+                updated_card = self._get_card_by_id(conn, card_id)
 
             finally:
                 conn.close()
 
+        if updated_card:
+            self._sync_vector_index_for_card_id(card_id)
+        return updated_card
+
     def delete_card(self, card_id: int, hard_delete: bool = False) -> bool:
         """Delete a card (soft delete by default)."""
+        deleted = False
         with self._lock:
             conn = self._connect()
             try:
@@ -2027,13 +2487,18 @@ END;
                         details={"title": card["title"]}
                     )
                 conn.commit()
-                return True
+                deleted = True
 
             finally:
                 conn.close()
 
+        if deleted:
+            self._sync_vector_index_for_card_id(card_id)
+        return deleted
+
     def restore_card(self, card_id: int) -> Dict[str, Any]:
         """Restore a soft-deleted card."""
+        restored_card: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -2061,10 +2526,14 @@ END;
 
                 conn.commit()
 
-                return self._get_card_by_id(conn, card_id)
+                restored_card = self._get_card_by_id(conn, card_id)
 
             finally:
                 conn.close()
+
+        if restored_card:
+            self._sync_vector_index_for_card_id(card_id)
+        return restored_card
 
     # =========================================================================
     # SEARCH OPERATIONS
@@ -2133,6 +2602,9 @@ END;
                 # Build common filters
                 board_filter = "AND c.board_id = ?" if board_id else ""
                 priority_filter = "AND c.priority = ?" if priority else ""
+                active_board_filter = "AND b.archived = 0"
+                active_list_filter = "AND l.archived = 0"
+                archived_scope_filter = "AND (c.archived = 1 OR l.archived = 1 OR b.archived = 1)"
 
                 # Strategy: FTS only indexes non-archived, non-deleted cards
                 # For include_archived=True, we need to also search archived cards using LIKE
@@ -2144,17 +2616,19 @@ END;
                             SELECT c.id
                             FROM kanban_cards c
                             JOIN kanban_boards b ON c.board_id = b.id
+                            JOIN kanban_lists l ON c.list_id = l.id
                             JOIN kanban_cards_fts fts ON c.id = fts.rowid
                             WHERE b.user_id = ? AND c.deleted = 0 AND c.archived = 0
-                            {board_filter} {priority_filter} {label_filter_sql}
+                            {active_board_filter} {active_list_filter} {board_filter} {priority_filter} {label_filter_sql}
                             AND kanban_cards_fts MATCH ?
                             UNION
                             -- Archived cards via LIKE
                             SELECT c.id
                             FROM kanban_cards c
                             JOIN kanban_boards b ON c.board_id = b.id
-                            WHERE b.user_id = ? AND c.deleted = 0 AND c.archived = 1
-                            {board_filter} {priority_filter} {label_filter_sql}
+                            JOIN kanban_lists l ON c.list_id = l.id
+                            WHERE b.user_id = ? AND c.deleted = 0
+                            {archived_scope_filter} {board_filter} {priority_filter} {label_filter_sql}
                             AND (c.title LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\')
                         )
                     """
@@ -2193,7 +2667,7 @@ END;
                             JOIN kanban_lists l ON c.list_id = l.id
                             JOIN kanban_cards_fts fts ON c.id = fts.rowid
                             WHERE b.user_id = ? AND c.deleted = 0 AND c.archived = 0
-                            {board_filter} {priority_filter} {label_filter_sql}
+                            {active_board_filter} {active_list_filter} {board_filter} {priority_filter} {label_filter_sql}
                             AND kanban_cards_fts MATCH ?
                             UNION
                             -- Archived cards via LIKE
@@ -2206,8 +2680,8 @@ END;
                             FROM kanban_cards c
                             JOIN kanban_boards b ON c.board_id = b.id
                             JOIN kanban_lists l ON c.list_id = l.id
-                            WHERE b.user_id = ? AND c.deleted = 0 AND c.archived = 1
-                            {board_filter} {priority_filter} {label_filter_sql}
+                            WHERE b.user_id = ? AND c.deleted = 0
+                            {archived_scope_filter} {board_filter} {priority_filter} {label_filter_sql}
                             AND (c.title LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\')
                         )
                         ORDER BY search_rank, updated_at DESC
@@ -2237,9 +2711,10 @@ END;
                         SELECT COUNT(*) as cnt
                         FROM kanban_cards c
                         JOIN kanban_boards b ON c.board_id = b.id
+                        JOIN kanban_lists l ON c.list_id = l.id
                         JOIN kanban_cards_fts fts ON c.id = fts.rowid
                         WHERE b.user_id = ? AND c.deleted = 0 AND c.archived = 0
-                        {board_filter} {priority_filter} {label_filter_sql}
+                        {active_board_filter} {active_list_filter} {board_filter} {priority_filter} {label_filter_sql}
                         AND kanban_cards_fts MATCH ?
                     """
                     count_params = [self.user_id]
@@ -2264,7 +2739,7 @@ END;
                         JOIN kanban_lists l ON c.list_id = l.id
                         JOIN kanban_cards_fts fts ON c.id = fts.rowid
                         WHERE b.user_id = ? AND c.deleted = 0 AND c.archived = 0
-                        {board_filter} {priority_filter} {label_filter_sql}
+                        {active_board_filter} {active_list_filter} {board_filter} {priority_filter} {label_filter_sql}
                         AND kanban_cards_fts MATCH ?
                         ORDER BY rank
                         LIMIT ? OFFSET ?
@@ -2396,11 +2871,89 @@ END;
              action_type, entity_type, entity_id, details_json, now)
         )
 
+    def _fetch_activities(
+        self,
+        conn: sqlite3.Connection,
+        board_id: int,
+        list_id: Optional[int] = None,
+        card_id: Optional[int] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        action_type: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        conditions = ["board_id = ?"]
+        params: List[Any] = [board_id]
+
+        if list_id is not None:
+            conditions.append("list_id = ?")
+            params.append(list_id)
+
+        if card_id is not None:
+            conditions.append("card_id = ?")
+            params.append(card_id)
+
+        if created_after:
+            conditions.append("created_at >= ?")
+            params.append(created_after)
+
+        if created_before:
+            conditions.append("created_at <= ?")
+            params.append(created_before)
+
+        if action_type:
+            conditions.append("action_type = ?")
+            params.append(action_type)
+
+        if entity_type:
+            conditions.append("entity_type = ?")
+            params.append(entity_type)
+
+        where_clause = " AND ".join(conditions)
+
+        count_sql = f"SELECT COUNT(*) as cnt FROM kanban_activities WHERE {where_clause}"
+        cur = conn.execute(count_sql, params)
+        total = cur.fetchone()["cnt"]
+
+        sql = f"""
+            SELECT id, uuid, board_id, list_id, card_id, user_id, action_type,
+                   entity_type, entity_id, details, created_at
+            FROM kanban_activities
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """
+        cur = conn.execute(sql, params + [limit, offset])
+
+        activities = []
+        for row in cur.fetchall():
+            activities.append({
+                "id": row["id"],
+                "uuid": row["uuid"],
+                "board_id": row["board_id"],
+                "list_id": row["list_id"],
+                "card_id": row["card_id"],
+                "user_id": row["user_id"],
+                "action_type": row["action_type"],
+                "entity_type": row["entity_type"],
+                "entity_id": row["entity_id"],
+                "details": json.loads(row["details"]) if row["details"] else None,
+                "created_at": row["created_at"]
+            })
+
+        return activities, total
+
     def get_board_activities(
         self,
         board_id: int,
         list_id: Optional[int] = None,
         card_id: Optional[int] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        action_type: Optional[str] = None,
+        entity_type: Optional[str] = None,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[List[Dict[str, Any]], int]:
@@ -2411,6 +2964,10 @@ END;
             board_id: The board ID.
             list_id: Optional filter by list.
             card_id: Optional filter by card.
+            created_after: Optional timestamp filter (inclusive).
+            created_before: Optional timestamp filter (inclusive).
+            action_type: Optional filter by action_type.
+            entity_type: Optional filter by entity_type.
             limit: Maximum results to return.
             offset: Number of results to skip.
 
@@ -2425,53 +2982,121 @@ END;
                 if not board:
                     raise NotFoundError("Board not found", entity="board", entity_id=board_id)
 
-                conditions = ["board_id = ?"]
-                params: List[Any] = [board_id]
-
                 if list_id is not None:
-                    conditions.append("list_id = ?")
-                    params.append(list_id)
+                    lst = self._get_list_by_id(conn, list_id)
+                    if not lst or lst["board_id"] != board_id:
+                        raise NotFoundError("List not found for board", entity="list", entity_id=list_id)
 
                 if card_id is not None:
-                    conditions.append("card_id = ?")
-                    params.append(card_id)
+                    card = self._get_card_by_id(conn, card_id, include_deleted=True)
+                    if not card or card["board_id"] != board_id:
+                        raise NotFoundError("Card not found for board", entity="card", entity_id=card_id)
 
-                where_clause = " AND ".join(conditions)
+                return self._fetch_activities(
+                    conn=conn,
+                    board_id=board_id,
+                    list_id=list_id,
+                    card_id=card_id,
+                    created_after=created_after,
+                    created_before=created_before,
+                    action_type=action_type,
+                    entity_type=entity_type,
+                    limit=limit,
+                    offset=offset,
+                )
 
-                # Count
-                count_sql = f"SELECT COUNT(*) as cnt FROM kanban_activities WHERE {where_clause}"
-                cur = conn.execute(count_sql, params)
-                total = cur.fetchone()["cnt"]
+            finally:
+                conn.close()
 
-                # Get activities
-                sql = f"""
-                    SELECT id, uuid, board_id, list_id, card_id, user_id, action_type,
-                           entity_type, entity_id, details, created_at
-                    FROM kanban_activities
-                    WHERE {where_clause}
-                    ORDER BY created_at DESC
-                    LIMIT ? OFFSET ?
-                """
-                cur = conn.execute(sql, params + [limit, offset])
+    def get_list_activities(
+        self,
+        list_id: int,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        action_type: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Get activities for a list.
 
-                activities = []
-                for row in cur.fetchall():
-                    activities.append({
-                        "id": row["id"],
-                        "uuid": row["uuid"],
-                        "board_id": row["board_id"],
-                        "list_id": row["list_id"],
-                        "card_id": row["card_id"],
-                        "user_id": row["user_id"],
-                        "action_type": row["action_type"],
-                        "entity_type": row["entity_type"],
-                        "entity_id": row["entity_id"],
-                        "details": json.loads(row["details"]) if row["details"] else None,
-                        "created_at": row["created_at"]
-                    })
+        Args:
+            list_id: The list ID.
+            created_after: Optional timestamp filter (inclusive).
+            created_before: Optional timestamp filter (inclusive).
+            action_type: Optional filter by action_type.
+            entity_type: Optional filter by entity_type.
+            limit: Maximum results to return.
+            offset: Number of results to skip.
 
-                return activities, total
+        Returns:
+            Tuple of (list of activities, total count).
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                lst = self._get_list_by_id(conn, list_id, include_deleted=True)
+                if not lst:
+                    raise NotFoundError("List not found", entity="list", entity_id=list_id)
 
+                return self._fetch_activities(
+                    conn=conn,
+                    board_id=lst["board_id"],
+                    list_id=list_id,
+                    created_after=created_after,
+                    created_before=created_before,
+                    action_type=action_type,
+                    entity_type=entity_type,
+                    limit=limit,
+                    offset=offset,
+                )
+            finally:
+                conn.close()
+
+    def get_card_activities(
+        self,
+        card_id: int,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        action_type: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Get activities for a card.
+
+        Args:
+            card_id: The card ID.
+            created_after: Optional timestamp filter (inclusive).
+            created_before: Optional timestamp filter (inclusive).
+            action_type: Optional filter by action_type.
+            entity_type: Optional filter by entity_type.
+            limit: Maximum results to return.
+            offset: Number of results to skip.
+
+        Returns:
+            Tuple of (list of activities, total count).
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                card = self._get_card_by_id(conn, card_id, include_deleted=True)
+                if not card:
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+
+                return self._fetch_activities(
+                    conn=conn,
+                    board_id=card["board_id"],
+                    card_id=card_id,
+                    created_after=created_after,
+                    created_before=created_before,
+                    action_type=action_type,
+                    entity_type=entity_type,
+                    limit=limit,
+                    offset=offset,
+                )
             finally:
                 conn.close()
 
@@ -2777,6 +3402,8 @@ END;
         color: Optional[str] = None
     ) -> Dict[str, Any]:
         """Update a label."""
+        updated_label: Optional[Dict[str, Any]] = None
+        affected_card_ids: List[int] = []
         with self._lock:
             conn = self._connect()
             try:
@@ -2805,6 +3432,12 @@ END;
                 if not updates:
                     return label
 
+                cur = conn.execute(
+                    "SELECT card_id FROM kanban_card_labels WHERE label_id = ?",
+                    (label_id,),
+                )
+                affected_card_ids = [row["card_id"] for row in cur.fetchall()]
+
                 # Build list of updated fields
                 updated_fields = []
                 if name is not None:
@@ -2827,10 +3460,13 @@ END;
 
                 conn.commit()
 
-                return self._get_label_by_id(conn, label_id)
+                updated_label = self._get_label_by_id(conn, label_id)
 
             finally:
                 conn.close()
+        if affected_card_ids:
+            self._sync_vector_index_for_card_ids(affected_card_ids)
+        return updated_label
 
     def delete_label(self, label_id: int) -> bool:
         """
@@ -2838,6 +3474,8 @@ END;
 
         This also removes all card_label associations.
         """
+        deleted = False
+        affected_card_ids: List[int] = []
         with self._lock:
             conn = self._connect()
             try:
@@ -2851,13 +3489,22 @@ END;
                     details={"name": label["name"], "color": label["color"]}
                 )
 
+                cur = conn.execute(
+                    "SELECT card_id FROM kanban_card_labels WHERE label_id = ?",
+                    (label_id,),
+                )
+                affected_card_ids = [row["card_id"] for row in cur.fetchall()]
+
                 conn.execute("DELETE FROM kanban_labels WHERE id = ?", (label_id,))
                 conn.commit()
 
-                return True
+                deleted = True
 
             finally:
                 conn.close()
+        if deleted and affected_card_ids:
+            self._sync_vector_index_for_card_ids(affected_card_ids)
+        return deleted
 
     def assign_label_to_card(self, card_id: int, label_id: int) -> bool:
         """
@@ -2874,6 +3521,7 @@ END;
             NotFoundError: If card or label not found.
             InputError: If label doesn't belong to the card's board.
         """
+        assigned = False
         with self._lock:
             conn = self._connect()
             try:
@@ -2907,14 +3555,17 @@ END;
                     )
 
                     conn.commit()
+                    assigned = True
                 except sqlite3.IntegrityError:
                     # Already exists, that's fine
                     pass
 
-                return True
-
             finally:
                 conn.close()
+
+        if assigned:
+            self._sync_vector_index_for_card_id(card_id)
+        return True
 
     def remove_label_from_card(self, card_id: int, label_id: int) -> bool:
         """
@@ -2927,6 +3578,7 @@ END;
         Returns:
             True if removed, False if the association didn't exist.
         """
+        removed = False
         with self._lock:
             conn = self._connect()
             try:
@@ -2953,10 +3605,14 @@ END;
 
                 conn.commit()
 
-                return cur.rowcount > 0
+                removed = cur.rowcount > 0
 
             finally:
                 conn.close()
+
+        if removed:
+            self._sync_vector_index_for_card_id(card_id)
+        return removed
 
     def get_card_labels(self, card_id: int) -> List[Dict[str, Any]]:
         """Get all labels assigned to a card."""
@@ -3011,6 +3667,7 @@ END;
 
         checklist_uuid = _generate_uuid()
         now = _utcnow_iso()
+        checklist: Optional[Dict[str, Any]] = None
 
         with self._lock:
             conn = self._connect()
@@ -3056,10 +3713,14 @@ END;
 
                 conn.commit()
 
-                return self._get_checklist_by_id(conn, checklist_id)
+                checklist = self._get_checklist_by_id(conn, checklist_id)
 
             finally:
                 conn.close()
+
+        if checklist:
+            self._sync_vector_index_for_card_id(card_id)
+        return checklist
 
     def get_checklist(self, checklist_id: int) -> Optional[Dict[str, Any]]:
         """Get a checklist by ID."""
@@ -3136,6 +3797,9 @@ END;
         name: Optional[str] = None
     ) -> Dict[str, Any]:
         """Update a checklist."""
+        updated_checklist: Optional[Dict[str, Any]] = None
+        card_id: Optional[int] = None
+        changed = False
         with self._lock:
             conn = self._connect()
             try:
@@ -3159,7 +3823,9 @@ END;
                     params.append(name)
 
                 if not updates:
-                    return checklist
+                    updated_checklist = checklist
+                    card_id = checklist["card_id"]
+                    return updated_checklist
 
                 updates.append("updated_at = ?")
                 params.append(_utcnow_iso())
@@ -3167,6 +3833,8 @@ END;
 
                 sql = f"UPDATE kanban_checklists SET {', '.join(updates)} WHERE id = ?"
                 conn.execute(sql, params)
+                changed = True
+                card_id = checklist["card_id"]
 
                 # Log activity
                 if card:
@@ -3178,10 +3846,14 @@ END;
 
                 conn.commit()
 
-                return self._get_checklist_by_id(conn, checklist_id)
+                updated_checklist = self._get_checklist_by_id(conn, checklist_id)
 
             finally:
                 conn.close()
+
+        if changed and card_id:
+            self._sync_vector_index_for_card_id(card_id)
+        return updated_checklist
 
     def reorder_checklists(self, card_id: int, checklist_ids: List[int]) -> List[Dict[str, Any]]:
         """
@@ -3241,6 +3913,8 @@ END;
 
         This also cascades to delete all checklist items.
         """
+        deleted = False
+        card_id: Optional[int] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -3250,6 +3924,7 @@ END;
 
                 # Get the card for activity logging
                 card = self._get_card_by_id(conn, checklist["card_id"])
+                card_id = checklist["card_id"]
 
                 # Log activity before deleting
                 if card:
@@ -3262,10 +3937,14 @@ END;
                 conn.execute("DELETE FROM kanban_checklists WHERE id = ?", (checklist_id,))
                 conn.commit()
 
-                return True
+                deleted = True
 
             finally:
                 conn.close()
+
+        if deleted and card_id:
+            self._sync_vector_index_for_card_id(card_id)
+        return deleted
 
     # =========================================================================
     # CHECKLIST ITEM OPERATIONS
@@ -3300,6 +3979,8 @@ END;
         item_uuid = _generate_uuid()
         now = _utcnow_iso()
 
+        created_item: Optional[Dict[str, Any]] = None
+        card_id: Optional[int] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -3329,6 +4010,7 @@ END;
 
                 # Get the card for activity logging
                 card = self._get_card_by_id(conn, checklist["card_id"])
+                card_id = checklist["card_id"]
 
                 # Insert item
                 cur = conn.execute(
@@ -3350,10 +4032,13 @@ END;
 
                 conn.commit()
 
-                return self._get_checklist_item_by_id(conn, item_id)
+                created_item = self._get_checklist_item_by_id(conn, item_id)
 
             finally:
                 conn.close()
+        if created_item and card_id:
+            self._sync_vector_index_for_card_id(card_id)
+        return created_item
 
     def get_checklist_item(self, item_id: int) -> Optional[Dict[str, Any]]:
         """Get a checklist item by ID."""
@@ -3434,6 +4119,9 @@ END;
         checked: Optional[bool] = None
     ) -> Dict[str, Any]:
         """Update a checklist item."""
+        updated_item: Optional[Dict[str, Any]] = None
+        card_id: Optional[int] = None
+        should_reindex = name is not None
         with self._lock:
             conn = self._connect()
             try:
@@ -3480,19 +4168,29 @@ END;
                     if checklist:
                         card = self._get_card_by_id(conn, checklist["card_id"])
                         if card:
+                            card_id = checklist["card_id"]
                             action = "checklist_item_checked" if checked else "checklist_item_unchecked"
                             self._log_activity_internal(
                                 conn, card["board_id"], action, "checklist_item", entity_id=item_id,
                                 list_id=card["list_id"], card_id=card["id"],
                                 details={"name": item["name"]}
                             )
+                    if checklist and card_id is None:
+                        card_id = checklist["card_id"]
+                elif should_reindex:
+                    checklist = self._get_checklist_by_id(conn, item["checklist_id"])
+                    if checklist:
+                        card_id = checklist["card_id"]
 
                 conn.commit()
 
-                return self._get_checklist_item_by_id(conn, item_id)
+                updated_item = self._get_checklist_item_by_id(conn, item_id)
 
             finally:
                 conn.close()
+        if should_reindex and card_id:
+            self._sync_vector_index_for_card_id(card_id)
+        return updated_item
 
     def reorder_checklist_items(self, checklist_id: int, item_ids: List[int]) -> List[Dict[str, Any]]:
         """
@@ -3541,6 +4239,8 @@ END;
 
     def delete_checklist_item(self, item_id: int) -> bool:
         """Delete a checklist item (hard delete)."""
+        deleted = False
+        card_id: Optional[int] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -3551,6 +4251,7 @@ END;
                 # Get checklist and card for activity logging
                 checklist = self._get_checklist_by_id(conn, item["checklist_id"])
                 if checklist:
+                    card_id = checklist["card_id"]
                     card = self._get_card_by_id(conn, checklist["card_id"])
                     if card:
                         self._log_activity_internal(
@@ -3562,10 +4263,13 @@ END;
                 conn.execute("DELETE FROM kanban_checklist_items WHERE id = ?", (item_id,))
                 conn.commit()
 
-                return True
+                deleted = True
 
             finally:
                 conn.close()
+        if deleted and card_id:
+            self._sync_vector_index_for_card_id(card_id)
+        return deleted
 
     def get_checklist_with_items(self, checklist_id: int) -> Optional[Dict[str, Any]]:
         """Get a checklist with all its items included."""
@@ -4396,6 +5100,7 @@ END;
         if not card_ids:
             return {"success": True, "moved_count": 0, "cards": []}
 
+        moved_cards: List[Dict[str, Any]] = []
         with self._lock:
             conn = self._connect()
             try:
@@ -4465,14 +5170,15 @@ END;
                 for card_id in card_ids:
                     moved_cards.append(self._get_card_by_id(conn, card_id))
 
-                return {
-                    "success": True,
-                    "moved_count": len(moved_cards),
-                    "cards": moved_cards
-                }
-
             finally:
                 conn.close()
+
+        self._sync_vector_index_for_card_ids(card_ids)
+        return {
+            "success": True,
+            "moved_count": len(moved_cards),
+            "cards": moved_cards,
+        }
 
     def bulk_archive_cards(self, card_ids: List[int], archive: bool = True) -> Dict[str, Any]:
         """
@@ -4537,10 +5243,13 @@ END;
                 conn.commit()
 
                 result_key = "archived_count" if archive else "unarchived_count"
-                return {"success": True, result_key: len(cards)}
+                result = {"success": True, result_key: len(cards)}
 
             finally:
                 conn.close()
+
+        self._sync_vector_index_for_card_ids(card_ids)
+        return result
 
     def bulk_delete_cards(self, card_ids: List[int], hard_delete: bool = False) -> Dict[str, Any]:
         """
@@ -4610,10 +5319,13 @@ END;
 
                 conn.commit()
 
-                return {"success": True, "deleted_count": len(cards)}
+                result = {"success": True, "deleted_count": len(cards)}
 
             finally:
                 conn.close()
+
+        self._sync_vector_index_for_card_ids(card_ids)
+        return result
 
     def bulk_label_cards(
         self,
@@ -4641,6 +5353,7 @@ END;
         if not add_label_ids and not remove_label_ids:
             return {"success": True, "updated_count": 0}
 
+        result: Dict[str, Any] = {}
         with self._lock:
             conn = self._connect()
             try:
@@ -4730,10 +5443,14 @@ END;
 
                 conn.commit()
 
-                return {"success": True, "updated_count": updated_count}
+                result = {"success": True, "updated_count": updated_count}
 
             finally:
                 conn.close()
+
+        if result.get("updated_count"):
+            self._sync_vector_index_for_card_ids(card_ids)
+        return result
 
     # =========================================================================
     # Phase 3: Card Filtering
@@ -4783,6 +5500,8 @@ END;
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
                     raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                if board["archived"] and not include_archived:
+                    return [], 0
 
                 # Build query
                 conditions = ["c.board_id = ?"]
@@ -4792,6 +5511,7 @@ END;
                     conditions.append("c.deleted = 0")
                 if not include_archived:
                     conditions.append("c.archived = 0")
+                    conditions.append("l.archived = 0")
 
                 if priority:
                     conditions.append("c.priority = ?")
@@ -4855,7 +5575,12 @@ END;
                 where_clause = " AND ".join(conditions)
 
                 # Count total
-                count_sql = f"SELECT COUNT(*) as cnt FROM kanban_cards c WHERE {where_clause}"
+                count_sql = f"""
+                    SELECT COUNT(*) as cnt
+                    FROM kanban_cards c
+                    JOIN kanban_lists l ON c.list_id = l.id
+                    WHERE {where_clause}
+                """
                 cur = conn.execute(count_sql, params)
                 total = cur.fetchone()["cnt"]
 
@@ -4863,6 +5588,7 @@ END;
                 offset = (page - 1) * per_page
                 query_sql = f"""
                     SELECT c.* FROM kanban_cards c
+                    JOIN kanban_lists l ON c.list_id = l.id
                     WHERE {where_clause}
                     ORDER BY c.list_id, c.position
                     LIMIT ? OFFSET ?
@@ -4972,6 +5698,7 @@ END;
         Returns:
             The copied card with checklists if copied.
         """
+        copied_card: Optional[Dict[str, Any]] = None
         with self._lock:
             conn = self._connect()
             try:
@@ -5086,7 +5813,7 @@ END;
 
                 conn.commit()
 
-                return self._get_card_by_id(conn, new_card_id)
+                copied_card = self._get_card_by_id(conn, new_card_id)
 
             except sqlite3.IntegrityError as e:
                 if "UNIQUE constraint" in str(e) and "client_id" in str(e):
@@ -5098,6 +5825,10 @@ END;
                 raise KanbanDBError(f"Database error: {e}") from e
             finally:
                 conn.close()
+
+        if copied_card:
+            self._sync_vector_index_for_card_id(copied_card["id"])
+        return copied_card
 
     # ==========================================================================
     # Card Links Methods (Phase 5: Content Integration)
@@ -5350,6 +6081,48 @@ END;
                 conn.execute("DELETE FROM kanban_card_links WHERE id = ?", (link_id,))
 
                 # Log activity
+                self._log_activity_internal(
+                    conn, link["board_id"], "link_removed", "card_link",
+                    card_id=link["card_id"], list_id=link["list_id"],
+                    details={"linked_type": link["linked_type"], "linked_id": link["linked_id"]}
+                )
+                conn.commit()
+                return True
+
+            finally:
+                conn.close()
+
+    def remove_card_link_by_id_for_card(self, card_id: int, link_id: int) -> bool:
+        """
+        Remove a card link by its ID, scoped to a specific card.
+
+        Args:
+            card_id: The card ID the link must belong to.
+            link_id: The link ID to remove.
+
+        Returns:
+            True if the link was removed, False if it didn't exist.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    SELECT cl.*, c.board_id, c.list_id
+                    FROM kanban_card_links cl
+                    JOIN kanban_cards c ON cl.card_id = c.id
+                    JOIN kanban_boards b ON c.board_id = b.id
+                    WHERE cl.id = ? AND cl.card_id = ? AND b.user_id = ?
+                    """,
+                    (link_id, card_id, self.user_id)
+                )
+                link = cur.fetchone()
+
+                if not link:
+                    return False
+
+                conn.execute("DELETE FROM kanban_card_links WHERE id = ?", (link_id,))
+
                 self._log_activity_internal(
                     conn, link["board_id"], "link_removed", "card_link",
                     card_id=link["card_id"], list_id=link["list_id"],

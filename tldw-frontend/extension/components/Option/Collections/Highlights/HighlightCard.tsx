@@ -32,16 +32,24 @@ export const HighlightCard: React.FC<HighlightCardProps> = ({
   compact = false
 }) => {
   const { t } = useTranslation("collections")
+  const isStale = highlight.state === "stale"
 
   return (
     <div
-      className={`group rounded-lg border border-zinc-200 p-3 transition-shadow hover:shadow-sm dark:border-zinc-700 ${getHighlightBgColor(highlight.color)}`}
+      className={`group rounded-lg border border-zinc-200 p-3 transition-shadow hover:shadow-sm dark:border-zinc-700 ${getHighlightBgColor(highlight.color)} ${isStale ? "border-dashed" : ""}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <blockquote className="text-sm italic text-zinc-700 dark:text-zinc-200">
-            "{highlight.quote}"
-          </blockquote>
+          <div className="flex flex-wrap items-center gap-2">
+            <blockquote className="text-sm italic text-zinc-700 dark:text-zinc-200">
+              "{highlight.quote}"
+            </blockquote>
+            {isStale && (
+              <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
+                {t("collections:highlights.stale", "Stale")}
+              </span>
+            )}
+          </div>
 
           {highlight.note && (
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">

@@ -134,6 +134,24 @@ def test_notify_step_test_mode(client_with_wf: TestClient):
     assert out.get("test_mode") is True
 
 
+def test_llm_step_test_mode(client_with_wf: TestClient):
+    client = client_with_wf
+    definition = {
+        "name": "llm",
+        "version": 1,
+        "steps": [
+            {"id": "l1", "type": "llm", "config": {"provider": "openai", "prompt": "Hello {{ inputs.name }}"}},
+        ],
+    }
+    wid = client.post("/api/v1/workflows", json=definition).json()["id"]
+    run_id = client.post(f"/api/v1/workflows/{wid}/run", json={"inputs": {"name": "Rui"}}).json()["run_id"]
+    data = _wait_terminal(client, run_id)
+    assert data["status"] == "succeeded"
+    out = data.get("outputs") or {}
+    assert out.get("simulated") is True
+    assert "Rui" in (out.get("text") or "")
+
+
 def test_diff_change_detector(client_with_wf: TestClient):
     client = client_with_wf
     definition = {

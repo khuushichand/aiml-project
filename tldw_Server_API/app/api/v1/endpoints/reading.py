@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+import html
+import os
+import re
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Dict, List, Optional
 
@@ -15,6 +18,11 @@ from tldw_Server_API.app.api.v1.schemas.reading_schemas import (
     ReadingItem,
     ReadingItemDetail,
     ReadingImportResponse,
+    ReadingArchiveCreateRequest,
+    ReadingArchiveResponse,
+    ReadingImportJobResponse,
+    ReadingImportJobStatus,
+    ReadingImportJobsListResponse,
     ReadingItemsListResponse,
     ReadingSaveRequest,
     ReadingSummarizeRequest,
@@ -30,11 +38,15 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.api.v1.endpoints.items import bulk_update_items as bulk_update_items_handler
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Collections.reading_service import ReadingService
-from tldw_Server_API.app.core.Collections.reading_importers import (
-    detect_import_source,
-    parse_reading_import,
+from tldw_Server_API.app.core.Collections.reading_import_jobs import (
+    MAX_READING_IMPORT_BYTES,
+    READING_IMPORT_DOMAIN,
+    READING_IMPORT_JOB_TYPE,
+    reading_import_queue,
+    stage_reading_import_file,
 )
 from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as summarize_analyze
 from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
@@ -47,9 +59,16 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 )
 from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
+from tldw_Server_API.app.services.outputs_service import (
+    _outputs_dir_for_user,
+    _resolve_output_path_for_user,
+    _sanitize_title_for_filename,
+)
 
 
-MAX_READING_IMPORT_BYTES = 10 * 1024 * 1024
+READING_ARCHIVE_MAX_BYTES = int(os.getenv("READING_ARCHIVE_MAX_BYTES", str(5 * 1024 * 1024)))
+READING_ARCHIVE_RETENTION_DAYS = int(os.getenv("READING_ARCHIVE_RETENTION_DAYS", "30") or "30")
+
 
 router = APIRouter(prefix="/reading", tags=["reading"])
 
@@ -58,6 +77,12 @@ def _service_for_user(user: User) -> ReadingService:
     if not user or user.id is None:
         raise HTTPException(status_code=500, detail="user_missing")
     return ReadingService(user.id)
+
+
+def _jobs_manager() -> JobManager:
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    backend = "postgres" if db_url.startswith("postgres") else None
+    return JobManager(backend=backend, db_url=db_url or None)
 
 
 def _parse_metadata(row: ContentItemRow) -> Dict[str, object]:
@@ -163,6 +188,109 @@ def _raise_for_tts_error(exc: Exception) -> None:
     if isinstance(exc, TTSError):
         raise HTTPException(status_code=500, detail=f"TTS error: {str(exc)}")
     raise HTTPException(status_code=500, detail="TTS generation failed")
+
+
+def _parse_import_job_result(result: object) -> Optional[ReadingImportResponse]:
+    if result is None:
+        return None
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except Exception:
+            return None
+    if isinstance(result, dict):
+        try:
+            return ReadingImportResponse(**result)
+        except Exception:
+            return None
+    return None
+
+
+def _to_import_job_status(job: Dict[str, object]) -> ReadingImportJobStatus:
+    return ReadingImportJobStatus(
+        job_id=int(job.get("id")),
+        job_uuid=job.get("uuid"),
+        status=str(job.get("status") or ""),
+        created_at=job.get("created_at"),
+        started_at=job.get("started_at"),
+        completed_at=job.get("completed_at"),
+        progress_percent=job.get("progress_percent"),
+        progress_message=job.get("progress_message"),
+        error_message=job.get("error_message") or job.get("last_error"),
+        result=_parse_import_job_result(job.get("result")),
+    )
+
+
+def _parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _resolve_archive_retention(payload: ReadingArchiveCreateRequest) -> Optional[str]:
+    if payload.retention_until:
+        dt = _parse_iso_datetime(payload.retention_until)
+        if dt is None:
+            raise HTTPException(status_code=422, detail="reading_archive_retention_invalid")
+        return dt.isoformat()
+    days = payload.retention_days
+    if days is None:
+        days = max(0, int(READING_ARCHIVE_RETENTION_DAYS))
+    if days <= 0:
+        return None
+    return (datetime.now(tz=timezone.utc) + timedelta(days=days)).isoformat()
+
+
+def _render_archive_html(
+    *,
+    title: str,
+    url: Optional[str],
+    body_html: Optional[str],
+    body_text: Optional[str],
+) -> str:
+    safe_title = html.escape(title or "Untitled")
+    safe_url = html.escape(url or "")
+    if body_html:
+        content_html = body_html
+    else:
+        content_html = f"<pre>{html.escape(body_text or '')}</pre>"
+    header = f"<h1>{safe_title}</h1>"
+    if safe_url:
+        header = f"{header}<p><a href=\"{safe_url}\">{safe_url}</a></p>"
+    return (
+        "<!doctype html>"
+        "<html><head><meta charset=\"utf-8\">"
+        f"<title>{safe_title}</title></head><body>{header}{content_html}</body></html>"
+    )
+
+
+def _strip_basic_html(html_value: str) -> str:
+    stripped = re.sub(r"<[^>]+>", "", html_value)
+    return html.unescape(stripped)
+
+
+def _serialize_highlight_row(row) -> Dict[str, object]:
+    return {
+        "id": row.id,
+        "item_id": row.item_id,
+        "quote": row.quote,
+        "start_offset": row.start_offset,
+        "end_offset": row.end_offset,
+        "color": row.color,
+        "note": row.note,
+        "created_at": row.created_at,
+        "anchor_strategy": row.anchor_strategy,
+        "content_hash_ref": row.content_hash_ref,
+        "context_before": row.context_before,
+        "context_after": row.context_after,
+        "state": row.state,
+    }
 
 
 @router.post(
@@ -294,7 +422,8 @@ async def bulk_update_reading_items(
 
 @router.post(
     "/import",
-    response_model=ReadingImportResponse,
+    response_model=ReadingImportJobResponse,
+    status_code=202,
     summary="Import Pocket/Instapaper export into reading list",
     dependencies=[Depends(rbac_rate_limit("reading.import"))],
 )
@@ -303,8 +432,7 @@ async def import_reading_items(
     source: str = Form("auto"),
     merge_tags: bool = Form(True),
     current_user: User = Depends(get_request_user),
-) -> ReadingImportResponse:
-    service = _service_for_user(current_user)
+) -> ReadingImportJobResponse:
     try:
         raw = await file.read()
     except Exception as exc:
@@ -315,25 +443,97 @@ async def import_reading_items(
     if len(raw) > MAX_READING_IMPORT_BYTES:
         raise HTTPException(status_code=413, detail="reading_import_too_large")
 
-    if source == "auto":
-        source = detect_import_source(file.filename, raw)
-
+    staged_path = None
     try:
-        items = parse_reading_import(raw, source=source, filename=file.filename)
-        result = service.import_items(items=items, merge_tags=merge_tags, origin_type=source)
-    except ValueError as exc:
-        logger.error(f"reading_import_invalid: {exc}")
-        raise HTTPException(status_code=400, detail="reading_import_invalid")
+        staged_path = stage_reading_import_file(
+            user_id=current_user.id,
+            filename=file.filename,
+            raw_bytes=raw,
+        )
+        payload = {
+            "file_token": staged_path.name,
+            "source": source,
+            "merge_tags": merge_tags,
+            "filename": file.filename,
+        }
+        jm = _jobs_manager()
+        job = jm.create_job(
+            domain=READING_IMPORT_DOMAIN,
+            queue=reading_import_queue(),
+            job_type=READING_IMPORT_JOB_TYPE,
+            payload=payload,
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=3,
+        )
     except Exception as exc:
-        logger.error(f"reading_import_failed: {exc}")
+        logger.error(f"reading_import_job_create_failed: {exc}")
+        if staged_path is not None:
+            try:
+                staged_path.unlink(missing_ok=True)
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail="reading_import_failed")
-    return ReadingImportResponse(
-        source=source,
-        imported=result.imported,
-        updated=result.updated,
-        skipped=result.skipped,
-        errors=result.errors,
+
+    return ReadingImportJobResponse(
+        job_id=int(job.get("id")),
+        job_uuid=job.get("uuid"),
+        status=str(job.get("status") or "queued"),
     )
+
+
+@router.get(
+    "/import/jobs",
+    response_model=ReadingImportJobsListResponse,
+    summary="List reading import jobs",
+    dependencies=[Depends(rbac_rate_limit("reading.import.status"))],
+)
+async def list_reading_import_jobs(
+    status: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_request_user),
+) -> ReadingImportJobsListResponse:
+    jm = _jobs_manager()
+    fetch_limit = limit + offset
+    rows = jm.list_jobs(
+        domain=READING_IMPORT_DOMAIN,
+        owner_user_id=str(current_user.id),
+        job_type=READING_IMPORT_JOB_TYPE,
+        status=status,
+        limit=fetch_limit,
+    )
+    total = jm.count_jobs(
+        domain=READING_IMPORT_DOMAIN,
+        owner_user_id=str(current_user.id),
+        status=status,
+    )
+    jobs = rows[offset: offset + limit] if offset else rows[:limit]
+    return ReadingImportJobsListResponse(
+        jobs=[_to_import_job_status(row) for row in jobs],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/import/jobs/{job_id}",
+    response_model=ReadingImportJobStatus,
+    summary="Get a reading import job",
+    dependencies=[Depends(rbac_rate_limit("reading.import.status"))],
+)
+async def get_reading_import_job(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+) -> ReadingImportJobStatus:
+    jm = _jobs_manager()
+    job = jm.get_job(job_id)
+    if not job or str(job.get("domain")) != READING_IMPORT_DOMAIN:
+        raise HTTPException(status_code=404, detail="reading_import_job_not_found")
+    if str(job.get("owner_user_id")) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="reading_import_job_forbidden")
+    return _to_import_job_status(job)
 
 
 @router.get(
@@ -612,6 +812,139 @@ async def delete_reading_item(
         raise HTTPException(status_code=400, detail="reading_delete_failed")
 
 
+@router.post(
+    "/items/{item_id}/archive",
+    response_model=ReadingArchiveResponse,
+    summary="Create an archive snapshot for a reading item",
+    dependencies=[Depends(rbac_rate_limit("reading.archive"))],
+)
+async def create_reading_archive(
+    item_id: int,
+    payload: ReadingArchiveCreateRequest = Body(...),
+    current_user: User = Depends(get_request_user),
+) -> ReadingArchiveResponse:
+    service = _service_for_user(current_user)
+    try:
+        row = service.get_item(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="reading_item_not_found")
+
+    metadata = _parse_metadata(row)
+    clean_html = metadata.get("clean_html") if isinstance(metadata, dict) else None
+    text = metadata.get("text") if isinstance(metadata, dict) else None
+    fallback_text = text or row.summary or row.notes or ""
+
+    source = payload.source
+    format_value = payload.format
+    body_html: Optional[str] = None
+    body_text: Optional[str] = None
+    if source == "clean_html":
+        if not clean_html:
+            raise HTTPException(status_code=409, detail="reading_archive_no_html")
+        body_html = clean_html
+    elif source == "text":
+        if not fallback_text:
+            raise HTTPException(status_code=409, detail="reading_archive_no_text")
+        body_text = fallback_text
+    else:
+        if format_value == "html":
+            if clean_html:
+                body_html = clean_html
+            elif fallback_text:
+                body_text = fallback_text
+            else:
+                raise HTTPException(status_code=409, detail="reading_archive_no_content")
+        else:
+            if fallback_text:
+                body_text = fallback_text
+            elif clean_html:
+                body_text = _strip_basic_html(clean_html)
+            else:
+                raise HTTPException(status_code=409, detail="reading_archive_no_content")
+
+    base_title = payload.title or row.title or "Reading Archive"
+    if format_value == "html":
+        content = _render_archive_html(
+            title=base_title,
+            url=row.canonical_url or row.url,
+            body_html=body_html,
+            body_text=body_text,
+        )
+        ext = "html"
+    else:
+        parts = [f"# {base_title}"]
+        url = row.canonical_url or row.url
+        if url:
+            parts.append("")
+            parts.append(url)
+        if body_text:
+            parts.append("")
+            parts.append(body_text)
+        content = "\n".join(parts).strip() + "\n"
+        ext = "md"
+
+    content_bytes = content.encode("utf-8")
+    if READING_ARCHIVE_MAX_BYTES > 0 and len(content_bytes) > READING_ARCHIVE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="reading_archive_too_large")
+
+    user_id = int(current_user.id)
+    out_dir = _outputs_dir_for_user(user_id)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        logger.error(f"reading_archive: failed to create outputs dir: {exc}")
+        raise HTTPException(status_code=500, detail="storage_unavailable")
+
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_title = f"{base_title} (archive {ts})"
+    safe_title = _sanitize_title_for_filename(base_title)
+    filename = f"reading_archive_{item_id}_{safe_title}_{ts}.{ext}"
+    path = _resolve_output_path_for_user(user_id, filename)
+
+    try:
+        path.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        logger.error(f"reading_archive: failed to write archive file: {exc}")
+        raise HTTPException(status_code=500, detail="reading_archive_write_failed")
+
+    retention_until = _resolve_archive_retention(payload)
+    meta = {
+        "item_id": row.id,
+        "url": row.url,
+        "canonical_url": row.canonical_url,
+        "source": source,
+        "format": format_value,
+        "title": row.title,
+    }
+    try:
+        output_row = service.collections.create_output_artifact(
+            type_="reading_archive",
+            title=archive_title,
+            format_=format_value,
+            storage_path=filename,
+            metadata_json=json.dumps(meta),
+            media_item_id=row.media_id,
+            retention_until=retention_until,
+        )
+    except Exception as exc:
+        logger.error(f"reading_archive: failed to insert output record: {exc}")
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="reading_archive_db_failed")
+
+    return ReadingArchiveResponse(
+        output_id=output_row.id,
+        title=output_row.title,
+        format=format_value,
+        storage_path=output_row.storage_path,
+        created_at=output_row.created_at,
+        retention_until=retention_until,
+        download_url=f"/api/v1/outputs/{output_row.id}/download",
+    )
+
+
 @router.get(
     "/export",
     response_class=StreamingResponse,
@@ -626,6 +959,10 @@ async def export_reading_items(
     domain: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(1000, ge=1, le=10000),
+    include_metadata: bool = Query(True),
+    include_clean_html: bool = Query(False),
+    include_text: bool = Query(False),
+    include_highlights: bool = Query(False),
     format: str = Query("jsonl", description="Export format: jsonl or zip"),
     current_user: User = Depends(get_request_user),
 ) -> StreamingResponse:
@@ -642,14 +979,17 @@ async def export_reading_items(
 
     def _serialize_row(row: ContentItemRow) -> dict:
         metadata = {}
-        if getattr(row, "metadata_json", None):
-            try:
-                import json as _json
+        if include_metadata or include_clean_html or include_text:
+            if getattr(row, "metadata_json", None):
+                try:
+                    import json as _json
 
-                metadata = _json.loads(row.metadata_json) if row.metadata_json else {}
-            except Exception:
-                metadata = {}
-        return {
+                    metadata = _json.loads(row.metadata_json) if row.metadata_json else {}
+                except Exception:
+                    metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        payload = {
             "id": row.id,
             "url": row.url,
             "canonical_url": row.canonical_url,
@@ -665,8 +1005,20 @@ async def export_reading_items(
             "read_at": row.read_at,
             "published_at": row.published_at,
             "origin_type": row.origin_type,
-            "metadata": metadata,
         }
+        if include_metadata:
+            payload["metadata"] = metadata
+        if include_clean_html:
+            payload["clean_html"] = metadata.get("clean_html") if isinstance(metadata, dict) else None
+        if include_text:
+            payload["text"] = metadata.get("text") if isinstance(metadata, dict) else None
+        if include_highlights:
+            try:
+                highlights = service.collections.list_highlights_by_item(item_id=row.id)
+            except Exception:
+                highlights = []
+            payload["highlights"] = [_serialize_highlight_row(h) for h in highlights]
+        return payload
 
     export_rows = [_serialize_row(row) for row in rows]
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")

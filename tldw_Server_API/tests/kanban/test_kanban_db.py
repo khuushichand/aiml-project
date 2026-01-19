@@ -199,6 +199,16 @@ class TestBoardOperations:
 
     def test_archive_board(self, kanban_db: KanbanDB, sample_board: dict):
         """Test archiving and unarchiving a board."""
+        lst = kanban_db.create_list(
+            board_id=sample_board["id"],
+            name="Archive List",
+            client_id="board-archive-list-1"
+        )
+        kanban_db.create_card(
+            list_id=lst["id"],
+            title="Archive Card",
+            client_id="board-archive-card-1"
+        )
         # Archive
         archived = kanban_db.archive_board(sample_board["id"], archive=True)
         assert archived["archived"] is True
@@ -211,6 +221,14 @@ class TestBoardOperations:
         # Should appear with include_archived
         boards, total = kanban_db.list_boards(include_archived=True)
         assert total == 1
+
+        lists = kanban_db.list_lists(sample_board["id"], include_archived=True)
+        assert len(lists) == 1
+        assert lists[0]["archived"] is True
+
+        cards = kanban_db.list_cards(lst["id"], include_archived=True)
+        assert len(cards) == 1
+        assert cards[0]["archived"] is True
 
         # Unarchive
         unarchived = kanban_db.archive_board(sample_board["id"], archive=False)
@@ -321,8 +339,19 @@ class TestListOperations:
 
     def test_archive_list(self, kanban_db: KanbanDB, sample_list: dict, sample_board: dict):
         """Test archiving and unarchiving a list."""
+        kanban_db.create_card(
+            list_id=sample_list["id"],
+            title="Archived list card",
+            client_id="card-archived-list-1"
+        )
         archived = kanban_db.archive_list(sample_list["id"], archive=True)
         assert archived["archived"] is True
+
+        cards = kanban_db.list_cards(sample_list["id"], include_archived=False)
+        assert cards == []
+        cards = kanban_db.list_cards(sample_list["id"], include_archived=True)
+        assert len(cards) == 1
+        assert cards[0]["archived"] is True
 
         # Should not appear in default list
         lists = kanban_db.list_lists(sample_board["id"], include_archived=False)

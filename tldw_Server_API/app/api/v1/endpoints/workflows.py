@@ -340,11 +340,34 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
             "type": "object",
             "properties": {
                 "template": {"type": "string"},
-                "model": {"type": "string"},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "default": 300},
                 "retry": {"type": "integer", "minimum": 0, "default": 0},
             },
             "required": ["template"],
+            "additionalProperties": True,
+        },
+        "llm": {
+            "type": "object",
+            "properties": {
+                "provider": {"type": "string"},
+                "model": {"type": "string"},
+                "prompt": {"type": "string"},
+                "messages": {"type": ["array", "string"]},
+                "system_message": {"type": "string"},
+                "system": {"type": "string"},
+                "temperature": {"type": "number"},
+                "top_p": {"type": "number"},
+                "max_tokens": {"type": "integer", "minimum": 1},
+                "max_completion_tokens": {"type": "integer", "minimum": 1},
+                "stop": {"type": ["string", "array"]},
+                "tools": {"type": "array"},
+                "tool_choice": {},
+                "response_format": {"type": "object"},
+                "seed": {"type": "integer"},
+                "stream": {"type": "boolean"},
+                "include_response": {"type": "boolean"},
+            },
+            "required": [],
             "additionalProperties": True,
         },
         "branch": {
@@ -460,6 +483,11 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                 raise HTTPException(status_code=422, detail=f"Step '{sid}' requires assigned_to_user_id")
             if isinstance(assigned, str) and not assigned.strip():
                 raise HTTPException(status_code=422, detail=f"Step '{sid}' requires assigned_to_user_id")
+        if t == "llm":
+            has_prompt = bool(cfg.get("prompt") or cfg.get("input") or cfg.get("template"))
+            has_messages = bool(cfg.get("messages") or cfg.get("messages_payload"))
+            if not (has_prompt or has_messages):
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' requires prompt or messages")
         if t == "rag_search":
             _validate_rag_search_config(cfg, step_id=sid)
         if t == "media_ingest":
@@ -492,6 +520,28 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                         status_code=422,
                         detail=f"Invalid config for step '{sid}': {detail}",
                     ) from e
+
+    # Optional MCP policy validation (per-workflow allowlist/scopes)
+    try:
+        raw_policy = None
+        meta = defn.get("metadata") if isinstance(defn, dict) else None
+        if isinstance(meta, dict):
+            raw_policy = meta.get("mcp") or meta.get("mcp_policy")
+        if raw_policy is None and isinstance(defn, dict):
+            raw_policy = defn.get("mcp") or defn.get("mcp_policy")
+        if raw_policy is not None:
+            if not isinstance(raw_policy, dict):
+                raise HTTPException(status_code=422, detail="Invalid mcp policy format")
+            allowlist = raw_policy.get("allowlist") or raw_policy.get("allowed_tools")
+            if allowlist is not None and not isinstance(allowlist, (list, tuple, set, str)):
+                raise HTTPException(status_code=422, detail="Invalid mcp allowlist format")
+            scopes = raw_policy.get("scopes") or raw_policy.get("allow_scopes") or raw_policy.get("capabilities")
+            if scopes is not None and not isinstance(scopes, (list, tuple, set, str)):
+                raise HTTPException(status_code=422, detail="Invalid mcp scopes format")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     # Graph/DAG robustness checks (detect explicit cycles and unknown targets)
     _validate_dag(defn)
@@ -2774,14 +2824,36 @@ async def list_step_types():
             "type": "object",
             "properties": {
                 "template": {"type": "string"},
-                "model": {"type": "string"},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "default": 300},
                 "retry": {"type": "integer", "minimum": 0, "default": 0},
             },
             "required": ["template"],
             "additionalProperties": True,
-            "example": {"template": "Hello {{inputs.name}}", "model": "gpt-4o-mini"},
+            "example": {"template": "Hello {{inputs.name}}"},
             "min_engine_version": "0.1.0",
+        },
+        "llm": {
+            "type": "object",
+            "properties": {
+                "provider": {"type": "string"},
+                "model": {"type": "string"},
+                "prompt": {"type": "string"},
+                "messages": {"type": ["array", "string"]},
+                "system_message": {"type": "string"},
+                "temperature": {"type": "number"},
+                "top_p": {"type": "number"},
+                "max_tokens": {"type": "integer", "minimum": 1},
+                "stop": {"type": ["string", "array"]},
+                "tools": {"type": "array"},
+                "tool_choice": {},
+                "response_format": {"type": "object"},
+                "stream": {"type": "boolean"},
+                "include_response": {"type": "boolean"},
+            },
+            "required": [],
+            "additionalProperties": True,
+            "example": {"provider": "openai", "model": "gpt-4o-mini", "prompt": "Summarize {{ inputs.topic }}"},
+            "min_engine_version": "0.1.1",
         },
         "branch": {
             "type": "object",
@@ -3391,7 +3463,6 @@ async def approve_step(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
-    # Owner/admin check for the run
     run = db.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -3399,8 +3470,14 @@ async def approve_step(
     if run.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Run not found")
     is_admin = bool(getattr(current_user, "is_admin", False))
-    if str(run.user_id) != str(current_user.id) and not is_admin:
-        raise HTTPException(status_code=404, detail="Run not found")
+    step_run = db.get_latest_step_run(run_id=run_id, step_id=step_id)
+    if not step_run:
+        raise HTTPException(status_code=404, detail="Step run not found")
+    assigned_to = step_run.get("assigned_to")
+    user_id = str(current_user.id)
+    if not is_admin:
+        if not assigned_to or str(assigned_to) != user_id:
+            raise HTTPException(status_code=404, detail="Run not found")
     # Update step decision via DB adapter
     try:
         db.approve_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
@@ -3467,10 +3544,7 @@ async def reject_step(
     assigned_to = step_run.get("assigned_to")
     user_id = str(current_user.id)
     if not is_admin:
-        if assigned_to:
-            if str(assigned_to) != user_id:
-                raise HTTPException(status_code=404, detail="Run not found")
-        elif str(run.user_id) != user_id:
+        if not assigned_to or str(assigned_to) != user_id:
             raise HTTPException(status_code=404, detail="Run not found")
     failure_next = None
     try:

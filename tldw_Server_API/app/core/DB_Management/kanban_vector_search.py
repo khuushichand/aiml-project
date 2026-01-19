@@ -145,7 +145,7 @@ class KanbanVectorSearch:
         """
         Build a searchable document from card data.
 
-        Combines title, description, and label names for embedding.
+        Combines title, description, label names, and checklist item names for embedding.
         """
         parts = []
 
@@ -165,6 +165,12 @@ class KanbanVectorSearch:
             label_names = [label.get("name", "") for label in labels if label.get("name")]
             if label_names:
                 parts.append("Labels: " + ", ".join(label_names))
+
+        checklist_items = card.get("checklist_items", [])
+        if checklist_items:
+            item_names = [item for item in checklist_items if item]
+            if item_names:
+                parts.append("Checklist: " + "; ".join(item_names))
 
         return " ".join(parts)
 
@@ -187,6 +193,11 @@ class KanbanVectorSearch:
             metadata["due_date"] = card["due_date"]
         if card.get("created_at"):
             metadata["created_at"] = card["created_at"]
+        labels = card.get("labels", [])
+        if labels:
+            label_names = [label.get("name") for label in labels if label.get("name")]
+            if label_names:
+                metadata["labels"] = label_names
 
         return metadata
 

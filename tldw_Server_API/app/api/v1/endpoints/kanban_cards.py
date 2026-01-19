@@ -11,6 +11,7 @@ Provides CRUD operations for Kanban cards including:
 - Search cards
 """
 from typing import Optional, List
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
 from loguru import logger
@@ -26,6 +27,7 @@ from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
     CardCreate,
     CardUpdate,
     CardResponse,
+    CardWithDetailsResponse,
     CardsListResponse,
     CardMoveRequest,
     CardCopyRequest,
@@ -46,10 +48,13 @@ from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
     BulkLabelCardsResponse,
     FilteredCardsResponse,
     CardCopyWithChecklistsRequest,
+    ActivitiesListResponse,
+    ActivityResponse,
 )
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
+    kanban_rate_limit,
 )
 
 
@@ -62,6 +67,15 @@ def _handle_error(e: Exception) -> HTTPException:
     return handle_kanban_db_error(e)
 
 
+def _to_db_timestamp(value: Optional[datetime]) -> Optional[str]:
+    """Convert datetime to DB-friendly timestamp string."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 # =============================================================================
 # Card CRUD Endpoints (nested under /lists/{list_id}/cards)
 # =============================================================================
@@ -71,7 +85,8 @@ def _handle_error(e: Exception) -> HTTPException:
     response_model=CardResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new card",
-    description="Create a new card in a list."
+    description="Create a new card in a list.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.create"))]
 )
 async def create_card(
     list_id: int,
@@ -116,7 +131,8 @@ async def create_card(
     "/lists/{list_id}/cards",
     response_model=CardsListResponse,
     summary="Get all cards in a list",
-    description="Get all cards for a list, ordered by position."
+    description="Get all cards for a list, ordered by position.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.list"))]
 )
 async def get_cards(
     list_id: int,
@@ -144,7 +160,8 @@ async def get_cards(
     "/lists/{list_id}/cards/reorder",
     response_model=ReorderResponse,
     summary="Reorder cards in a list",
-    description="Set the order of cards in a list."
+    description="Set the order of cards in a list.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.reorder"))]
 )
 async def reorder_cards(
     list_id: int,
@@ -171,23 +188,24 @@ async def reorder_cards(
 
 @router.get(
     "/cards/{card_id}",
-    response_model=CardResponse,
+    response_model=CardWithDetailsResponse,
     summary="Get a card",
-    description="Get a card by ID."
+    description="Get a card by ID.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.get"))]
 )
 async def get_card(
     card_id: int,
     db: KanbanDB = Depends(get_kanban_db_for_user)
-) -> CardResponse:
+) -> CardWithDetailsResponse:
     """Get a card by ID."""
     try:
-        card = db.get_card(card_id)
+        card = db.get_card_with_details(card_id)
         if not card:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Card {card_id} not found"
             )
-        return CardResponse(**card)
+        return CardWithDetailsResponse(**card)
     except KanbanDBError as e:
         raise _handle_error(e)
 
@@ -196,7 +214,8 @@ async def get_card(
     "/cards/{card_id}",
     response_model=CardResponse,
     summary="Update a card",
-    description="Update card properties."
+    description="Update card properties.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.update"))]
 )
 async def update_card(
     card_id: int,
@@ -240,7 +259,8 @@ async def update_card(
     "/cards/{card_id}/move",
     response_model=CardResponse,
     summary="Move a card to another list",
-    description="Move a card to a different list within the same board."
+    description="Move a card to a different list within the same board.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.move"))]
 )
 async def move_card(
     card_id: int,
@@ -269,7 +289,8 @@ async def move_card(
     response_model=CardResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Copy a card",
-    description="Copy a card to a list (can be same or different list)."
+    description="Copy a card to a list (can be same or different list).",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.copy"))]
 )
 async def copy_card(
     card_id: int,
@@ -279,16 +300,18 @@ async def copy_card(
     """
     Copy a card to a list.
 
-    Creates a copy of the card with its description, labels, and metadata.
-    Checklists are not copied in Phase 1.
+    Creates a copy of the card with its description, labels, metadata,
+    and checklists.
     """
     try:
-        card = db.copy_card(
+        card = db.copy_card_with_checklists(
             card_id=card_id,
             target_list_id=copy_in.target_list_id,
             new_client_id=copy_in.new_client_id,
             position=copy_in.position,
-            new_title=copy_in.new_title
+            new_title=copy_in.new_title,
+            copy_checklists=True,
+            copy_labels=True
         )
         logger.info(f"Copied card {card_id} to list {copy_in.target_list_id} as {card['id']}")
         return CardResponse(**card)
@@ -304,7 +327,8 @@ async def copy_card(
     "/cards/{card_id}/archive",
     response_model=CardResponse,
     summary="Archive a card",
-    description="Archive a card. Archived cards are hidden from default listings but can be restored."
+    description="Archive a card. Archived cards are hidden from default listings but can be restored.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.update"))]
 )
 async def archive_card(
     card_id: int,
@@ -323,7 +347,8 @@ async def archive_card(
     "/cards/{card_id}/unarchive",
     response_model=CardResponse,
     summary="Unarchive a card",
-    description="Restore an archived card to active status."
+    description="Restore an archived card to active status.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.update"))]
 )
 async def unarchive_card(
     card_id: int,
@@ -346,7 +371,8 @@ async def unarchive_card(
     "/cards/{card_id}",
     response_model=DetailResponse,
     summary="Delete a card",
-    description="Soft-delete a card. The card can be restored within the retention period."
+    description="Soft-delete a card. The card can be restored within the retention period.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.delete"))]
 )
 async def delete_card(
     card_id: int,
@@ -370,7 +396,8 @@ async def delete_card(
     "/cards/{card_id}/restore",
     response_model=CardResponse,
     summary="Restore a deleted card",
-    description="Restore a soft-deleted card."
+    description="Restore a soft-deleted card.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.delete"))]
 )
 async def restore_card(
     card_id: int,
@@ -386,6 +413,51 @@ async def restore_card(
 
 
 # =============================================================================
+# Activity Endpoints
+# =============================================================================
+
+@router.get(
+    "/cards/{card_id}/activities",
+    response_model=ActivitiesListResponse,
+    summary="Get card activities",
+    description="Get activity log for a card.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.get"))]
+)
+async def get_card_activities(
+    card_id: int,
+    created_after: Optional[datetime] = Query(None, description="Filter by created_at >= timestamp"),
+    created_before: Optional[datetime] = Query(None, description="Filter by created_at <= timestamp"),
+    action_type: Optional[str] = Query(None, description="Filter by action_type"),
+    entity_type: Optional[str] = Query(None, description="Filter by entity_type"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum activities to return"),
+    offset: int = Query(0, ge=0, description="Number of activities to skip"),
+    db: KanbanDB = Depends(get_kanban_db_for_user)
+) -> ActivitiesListResponse:
+    """Get activity log for a card."""
+    try:
+        activities, total = db.get_card_activities(
+            card_id=card_id,
+            created_after=_to_db_timestamp(created_after),
+            created_before=_to_db_timestamp(created_before),
+            action_type=action_type,
+            entity_type=entity_type,
+            limit=limit,
+            offset=offset,
+        )
+        return ActivitiesListResponse(
+            activities=[ActivityResponse(**a) for a in activities],
+            pagination=PaginationInfo(
+                total=total,
+                limit=limit,
+                offset=offset,
+                has_more=(offset + len(activities)) < total
+            )
+        )
+    except (NotFoundError, KanbanDBError) as e:
+        raise _handle_error(e)
+
+
+# =============================================================================
 # Search Operations
 # =============================================================================
 
@@ -393,7 +465,8 @@ async def restore_card(
     "/cards/search",
     response_model=CardSearchResponse,
     summary="Search cards",
-    description="Search cards using full-text search."
+    description="Search cards using full-text search.",
+    dependencies=[Depends(kanban_rate_limit("kanban.search"))]
 )
 async def search_cards(
     search_in: CardSearchRequest,
@@ -428,7 +501,8 @@ async def search_cards(
     "/cards/search",
     response_model=CardSearchResponse,
     summary="Search cards (GET)",
-    description="Search cards using full-text search via query parameters."
+    description="Search cards using full-text search via query parameters.",
+    dependencies=[Depends(kanban_rate_limit("kanban.search"))]
 )
 async def search_cards_get(
     q: str = Query(..., min_length=1, max_length=500, description="Search query"),
@@ -470,7 +544,8 @@ async def search_cards_get(
     "/cards/bulk-move",
     response_model=BulkMoveCardsResponse,
     summary="Bulk move cards",
-    description="Move multiple cards to a target list."
+    description="Move multiple cards to a target list.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.bulk"))]
 )
 async def bulk_move_cards(
     request: BulkMoveCardsRequest,
@@ -502,7 +577,8 @@ async def bulk_move_cards(
     "/cards/bulk-archive",
     response_model=BulkArchiveCardsResponse,
     summary="Bulk archive cards",
-    description="Archive multiple cards."
+    description="Archive multiple cards.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.bulk"))]
 )
 async def bulk_archive_cards(
     request: BulkArchiveCardsRequest,
@@ -527,7 +603,8 @@ async def bulk_archive_cards(
     "/cards/bulk-unarchive",
     response_model=BulkUnarchiveCardsResponse,
     summary="Bulk unarchive cards",
-    description="Unarchive multiple cards."
+    description="Unarchive multiple cards.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.bulk"))]
 )
 async def bulk_unarchive_cards(
     request: BulkArchiveCardsRequest,
@@ -552,7 +629,8 @@ async def bulk_unarchive_cards(
     "/cards/bulk-delete",
     response_model=BulkDeleteCardsResponse,
     summary="Bulk delete cards",
-    description="Soft delete multiple cards."
+    description="Soft delete multiple cards.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.bulk"))]
 )
 async def bulk_delete_cards(
     request: BulkDeleteCardsRequest,
@@ -577,7 +655,8 @@ async def bulk_delete_cards(
     "/cards/bulk-label",
     response_model=BulkLabelCardsResponse,
     summary="Bulk label cards",
-    description="Add and/or remove labels from multiple cards."
+    description="Add and/or remove labels from multiple cards.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.bulk"))]
 )
 async def bulk_label_cards(
     request: BulkLabelCardsRequest,
@@ -612,7 +691,8 @@ async def bulk_label_cards(
     "/boards/{board_id}/cards",
     response_model=FilteredCardsResponse,
     summary="Get filtered cards for a board",
-    description="Get all cards in a board with optional filters."
+    description="Get all cards in a board with optional filters.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.filter"))]
 )
 async def get_filtered_cards(
     board_id: int,
@@ -680,7 +760,8 @@ async def get_filtered_cards(
     response_model=CardResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Copy a card with checklists",
-    description="Copy a card to a list, optionally including checklists and labels."
+    description="Copy a card to a list, optionally including checklists and labels.",
+    dependencies=[Depends(kanban_rate_limit("kanban.cards.copy"))]
 )
 async def copy_card_with_checklists(
     card_id: int,

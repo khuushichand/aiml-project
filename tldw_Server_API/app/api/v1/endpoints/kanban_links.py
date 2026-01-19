@@ -183,6 +183,32 @@ async def remove_card_link(
 
 
 @router.delete(
+    "/cards/{card_id}/links/{link_id}",
+    response_model=DetailResponse,
+    summary="Remove a link from a card by ID",
+    description="Remove a card link by its ID.",
+    dependencies=[Depends(kanban_rate_limit("kanban.links.delete"))]
+)
+async def remove_card_link_by_id_for_card(
+    card_id: int,
+    link_id: int,
+    db: KanbanDB = Depends(get_kanban_db_for_user)
+) -> DetailResponse:
+    """Remove a card link by ID scoped to a card."""
+    try:
+        removed = db.remove_card_link_by_id_for_card(card_id=card_id, link_id=link_id)
+        if not removed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Link {link_id} not found for card {card_id}"
+            )
+        logger.info(f"Removed link {link_id} from card {card_id}")
+        return DetailResponse(detail="Link removed successfully")
+    except KanbanDBError as e:
+        raise _handle_error(e)
+
+
+@router.delete(
     "/links/{link_id}",
     response_model=DetailResponse,
     summary="Remove a link by ID",

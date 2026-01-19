@@ -30,7 +30,12 @@ import {
 import { useTranslation } from "react-i18next"
 import { useCollectionsStore } from "@/store/collections"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
-import type { Highlight, HighlightColor, ReadingStatus } from "@/types/collections"
+import type {
+  AnchoringStrategy,
+  Highlight,
+  HighlightColor,
+  ReadingStatus
+} from "@/types/collections"
 import { StatusBadge } from "../common/StatusBadge"
 import { TagSelector } from "../common/TagSelector"
 import { HighlightCard } from "../Highlights/HighlightCard"
@@ -68,6 +73,9 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   const [generatingTts, setGeneratingTts] = useState(false)
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState("")
+  const [notesDirty, setNotesDirty] = useState(false)
+  const [notesSaving, setNotesSaving] = useState(false)
+  const [notesSaveError, setNotesSaveError] = useState<string | null>(null)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [itemHighlights, setItemHighlights] = useState<Highlight[]>([])
   const [itemHighlightsLoading, setItemHighlightsLoading] = useState(false)
@@ -75,11 +83,22 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   const [highlightQuote, setHighlightQuote] = useState("")
   const [highlightNote, setHighlightNote] = useState("")
   const [highlightColor, setHighlightColor] = useState<HighlightColor>("yellow")
+  const [highlightStartOffset, setHighlightStartOffset] = useState<number | null>(null)
+  const [highlightEndOffset, setHighlightEndOffset] = useState<number | null>(null)
+  const [highlightAnchorStrategy, setHighlightAnchorStrategy] =
+    useState<AnchoringStrategy>("fuzzy_quote")
+  const [selectionHighlight, setSelectionHighlight] = useState<{
+    quote: string
+    startOffset: number
+    endOffset: number
+  } | null>(null)
   const [highlightSaving, setHighlightSaving] = useState(false)
   const [highlightDeleteOpen, setHighlightDeleteOpen] = useState(false)
   const [highlightDeleteId, setHighlightDeleteId] = useState<string | null>(null)
   const [highlightDeleteLoading, setHighlightDeleteLoading] = useState(false)
   const lastEditedItemId = useRef<string | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const notesSaveTokenRef = useRef(0)
 
   // Fetch item details
   useEffect(() => {
@@ -91,6 +110,9 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         const item = await api.getReadingItem(selectedItemId)
         setCurrentItem(item)
         setNotesValue(item.notes || "")
+        setEditingNotes(false)
+        setNotesDirty(false)
+        setNotesSaveError(null)
       } catch (error: any) {
         message.error(error?.message || "Failed to load article details")
         closeItemDetail()
@@ -108,6 +130,25 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     setCurrentItemLoading,
     closeItemDetail
   ])
+
+  const clearSelection = useCallback(() => {
+    setSelectionHighlight(null)
+    setHighlightStartOffset(null)
+    setHighlightEndOffset(null)
+    setHighlightAnchorStrategy("fuzzy_quote")
+    try {
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+    } catch (error) {
+      // Ignore selection reset failures (non-critical).
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!itemDetailOpen || !currentItem?.id) {
+      clearSelection()
+    }
+  }, [itemDetailOpen, currentItem?.id, clearSelection])
 
   const fetchItemHighlights = useCallback(async () => {
     if (!selectedItemId || !itemDetailOpen) return
@@ -150,7 +191,15 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   const handleClose = useCallback(() => {
     closeItemDetail()
     setEditingNotes(false)
+    setNotesDirty(false)
+    setNotesSaveError(null)
+    setNotesSaving(false)
   }, [closeItemDetail])
+
+  const handleStartEditingNotes = useCallback(() => {
+    setEditingNotes(true)
+    setNotesSaveError(null)
+  }, [])
 
   const handleToggleFavorite = useCallback(async () => {
     if (!currentItem) return
@@ -209,19 +258,68 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
 
   const handleSaveNotes = useCallback(async () => {
     if (!currentItem) return
-    setActionLoading(true)
+    setNotesSaving(true)
+    setNotesSaveError(null)
+    const token = ++notesSaveTokenRef.current
     try {
       await api.updateReadingItem(currentItem.id, { notes: notesValue })
+      if (notesSaveTokenRef.current !== token) return
       const updated = { ...currentItem, notes: notesValue }
       setCurrentItem(updated)
+      updateItemInList(currentItem.id, { notes: notesValue })
+      setNotesDirty(false)
       setEditingNotes(false)
       message.success(t("collections:reading.notesSaved", "Notes saved"))
     } catch (error: any) {
+      if (notesSaveTokenRef.current !== token) return
+      setNotesSaveError(error?.message || "Failed to save notes")
       message.error(error?.message || "Failed to save notes")
     } finally {
-      setActionLoading(false)
+      if (notesSaveTokenRef.current === token) {
+        setNotesSaving(false)
+      }
     }
-  }, [api, currentItem, notesValue, setCurrentItem, t])
+  }, [api, currentItem, notesValue, setCurrentItem, updateItemInList, t])
+
+  const handleCancelNotes = useCallback(() => {
+    setEditingNotes(false)
+    setNotesValue(currentItem?.notes || "")
+    setNotesDirty(false)
+    setNotesSaveError(null)
+    setNotesSaving(false)
+  }, [currentItem?.notes])
+
+  useEffect(() => {
+    if (!editingNotes || !currentItem) return
+    const baseNotes = currentItem.notes || ""
+    const dirty = notesValue !== baseNotes
+    setNotesDirty(dirty)
+    if (!dirty) return
+
+    const token = ++notesSaveTokenRef.current
+    setNotesSaveError(null)
+    const timer = window.setTimeout(async () => {
+      if (notesSaveTokenRef.current !== token) return
+      setNotesSaving(true)
+      try {
+        await api.updateReadingItem(currentItem.id, { notes: notesValue })
+        if (notesSaveTokenRef.current !== token) return
+        const updated = { ...currentItem, notes: notesValue }
+        setCurrentItem(updated)
+        updateItemInList(currentItem.id, { notes: notesValue })
+        setNotesDirty(false)
+      } catch (error: any) {
+        if (notesSaveTokenRef.current !== token) return
+        setNotesSaveError(error?.message || "Failed to save notes")
+      } finally {
+        if (notesSaveTokenRef.current === token) {
+          setNotesSaving(false)
+        }
+      }
+    }, 800)
+
+    return () => window.clearTimeout(timer)
+  }, [editingNotes, notesValue, currentItem, api, setCurrentItem, updateItemInList])
 
   const handleSummarize = useCallback(async () => {
     if (!currentItem) return
@@ -270,6 +368,56 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     }
   }, [api, currentItem, removeItem, handleClose, onRefresh, t])
 
+  const captureSelection = useCallback(() => {
+    const container = contentRef.current
+    if (!container) return
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      if (selectionHighlight) {
+        setSelectionHighlight(null)
+      }
+      return
+    }
+    const range = selection.getRangeAt(0)
+    if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) {
+      return
+    }
+    const quote = selection.toString().trim()
+    if (!quote) return
+
+    const computeOffset = (node: Node, offset: number) => {
+      const preRange = document.createRange()
+      preRange.selectNodeContents(container)
+      preRange.setEnd(node, offset)
+      return preRange.toString().length
+    }
+
+    const startOffset = computeOffset(range.startContainer, range.startOffset)
+    const endOffset = computeOffset(range.endContainer, range.endOffset)
+    if (endOffset <= startOffset) return
+
+    const selectionPayload = { quote, startOffset, endOffset }
+    setSelectionHighlight(selectionPayload)
+    if (!highlightQuote) {
+      setHighlightQuote(quote)
+      setHighlightStartOffset(startOffset)
+      setHighlightEndOffset(endOffset)
+      setHighlightAnchorStrategy("fuzzy_quote")
+    }
+  }, [highlightQuote, selectionHighlight])
+
+  const handleHighlightQuoteChange = useCallback(
+    (value: string) => {
+      setHighlightQuote(value)
+      if (selectionHighlight && value !== selectionHighlight.quote) {
+        setHighlightStartOffset(null)
+        setHighlightEndOffset(null)
+        setHighlightAnchorStrategy("fuzzy_quote")
+      }
+    },
+    [selectionHighlight]
+  )
+
   const handleCreateHighlight = useCallback(async () => {
     if (!currentItem) return
     const quote = highlightQuote.trim()
@@ -285,7 +433,10 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         item_id: currentItem.id,
         quote,
         note: highlightNote.trim() || undefined,
-        color: highlightColor
+        color: highlightColor,
+        start_offset: highlightStartOffset ?? undefined,
+        end_offset: highlightEndOffset ?? undefined,
+        anchor_strategy: highlightAnchorStrategy
       })
       const normalized = created.item_title
         ? created
@@ -294,13 +445,36 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       addHighlight(normalized)
       setHighlightQuote("")
       setHighlightNote("")
+      setHighlightStartOffset(null)
+      setHighlightEndOffset(null)
+      setHighlightAnchorStrategy("fuzzy_quote")
+      clearSelection()
       message.success(t("collections:highlights.created", "Highlight created"))
     } catch (error: any) {
       message.error(error?.message || "Failed to create highlight")
     } finally {
       setHighlightSaving(false)
     }
-  }, [api, currentItem, highlightQuote, highlightNote, highlightColor, t])
+  }, [
+    api,
+    currentItem,
+    highlightQuote,
+    highlightNote,
+    highlightColor,
+    highlightStartOffset,
+    highlightEndOffset,
+    highlightAnchorStrategy,
+    clearSelection,
+    t
+  ])
+
+  const applySelectionToHighlight = useCallback(() => {
+    if (!selectionHighlight) return
+    setHighlightQuote(selectionHighlight.quote)
+    setHighlightStartOffset(selectionHighlight.startOffset)
+    setHighlightEndOffset(selectionHighlight.endOffset)
+    setHighlightAnchorStrategy("fuzzy_quote")
+  }, [selectionHighlight])
 
   const handleHighlightDeleteClick = useCallback((id: string) => {
     setHighlightDeleteId(id)
@@ -344,15 +518,38 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       children: (
         <div className="prose prose-sm dark:prose-invert max-w-none">
           {currentItem?.clean_html ? (
-            <div dangerouslySetInnerHTML={{ __html: currentItem.clean_html }} />
+            <div
+              ref={contentRef}
+              onMouseUp={captureSelection}
+              onKeyUp={captureSelection}
+              onTouchEnd={captureSelection}
+              dangerouslySetInnerHTML={{ __html: currentItem.clean_html }}
+            />
           ) : currentItem?.text ? (
-            <pre className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-200">
+            <pre
+              ref={contentRef}
+              onMouseUp={captureSelection}
+              onKeyUp={captureSelection}
+              onTouchEnd={captureSelection}
+              className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-200"
+            >
               {currentItem.text}
             </pre>
           ) : (
             <p className="text-zinc-500">
               {t("collections:reading.noContent", "Content not available")}
             </p>
+          )}
+          {selectionHighlight && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+              <span>{t("collections:highlights.selectionCaptured", "Selection captured")}</span>
+              <Button size="small" type="link" onClick={applySelectionToHighlight}>
+                {t("collections:highlights.useSelection", "Use selection")}
+              </Button>
+              <Button size="small" type="text" onClick={clearSelection}>
+                {t("common:clear", "Clear")}
+              </Button>
+            </div>
           )}
         </div>
       )
@@ -409,13 +606,26 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                 <TextArea
                   rows={3}
                   value={highlightQuote}
-                  onChange={(e) => setHighlightQuote(e.target.value)}
+                  onChange={(e) => handleHighlightQuoteChange(e.target.value)}
                   placeholder={t(
                     "collections:highlights.quotePlaceholder",
                     "Paste the highlighted text..."
                   )}
                   aria-label={t("collections:highlights.quoteLabel", "Quote")}
                 />
+                {selectionHighlight && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+                    <span>
+                      {t("collections:highlights.selectionCaptured", "Selection captured")}
+                    </span>
+                    <Button size="small" type="link" onClick={applySelectionToHighlight}>
+                      {t("collections:highlights.useSelection", "Use selection")}
+                    </Button>
+                    <Button size="small" type="text" onClick={clearSelection}>
+                      {t("common:clear", "Clear")}
+                    </Button>
+                  </div>
+                )}
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-zinc-600 dark:text-zinc-300">
@@ -510,13 +720,24 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                 rows={6}
                 placeholder={t("collections:reading.notesPlaceholder", "Add your notes...")}
               />
-              <div className="flex justify-end gap-2">
-                <Button onClick={() => setEditingNotes(false)}>
+              <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-500 dark:text-zinc-400">
+                <div>
+                  {notesSaveError
+                    ? t("collections:reading.notesSaveFailed", notesSaveError)
+                    : notesSaving
+                      ? t("collections:reading.notesSaving", "Saving...")
+                      : notesDirty
+                        ? t("collections:reading.notesDirty", "Unsaved changes")
+                        : t("collections:reading.notesSaved", "All changes saved")}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button onClick={handleCancelNotes}>
                   {t("common:cancel", "Cancel")}
                 </Button>
-                <Button type="primary" onClick={handleSaveNotes} loading={actionLoading}>
+                  <Button type="primary" onClick={handleSaveNotes} loading={notesSaving}>
                   {t("common:save", "Save")}
                 </Button>
+                </div>
               </div>
             </>
           ) : (
@@ -530,7 +751,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                   {t("collections:reading.noNotes", "No notes yet")}
                 </p>
               )}
-              <Button onClick={() => setEditingNotes(true)}>
+              <Button onClick={handleStartEditingNotes}>
                 {currentItem?.notes
                   ? t("collections:reading.editNotes", "Edit Notes")
                   : t("collections:reading.addNotes", "Add Notes")}
