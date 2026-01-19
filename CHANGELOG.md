@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
-## [0.1.16] 2026-01-X
+## [Version] Date
+
+### Added
+
+### Changed
+
+### Removed
+
+### Fixed
+
+
+
+## [0.1.16] 2026-01-19
 
 ### Added
 - File Artifacts System: Comprehensive implementation of file artifact management with support for multiple export formats (iCalendar, Markdown tables, HTML tables, XLSX, data tables) including export lifecycle management, garbage collection, and validation
