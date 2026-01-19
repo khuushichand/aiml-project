@@ -7177,7 +7177,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if unique_col_name_in_data and unique_col_name_in_data in update_data:
                 # More specific check for the unique column mentioned
                 db_unique_col_name = unique_col_name_in_data # Assuming it matches DB col name for this check
-                if f"UNIQUE constraint failed: {table_name}.{db_unique_col_name}" in str(e).lower():
+                if f"UNIQUE constraint failed: {table_name}.{db_unique_col_name}".lower() in str(e).lower():
                     val = update_data[unique_col_name_in_data]
                     logger.warning(
                         f"Update failed for {table_name} ID {item_id}: {db_unique_col_name} '{val}' already exists.")

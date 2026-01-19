@@ -167,6 +167,12 @@ class WritingTokenCountResponse(BaseModel):
     meta: WritingTokenizeMeta
 
 
+class WritingTokenizerSupport(BaseModel):
+    available: bool
+    tokenizer: Optional[str] = None
+    error: Optional[str] = None
+
+
 class WritingServerCapabilities(BaseModel):
     sessions: bool
     templates: bool
@@ -181,6 +187,7 @@ class WritingProviderCapabilities(BaseModel):
     capabilities: Dict[str, Any]
     supported_fields: List[str]
     features: Dict[str, bool]
+    tokenizers: Optional[Dict[str, WritingTokenizerSupport]] = None
 
 
 class WritingRequestedCapabilities(BaseModel):

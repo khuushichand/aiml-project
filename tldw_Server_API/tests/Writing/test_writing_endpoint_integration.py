@@ -188,6 +188,42 @@ def test_writing_capabilities_basic(client_with_writing_db: TestClient):
     assert data["providers"] is None
 
 
+def test_writing_capabilities_provider_tokenizers(client_with_writing_db: TestClient, monkeypatch):
+    client = client_with_writing_db
+
+    async def fake_get_configured_providers_async(include_deprecated: bool = False):
+        return {
+            "default_provider": "openai",
+            "providers": [
+                {
+                    "name": "openai",
+                    "models": ["gpt-3.5-turbo", "definitely-not-a-real-model"],
+                    "capabilities": {},
+                }
+            ],
+        }
+
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    monkeypatch.setattr(writing_endpoints, "get_configured_providers_async", fake_get_configured_providers_async)
+
+    resp = client.get("/api/v1/writing/capabilities")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    providers = data["providers"]
+    assert providers
+    tokenizers = providers[0]["tokenizers"]
+    assert "gpt-3.5-turbo" in tokenizers
+    assert "definitely-not-a-real-model" in tokenizers
+    assert tokenizers["definitely-not-a-real-model"]["available"] is False
+    if _has_tiktoken():
+        assert tokenizers["gpt-3.5-turbo"]["available"] is True
+        assert tokenizers["gpt-3.5-turbo"]["tokenizer"].startswith("tiktoken:")
+    else:
+        assert tokenizers["gpt-3.5-turbo"]["available"] is False
+        assert "unavailable" in tokenizers["gpt-3.5-turbo"]["error"].lower()
+
+
 def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     if not _has_tiktoken():
         pytest.skip("tiktoken not available")
@@ -213,3 +249,30 @@ def test_writing_tokenize_and_count(client_with_writing_db: TestClient):
     assert tokenize_resp.status_code == 200, tokenize_resp.text
     tokens = tokenize_resp.json()
     assert tokens["strings"] is None
+
+
+def test_writing_tokenize_provider_model_mismatch(client_with_writing_db: TestClient):
+    if not _has_tiktoken():
+        pytest.skip("tiktoken not available")
+
+    client = client_with_writing_db
+    resp = client.post(
+        "/api/v1/writing/token-count",
+        json={"provider": "anthropic", "model": "gpt-3.5-turbo", "text": "Mismatch OK"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["count"] >= 1
+
+
+def test_writing_tokenize_unavailable(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+    resp = client.post(
+        "/api/v1/writing/token-count",
+        json={"provider": "openai", "model": "definitely-not-a-real-model", "text": "Hello"},
+    )
+    assert resp.status_code == 422, resp.text
+    detail = str(resp.json().get("detail", "")).lower()
+    if _has_tiktoken():
+        assert "not available" in detail
+    else:
+        assert "unavailable" in detail

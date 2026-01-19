@@ -33,6 +33,7 @@ from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingTokenizeRequest,
     WritingTokenizeResponse,
     WritingTokenizeMeta,
+    WritingTokenizerSupport,
     WritingVersionResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -128,6 +129,25 @@ def _provider_features(provider: str) -> Dict[str, bool]:
     }
 
 
+def _coerce_model_name(model: Any) -> Optional[str]:
+    if isinstance(model, str):
+        return model.strip() or None
+    if isinstance(model, dict):
+        for key in ("name", "id", "model"):
+            value = model.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _tokenizer_support(provider: str, model: str) -> WritingTokenizerSupport:
+    try:
+        _, tokenizer_name = _resolve_tokenizer(provider, model)
+        return WritingTokenizerSupport(available=True, tokenizer=tokenizer_name)
+    except TokenizerUnavailable as exc:
+        return WritingTokenizerSupport(available=False, error=str(exc))
+
+
 @router.get(
     "/version",
     response_model=WritingVersionResponse,
@@ -176,9 +196,17 @@ async def get_writing_capabilities(
         providers_payload = []
         for provider_info in providers_info.get("providers", []):
             name = provider_info.get("name") or "unknown"
-            models = provider_info.get("models") or []
+            raw_models = provider_info.get("models") or []
+            models: List[str] = []
+            for model in raw_models:
+                model_name = _coerce_model_name(model)
+                if model_name:
+                    models.append(model_name)
             capabilities = provider_info.get("capabilities") or {}
             supported_fields = sorted(get_allowed_fields(name))
+            tokenizers = None
+            if models:
+                tokenizers = {model: _tokenizer_support(name, model) for model in models}
             providers_payload.append(
                 WritingProviderCapabilities(
                     name=name,
@@ -186,6 +214,7 @@ async def get_writing_capabilities(
                     capabilities=capabilities,
                     supported_fields=supported_fields,
                     features=_provider_features(name),
+                    tokenizers=tokenizers,
                 )
             )
 

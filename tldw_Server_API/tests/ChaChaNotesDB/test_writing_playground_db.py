@@ -66,7 +66,7 @@ def test_writing_templates_and_themes_versioning():
         template = db.get_writing_template_by_name("Template A")
         assert template is not None
         assert template["payload"] == {"preset": "alpha"}
-        assert template["is_default"] is False
+        assert bool(template["is_default"]) is False
         assert template["version"] == 1
 
         db.update_writing_template(
@@ -76,7 +76,7 @@ def test_writing_templates_and_themes_versioning():
         )
         updated = db.get_writing_template_by_name("Template A")
         assert updated is not None
-        assert updated["is_default"] is True
+        assert bool(updated["is_default"]) is True
         assert updated["version"] == 2
 
         db.soft_delete_writing_template("Template A", expected_version=2)

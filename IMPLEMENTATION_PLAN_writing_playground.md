@@ -8,13 +8,13 @@
 **Goal**: Implement Writing Playground persistence endpoints, capability handshake, and tokenization utilities in tldw_server.
 **Success Criteria**: ChaChaDB tables + migrations (soft-delete/versioning); CRUD for sessions/templates/themes; token count/tokenize endpoints; capabilities endpoint; AuthNZ + RBAC + rate limits; OpenAPI updated.
 **Tests**: Unit tests for DB layer (versioning/soft-delete); integration tests for API endpoints + auth; contract tests for capabilities payload.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Extension playground UI + state
 **Goal**: Build new Writing Playground page with full feature parity wired to server endpoints.
 **Success Criteria**: Editor/overlay, sidebar controls, modals, TTS, import/export all functional; uses server-backed persistence; capability handshake gates unsupported features per provider; CSP-safe bundling (no external imports); one-time migration path from local storage if present.
 **Tests**: Component tests for state actions; import/export JSON validation tests; markdown sanitization tests; smoke tests for core flows.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 4: Integration + validation
 **Goal**: End-to-end validation and polish.

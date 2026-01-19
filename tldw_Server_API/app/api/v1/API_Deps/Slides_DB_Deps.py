@@ -39,17 +39,17 @@ async def get_slides_db_for_user(
         try:
             db_path = _get_slides_db_path_for_user(user_id)
             db_instance = SlidesDatabase(db_path=str(db_path), client_id=str(current_user.id))
-                if len(_slides_db_instances) >= _MAX_CACHED_SLIDES_DB:
-                    oldest_key = next(iter(_slides_db_instances))
-                    oldest_db = _slides_db_instances.pop(oldest_key)
-                    try:
-                        oldest_db.close_connection()
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to close Slides DB for evicted user {}: {}",
-                            oldest_key,
-                            exc,
-                        )
+            if len(_slides_db_instances) >= _MAX_CACHED_SLIDES_DB:
+                oldest_key = next(iter(_slides_db_instances))
+                oldest_db = _slides_db_instances.pop(oldest_key)
+                try:
+                    oldest_db.close_connection()
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to close Slides DB for evicted user {}: {}",
+                        oldest_key,
+                        exc,
+                    )
             _slides_db_instances[db_key] = db_instance
             return db_instance
         except (SlidesDatabaseError, SchemaError) as exc:
