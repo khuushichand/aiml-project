@@ -13,6 +13,7 @@ import {
 import { useTranslation } from "react-i18next"
 import { useCollectionsStore } from "@/store/collections"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
+import { clearReadingProgress } from "@/services/reading-progress"
 import type { ReadingItemSummary, ReadingStatus } from "@/types/collections"
 import { StatusBadge } from "../common/StatusBadge"
 
@@ -20,12 +21,14 @@ interface ReadingItemCardProps {
   item: ReadingItemSummary
   onRefresh?: () => void
   progressPercent?: number
+  onProgressCleared?: (id: string) => void
 }
 
 export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
   item,
   onRefresh,
-  progressPercent
+  progressPercent,
+  onProgressCleared
 }) => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
@@ -64,13 +67,19 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
             status: newStatus
           })
         )
+        if (newStatus === "read" || newStatus === "archived") {
+          try {
+            await clearReadingProgress(item.id)
+          } catch {}
+          onProgressCleared?.(item.id)
+        }
       } catch (error: any) {
         message.error(error?.message || "Failed to update status")
       } finally {
         setActionLoading(false)
       }
     },
-    [api, item.id, updateItemInList, t]
+    [api, item.id, onProgressCleared, updateItemInList, t]
   )
 
   const menuItems: MenuProps["items"] = [

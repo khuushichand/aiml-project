@@ -11,6 +11,7 @@ Define, run, and monitor multi‑step workflows. Includes definition/versioning,
   - Events and artifacts persisted; step run entries tracked with timestamps and status.
 - Step types (initial set)
   - `media_ingest`, `prompt` (templating), `llm`, `rag_search`, `kanban`, `mcp_tool`, `tts`, `webhook`, `delay`, `log`, `wait_for_human`, `wait_for_approval`, `branch`, `map`, `process_media`, `policy_check`, `rss_fetch`, `atom_fetch`, `embed`, `translate`, `stt_transcribe`, `notify`, `diff_change_detector`.
+  - Map sub-steps: `map` supports nested types `prompt`, `log`, `delay`, `rag_search`, `media_ingest`, `mcp_tool`, `webhook`, `kanban` only (others are rejected).
 - Scheduling
   - Recurring schedules via Workflows Scheduler (cron/APS); presence gating, concurrency mode (skip/queue), coalesce/misfire behavior, jitter.
 - Governance

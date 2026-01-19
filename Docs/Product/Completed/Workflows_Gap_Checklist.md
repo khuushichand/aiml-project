@@ -9,4 +9,4 @@ Source of truth: `Docs/Product/Workflows_PRD.md` (legacy UI excluded).
 - [x] Webhook step controls (per-step allow/deny, redirects, max bytes, signing); Owner: Backend/Security; Tests: unit policy enforcement + integration signature/redirect/size
 - [x] Idempotency TTL 24h; Owner: Backend/DB; Tests: unit TTL reuse vs new run
 - [x] Tokens/cost aggregation across steps; Owner: Backend/Metrics; Tests: unit aggregate + integration multi-step
-- [ ] Map sub-step support expansion or explicit hard-fail with docs; Owner: Workflows; Tests: unit unsupported type error + integration supported
+- [x] Map sub-step support expansion or explicit hard-fail with docs; Owner: Workflows; Tests: unit unsupported type error + integration supported

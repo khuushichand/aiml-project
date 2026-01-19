@@ -207,8 +207,8 @@ def _deserialize_source_ref(value: Optional[str]) -> Optional[Any]:
         return None
     try:
         return json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=422, detail="invalid_source_ref_json") from exc
+    except json.JSONDecodeError:
+        return value
 
 
 def _serialize_source_ref(value: Optional[Any]) -> Optional[str]:

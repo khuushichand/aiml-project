@@ -791,14 +791,23 @@ class TestNestedResponses:
         list1 = kanban_db.create_list(board_id=sample_board["id"], name="To Do", client_id="l1")
         list2 = kanban_db.create_list(board_id=sample_board["id"], name="Done", client_id="l2")
 
-        kanban_db.create_card(list_id=list1["id"], title="Task 1", client_id="c1")
+        card1 = kanban_db.create_card(list_id=list1["id"], title="Task 1", client_id="c1")
         kanban_db.create_card(list_id=list1["id"], title="Task 2", client_id="c2")
         kanban_db.create_card(list_id=list2["id"], title="Task 3", client_id="c3")
+
+        label = kanban_db.create_label(board_id=sample_board["id"], name="Research", color="blue")
+        kanban_db.assign_label_to_card(card1["id"], label["id"])
+
+        checklist = kanban_db.create_checklist(card_id=card1["id"], name="Checklist 1")
+        kanban_db.create_checklist_item(checklist_id=checklist["id"], name="Item 1", checked=True)
+        kanban_db.create_checklist_item(checklist_id=checklist["id"], name="Item 2", checked=False)
+        kanban_db.create_comment(card_id=card1["id"], content="First comment")
 
         # Get nested response
         board = kanban_db.get_board_with_lists_and_cards(sample_board["id"])
 
         assert board is not None
+        assert any(lbl["id"] == label["id"] for lbl in board["labels"])
         assert len(board["lists"]) == 2
         assert board["total_cards"] == 3
 
@@ -806,6 +815,12 @@ class TestNestedResponses:
         todo_list = next(l for l in board["lists"] if l["name"] == "To Do")
         assert len(todo_list["cards"]) == 2
         assert todo_list["card_count"] == 2
+        todo_card = next(c for c in todo_list["cards"] if c["id"] == card1["id"])
+        assert any(lbl["id"] == label["id"] for lbl in todo_card["labels"])
+        assert todo_card["checklist_count"] == 1
+        assert todo_card["checklist_total"] == 2
+        assert todo_card["checklist_complete"] == 1
+        assert todo_card["comment_count"] == 1
 
         done_list = next(l for l in board["lists"] if l["name"] == "Done")
         assert len(done_list["cards"]) == 1

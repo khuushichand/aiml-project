@@ -91,6 +91,8 @@ class BoardResponse(BoardBase):
     deleted_at: Optional[datetime] = Field(None, description="When the board was deleted")
     version: int = Field(..., description="Version number for optimistic locking")
     metadata: Optional[Dict[str, Any]] = Field(None, description="JSON metadata")
+    list_count: Optional[int] = Field(None, description="Number of lists in the board")
+    card_count: Optional[int] = Field(None, description="Number of cards in the board")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -280,26 +282,6 @@ class CardCopyRequest(BaseModel):
 
 
 # =============================================================================
-# Nested Response Schemas (for GET /boards/{id} with lists and cards)
-# =============================================================================
-
-class CardInListResponse(CardResponse):
-    """Card response nested within a list."""
-    pass
-
-
-class ListWithCardsResponse(ListResponse):
-    """List response with nested cards."""
-    cards: List[CardInListResponse] = Field(default_factory=list, description="Cards in this list")
-
-
-class BoardWithListsResponse(BoardResponse):
-    """Board response with nested lists and cards."""
-    lists: List[ListWithCardsResponse] = Field(default_factory=list, description="Lists in this board")
-    total_cards: int = Field(0, description="Total number of cards across all lists")
-
-
-# =============================================================================
 # Search Schemas
 # =============================================================================
 
@@ -406,6 +388,31 @@ class LabelResponse(LabelBase):
 class LabelsListResponse(BaseModel):
     """Schema for list of labels."""
     labels: List[LabelResponse] = Field(..., description="List of labels")
+
+
+# =============================================================================
+# Nested Response Schemas (for GET /boards/{id} with lists and cards)
+# =============================================================================
+
+class CardInListResponse(CardResponse):
+    """Card response nested within a list."""
+    labels: List[LabelResponse] = Field(default_factory=list, description="Labels assigned to this card")
+    checklist_count: int = Field(0, description="Number of checklists on the card")
+    checklist_complete: int = Field(0, description="Number of completed checklist items")
+    checklist_total: int = Field(0, description="Total checklist items")
+    comment_count: int = Field(0, description="Number of comments on the card")
+
+
+class ListWithCardsResponse(ListResponse):
+    """List response with nested cards."""
+    cards: List[CardInListResponse] = Field(default_factory=list, description="Cards in this list")
+
+
+class BoardWithListsResponse(BoardResponse):
+    """Board response with nested lists and cards."""
+    labels: List[LabelResponse] = Field(default_factory=list, description="Labels available on this board")
+    lists: List[ListWithCardsResponse] = Field(default_factory=list, description="Lists in this board")
+    total_cards: int = Field(0, description="Total number of cards across all lists")
 
 
 # =============================================================================

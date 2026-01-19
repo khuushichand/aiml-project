@@ -96,6 +96,7 @@ CREATE TABLE presentations (
     title TEXT NOT NULL,
     description TEXT,
     theme TEXT DEFAULT 'black',       -- Reveal.js theme name
+    marp_theme TEXT,                  -- Optional Marp theme override
     settings TEXT,                    -- JSON: validated allowlist (see Settings Validation)
     slides TEXT NOT NULL,             -- JSON array of Slide objects
     slides_text TEXT NOT NULL,        -- Flattened text for FTS (stored by app)
@@ -244,7 +245,10 @@ Response (200, `Content-Type: application/json`):
 {
   "id": "b1d33d8a-5d2c-4b2f-9d5c-0b33fe2b4d2f",
   "title": "Q2 Research Summary",
+  "description": null,
   "theme": "black",
+  "marp_theme": null,
+  "settings": null,
   "slides": [
     {
       "order": 0,
@@ -254,7 +258,16 @@ Response (200, `Content-Type: application/json`):
       "speaker_notes": null,
       "metadata": {}
     }
-  ]
+  ],
+  "custom_css": null,
+  "source_type": "manual",
+  "source_ref": null,
+  "source_query": null,
+  "created_at": "2025-01-14T12:00:00Z",
+  "last_modified": "2025-01-14T12:00:00Z",
+  "deleted": false,
+  "client_id": "api_client",
+  "version": 1
 }
 ```
 
@@ -321,13 +334,14 @@ POST /api/v1/slides/generate
   "chunk_size_tokens": 1200
 }
 ```
-Response (201):
+Response (200):
 ```json
 {
   "id": "b1d33d8a-5d2c-4b2f-9d5c-0b33fe2b4d2f",
   "title": "Q2 Research Summary",
   "description": null,
   "theme": "black",
+  "marp_theme": null,
   "settings": {
     "transition": "fade",
     "slideNumber": true
@@ -356,7 +370,7 @@ Response (201):
   "custom_css": null,
   "created_at": "2025-01-14T12:00:00Z",
   "last_modified": "2025-01-14T12:00:00Z",
-  "deleted": 0,
+  "deleted": false,
   "client_id": "api_client",
   "version": 1
 }
@@ -369,14 +383,14 @@ POST /api/v1/slides/generate/from-media
 ```
 ```json
 {
-  "media_id": "media_2f1c9a",
+  "media_id": 12345,
   "title_hint": "Talk Summary",
   "theme": "night",
   "max_source_chars": 40000,
   "enable_chunking": false
 }
 ```
-Response (201): same shape as above, with `"source_type": "media"` and `"source_ref": "media_2f1c9a"`.
+Response (200): same shape as above, with `"source_type": "media"` and `"source_ref": 12345`.
 
 **Example: Generate from chat**
 Request:
@@ -393,7 +407,7 @@ POST /api/v1/slides/generate/from-chat
   "chunk_size_tokens": 1000
 }
 ```
-Response (201): same shape as above, with `"source_type": "chat"` and `"source_ref": "550e8400-e29b-41d4-a716-446655440000"`.
+Response (200): same shape as above, with `"source_type": "chat"` and `"source_ref": "550e8400-e29b-41d4-a716-446655440000"`.
 
 **Example: Generate from notes**
 Request:
@@ -411,7 +425,7 @@ POST /api/v1/slides/generate/from-notes
   "summary_tokens": 400
 }
 ```
-Response (201): same shape as above, with `"source_type": "notes"` and `"source_ref": ["note_12a","note_12b","note_12c"]`.
+Response (200): same shape as above, with `"source_type": "notes"` and `"source_ref": ["note_12a","note_12b","note_12c"]`.
 
 **Example: Generate from RAG**
 Request:
@@ -428,7 +442,7 @@ POST /api/v1/slides/generate/from-rag
   "enable_chunking": false
 }
 ```
-Response (201): same shape as above, with `"source_type": "rag"` and `"source_query"` set to the query.
+Response (200): same shape as above, with `"source_type": "rag"` and `"source_query"` set to the query.
 
 **RAG Error Examples**
 - 413 (chunking disabled, input too large):
@@ -669,7 +683,7 @@ If a Reveal.js theme is not in the table, default to `default` unless `marp_them
 | Markdown XSS in exports | Use safe markdown renderer; sanitize HTML output |
 
 **Decisions:**
-- Generation supports streaming (partial slides as they are generated).
+- Generation streaming (partial slides as they are generated) is deferred to a future phase.
 - Support presentation templates beyond Reveal.js themes (post-v1).
 - Exports include an offline Reveal.js ZIP bundle by default.
 - Reveal.js `settings` are validated against an allowlist.

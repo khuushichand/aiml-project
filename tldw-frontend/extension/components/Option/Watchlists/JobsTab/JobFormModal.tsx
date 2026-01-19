@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from "react"
-import { Collapse, Form, Input, Modal, Switch, message } from "antd"
+import { Collapse, Form, Input, Modal, Select, Switch, message } from "antd"
 import { useTranslation } from "react-i18next"
-import { createWatchlistJob, updateWatchlistJob } from "@/services/watchlists"
+import { useTldwApiClient } from "@/hooks/useTldwApiClient"
+import { createWatchlistJob, fetchWatchlistTemplates, updateWatchlistJob } from "@/services/watchlists"
 import type {
   JobScope,
   WatchlistFilter,
   WatchlistJob,
-  WatchlistJobCreate
+  WatchlistJobCreate,
+  WatchlistTemplate
 } from "@/types/watchlists"
 import { ScopeSelector } from "./ScopeSelector"
 import { FilterBuilder } from "./FilterBuilder"
@@ -32,6 +34,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   initialValues
 }) => {
   const { t } = useTranslation(["watchlists", "common"])
+  const api = useTldwApiClient()
   const [form] = Form.useForm<FormValues>()
   const [submitting, setSubmitting] = useState(false)
 
@@ -42,11 +45,20 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   const [filters, setFilters] = useState<WatchlistFilter[]>([])
   const [schedule, setSchedule] = useState<string | null>(null)
   const [timezone, setTimezone] = useState("UTC")
+  const [outputTemplateName, setOutputTemplateName] = useState<string | null>(null)
+  const [templateOptions, setTemplateOptions] = useState<Array<{ label: string; options: Array<{ label: string; value: string }> }>>([])
+  const [templatesLoading, setTemplatesLoading] = useState(false)
+  const [templatesError, setTemplatesError] = useState<string | null>(null)
 
   // Reset form when modal opens/closes or initialValues change
   useEffect(() => {
     if (open) {
       if (initialValues) {
+        const outputPrefs = initialValues.output_prefs as Record<string, unknown> | null
+        const templatePrefs =
+          outputPrefs && typeof outputPrefs === "object"
+            ? (outputPrefs as Record<string, any>).template
+            : null
         form.setFieldsValue({
           name: initialValues.name,
           description: initialValues.description || "",
@@ -56,6 +68,10 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         setFilters(initialValues.job_filters?.filters || [])
         setSchedule(initialValues.schedule_expr || null)
         setTimezone(initialValues.timezone || "UTC")
+        setOutputTemplateName(
+          (templatePrefs && typeof templatePrefs === "object" ? templatePrefs.default_name : null) ||
+            (outputPrefs && typeof outputPrefs === "object" ? (outputPrefs as Record<string, any>).template_name : null)
+        )
       } else {
         form.resetFields()
         form.setFieldsValue({
@@ -67,9 +83,84 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         setFilters([])
         setSchedule(null)
         setTimezone("UTC")
+        setOutputTemplateName(null)
       }
     }
   }, [open, initialValues, form])
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+
+    const loadTemplates = async () => {
+      setTemplatesLoading(true)
+      setTemplatesError(null)
+      try {
+        const [outputsResult, legacyResult] = await Promise.allSettled([
+          api.getOutputTemplates({ limit: 200, offset: 0 }),
+          fetchWatchlistTemplates()
+        ])
+        if (cancelled) return
+
+        const outputTemplates =
+          outputsResult.status === "fulfilled" && Array.isArray(outputsResult.value?.items)
+            ? outputsResult.value.items
+            : []
+        const legacyTemplates =
+          legacyResult.status === "fulfilled" && Array.isArray(legacyResult.value?.items)
+            ? legacyResult.value.items
+            : []
+
+        const outputOptions = outputTemplates
+          .filter((tpl: any) => tpl.format === "md" || tpl.format === "html")
+          .map((tpl: any) => ({
+            label: `${tpl.name} (${tpl.format})`,
+            value: String(tpl.name)
+          }))
+        const legacyOptions = legacyTemplates.map((tpl: WatchlistTemplate) => ({
+          label: `${tpl.name} (${tpl.format})`,
+          value: tpl.name
+        }))
+
+        const grouped: Array<{ label: string; options: Array<{ label: string; value: string }> }> = []
+        if (outputOptions.length > 0) {
+          grouped.push({
+            label: t("watchlists:jobs.outputPrefs.outputsTemplates", "Outputs templates"),
+            options: outputOptions
+          })
+        }
+        if (legacyOptions.length > 0) {
+          grouped.push({
+            label: t("watchlists:jobs.outputPrefs.legacyTemplates", "Legacy watchlists templates"),
+            options: legacyOptions
+          })
+        }
+        setTemplateOptions(grouped)
+
+        const errors = []
+        if (outputsResult.status === "rejected") {
+          errors.push(t("watchlists:jobs.outputPrefs.outputsTemplatesError", "Failed to load outputs templates"))
+        }
+        if (legacyResult.status === "rejected") {
+          errors.push(t("watchlists:jobs.outputPrefs.legacyTemplatesError", "Failed to load legacy templates"))
+        }
+        setTemplatesError(errors.length ? errors.join(" ") : null)
+      } catch (error) {
+        if (!cancelled) {
+          setTemplatesError(t("watchlists:jobs.outputPrefs.templatesError", "Failed to load templates"))
+        }
+      } finally {
+        if (!cancelled) {
+          setTemplatesLoading(false)
+        }
+      }
+    }
+
+    void loadTemplates()
+    return () => {
+      cancelled = true
+    }
+  }, [open, api, t])
 
   const handleSubmit = async () => {
     try {
@@ -96,6 +187,29 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         schedule_expr: schedule || undefined,
         timezone: timezone || undefined,
         job_filters: filters.length > 0 ? { filters } : undefined
+      }
+      const baseOutputPrefs =
+        initialValues?.output_prefs && typeof initialValues.output_prefs === "object"
+          ? { ...(initialValues.output_prefs as Record<string, unknown>) }
+          : {}
+      const templatePrefs =
+        baseOutputPrefs.template && typeof baseOutputPrefs.template === "object"
+          ? { ...(baseOutputPrefs.template as Record<string, unknown>) }
+          : {}
+      if (outputTemplateName) {
+        templatePrefs.default_name = outputTemplateName
+        baseOutputPrefs.template_name = outputTemplateName
+      } else {
+        delete templatePrefs.default_name
+        delete baseOutputPrefs.template_name
+      }
+      if (Object.keys(templatePrefs).length > 0) {
+        baseOutputPrefs.template = templatePrefs
+      } else {
+        delete baseOutputPrefs.template
+      }
+      if (Object.keys(baseOutputPrefs).length > 0) {
+        jobData.output_prefs = baseOutputPrefs
       }
 
       if (isEditing && initialValues) {
@@ -163,6 +277,42 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         </span>
       ),
       children: <FilterBuilder value={filters} onChange={setFilters} />
+    },
+    {
+      key: "outputs",
+      label: (
+        <span className="font-medium">
+          {t("watchlists:jobs.form.outputs", "Outputs")}
+        </span>
+      ),
+      children: (
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-sm font-medium">
+              {t("watchlists:jobs.outputPrefs.defaultTemplateLabel", "Default template")}
+            </label>
+            <Select
+              value={outputTemplateName ?? undefined}
+              onChange={(value) => setOutputTemplateName(value ?? null)}
+              placeholder={t("watchlists:jobs.outputPrefs.defaultTemplatePlaceholder", "Select a template")}
+              options={templateOptions}
+              loading={templatesLoading}
+              allowClear
+              showSearch
+              optionFilterProp="label"
+            />
+            {templatesError && (
+              <div className="mt-2 text-xs text-red-500">{templatesError}</div>
+            )}
+            <div className="mt-2 text-xs text-zinc-500">
+              {t(
+                "watchlists:jobs.outputPrefs.defaultTemplateHint",
+                "Used when generating outputs for this job unless overridden."
+              )}
+            </div>
+          </div>
+        </div>
+      )
     }
   ]
 

@@ -110,6 +110,38 @@ def test_board_crud(client_with_kanban_db):
     assert restore_resp.status_code == 200
 
 
+def test_board_list_counts(client_with_kanban_db):
+
+    client, db = client_with_kanban_db
+
+    board_resp = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Counts Board", "client_id": "board-counts-1"}
+    )
+    assert board_resp.status_code == 201
+    board_id = board_resp.json()["id"]
+
+    list_resp = client.post(
+        f"/api/v1/kanban/boards/{board_id}/lists",
+        json={"name": "Counts List", "client_id": "list-counts-1"}
+    )
+    assert list_resp.status_code == 201
+    list_id = list_resp.json()["id"]
+
+    card_resp = client.post(
+        f"/api/v1/kanban/lists/{list_id}/cards",
+        json={"title": "Counts Card", "client_id": "card-counts-1"}
+    )
+    assert card_resp.status_code == 201
+
+    boards_resp = client.get("/api/v1/kanban/boards")
+    assert boards_resp.status_code == 200
+    boards = boards_resp.json()["boards"]
+    board_entry = next(b for b in boards if b["id"] == board_id)
+    assert board_entry["list_count"] == 1
+    assert board_entry["card_count"] == 1
+
+
 # =============================================================================
 # List CRUD Tests
 # =============================================================================

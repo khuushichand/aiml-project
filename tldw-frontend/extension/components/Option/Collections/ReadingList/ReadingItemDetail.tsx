@@ -242,6 +242,18 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
             status: newStatus
           })
         )
+        if (newStatus === "read" || newStatus === "archived") {
+          if (progressSaveTimerRef.current) {
+            clearTimeout(progressSaveTimerRef.current)
+            progressSaveTimerRef.current = null
+          }
+          try {
+            await clearReadingProgress(currentItem.id)
+          } catch {}
+          lastSavedProgressRef.current = null
+          lastProgressRef.current = null
+          setProgressPercent(0)
+        }
       } catch (error: any) {
         message.error(error?.message || "Failed to update status")
       } finally {

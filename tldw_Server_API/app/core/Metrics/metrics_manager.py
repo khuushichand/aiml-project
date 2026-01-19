@@ -452,6 +452,44 @@ class MetricsRegistry:
             )
         )
 
+        # Slides metrics
+        self.register_metric(
+            MetricDefinition(
+                name="slides_generation_latency_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Slides generation latency in seconds",
+                unit="s",
+                labels=["source_type"],
+                buckets=[0.5, 1, 2.5, 5, 10, 20, 30, 60]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="slides_generation_errors_total",
+                type=MetricType.COUNTER,
+                description="Slides generation errors",
+                labels=["source_type", "error"]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="slides_export_latency_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Slides export latency in seconds",
+                unit="s",
+                labels=["format"],
+                buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="slides_export_errors_total",
+                type=MetricType.COUNTER,
+                description="Slides export errors",
+                labels=["format", "error"]
+            )
+        )
+
         # Generic application observability counters
         self.register_metric(
             MetricDefinition(

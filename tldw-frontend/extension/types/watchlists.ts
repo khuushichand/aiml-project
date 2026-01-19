@@ -98,14 +98,48 @@ export interface JobScope {
   tags?: string[]
 }
 
+export interface JobOutputTemplateDefaults {
+  default_name?: string
+  default_format?: "md" | "html"
+}
+
+export interface JobOutputRetentionDefaults {
+  default_seconds?: number
+  temporary_seconds?: number
+}
+
+export interface JobOutputDeliveries {
+  email?: {
+    recipients?: string[]
+    format?: "auto" | "text" | "html"
+    subject?: string
+    sender?: string
+    reply_to?: string
+  }
+  chatbook?: {
+    enabled?: boolean
+    title?: string
+    description?: string
+    conversation_id?: number
+    provider?: string
+    model?: string
+    metadata?: Record<string, unknown>
+  }
+}
+
 export interface JobOutputPrefs {
-  retention_days?: number
+  template?: JobOutputTemplateDefaults
+  retention?: JobOutputRetentionDefaults
+  deliveries?: JobOutputDeliveries
+  ingest?: Record<string, unknown>
   template_name?: string
+  retention_days?: number
   delivery_config?: {
     email_recipients?: string[]
     email_format?: "auto" | "text" | "html"
     create_chatbook?: boolean
   }
+  [key: string]: unknown
 }
 
 export interface WatchlistJob {

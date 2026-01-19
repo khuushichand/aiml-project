@@ -130,7 +130,7 @@ Example (abridged):
 - wait_for_human: Blocks until approval/reject with optional edited payload. Supports `form_schema`, `assigned_to_user_id`, and `on_timeout`. Default behavior in v0.1 is to wait indefinitely until action, unless a `timeout_seconds` is configured.
 - wait_for_approval: Blocks until approve/reject with minimal payload (approval-only UX).
 - branch: Evaluate a templated condition and route to `true_next`/`false_next`.
-- map: Fan-out over a list, run a nested step, and aggregate results.
+- map: Fan-out over a list, run a nested step, and aggregate results. Supported nested steps: prompt, log, delay, rag_search, media_ingest, mcp_tool, webhook, kanban. Other types are rejected at validation.
 - media_ingest: Downloads/ingests URLs or local paths via `/app/core/Ingestion_Media_Processing/`; extracts text/metadata, chunks, and optionally indexes into RAG.
 - tts: Text-to-speech synthesis with artifact output.
 - stt_transcribe: Transcribe audio to text with optional diarization.

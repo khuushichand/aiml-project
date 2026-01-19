@@ -174,6 +174,9 @@ async def get_board(
                 detail=f"Board {board_id} not found"
             )
 
+        if "labels" not in board:
+            board["labels"] = db.list_labels(board_id)
+
         # If we didn't get nested data, add empty lists
         if "lists" not in board:
             board["lists"] = []

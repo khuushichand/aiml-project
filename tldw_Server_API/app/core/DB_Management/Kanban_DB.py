@@ -791,6 +791,50 @@ END;
                 cur = conn.execute(sql, params)
 
                 boards = [self._row_to_board_dict(row) for row in cur.fetchall()]
+                if boards:
+                    board_ids = [board["id"] for board in boards]
+                    placeholders = ",".join("?" * len(board_ids))
+
+                    list_conditions = [f"board_id IN ({placeholders})"]
+                    list_params: List[Any] = list(board_ids)
+                    if not include_archived:
+                        list_conditions.append("archived = 0")
+                    if not include_deleted:
+                        list_conditions.append("deleted = 0")
+                    list_where = " AND ".join(list_conditions)
+                    list_sql = f"""
+                        SELECT board_id, COUNT(*) as cnt
+                        FROM kanban_lists
+                        WHERE {list_where}
+                        GROUP BY board_id
+                    """
+                    list_counts = {
+                        row["board_id"]: int(row["cnt"])
+                        for row in conn.execute(list_sql, list_params).fetchall()
+                    }
+
+                    card_conditions = [f"board_id IN ({placeholders})"]
+                    card_params: List[Any] = list(board_ids)
+                    if not include_archived:
+                        card_conditions.append("archived = 0")
+                    if not include_deleted:
+                        card_conditions.append("deleted = 0")
+                    card_where = " AND ".join(card_conditions)
+                    card_sql = f"""
+                        SELECT board_id, COUNT(*) as cnt
+                        FROM kanban_cards
+                        WHERE {card_where}
+                        GROUP BY board_id
+                    """
+                    card_counts = {
+                        row["board_id"]: int(row["cnt"])
+                        for row in conn.execute(card_sql, card_params).fetchall()
+                    }
+
+                    for board in boards:
+                        board_id = board["id"]
+                        board["list_count"] = list_counts.get(board_id, 0)
+                        board["card_count"] = card_counts.get(board_id, 0)
 
                 return boards, total
 
@@ -2185,6 +2229,84 @@ END;
             finally:
                 conn.close()
 
+    def _list_cards_with_summary_for_list(
+        self,
+        conn: sqlite3.Connection,
+        list_id: int,
+        *,
+        include_archived: bool,
+        include_deleted: bool,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get cards in a list with label and checklist/comment summaries.
+
+        Uses an existing connection to avoid extra round-trips inside nested board views.
+        """
+        conditions = ["c.list_id = ?"]
+        params: List[Any] = [list_id]
+
+        if not include_archived:
+            conditions.append("c.archived = 0")
+        if not include_deleted:
+            conditions.append("c.deleted = 0")
+
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT c.id, c.uuid, c.board_id, c.list_id, c.client_id, c.title, c.description,
+                   c.position, c.due_date, c.due_complete, c.start_date, c.priority,
+                   c.archived, c.archived_at, c.created_at, c.updated_at,
+                   c.deleted, c.deleted_at, c.version, c.metadata,
+                   (SELECT COUNT(*) FROM kanban_checklists ch WHERE ch.card_id = c.id) AS checklist_count,
+                   (SELECT COUNT(*) FROM kanban_checklist_items ci
+                        JOIN kanban_checklists ch ON ci.checklist_id = ch.id
+                        WHERE ch.card_id = c.id) AS checklist_total,
+                   (SELECT COUNT(*) FROM kanban_checklist_items ci
+                        JOIN kanban_checklists ch ON ci.checklist_id = ch.id
+                        WHERE ch.card_id = c.id AND ci.checked = 1) AS checklist_complete,
+                   (SELECT COUNT(*) FROM kanban_comments cm
+                        WHERE cm.card_id = c.id AND cm.deleted = 0) AS comment_count
+            FROM kanban_cards c
+            WHERE {where_clause}
+            ORDER BY c.position ASC
+        """
+        cur = conn.execute(sql, params)
+        rows = cur.fetchall()
+
+        cards: List[Dict[str, Any]] = []
+        card_ids: List[int] = []
+        for row in rows:
+            card = self._row_to_card_dict(row)
+            card["checklist_count"] = int(row["checklist_count"] or 0)
+            card["checklist_total"] = int(row["checklist_total"] or 0)
+            card["checklist_complete"] = int(row["checklist_complete"] or 0)
+            card["comment_count"] = int(row["comment_count"] or 0)
+            cards.append(card)
+            card_ids.append(card["id"])
+
+        if not card_ids:
+            return cards
+
+        placeholders = ",".join("?" * len(card_ids))
+        label_sql = f"""
+            SELECT cl.card_id, l.id, l.uuid, l.board_id, l.name, l.color, l.created_at, l.updated_at
+            FROM kanban_card_labels cl
+            JOIN kanban_labels l ON l.id = cl.label_id
+            WHERE cl.card_id IN ({placeholders})
+            ORDER BY l.name ASC
+        """
+        label_rows = conn.execute(label_sql, card_ids).fetchall()
+        labels_by_card: Dict[int, List[Dict[str, Any]]] = {}
+        for row in label_rows:
+            card_id = row["card_id"]
+            label = self._row_to_label_dict(row)
+            labels_by_card.setdefault(card_id, []).append(label)
+
+        for card in cards:
+            card["labels"] = labels_by_card.get(card["id"], [])
+
+        return cards
+
     def update_card(
         self,
         card_id: int,
@@ -3312,12 +3434,19 @@ END;
                 if not board:
                     return None
 
+                board["labels"] = self._list_labels_for_board(conn, board_id)
+
                 # Get lists
                 lists = self.list_lists(board_id, include_archived=include_archived)
 
                 # Get cards for each list
                 for lst in lists:
-                    lst["cards"] = self.list_cards(lst["id"], include_archived=include_archived)
+                    lst["cards"] = self._list_cards_with_summary_for_list(
+                        conn,
+                        lst["id"],
+                        include_archived=include_archived,
+                        include_deleted=False,
+                    )
                     lst["card_count"] = len(lst["cards"])
 
                 board["lists"] = lists
@@ -3518,6 +3647,19 @@ END;
             "created_at": row["created_at"],
             "updated_at": row["updated_at"]
         }
+
+    def _list_labels_for_board(self, conn: sqlite3.Connection, board_id: int) -> List[Dict[str, Any]]:
+        """Fetch labels for a board using an existing connection."""
+        cur = conn.execute(
+            """
+            SELECT l.id, l.uuid, l.board_id, l.name, l.color, l.created_at, l.updated_at
+            FROM kanban_labels l
+            WHERE l.board_id = ?
+            ORDER BY l.name ASC
+            """,
+            (board_id,),
+        )
+        return [self._row_to_label_dict(row) for row in cur.fetchall()]
 
     def list_labels(self, board_id: int) -> List[Dict[str, Any]]:
         """

@@ -252,6 +252,14 @@ export const ReadingItemsList: React.FC = () => {
     }
   }, [api, deleteTargetId, deleteTargetType, removeItem, closeDeleteConfirm, t])
 
+  const handleProgressCleared = useCallback((itemId: string) => {
+    setProgressById((prev) => {
+      if (!(itemId in prev)) return prev
+      const { [itemId]: _, ...rest } = prev
+      return rest
+    })
+  }, [])
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
@@ -410,6 +418,7 @@ export const ReadingItemsList: React.FC = () => {
               item={item}
               onRefresh={fetchItems}
               progressPercent={progressById[item.id]}
+              onProgressCleared={handleProgressCleared}
             />
           ))}
         </div>

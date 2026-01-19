@@ -43,6 +43,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
+from tldw_Server_API.app.core.Workflows.constants import MAP_SUBSTEP_TYPES
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     WORKFLOWS_RUNS_READ,
@@ -538,14 +539,19 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
             _validate_chunking_contract(cfg, step_id=sid)
         if t == "map":
             sub = cfg.get("step") if isinstance(cfg, dict) else None
-            if isinstance(sub, dict):
-                sub_type = str(sub.get("type") or "").strip()
-                sub_cfg = sub.get("config") or {}
-                sub_id = f"{sid}.step"
-                if sub_type == "rag_search":
-                    _validate_rag_search_config(sub_cfg, step_id=sub_id)
-                if sub_type == "media_ingest":
-                    _validate_chunking_contract(sub_cfg, step_id=sub_id)
+            if not isinstance(sub, dict):
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' requires map step config")
+            sub_type = str(sub.get("type") or "").strip()
+            if not sub_type:
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' requires map step type")
+            if sub_type not in MAP_SUBSTEP_TYPES:
+                raise HTTPException(status_code=422, detail=f"Step '{sid}' has unsupported map step type '{sub_type}'")
+            sub_cfg = sub.get("config") or {}
+            sub_id = f"{sid}.step"
+            if sub_type == "rag_search":
+                _validate_rag_search_config(sub_cfg, step_id=sub_id)
+            if sub_type == "media_ingest":
+                _validate_chunking_contract(sub_cfg, step_id=sub_id)
         # Optional schema validation when jsonschema is available
         if jsonschema is not None:
             schema = step_schemas.get(t)
