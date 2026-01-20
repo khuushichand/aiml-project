@@ -246,6 +246,20 @@ class CollectionsDatabase:
             return bool(value)
         return 1 if value else 0
 
+    def _sqlite_columns(self, table: str) -> set[str]:
+        if self.backend.backend_type != BackendType.SQLITE:
+            return set()
+        try:
+            result = self.backend.execute(f"PRAGMA table_info({table})", tuple())
+        except Exception:
+            return set()
+        columns: set[str] = set()
+        for row in result.rows:
+            name = row.get("name")
+            if name:
+                columns.add(str(name))
+        return columns
+
     def ensure_schema(self) -> None:
         """Create tables if they do not already exist."""
         if self.backend.backend_type == BackendType.POSTGRESQL:
@@ -473,137 +487,173 @@ class CollectionsDatabase:
         except Exception as e:
             logger.error(f"Collections schema init failed: {e}")
             raise
+        output_template_columns: set[str] = set()
+        output_columns: set[str] = set()
+        digest_columns: set[str] = set()
+        file_artifact_columns: set[str] = set()
+        content_columns: set[str] = set()
+        if self.backend.backend_type == BackendType.SQLITE:
+            output_template_columns = self._sqlite_columns("output_templates")
+            output_columns = self._sqlite_columns("outputs")
+            digest_columns = self._sqlite_columns("reading_digest_schedules")
+            file_artifact_columns = self._sqlite_columns("file_artifacts")
+            content_columns = self._sqlite_columns("content_items")
         # Backfill columns for existing tables
-        try:
-            # Attempt to add metadata_json if missing
-            self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
+        if "metadata_json" not in output_template_columns:
+            try:
+                # Attempt to add metadata_json if missing
+                self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
         # Outputs table backfills
-        try:
-            deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-            deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
-            self.backend.execute(
-                f"ALTER TABLE outputs ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
-                tuple(),
-            )
-        except Exception:
-            logger.debug("collections backfill: outputs.deleted already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: outputs.retention_until already exists or skipped")
+        if "deleted" not in output_columns:
+            try:
+                deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
+                self.backend.execute(
+                    f"ALTER TABLE outputs ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
+                    tuple(),
+                )
+            except Exception:
+                logger.debug("collections backfill: outputs.deleted already exists or skipped")
+        if "deleted_at" not in output_columns:
+            try:
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
+        if "retention_until" not in output_columns:
+            try:
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: outputs.retention_until already exists or skipped")
         try:
             self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
         except Exception:
             logger.debug("collections backfill: outputs unique index already exists or skipped")
         # Reading digest schedule backfills
-        try:
-            enabled_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-            enabled_default = "TRUE" if self.backend.backend_type == BackendType.POSTGRESQL else "1"
-            self.backend.execute(
-                f"ALTER TABLE reading_digest_schedules ADD COLUMN enabled {enabled_type} NOT NULL DEFAULT {enabled_default}",
-                tuple(),
-            )
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.enabled already exists or skipped")
-        try:
-            online_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-            online_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
-            self.backend.execute(
-                f"ALTER TABLE reading_digest_schedules ADD COLUMN require_online {online_type} NOT NULL DEFAULT {online_default}",
-                tuple(),
-            )
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.require_online already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.filters_json already exists or skipped")
-        try:
-            template_id_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-            self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", tuple())
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.template_id already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.template_name already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.format already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", tuple())
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.retention_days already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.last_run_at already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.next_run_at already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: reading_digest_schedules.last_status already exists or skipped")
+        if "enabled" not in digest_columns:
+            try:
+                enabled_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                enabled_default = "TRUE" if self.backend.backend_type == BackendType.POSTGRESQL else "1"
+                self.backend.execute(
+                    f"ALTER TABLE reading_digest_schedules ADD COLUMN enabled {enabled_type} NOT NULL DEFAULT {enabled_default}",
+                    tuple(),
+                )
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.enabled already exists or skipped")
+        if "require_online" not in digest_columns:
+            try:
+                online_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                online_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
+                self.backend.execute(
+                    f"ALTER TABLE reading_digest_schedules ADD COLUMN require_online {online_type} NOT NULL DEFAULT {online_default}",
+                    tuple(),
+                )
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.require_online already exists or skipped")
+        if "filters_json" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.filters_json already exists or skipped")
+        if "template_id" not in digest_columns:
+            try:
+                template_id_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", tuple())
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.template_id already exists or skipped")
+        if "template_name" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.template_name already exists or skipped")
+        if "format" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.format already exists or skipped")
+        if "retention_days" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", tuple())
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.retention_days already exists or skipped")
+        if "last_run_at" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.last_run_at already exists or skipped")
+        if "next_run_at" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.next_run_at already exists or skipped")
+        if "last_status" not in digest_columns:
+            try:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: reading_digest_schedules.last_status already exists or skipped")
         # File artifacts backfills
-        try:
-            deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-            deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
-            self.backend.execute(
-                f"ALTER TABLE file_artifacts ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
-                tuple(),
-            )
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.deleted already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
-        try:
-            export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-            self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
-        try:
-            self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
-        except Exception:
-            logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
+        if "deleted" not in file_artifact_columns:
+            try:
+                deleted_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
+                self.backend.execute(
+                    f"ALTER TABLE file_artifacts ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
+                    tuple(),
+                )
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.deleted already exists or skipped")
+        if "deleted_at" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
+        if "retention_until" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
+        if "export_status" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
+        if "export_format" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
+        if "export_storage_path" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
+        if "export_bytes" not in file_artifact_columns:
+            try:
+                export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
+                self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
+        if "export_content_type" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
+        if "export_job_id" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
+        if "export_expires_at" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
+        if "export_consumed_at" not in file_artifact_columns:
+            try:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
+            except Exception:
+                logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
         # Collections layer tables
         fts_available = self.backend.backend_type == BackendType.SQLITE
         if self.backend.backend_type == BackendType.POSTGRESQL:
@@ -735,6 +785,8 @@ class CollectionsDatabase:
             "notes": "TEXT",
         }
         for column, col_type in _backfill_columns.items():
+            if column in content_columns:
+                continue
             try:
                 self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", tuple())
             except Exception:

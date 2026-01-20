@@ -16,6 +16,6 @@ export default defineConfig({
       '**/__tests__/**/*.test.{ts,tsx}',
       '**/__tests__/**/*.spec.{ts,tsx}',
     ],
-    exclude: ['node_modules/**', 'dist/**', 'build/**', 'pages/**'],
+    exclude: ['node_modules/**', 'dist/**', 'build/**', 'pages/**', 'extension/**'],
   },
 });

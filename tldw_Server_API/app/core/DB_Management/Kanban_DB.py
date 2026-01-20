@@ -30,7 +30,7 @@ import threading
 import uuid as uuid_module
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from loguru import logger
 
@@ -130,8 +130,11 @@ def _kanban_card_indexable(
         finally:
             try:
                 db.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Error closing db in _kanban_card_indexable during db.close(): "
+                    f"user_id={user_id}, card_id={card_id}, error={exc}"
+                )
     except Exception as exc:
         logger.warning(f"Kanban card indexability check failed: {exc}")
         return False
@@ -224,6 +227,8 @@ class KanbanDB:
     MAX_CHECKLIST_ITEMS_PER_CHECKLIST = 100
     MAX_COMMENTS_PER_CARD = 500
     MAX_COMMENT_SIZE = 16384  # characters
+    VECTOR_INDEX_RETRY_DELAY_SECONDS = 5
+    VECTOR_INDEX_MAX_RETRY_ATTEMPTS = 1
 
     def __init__(self, db_path: str, user_id: str) -> None:
         """
@@ -247,6 +252,8 @@ class KanbanDB:
         self._memory_conn: Optional[_KanbanMemoryConnection] = None
         self._vector_search = None
         self._vector_search_initialized = False
+        self._vector_index_retry_pending: Set[Tuple[str, int]] = set()
+        self._vector_index_retry_lock = threading.Lock()
         self._apply_limit_overrides()
 
         # Ensure directory exists
@@ -2172,11 +2179,50 @@ END;
         card["checklist_items"] = self._get_checklist_item_names(conn, card_id)
         return card
 
-    def _sync_vector_index_for_card_id(self, card_id: int, search: Optional[Any] = None) -> None:
+    def _schedule_vector_index_retry(
+        self,
+        card_id: int,
+        operation: str,
+        *,
+        retry_attempt: int,
+    ) -> None:
+        """Schedule a best-effort retry for vector index operations."""
+        if _is_test_context():
+            return
+        if retry_attempt >= self.VECTOR_INDEX_MAX_RETRY_ATTEMPTS:
+            return
+        key = (operation, card_id)
+        with self._vector_index_retry_lock:
+            if key in self._vector_index_retry_pending:
+                return
+            self._vector_index_retry_pending.add(key)
+
+        delay = self.VECTOR_INDEX_RETRY_DELAY_SECONDS
+
+        def _retry() -> None:
+            try:
+                self._sync_vector_index_for_card_id(card_id, retry_attempt=retry_attempt + 1)
+            finally:
+                with self._vector_index_retry_lock:
+                    self._vector_index_retry_pending.discard(key)
+
+        timer = threading.Timer(delay, _retry)
+        timer.daemon = True
+        timer.start()
+        logger.debug(f"Scheduled vector index retry for card {card_id} op={operation}")
+
+    def _sync_vector_index_for_card_id(
+        self,
+        card_id: int,
+        search: Optional[Any] = None,
+        *,
+        retry_attempt: int = 0,
+    ) -> None:
         """Index or remove a card in vector search based on current state."""
         vector_search = search or self._get_vector_search()
         if vector_search is None:
             return
+        attempt = retry_attempt + 1
         with self._lock:
             conn = self._connect()
             try:
@@ -2185,14 +2231,71 @@ END;
                 conn.close()
 
         if not card:
-            vector_search.remove_card(card_id)
+            try:
+                result = vector_search.remove_card(card_id)
+                if result is False:
+                    logger.warning(
+                        f"Vector index op=remove reported failure for card {card_id} (attempt {attempt})"
+                    )
+                    self._schedule_vector_index_retry(
+                        card_id,
+                        "remove",
+                        retry_attempt=retry_attempt,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    f"Vector index op=remove failed for card {card_id} (attempt {attempt}): {exc}"
+                )
+                self._schedule_vector_index_retry(
+                    card_id,
+                    "remove",
+                    retry_attempt=retry_attempt,
+                )
             return
 
         if card.get("deleted") or card.get("archived"):
-            vector_search.remove_card(card_id)
+            try:
+                result = vector_search.remove_card(card_id)
+                if result is False:
+                    logger.warning(
+                        f"Vector index op=remove reported failure for card {card_id} (attempt {attempt})"
+                    )
+                    self._schedule_vector_index_retry(
+                        card_id,
+                        "remove",
+                        retry_attempt=retry_attempt,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    f"Vector index op=remove failed for card {card_id} (attempt {attempt}): {exc}"
+                )
+                self._schedule_vector_index_retry(
+                    card_id,
+                    "remove",
+                    retry_attempt=retry_attempt,
+                )
             return
 
-        vector_search.index_card(card)
+        try:
+            result = vector_search.index_card(card)
+            if result is False:
+                logger.warning(
+                    f"Vector index op=index reported failure for card {card_id} (attempt {attempt})"
+                )
+                self._schedule_vector_index_retry(
+                    card_id,
+                    "index",
+                    retry_attempt=retry_attempt,
+                )
+        except Exception as exc:
+            logger.warning(
+                f"Vector index op=index failed for card {card_id} (attempt {attempt}): {exc}"
+            )
+            self._schedule_vector_index_retry(
+                card_id,
+                "index",
+                retry_attempt=retry_attempt,
+            )
 
     def _sync_vector_index_for_card_ids(self, card_ids: List[int]) -> None:
         """Sync vector index for multiple cards."""

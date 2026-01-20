@@ -9,8 +9,8 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 ## Features
 
 ### Core Capabilities
-- **Multi-Provider Support**: OpenAI, ElevenLabs, and seven local adapters (Kokoro, Higgs, Chatterbox, Dia, VibeVoice, IndexTTS2, NeuTTS) with a mock adapter for testing.
-- **Voice Cloning**: Voice reference audio accepted by Higgs, Chatterbox, Dia, VibeVoice, NeuTTS, and IndexTTS2 (ElevenLabs supports user voices via API).
+- **Multi-Provider Support**: OpenAI, ElevenLabs, and eight local adapters (Kokoro, PocketTTS, Higgs, Chatterbox, Dia, VibeVoice, IndexTTS2, NeuTTS) with a mock adapter for testing.
+- **Voice Cloning**: Voice reference audio accepted by PocketTTS, Higgs, Chatterbox, Dia, VibeVoice, NeuTTS, and IndexTTS2 (ElevenLabs supports user voices via API).
 - **Streaming Audio**: Real-time chunked streaming across adapters; NeuTTS enables streaming when a quantized (GGUF) backbone is loaded.
 - **Format Support**: Adapter-specific coverage spanning MP3, WAV, OPUS, FLAC, PCM, AAC, and OGG via the shared `AudioFormat` enum.
 - **OpenAI Compatibility**: Drop-in replacement for OpenAI TTS API
@@ -26,6 +26,7 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 | **OpenAI** | Commercial API | EN* | ❌ | Industry standard, HD quality |
 | **ElevenLabs** | Commercial API | 29 | ✅ (Pro/user voices) | Premium quality, emotion control |
 | **Kokoro** | Local ONNX | EN (US/GB) | ❌ | Lightweight, CPU-friendly, offline |
+| **PocketTTS** | Local ONNX | EN | ✅ (reference) | Zero-shot cloning, streaming ONNX |
 | **Higgs** | Local PyTorch | 50+ | ✅ (3-10s) | Music generation, multi-lingual |
 | **Chatterbox** | Local PyTorch | EN | ✅ (5-20s) | Emotion exaggeration control |
 | **Dia** | Local PyTorch | EN | ✅ (dialogue prompts) | Multi-speaker dialogue specialist |

@@ -49,6 +49,7 @@ class TTSProvider(Enum):
     INDEX_TTS = "index_tts"
     SUPERTONIC = "supertonic"
     SUPERTONIC2 = "supertonic2"
+    POCKET_TTS = "pocket_tts"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -73,6 +74,7 @@ class TTSAdapterRegistry:
         TTSProvider.INDEX_TTS: "tldw_Server_API.app.core.TTS.adapters.index_tts_adapter.IndexTTS2Adapter",
         TTSProvider.SUPERTONIC: "tldw_Server_API.app.core.TTS.adapters.supertonic_adapter.SupertonicOnnxAdapter",
         TTSProvider.SUPERTONIC2: "tldw_Server_API.app.core.TTS.adapters.supertonic2_adapter.Supertonic2OnnxAdapter",
+        TTSProvider.POCKET_TTS: "tldw_Server_API.app.core.TTS.adapters.pocket_tts_adapter.PocketTTSOnnxAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -499,6 +501,17 @@ class TTSAdapterRegistry:
                     alias('more_segment_before', 'index_tts_more_segment_before')
                     alias('verbose', 'index_tts_verbose')
                     alias('sample_rate', 'sample_rate')
+                elif p == 'pocket_tts':
+                    alias('model_path', 'pocket_tts_model_path')
+                    alias('tokenizer_path', 'pocket_tts_tokenizer_path')
+                    alias('precision', 'pocket_tts_precision')
+                    alias('device', 'pocket_tts_device')
+                    alias('temperature', 'pocket_tts_temperature')
+                    alias('lsd_steps', 'pocket_tts_lsd_steps')
+                    alias('max_frames', 'pocket_tts_max_frames')
+                    alias('stream_first_chunk_frames', 'pocket_tts_stream_first_chunk_frames')
+                    alias('stream_target_buffer_sec', 'pocket_tts_stream_target_buffer_sec')
+                    alias('stream_max_chunk_frames', 'pocket_tts_stream_max_chunk_frames')
 
                 # Generic target latency for local providers
                 if p == 'chatterbox':
@@ -545,7 +558,7 @@ class TTSAdapterRegistry:
             # Skip local model providers in testing unless explicitly enabled
             if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
                            TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.SUPERTONIC,
-                           TTSProvider.SUPERTONIC2]:
+                           TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS]:
                 # Check if explicitly enabled in config
                 if self.config_manager:
                     if not self.config_manager.is_provider_enabled(provider.value):
@@ -820,6 +833,14 @@ class TTSAdapterFactory:
         "supertonic2": TTSProvider.SUPERTONIC2,
         "supertonic-2": TTSProvider.SUPERTONIC2,
         "supertonic2-onnx": TTSProvider.SUPERTONIC2,
+
+        # PocketTTS ONNX models
+        "pocket-tts": TTSProvider.POCKET_TTS,
+        "pocket-tts-onnx": TTSProvider.POCKET_TTS,
+        "pocket_tts": TTSProvider.POCKET_TTS,
+        "pockettts": TTSProvider.POCKET_TTS,
+        "pockettts-onnx": TTSProvider.POCKET_TTS,
+        "kevinahm/pocket-tts-onnx": TTSProvider.POCKET_TTS,
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

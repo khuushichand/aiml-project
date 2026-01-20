@@ -1,0 +1,491 @@
+import type { ChatMessage } from "@/services/tldw/TldwApiClient"
+import type {
+  WritingPromptChunk,
+  WritingSessionPayload,
+  WritingTemplatePayload,
+  WritingWorldInfo
+} from "@/types/writing"
+import { DEFAULT_SESSION } from "@/components/Option/WritingPlayground/presets"
+
+const lenientPrefixCache = new Map<string, RegExp>()
+const lenientCache = new Map<string, RegExp>()
+
+export const joinPrompt = (prompt: WritingPromptChunk[]) =>
+  prompt.map((chunk) => chunk.content).join("")
+
+export const replacePlaceholders = (
+  input: string,
+  placeholders: Record<string, string>
+) =>
+  input
+    .replace(/\{[^}]+\}/g, (placeholder) =>
+      Object.prototype.hasOwnProperty.call(placeholders, placeholder)
+        ? placeholders[placeholder]
+        : placeholder
+    )
+    .replace(/\\n/g, "\n")
+
+export const replaceNewlines = (template: WritingTemplatePayload) => {
+  return Object.fromEntries(
+    Object.entries(template).map(([key, value]) => [
+      key,
+      typeof value === "string" ? value.replaceAll("\\n", "\n") : value
+    ])
+  ) as WritingTemplatePayload
+}
+
+export const regexSplitString = (
+  value: string,
+  separator: string,
+  limit?: number
+): [string[], string[]] => {
+  const result: string[] = []
+  const separators: string[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  const regex = new RegExp(separator, "g")
+
+  while ((match = regex.exec(value)) !== null) {
+    if (limit !== undefined && result.length >= limit) break
+    result.push(value.slice(lastIndex, match.index))
+    separators.push(match[0])
+    lastIndex = match.index + match[0].length
+  }
+
+  result.push(value.slice(lastIndex))
+  return [result, separators]
+}
+
+export const regexIndexOf = (value: string, regex: RegExp, start = 0) => {
+  const indexOf = value.substring(start).search(regex)
+  return indexOf >= 0 ? indexOf + start : indexOf
+}
+
+export const regexLastIndexOf = (value: string, regex: RegExp, start?: number) => {
+  const globalRegex = regex.global
+    ? regex
+    : new RegExp(
+        regex.source,
+        `g${regex.ignoreCase ? "i" : ""}${regex.multiLine ? "m" : ""}`
+      )
+  let startPos = start
+  if (typeof startPos === "undefined") {
+    startPos = value.length
+  } else if (startPos < 0) {
+    startPos = 0
+  }
+  const stringToWorkWith = value.substring(0, startPos + 1)
+  let lastIndex = -1
+  let nextStop = 0
+  let result: RegExpExecArray | null
+  while ((result = globalRegex.exec(stringToWorkWith)) != null) {
+    lastIndex = result.index
+    globalRegex.lastIndex = ++nextStop
+  }
+  return lastIndex
+}
+
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+const makeWhiteSpaceLenient = (value: string) =>
+  value
+    .replace(/\s+/g, "")
+    .replace(/(?<!\\)(?:\\{2})*(?!\s)(?!$)/g, "$&\\s*")
+
+export const createLenientPrefixRegex = (prefix: string) => {
+  if (!prefix) return /^/
+  const cached = lenientPrefixCache.get(prefix)
+  if (cached) return cached
+  const regex = new RegExp(`^${makeWhiteSpaceLenient(escapeRegExp(prefix))}`, "i")
+  lenientPrefixCache.set(prefix, regex)
+  return regex
+}
+
+export const createLenientRegex = (value: string) => {
+  if (!value) return /$^/
+  const cached = lenientCache.get(value)
+  if (cached) return cached
+  const regex = new RegExp(
+    makeWhiteSpaceLenient(escapeRegExp(value)).replace(/^\\s\*/, "(^\\s*)?"),
+    "i"
+  )
+  lenientCache.set(value, regex)
+  return regex
+}
+
+export const prefixMatchLength = (left: string, right: string) => {
+  if (left === "" || right === "") return 0
+  for (let len = left.length; len > 0; len--) {
+    for (let i = 0; i <= left.length - len; i++) {
+      const sub = left.substring(i, i + len)
+      if (right.startsWith(sub)) return len
+    }
+  }
+  return 0
+}
+
+export const convertChatToMessages = (
+  chatString: string,
+  template?: WritingTemplatePayload
+): ChatMessage[] => {
+  if (!template || typeof template !== "object") {
+    return [{ role: "user", content: chatString }]
+  }
+
+  const messages: ChatMessage[] = []
+  const { sysPre, sysSuf, instPre, instSuf } = replaceNewlines(template)
+  let remaining = chatString.trimStart()
+
+  const indices = [sysPre, instPre]
+    .map((prefix) => (prefix ? regexIndexOf(remaining, createLenientPrefixRegex(prefix)) : -1))
+    .filter((index) => index !== -1)
+  const minIndex = indices.length > 0 ? Math.min(...indices) : remaining.length
+  if (minIndex !== 0 && instPre) {
+    const matchLen = prefixMatchLength(instPre.trim(), remaining)
+    remaining = instPre + remaining.substring(matchLen)
+  }
+
+  const extractMessage = (
+    text: string,
+    prefix: string,
+    suffixes: string[],
+    role: ChatMessage["role"]
+  ) => {
+    const matches = prefix ? text.match(createLenientPrefixRegex(prefix)) : null
+    if (!matches || !matches.length) return null
+    let working = text.substring(matches[0].length)
+    let endIndex = suffixes[0]
+      ? regexIndexOf(working, createLenientRegex(suffixes[0]))
+      : -1
+    if (endIndex === -1) {
+      if (suffixes.length > 1) {
+        const indices = suffixes
+          .slice(1)
+          .map((suffix) => (suffix ? regexIndexOf(working, createLenientRegex(suffix)) : -1))
+          .filter((index) => index !== -1)
+        endIndex = indices.length > 0 ? Math.min(...indices) : working.length
+      } else {
+        endIndex = working.length
+      }
+    }
+    let content = working.substring(0, endIndex)
+    content = endIndex !== working.length ? content.trim() : content.trimLeft()
+    return {
+      message: { role, content },
+      remainingString: working.substring(endIndex)
+    }
+  }
+
+  const skipToNextKnownPrefix = (text: string, ...prefixes: Array<string | undefined>) => {
+    const indices = prefixes
+      .map((prefix) => (prefix ? regexIndexOf(text, createLenientRegex(prefix)) : -1))
+      .filter((index) => index !== -1)
+    const nextIndex = indices.length > 0 ? Math.min(...indices) : text.length
+    if (nextIndex === 0) return ""
+    return text.substring(nextIndex)
+  }
+
+  while (remaining.length > 0) {
+    let extracted = null
+    if (sysPre) {
+      extracted = extractMessage(remaining, sysPre, [sysSuf || "", instPre || "", instSuf || ""], "system")
+    }
+    if (instPre && !extracted) {
+      extracted = extractMessage(remaining, instPre, [instSuf || ""], "user")
+    }
+    if (instSuf && !extracted) {
+      extracted = extractMessage(remaining, instSuf, [instPre || ""], "assistant")
+    }
+    if (!extracted) {
+      remaining = skipToNextKnownPrefix(remaining, sysPre, instPre, instSuf)
+      continue
+    }
+    const { message, remainingString } = extracted
+    if (message.content.length > 0) messages.push(message)
+    remaining = remainingString
+  }
+
+  const last = messages.at(-1)
+  if (last && last.role === "assistant" && !last.content) {
+    messages.pop()
+  }
+  return messages
+}
+
+export const applyFimTemplate = (
+  promptChunks: WritingPromptChunk[],
+  template?: WritingTemplatePayload
+) => {
+  const fillPlaceholder = "{fill}"
+  const predictPlaceholder = "{predict}"
+
+  let placeholderRegex = predictPlaceholder
+  if (template?.fimTemplate) {
+    placeholderRegex += `|${fillPlaceholder}`
+  }
+
+  let leftPromptChunks: WritingPromptChunk[] | undefined
+  let rightPromptChunks: WritingPromptChunk[] | undefined
+  let foundPlaceholder: string | undefined
+
+  for (let i = 0; i < promptChunks.length; i++) {
+    const chunk = promptChunks[i]
+    if (chunk.type !== "user") continue
+    if (chunk.content.includes(fillPlaceholder) || chunk.content.includes(predictPlaceholder)) {
+      const [sides, separators] = regexSplitString(chunk.content, placeholderRegex, 1)
+      foundPlaceholder = separators[0]
+      let left = sides[0]
+      if ((left.at(-2) !== " " || left.at(-2) !== "\t") && left.at(-1) === " ") {
+        left = left.substring(0, left.length - 1)
+      }
+      leftPromptChunks = [
+        ...promptChunks.slice(0, i),
+        ...(left ? [{ type: "user", content: left }] : [])
+      ]
+
+      const right = sides[1]
+      rightPromptChunks = [
+        ...(right ? [{ type: "user", content: right }] : []),
+        ...promptChunks.slice(i + 1)
+      ]
+      break
+    }
+  }
+
+  if (!foundPlaceholder || !leftPromptChunks || !rightPromptChunks) {
+    return {
+      modifiedPromptText: joinPrompt(promptChunks)
+    }
+  }
+
+  let modifiedPromptText = ""
+  if (foundPlaceholder === "{fill}" && template?.fimTemplate) {
+    const prefix = joinPrompt(leftPromptChunks)
+    const suffix = joinPrompt(rightPromptChunks)
+    modifiedPromptText = replacePlaceholders(template.fimTemplate, {
+      "{prefix}": prefix,
+      "{suffix}": suffix
+    })
+  } else {
+    modifiedPromptText = joinPrompt(leftPromptChunks)
+  }
+
+  return {
+    modifiedPromptText,
+    fimPromptInfo: {
+      fimLeftChunks: leftPromptChunks,
+      fimRightChunks: rightPromptChunks,
+      fimPlaceholder: foundPlaceholder
+    }
+  }
+}
+
+export const assembleWorldInfo = (
+  prompt: string,
+  worldInfo: WritingWorldInfo,
+  tokenRatio: number
+) => {
+  const entries = Array.isArray(worldInfo.entries) ? worldInfo.entries : []
+  const validEntries = entries.filter(
+    (entry) =>
+      entry.keys.length > 0 &&
+      !(entry.keys.length === 1 && entry.keys[0] === "") &&
+      entry.text !== ""
+  )
+  const activeEntries = validEntries.filter((entry) => {
+    const searchRange = Number(entry.search)
+    const resolvedRange = Number.isFinite(searchRange) ? searchRange : 2048
+    const sliceLength = Math.max(0, Math.round(resolvedRange * tokenRatio))
+    const searchPrompt = prompt.substring(Math.max(0, prompt.length - sliceLength))
+    return entry.keys.some((key) => {
+      if (!searchPrompt.length) return false
+      try {
+        return new RegExp(key, "i").test(searchPrompt) && key !== ""
+      } catch {
+        return false
+      }
+    })
+  })
+
+  return activeEntries.length > 0
+    ? activeEntries.map((entry) => entry.text).join("\n")
+    : ""
+}
+
+export const buildAdditionalContext = (params: {
+  promptText: string
+  contextLength: number
+  tokenRatio: number
+  memoryTokens: WritingSessionPayload["memoryTokens"]
+  authorNoteTokens: WritingSessionPayload["authorNoteTokens"]
+  authorNoteDepth: number
+  worldInfo: WritingWorldInfo
+  assembledWorldInfo: string
+  defaultContextOrder: string
+}) => {
+  const {
+    promptText,
+    contextLength,
+    tokenRatio,
+    memoryTokens,
+    authorNoteTokens,
+    authorNoteDepth,
+    worldInfo,
+    assembledWorldInfo,
+    defaultContextOrder
+  } = params
+
+  const authorNote = authorNoteTokens.text
+    ? [authorNoteTokens.prefix, authorNoteTokens.text, authorNoteTokens.suffix].join("")
+    : ""
+
+  const contextReplacements: Record<string, string> = {
+    "{wiPrefix}": assembledWorldInfo ? worldInfo.prefix : "",
+    "{wiText}": assembledWorldInfo,
+    "{wiSuffix}": assembledWorldInfo ? worldInfo.suffix : "",
+    "{memPrefix}": memoryTokens.text || assembledWorldInfo ? memoryTokens.prefix : "",
+    "{memText}": memoryTokens.text,
+    "{memSuffix}": memoryTokens.text || assembledWorldInfo ? memoryTokens.suffix : "",
+    "{prompt}": ""
+  }
+
+  const additionalContext = Object.values(contextReplacements).join("").length
+  const estimatedStart = Math.round(
+    promptText.length - contextLength * tokenRatio + additionalContext
+  )
+  const startIndex = Math.max(0, estimatedStart + 1)
+  const truncatedPrompt = promptText.substring(startIndex)
+
+  const promptLines = truncatedPrompt.match(/.*\n?/g) || []
+  const depth = Math.min(promptLines.length, authorNoteDepth)
+  const insertIndex = Math.max(0, promptLines.length - depth - 1)
+  if (authorNote) {
+    promptLines.splice(insertIndex, 0, authorNote)
+  }
+  const authorNotePrompt = authorNote ? promptLines.join("") : truncatedPrompt
+  contextReplacements["{prompt}"] = authorNotePrompt
+
+  const contextOrder = memoryTokens.contextOrder || defaultContextOrder
+  return contextOrder
+    .split("\n")
+    .map((line) => replacePlaceholders(line, contextReplacements))
+    .filter((line) => line.trim() !== "")
+    .join("\n")
+    .replace(/\\n/g, "\n")
+}
+
+const parseJsonMaybe = (value: string) => {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+const coercePromptChunks = (
+  value: unknown,
+  fallback: WritingPromptChunk[]
+): WritingPromptChunk[] => {
+  if (!value) return fallback
+  if (typeof value === "string") {
+    return [{ type: "user", content: value }]
+  }
+  if (!Array.isArray(value)) return fallback
+  const chunks = value
+    .map((item) => {
+      if (!item) return null
+      if (typeof item === "string") {
+        return { type: "user", content: item }
+      }
+      if (typeof item === "object") {
+        const record = item as WritingPromptChunk
+        if (record.type && typeof record.content === "string") {
+          return record
+        }
+        const content =
+          typeof (record as any).content === "string"
+            ? (record as any).content
+            : String((record as any).content ?? "")
+        return { type: "user", content }
+      }
+      return null
+    })
+    .filter(Boolean) as WritingPromptChunk[]
+  return chunks.length > 0 ? chunks : fallback
+}
+
+export const normalizeSessionPayload = (
+  raw: unknown,
+  defaults: WritingSessionPayload = DEFAULT_SESSION
+): WritingSessionPayload => {
+  if (!raw || typeof raw !== "object") {
+    return { ...defaults }
+  }
+  const payload = raw as Record<string, unknown>
+  const normalized: WritingSessionPayload = { ...defaults }
+
+  ;(Object.keys(defaults) as Array<keyof WritingSessionPayload>).forEach((key) => {
+    const value = payload[key]
+    const defaultValue = defaults[key]
+    if (value === undefined || value === null) {
+      return
+    }
+    if (typeof defaultValue === "number") {
+      const numeric = typeof value === "string" ? Number(value) : (value as number)
+      normalized[key] = Number.isFinite(numeric) ? (numeric as any) : defaultValue
+      return
+    }
+    if (typeof defaultValue === "boolean") {
+      if (typeof value === "string") {
+        normalized[key] = (value === "true") as any
+      } else {
+        normalized[key] = Boolean(value) as any
+      }
+      return
+    }
+    if (Array.isArray(defaultValue)) {
+      if (typeof value === "string") {
+        const parsed = parseJsonMaybe(value)
+        normalized[key] = (Array.isArray(parsed) ? parsed : defaultValue) as any
+      } else if (Array.isArray(value)) {
+        normalized[key] = value as any
+      }
+      return
+    }
+    if (typeof defaultValue === "object" && defaultValue !== null) {
+      if (typeof value === "string") {
+        const parsed = parseJsonMaybe(value)
+        normalized[key] = (typeof parsed === "object" && parsed
+          ? { ...defaultValue, ...parsed }
+          : defaultValue) as any
+      } else if (typeof value === "object" && value) {
+        normalized[key] = { ...defaultValue, ...(value as any) }
+      }
+      return
+    }
+    if (typeof value === "string") {
+      normalized[key] = value as any
+    }
+  })
+
+  normalized.prompt = coercePromptChunks(
+    payload.prompt ?? payload.promptChunks,
+    defaults.prompt
+  )
+
+  const endpointModel = payload.endpointModel
+  if (!normalized.model && typeof endpointModel === "string") {
+    normalized.model = endpointModel
+  }
+  const selectedTemplate = payload.selectedTemplate
+  if (!normalized.template && typeof selectedTemplate === "string") {
+    normalized.template = selectedTemplate
+  }
+
+  if (!normalized.prompt.length) {
+    normalized.prompt = defaults.prompt
+  }
+
+  return normalized
+}

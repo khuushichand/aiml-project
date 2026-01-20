@@ -104,6 +104,13 @@ class ProviderLimits:
             "valid_formats": {"mp3", "wav"},
             "min_speed": 0.9,
             "max_speed": 1.5
+        },
+        "pocket_tts": {
+            "max_text_length": 5000,
+            "languages": ["en"],
+            "valid_formats": {"mp3", "wav", "opus", "flac", "pcm", "aac"},
+            "min_speed": 0.25,
+            "max_speed": 4.0
         }
     }
 
@@ -200,6 +207,7 @@ class TTSInputValidator:
         "index_tts": 4000,
         "supertonic": 15000,
         "supertonic2": 15000,
+        "pocket_tts": 5000,
         "default": 5000,
     }
 
@@ -216,6 +224,7 @@ class TTSInputValidator:
         "index_tts": {"en", "zh"},
         "supertonic": {"en"},
         "supertonic2": {"en", "ko", "es", "pt", "fr"},
+        "pocket_tts": {"en"},
     }
 
     # Supported audio formats by provider
@@ -231,6 +240,7 @@ class TTSInputValidator:
         "index_tts": {AudioFormat.MP3, AudioFormat.WAV},
         "supertonic": {AudioFormat.MP3, AudioFormat.WAV},
         "supertonic2": {AudioFormat.MP3, AudioFormat.WAV},
+        "pocket_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM, AudioFormat.AAC},
     }
 
     # Voice reference file validation
@@ -636,7 +646,7 @@ class TTSInputValidator:
         elif provider == "elevenlabs":
             # ElevenLabs specific rules
             return text
-        elif provider in ["kokoro", "higgs", "dia", "chatterbox", "vibevoice"]:
+        elif provider in ["kokoro", "higgs", "dia", "chatterbox", "vibevoice", "pocket_tts"]:
             # Local model specific rules - more conservative
             # Remove URLs and email addresses
             text = re.sub(r'https?://\S+', '[URL]', text)

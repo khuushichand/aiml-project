@@ -27,6 +27,7 @@ import {
   Kanban,
   Table2,
   Library,
+  PenLine,
 } from "lucide-react"
 
 const classNames = (...classes: (string | false | null | undefined)[]) =>
@@ -196,6 +197,12 @@ export function HeaderShortcuts({
             to: "/quiz",
             icon: ClipboardList,
             label: t("option:header.quiz", "Quizzes"),
+          },
+          {
+            type: "link" as const,
+            to: "/writing-playground",
+            icon: PenLine,
+            label: t("option:header.writingPlayground", "Writing Playground"),
           },
           {
             type: "link" as const,

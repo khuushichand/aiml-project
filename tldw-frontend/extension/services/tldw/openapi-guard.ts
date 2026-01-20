@@ -153,6 +153,17 @@ export type ClientPath =
   | "/api/v1/chunking/chunk_text"
   | "/api/v1/chunking/chunk_file"
   | "/api/v1/chunking/capabilities"
+  | "/api/v1/writing/version"
+  | "/api/v1/writing/capabilities"
+  | "/api/v1/writing/sessions"
+  | "/api/v1/writing/sessions/{session_id}"
+  | "/api/v1/writing/sessions/{session_id}/clone"
+  | "/api/v1/writing/templates"
+  | "/api/v1/writing/templates/{name}"
+  | "/api/v1/writing/themes"
+  | "/api/v1/writing/themes/{name}"
+  | "/api/v1/writing/tokenize"
+  | "/api/v1/writing/token-count"
 
 type ReplacePathParams<Path extends string> =
   Path extends `${infer Head}{${string}}${infer Tail}`

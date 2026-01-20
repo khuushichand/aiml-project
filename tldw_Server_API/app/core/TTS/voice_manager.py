@@ -73,6 +73,13 @@ PROVIDER_REQUIREMENTS = {
         "duration": {"min": 3, "max": 15},
         "sample_rate": 16000,
         "convert_to": "wav"
+    },
+    "pocket_tts": {
+        "formats": [".wav", ".mp3", ".flac", ".ogg", ".m4a"],
+        "max_size_mb": 20,
+        "duration": {"min": 1, "max": 60},
+        "sample_rate": 24000,
+        "convert_to": "wav"
     }
 }
 

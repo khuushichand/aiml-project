@@ -24,6 +24,7 @@ Voice cloning, also known as voice synthesis or voice mimicry, allows the TTS sy
 
 | Provider | Min Duration | Max Duration | Languages | Quality | Speed | VRAM Usage |
 |----------|-------------|--------------|-----------|---------|-------|------------|
+| **PocketTTS** | 1s | 60s | EN | Good | Fast | CPU |
 | **Higgs** | 3s | 10s | 50+ | Excellent | Medium | 6GB+ |
 | **Chatterbox** | 5s | 20s | English | Very Good | Fast | 4GB+ |
 | **VibeVoice** | 3s | 30s | 12 | Good | Medium | 3-16GB |

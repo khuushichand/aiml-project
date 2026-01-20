@@ -1032,7 +1032,7 @@ TTS_VOICE_STRICT_DURATION = false
 
 [API-Routes]
 # When true, disables a curated set of in-development (experimental) routes unless explicitly enabled.
-stable_only = true
+stable_only = false
 
 # Comma-separated list of route keys to disable regardless of stability
 disable =

@@ -646,6 +646,7 @@ async def shutdown_user_audit_service(user_id: int):
 
     await asyncio.gather(*[_stop_service(s) for s in services], return_exceptions=True)
 
+
 async def shutdown_all_audit_services():
     """
     Shutdown all cached audit service instances.
@@ -653,6 +654,16 @@ async def shutdown_all_audit_services():
     """
     services: list[UnifiedAuditService] = []
     total_instances = 0
+    shutdown_timeout_s = _settings_float(
+        "AUDIT_SHUTDOWN_TIMEOUT_SECONDS",
+        10.0,
+        min_value=0.0,
+        max_value=300.0,
+    )
+    if shutdown_timeout_s <= 0:
+        shutdown_timeout_s = 0.0
+    timeout_count = 0
+    error_count = 0
 
     for state in _all_loop_states():
         with state.cache_lock:
@@ -675,10 +686,38 @@ async def shutdown_all_audit_services():
 
     logger.info(f"Shutting down audit services for {total_instances} instances...")
 
+    def _service_label(service: UnifiedAuditService) -> str:
+        db_path = getattr(service, "db_path", None)
+        storage_mode = getattr(service, "storage_mode", None)
+        return f"id={id(service)} db_path={db_path} storage_mode={storage_mode}"
+
+    async def _await_with_timeout(awaitable, *, label: str) -> None:
+        nonlocal timeout_count
+        if shutdown_timeout_s <= 0:
+            await awaitable
+            return
+        try:
+            await asyncio.wait_for(awaitable, timeout=shutdown_timeout_s)
+        except asyncio.TimeoutError:
+            timeout_count += 1
+            logger.error(
+                f"Audit service shutdown timed out after {shutdown_timeout_s:.2f}s ({label})"
+            )
+
     async def _stop_service(service: UnifiedAuditService) -> None:
+        nonlocal error_count
         owner_loop = getattr(service, "owner_loop", None)
-        if owner_loop and owner_loop.is_closed():
-            owner_loop = None
+        if owner_loop:
+            try:
+                if owner_loop.is_closed():
+                    owner_loop = None
+                elif not owner_loop.is_running():
+                    logger.warning(
+                        f"Audit service owner loop not running; forcing shutdown on current loop ({_service_label(service)})"
+                    )
+                    owner_loop = None
+            except Exception:
+                owner_loop = None
 
         try:
             try:
@@ -688,16 +727,22 @@ async def shutdown_all_audit_services():
 
             if owner_loop and current_loop is not owner_loop:
                 future = asyncio.run_coroutine_threadsafe(service.stop(), owner_loop)
-                await asyncio.wrap_future(future)
+                await _await_with_timeout(asyncio.wrap_future(future), label=_service_label(service))
             else:
-                await service.stop()
+                await _await_with_timeout(service.stop(), label=_service_label(service))
         except Exception as e:
+            error_count += 1
             logger.error(f"Error shutting down audit service: {e}", exc_info=True)
 
     if services:
         await asyncio.gather(*[_stop_service(s) for s in services], return_exceptions=True)
 
-    logger.info("All audit services shut down successfully.")
+    if timeout_count or error_count:
+        logger.warning(
+            f"Audit services shutdown completed with issues (timeouts={timeout_count}, errors={error_count})."
+        )
+    else:
+        logger.info("All audit services shut down successfully.")
 
 # Example of how to register for shutdown event in FastAPI:
 # from fastapi import FastAPI

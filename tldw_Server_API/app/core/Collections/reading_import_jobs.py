@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -35,8 +36,7 @@ class ReadingImportJobError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
-        if backoff_seconds is not None:
-            self.backoff_seconds = backoff_seconds
+        self.backoff_seconds = backoff_seconds
 
 
 def reading_import_queue() -> str:
@@ -143,9 +143,8 @@ async def handle_reading_import_job(job: Dict[str, Any]) -> Dict[str, Any]:
     filename = payload.get("filename")
 
     import_path = resolve_reading_import_file(user_id, str(file_token))
-    raw_bytes = b""
     try:
-        raw_bytes = import_path.read_bytes()
+        raw_bytes = await asyncio.to_thread(import_path.read_bytes)
         if not raw_bytes:
             raise ReadingImportJobError("reading_import_empty", retryable=False)
         if len(raw_bytes) > MAX_READING_IMPORT_BYTES:
@@ -155,7 +154,8 @@ async def handle_reading_import_job(job: Dict[str, Any]) -> Dict[str, Any]:
             source = detect_import_source(filename, raw_bytes)
         items = parse_reading_import(raw_bytes, source=source, filename=filename)
         service = ReadingService(user_id)
-        result = service.import_items(
+        result = await asyncio.to_thread(
+            service.import_items,
             items=items,
             merge_tags=merge_tags,
             origin_type=source,
@@ -176,6 +176,6 @@ async def handle_reading_import_job(job: Dict[str, Any]) -> Dict[str, Any]:
         raise ReadingImportJobError(f"reading_import_failed:{exc}", retryable=False) from exc
     finally:
         try:
-            import_path.unlink(missing_ok=True)
+            await asyncio.to_thread(import_path.unlink, missing_ok=True)
         except Exception as cleanup_exc:
             logger.debug(f"reading_import_job: cleanup failed for {import_path}: {cleanup_exc}")

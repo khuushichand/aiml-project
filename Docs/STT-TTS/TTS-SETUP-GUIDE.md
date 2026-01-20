@@ -166,6 +166,46 @@ kokoro:
 - **RAM**: 2GB minimum
 - **eSpeak NG**: install system package; env var only for non-standard library paths
 
+### PocketTTS ONNX Setup
+
+PocketTTS ONNX provides lightweight, streaming-capable voice cloning with short reference audio samples.
+
+#### Installation
+```bash
+# From repo root (runtime deps only)
+pip install -e '.[TTS_pocket_tts]'
+# Optional GPU: pip install onnxruntime-gpu
+```
+Note: PocketTTS ONNX is not published on PyPI. The runtime module and weights are downloaded separately.
+
+#### Download Models (Scripted)
+```bash
+python Helper_Scripts/TTS_Installers/install_tts_pocket_tts_onnx.py --output-dir models/pocket_tts_onnx
+```
+
+#### Download Models (Manual)
+```bash
+pip install huggingface-hub
+huggingface-cli download KevinAHM/pocket-tts-onnx onnx --local-dir models/pocket_tts_onnx
+huggingface-cli download KevinAHM/pocket-tts-onnx tokenizer.model --local-dir models/pocket_tts_onnx
+# If present in the repo, also fetch the Python module:
+huggingface-cli download KevinAHM/pocket-tts-onnx pocket_tts_onnx --local-dir models/pocket_tts_onnx
+huggingface-cli download KevinAHM/pocket-tts-onnx pocket_tts_onnx.py --local-dir models/pocket_tts_onnx
+```
+If you store the module elsewhere, set `module_path` to that directory in the config.
+
+#### Configuration
+```yaml
+# In tts_providers_config.yaml
+pocket_tts:
+  enabled: true
+  model_path: ./models/pocket_tts_onnx/onnx
+  tokenizer_path: ./models/pocket_tts_onnx/tokenizer.model
+  module_path: ./models/pocket_tts_onnx
+  precision: "int8"  # or "fp32"
+  device: "auto"     # "cpu" | "cuda"
+```
+
 ### Higgs Audio V2 Setup
 
 Higgs is a powerful 3B parameter model supporting 50+ languages, music generation, and voice cloning.
@@ -411,7 +451,7 @@ vibevoice:
 
 ## Voice Cloning Setup
 
-Voice cloning allows you to synthesize speech using a reference voice from an audio sample. Three providers support this feature: Higgs, Chatterbox, and VibeVoice.
+Voice cloning allows you to synthesize speech using a reference voice from an audio sample. Providers include PocketTTS, Higgs, Chatterbox, and VibeVoice.
 
 ### Preparing Voice Reference Audio
 
@@ -419,6 +459,7 @@ Voice cloning allows you to synthesize speech using a reference voice from an au
 
 | Provider | Min Duration | Max Duration | Sample Rate | Format | Quality Requirements |
 |----------|-------------|--------------|-------------|---------|---------------------|
+| **PocketTTS** | 1 second | 60 seconds | 24kHz | WAV/MP3/FLAC/OGG | Clear speech, single speaker |
 | **Higgs** | 3 seconds | 10 seconds | 24kHz | WAV/MP3/FLAC | Clear speech, single speaker |
 | **Chatterbox** | 5 seconds | 20 seconds | 24kHz | WAV/MP3 | No background noise/music |
 | **VibeVoice** | 3 seconds | 30 seconds | 22.05kHz | WAV/MP3 | Can handle some background |

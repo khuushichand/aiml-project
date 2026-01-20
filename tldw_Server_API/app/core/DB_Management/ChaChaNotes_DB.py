@@ -9807,6 +9807,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         update_data: Dict[str, Any],
         expected_version: int,
     ) -> bool | None:
+        payload = update_data.get("payload")
+        if isinstance(payload, dict):
+            update_data["payload_json"] = self._serialize_writing_payload(
+                update_data.pop("payload"),
+                "Session",
+            )
         allowed_fields = ["name", "payload_json", "schema_version", "version_parent_id"]
         return self._update_generic_item(
             "writing_sessions",
@@ -9924,6 +9930,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         expected_version: int,
     ) -> bool | None:
         template_name = self._normalize_writing_name(name, "Template")
+        payload = update_data.get("payload")
+        if isinstance(payload, dict):
+            update_data["payload_json"] = self._serialize_writing_payload(
+                update_data.pop("payload"),
+                "Template",
+            )
         allowed_fields = ["name", "payload_json", "schema_version", "version_parent_id", "is_default"]
         return self._update_generic_item(
             "writing_templates",

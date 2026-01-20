@@ -42,6 +42,12 @@ class AudioProcessor:
             'max_duration': 30.0,
             'preferred_sample_rate': 22050,
             'formats': {'.wav', '.mp3'}
+        },
+        'pocket_tts': {
+            'min_duration': 1.0,
+            'max_duration': 60.0,
+            'preferred_sample_rate': 24000,
+            'formats': {'.wav', '.mp3', '.flac', '.ogg', '.m4a'}
         }
     }
 

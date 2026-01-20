@@ -1337,6 +1337,7 @@ async def unified_search_stream_endpoint(
                             "media_db_path": media_db.db_path if media_db else None,
                             "notes_db_path": chacha_db.db_path if chacha_db else None,
                             "character_db_path": chacha_db.db_path if chacha_db else None,
+                            "kanban_db_path": kanban_db_path,
                         },
                         media_db=media_db,
                         chacha_db=chacha_db,

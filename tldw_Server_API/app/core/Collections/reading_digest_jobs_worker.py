@@ -52,7 +52,7 @@ async def run_reading_digest_jobs_worker(stop_event: Optional[asyncio.Event] = N
 
         _stop_watcher_task = asyncio.create_task(_watch_stop())
 
-    logger.info("Reading digest worker starting: queue=%s worker_id=%s", queue, worker_id)
+    logger.info("Reading digest worker starting: queue={} worker_id={}", queue, worker_id)
     try:
         await sdk.run(handler=handle_reading_digest_job)
     finally:

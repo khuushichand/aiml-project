@@ -23,7 +23,7 @@ def _get_slides_db_path_for_user(user_id: int) -> Path:
     return DatabasePaths.get_slides_db_path(user_id)
 
 
-async def get_slides_db_for_user(
+def get_slides_db_for_user(
     current_user: User = Depends(get_request_user),
 ) -> SlidesDatabase:
     """Resolve or initialize a per-user SlidesDatabase instance; raises HTTPException on failure."""
@@ -66,12 +66,12 @@ async def get_slides_db_for_user(
             ) from exc
 
 
-async def try_get_slides_db_for_user(
+def try_get_slides_db_for_user(
     current_user: User = Depends(get_request_user),
 ) -> Optional[SlidesDatabase]:
     """Best-effort SlidesDatabase resolver that returns None on failure."""
     try:
-        return await get_slides_db_for_user(current_user=current_user)
+        return get_slides_db_for_user(current_user=current_user)
     except HTTPException as exc:
         logger.debug(
             "Slides DB unavailable for user {}: {}",

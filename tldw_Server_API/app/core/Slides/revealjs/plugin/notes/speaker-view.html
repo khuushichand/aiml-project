@@ -502,7 +502,9 @@
 					if ( data.notes ) {
 						notes.classList.remove( 'hidden' );
 						notesValue.style.whiteSpace = data.whitespace;
-						if( data.markdown ) {
+						if( data.markdown
+							&& typeof marked !== 'undefined'
+							&& typeof DOMPurify !== 'undefined' ) {
 							notesValue.innerHTML = DOMPurify.sanitize( marked( data.notes ) );
 						}
 						else {

@@ -216,25 +216,25 @@ class WorkflowsSchedulerDB:
 
             if backend_type == BackendType.POSTGRESQL:
                 column_sql = {
-                    "concurrency_mode": "ALTER TABLE workflow_schedules ADD COLUMN concurrency_mode TEXT DEFAULT 'skip'",
+                    "concurrency_mode": "ALTER TABLE workflow_schedules ADD COLUMN concurrency_mode TEXT NOT NULL DEFAULT 'skip'",
                     "misfire_grace_sec": "ALTER TABLE workflow_schedules ADD COLUMN misfire_grace_sec INTEGER DEFAULT 300",
-                    "coalesce": "ALTER TABLE workflow_schedules ADD COLUMN coalesce BOOLEAN DEFAULT TRUE",
+                    "coalesce": "ALTER TABLE workflow_schedules ADD COLUMN coalesce BOOLEAN NOT NULL DEFAULT TRUE",
                     "require_online": "ALTER TABLE workflow_schedules ADD COLUMN require_online BOOLEAN DEFAULT FALSE",
                     "last_run_at": "ALTER TABLE workflow_schedules ADD COLUMN last_run_at TIMESTAMPTZ",
                     "next_run_at": "ALTER TABLE workflow_schedules ADD COLUMN next_run_at TIMESTAMPTZ",
                     "last_status": "ALTER TABLE workflow_schedules ADD COLUMN last_status TEXT",
-                    "jitter_sec": "ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER DEFAULT 0",
+                    "jitter_sec": "ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER NOT NULL DEFAULT 0",
                 }
             else:
                 column_sql = {
-                    "concurrency_mode": "ALTER TABLE workflow_schedules ADD COLUMN concurrency_mode TEXT DEFAULT 'skip'",
+                    "concurrency_mode": "ALTER TABLE workflow_schedules ADD COLUMN concurrency_mode TEXT NOT NULL DEFAULT 'skip'",
                     "misfire_grace_sec": "ALTER TABLE workflow_schedules ADD COLUMN misfire_grace_sec INTEGER DEFAULT 300",
-                    "coalesce": "ALTER TABLE workflow_schedules ADD COLUMN coalesce INTEGER DEFAULT 1",
+                    "coalesce": "ALTER TABLE workflow_schedules ADD COLUMN coalesce INTEGER NOT NULL DEFAULT 1",
                     "require_online": "ALTER TABLE workflow_schedules ADD COLUMN require_online INTEGER DEFAULT 0",
                     "last_run_at": "ALTER TABLE workflow_schedules ADD COLUMN last_run_at TEXT",
                     "next_run_at": "ALTER TABLE workflow_schedules ADD COLUMN next_run_at TEXT",
                     "last_status": "ALTER TABLE workflow_schedules ADD COLUMN last_status TEXT",
-                    "jitter_sec": "ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER DEFAULT 0",
+                    "jitter_sec": "ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER NOT NULL DEFAULT 0",
                 }
 
             for column, statement in column_sql.items():

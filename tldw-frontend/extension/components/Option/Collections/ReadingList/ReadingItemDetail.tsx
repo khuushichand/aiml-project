@@ -366,24 +366,6 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     }
   }, [api, currentItem, setCurrentItem, t])
 
-  const handleDelete = useCallback(async () => {
-    if (!currentItem) return
-    setActionLoading(true)
-    try {
-      await api.deleteReadingItem(currentItem.id, { hard: true })
-      await clearReadingProgress(currentItem.id)
-      removeItem(currentItem.id)
-      message.success(t("collections:reading.deleted", "Article deleted"))
-      handleClose()
-      onRefresh?.()
-    } catch (error: any) {
-      message.error(error?.message || "Failed to delete article")
-    } finally {
-      setActionLoading(false)
-      setDeleteModalOpen(false)
-    }
-  }, [api, currentItem, removeItem, handleClose, onRefresh, t])
-
   const computeProgress = useCallback((): ReadingProgress | null => {
     const container = scrollContainerRef.current
     if (!container) return null
@@ -439,6 +421,24 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     setNotesSaveError(null)
     setNotesSaving(false)
   }, [closeItemDetail, flushProgressSave])
+
+  const handleDelete = useCallback(async () => {
+    if (!currentItem) return
+    setActionLoading(true)
+    try {
+      await api.deleteReadingItem(currentItem.id, { hard: true })
+      await clearReadingProgress(currentItem.id)
+      removeItem(currentItem.id)
+      message.success(t("collections:reading.deleted", "Article deleted"))
+      handleClose()
+      onRefresh?.()
+    } catch (error: any) {
+      message.error(error?.message || "Failed to delete article")
+    } finally {
+      setActionLoading(false)
+      setDeleteModalOpen(false)
+    }
+  }, [api, currentItem, removeItem, handleClose, onRefresh, t])
 
   const handleContentScroll = useCallback(() => {
     if (activeTabKey !== "content") return

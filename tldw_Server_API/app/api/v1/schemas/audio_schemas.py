@@ -92,7 +92,10 @@ class OpenAISpeechRequest(BaseModel):
     )
     voice_reference: Optional[str] = Field(
         default=None,
-        description="Base64-encoded audio data for voice cloning/reference. Supported by NeuTTS, Higgs (3-10s), Chatterbox (5-20s), and VibeVoice models.",
+        description=(
+            "Base64-encoded audio data for voice cloning/reference. Supported by PocketTTS, NeuTTS, "
+            "Higgs (3-10s), Chatterbox (5-20s), VibeVoice, and IndexTTS2 models."
+        ),
     )
     reference_duration_min: Optional[float] = Field(
         default=None,

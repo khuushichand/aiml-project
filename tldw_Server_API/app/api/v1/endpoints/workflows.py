@@ -167,6 +167,24 @@ def _find_api_key_path(value: Any, path: str = "") -> Optional[str]:
     return None
 
 
+def _find_signing_secret_path(value: Any, path: str = "") -> Optional[str]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            next_path = f"{path}.{key}" if path else str(key)
+            if key == "signing" and isinstance(child, dict) and "secret" in child:
+                return f"{next_path}.secret"
+            found = _find_signing_secret_path(child, next_path)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            next_path = f"{path}[{idx}]"
+            found = _find_signing_secret_path(child, next_path)
+            if found:
+                return found
+    return None
+
+
 def _llm_step_schema_base() -> Dict[str, Any]:
     return {
         "type": "object",
@@ -392,6 +410,15 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
         raise HTTPException(
             status_code=422,
             detail=f"api_key not allowed in workflow definitions at '{api_key_path}'; use runtime secret refs",
+        )
+    signing_secret_path = _find_signing_secret_path(defn)
+    if signing_secret_path:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "signing.secret not allowed in workflow definitions at "
+                f"'{signing_secret_path}'; use secret_ref or environment variables"
+            ),
         )
     # steps
     steps = defn.get("steps") or []

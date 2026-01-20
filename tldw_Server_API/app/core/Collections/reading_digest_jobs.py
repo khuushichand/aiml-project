@@ -34,7 +34,7 @@ def _env_int(name: str, default: int) -> int:
     try:
         return int(raw)
     except (TypeError, ValueError):
-        logger.warning("Invalid %s; using default=%s", name, default)
+        logger.warning("Invalid {}; using default={}", name, default)
         return default
 
 
@@ -382,7 +382,21 @@ def _build_reading_items_context(rows: list[Any]) -> list[Dict[str, Any]]:
             items[idx]["notes"] = getattr(row, "notes", None) or ""
             items[idx]["read_at"] = getattr(row, "read_at", None)
             items[idx]["updated_at"] = getattr(row, "updated_at", None)
-        except Exception:
+        except Exception as exc:
+            row_id = None
+            try:
+                row_id = getattr(row, "id", None) or getattr(row, "pk", None)
+                if row_id is None and isinstance(row, dict):
+                    row_id = row.get("id") or row.get("pk")
+            except Exception:
+                row_id = None
+            logger.debug(
+                "reading_digest: failed to enrich item context idx={} row_id={}: {}",
+                idx,
+                row_id,
+                exc,
+                exc_info=True,
+            )
             continue
     return items
 
@@ -497,7 +511,7 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
             output_format = "md"
 
         if output_template and output_template.format not in {"md", "html"}:
-            logger.warning("reading_digest: invalid template format for %s", output_template.name)
+            logger.warning("reading_digest: invalid template format for {}", output_template.name)
             output_template = None
 
         if output_template is None:
@@ -603,10 +617,25 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:
             try:
                 await asyncio.to_thread(path.unlink)
-            except FileNotFoundError:
-                pass
-            except Exception:
-                pass
+            except FileNotFoundError as cleanup_exc:
+                logger.debug(
+                    "reading_digest: cleanup missing file after db insert failure "
+                    "(schedule_id={}, job_id={}, path={}): {}",
+                    schedule.id,
+                    job.get("id"),
+                    path,
+                    cleanup_exc,
+                )
+            except Exception as cleanup_exc:
+                logger.debug(
+                    "reading_digest: cleanup unlink failed after db insert failure "
+                    "(schedule_id={}, job_id={}, path={}): {}",
+                    schedule.id,
+                    job.get("id"),
+                    path,
+                    cleanup_exc,
+                    exc_info=True,
+                )
             raise ReadingDigestJobError("reading_digest_db_insert_failed", retryable=False) from exc
 
         try:

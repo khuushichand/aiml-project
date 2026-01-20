@@ -1714,7 +1714,13 @@ class UnifiedAuditService:
         current_loop = asyncio.get_running_loop()
         owner_closed = False
         try:
-            owner_closed = bool(self._owner_loop and self._owner_loop.is_closed())
+            if self._owner_loop:
+                owner_closed = bool(self._owner_loop.is_closed())
+                if not owner_closed:
+                    try:
+                        owner_closed = not self._owner_loop.is_running()
+                    except Exception:
+                        owner_closed = False
         except Exception:
             owner_closed = False
         # Enforce same-loop shutdown only when the owner loop is still alive.

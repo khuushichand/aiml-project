@@ -61,6 +61,10 @@ export default () => Plugin;
  */
 var zoom = (function(){
 
+	function hasDocumentBody() {
+		return typeof document !== 'undefined' && document.body;
+	}
+
 	// The current zoom level (scale)
 	var level = 1;
 
@@ -73,11 +77,20 @@ var zoom = (function(){
 		panUpdateInterval = -1;
 
 	// Check for transform support so that we can fallback otherwise
-	var supportsTransforms = 	'transform' in document.body.style;
-
-	if( supportsTransforms ) {
-		// The easing that will be applied when we zoom in/out
-		document.body.style.transition = 'transform 0.8s ease';
+	var supportsTransforms = null;
+	function getSupportsTransforms() {
+		if( supportsTransforms !== null ) {
+			return supportsTransforms;
+		}
+		if( !hasDocumentBody() ) {
+			return false;
+		}
+		supportsTransforms = 'transform' in document.body.style;
+		if( supportsTransforms ) {
+			// The easing that will be applied when we zoom in/out
+			document.body.style.transition = 'transform 0.8s ease';
+		}
+		return supportsTransforms;
 	}
 
 	// Event listeners are attached/detached so the plugin can be cleaned up.
@@ -94,7 +107,7 @@ var zoom = (function(){
 		}
 	};
 	function attachEventHandlers() {
-		if( eventHandlersAttached ) {
+		if( eventHandlersAttached || typeof document === 'undefined' ) {
 			return;
 		}
 		document.addEventListener( 'keyup', onKeyup );
@@ -102,16 +115,13 @@ var zoom = (function(){
 		eventHandlersAttached = true;
 	}
 	function detachEventHandlers() {
-		if( !eventHandlersAttached ) {
+		if( !eventHandlersAttached || typeof document === 'undefined' ) {
 			return;
 		}
 		document.removeEventListener( 'keyup', onKeyup );
 		document.removeEventListener( 'mousemove', onMousemove );
 		eventHandlersAttached = false;
 	}
-
-	// Attach keyup/mousemove handlers for escape + panning.
-	attachEventHandlers();
 
 	/**
 	 * Applies the CSS required to zoom in, prefers the use of CSS3
@@ -121,6 +131,9 @@ var zoom = (function(){
 	 * @param {Number} scale
 	 */
 	function magnify( rect, scale ) {
+		if( !hasDocumentBody() ) {
+			return;
+		}
 
 		var scrollOffset = getScrollOffset();
 
@@ -132,7 +145,7 @@ var zoom = (function(){
 		rect.x -= ( window.innerWidth - ( rect.width * scale ) ) / 2;
 		rect.y -= ( window.innerHeight - ( rect.height * scale ) ) / 2;
 
-		if( supportsTransforms ) {
+		if( getSupportsTransforms() ) {
 			// Reset
 			if( scale === 1 ) {
 				document.body.style.transform = '';

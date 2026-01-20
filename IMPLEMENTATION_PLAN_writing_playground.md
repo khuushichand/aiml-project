@@ -15,6 +15,7 @@
 **Success Criteria**: Editor/overlay, sidebar controls, modals, TTS, import/export all functional; uses server-backed persistence; capability handshake gates unsupported features per provider; CSP-safe bundling (no external imports); one-time migration path from local storage if present.
 **Tests**: Component tests for state actions; import/export JSON validation tests; markdown sanitization tests; smoke tests for core flows.
 **Status**: In Progress
+**Notes**: Capability gating + auth-safe prediction polish underway; added extension Vitest config + initial utility/component tests.
 
 ## Stage 4: Integration + validation
 **Goal**: End-to-end validation and polish.

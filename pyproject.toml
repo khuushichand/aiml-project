@@ -332,6 +332,14 @@ TTS_kokoro_onnx = [
   "kokoro-onnx>=0.1.0"
 ]
 
+TTS_pocket_tts = [
+  "onnxruntime>=1.16.0",
+  "soundfile>=0.12.1",
+  "sentencepiece>=0.1.99",
+  "scipy>=1.10.0",
+  "huggingface_hub>=0.21.0"
+]
+
 TTS_sovits = [
   "pydub>=0.25.0"
 ]

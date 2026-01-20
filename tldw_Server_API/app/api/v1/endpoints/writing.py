@@ -57,8 +57,18 @@ class TokenizerUnavailable(Exception):
 async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
     try:
         allowed, meta = await rate_limiter.check_user_rate_limit(int(user_id), scope)
-    except Exception:
-        allowed, meta = True, {}
+    except Exception as exc:
+        retry_after = 60
+        logger.exception(
+            "Rate limiter check failed for user_id={} scope={}",
+            user_id,
+            scope,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable",
+            headers={"Retry-After": str(retry_after)},
+        ) from exc
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

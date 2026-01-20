@@ -770,9 +770,29 @@ async def _handle_custom_content_job(
     if payload.get("request_source") == "kanban":
         card_id = payload.get("card_id") or meta.get("card_id")
         expected_version = payload.get("card_version")
-        if card_id is not None and not _kanban_card_indexable(
+        int_card_id = None
+        if card_id is not None:
+            try:
+                int_card_id = int(card_id)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Kanban content job has non-numeric card_id; skipping indexability check "
+                    f"(user_id={user_id}, card_id={card_id})"
+                )
+        if card_id is not None and int_card_id is None:
+            result = {
+                "embedding_count": 0,
+                "chunks_processed": 0,
+                "embedding_model": embedding_model,
+                "embedding_provider": embedding_provider,
+                "skipped": True,
+                "skip_reason": "card_not_indexable",
+            }
+            _update_root_job(root_uuid, status="completed", result=result)
+            return result
+        if int_card_id is not None and not _kanban_card_indexable(
             user_id=str(user_id),
-            card_id=int(card_id),
+            card_id=int_card_id,
             expected_version=expected_version,
         ):
             result = {

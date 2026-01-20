@@ -195,7 +195,7 @@ async def submit_media_ingest_jobs(
     files: Optional[List[UploadFile]] = File(None, description="Optional media uploads"),
     current_user: User = Depends(get_request_user),
     jm: JobManager = Depends(get_job_manager),
-    request: Optional[Request] = None,
+    request: Request = None,
 ) -> SubmitMediaIngestJobsResponse:
     rid = ensure_request_id(request) if request is not None else None
     tp = ensure_traceparent(request) if request is not None else ""

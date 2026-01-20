@@ -4,7 +4,7 @@
 
 - Purpose: Unified, production-grade TTS across local and cloud engines with OpenAI-compatible APIs, streaming, and voice management.
 - Capabilities:
-  - Multi-provider adapters: OpenAI, ElevenLabs, Kokoro (local ONNX), Higgs, Dia, Chatterbox, VibeVoice, IndexTTS2, NeuTTS; mock provider for tests.
+  - Multi-provider adapters: OpenAI, ElevenLabs, Kokoro (local ONNX), PocketTTS (local ONNX), Higgs, Dia, Chatterbox, VibeVoice, IndexTTS2, NeuTTS; mock provider for tests.
   - Streaming-first synthesis with graceful fallback and configurable error streaming-as-audio.
   - Voice cloning support and user voice management (upload, list, delete, preview).
   - Unified config with provider priority and per-provider settings; env/config.txt/YAML layering.
@@ -26,7 +26,7 @@
   - tldw_Server_API/app/core/TTS/voice_manager.py:89 — VoiceInfo
   - tldw_Server_API/app/core/TTS/voice_manager.py:104 — VoiceUploadResponse
 
-Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloning), Kokoro (local), Higgs/Dia/Chatterbox/VibeVoice/NeuTTS (local, cloning), IndexTTS2 (cloud/local). See adapters/ for exact capabilities.
+Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloning), Kokoro (local), PocketTTS (local, cloning), Higgs/Dia/Chatterbox/VibeVoice/NeuTTS (local, cloning), IndexTTS2 (cloud/local). See adapters/ for exact capabilities.
 
 ## 2. Technical Details of Features
 
