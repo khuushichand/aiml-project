@@ -47,6 +47,25 @@ class _FakeClient:
         return _FakeResponse(self._json_data)
 
 
+class _AsyncFakeClient:
+    def __init__(self, json_data: dict, capture: dict | None = None):
+        self._json_data = json_data
+        self._capture = capture
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, headers=None, json=None):
+        if self._capture is not None:
+            self._capture["url"] = url
+            self._capture["headers"] = headers
+            self._capture["json"] = json
+        return _FakeResponse(self._json_data)
+
+
 @pytest.mark.integration
 def test_messages_endpoint_non_streaming(client_user_only, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -124,6 +143,11 @@ def test_messages_llamacpp_base_url_normalized(client_user_only, monkeypatch):
         "http_client_factory",
         lambda *a, **k: _FakeClient({"ok": True}, capture),
     )
+    monkeypatch.setattr(
+        messages_endpoint,
+        "async_http_client_factory",
+        lambda *a, **k: _AsyncFakeClient({"ok": True}, capture),
+    )
 
     payload = {
         "model": "llama.cpp/test-model",
@@ -137,12 +161,47 @@ def test_messages_llamacpp_base_url_normalized(client_user_only, monkeypatch):
 
 
 @pytest.mark.integration
+def test_messages_llamacpp_base_url_normalized_completions(client_user_only, monkeypatch):
+    capture = {}
+    monkeypatch.setattr(
+        messages_endpoint,
+        "loaded_config_data",
+        {"llama_api": {"api_ip": "http://localhost:8080/v1/completions"}},
+    )
+    monkeypatch.setattr(
+        messages_endpoint,
+        "http_client_factory",
+        lambda *a, **k: _FakeClient({"ok": True}, capture),
+    )
+    monkeypatch.setattr(
+        messages_endpoint,
+        "async_http_client_factory",
+        lambda *a, **k: _AsyncFakeClient({"ok": True}, capture),
+    )
+
+    payload = {
+        "model": "llama.cpp/test-model",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    response = client_user_only.post("/api/v1/messages", json=payload)
+    assert response.status_code == 200
+    assert capture["url"].endswith("/v1/messages")
+    assert "/completions" not in capture["url"]
+
+
+@pytest.mark.integration
 def test_messages_count_tokens_anthropic(client_user_only, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(
         messages_endpoint,
         "http_client_factory",
         lambda *a, **k: _FakeClient({"input_tokens": 3}),
+    )
+    monkeypatch.setattr(
+        messages_endpoint,
+        "async_http_client_factory",
+        lambda *a, **k: _AsyncFakeClient({"input_tokens": 3}),
     )
 
     payload = {

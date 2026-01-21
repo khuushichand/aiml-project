@@ -396,7 +396,8 @@ async def openai_stream_to_anthropic(
     text_block_index: Optional[int] = None
     next_block_index = 0
     open_blocks: List[int] = []
-    tool_blocks: Dict[str, Dict[str, Any]] = {}
+    tool_blocks_by_id: Dict[str, Dict[str, Any]] = {}
+    tool_blocks_by_index: Dict[int, Dict[str, Any]] = {}
     final_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
     try:
@@ -451,55 +452,79 @@ async def openai_stream_to_anthropic(
                         },
                     )
 
-                tool_calls = delta.get("tool_calls")
-                if isinstance(tool_calls, list):
-                    for tool_delta in tool_calls:
-                        if not isinstance(tool_delta, dict):
-                            continue
-                        func = tool_delta.get("function") or {}
-                        name = func.get("name")
-                        args = func.get("arguments")
-                        tool_id = tool_delta.get("id") or f"tool_{tool_delta.get('index', next_block_index)}"
-                        state = tool_blocks.get(tool_id)
-                        if state is None:
-                            state = {
-                                "index": next_block_index,
-                                "name": name if isinstance(name, str) else None,
-                                "buffer": "",
-                            }
-                            tool_blocks[tool_id] = state
-                            next_block_index += 1
-                            open_blocks.append(state["index"])
-                            yield _sse_event(
-                                "content_block_start",
-                                {
-                                    "index": state["index"],
-                                    "content_block": {
-                                        "type": "tool_use",
-                                        "id": tool_id,
-                                        "name": state["name"] or "",
-                                        "input": {},
-                                    },
+            tool_calls = delta.get("tool_calls")
+            if isinstance(tool_calls, list):
+                for tool_delta in tool_calls:
+                    if not isinstance(tool_delta, dict):
+                        continue
+                    func = tool_delta.get("function") or {}
+                    name = func.get("name")
+                    args = func.get("arguments")
+                    tool_id = tool_delta.get("id")
+                    tool_index = tool_delta.get("index")
+
+                    state = None
+                    if isinstance(tool_index, int):
+                        state = tool_blocks_by_index.get(tool_index)
+                    if state is None and isinstance(tool_id, str) and tool_id:
+                        state = tool_blocks_by_id.get(tool_id)
+
+                    if state is None:
+                        state = {
+                            "index": next_block_index,
+                            "name": name if isinstance(name, str) else None,
+                            "buffer": "",
+                            "id": tool_id if isinstance(tool_id, str) and tool_id else None,
+                            "started": False,
+                        }
+                        next_block_index += 1
+                        if isinstance(tool_index, int):
+                            tool_blocks_by_index[tool_index] = state
+                        if isinstance(tool_id, str) and tool_id:
+                            tool_blocks_by_id[tool_id] = state
+                    else:
+                        if isinstance(tool_id, str) and tool_id and tool_id not in tool_blocks_by_id:
+                            tool_blocks_by_id[tool_id] = state
+
+                    if not state.get("started"):
+                        if not state.get("id"):
+                            if isinstance(tool_id, str) and tool_id:
+                                state["id"] = tool_id
+                            else:
+                                fallback_index = tool_index if isinstance(tool_index, int) else state["index"]
+                                state["id"] = f"tool_{fallback_index}"
+                        open_blocks.append(state["index"])
+                        yield _sse_event(
+                            "content_block_start",
+                            {
+                                "index": state["index"],
+                                "content_block": {
+                                    "type": "tool_use",
+                                    "id": state["id"],
+                                    "name": state["name"] or "",
+                                    "input": {},
                                 },
-                            )
-                        elif isinstance(name, str) and name and not state.get("name"):
-                            state["name"] = name
-                            yield _sse_event(
-                                "content_block_delta",
-                                {
-                                    "index": state["index"],
-                                    "delta": {"type": "tool_use_delta", "name": name},
-                                },
-                            )
-                        if isinstance(args, str) and args:
-                            state["buffer"] += args
-                            yield _sse_event(
-                                "content_block_delta",
-                                {
-                                    "index": state["index"],
-                                    "delta": {"type": "input_json_delta", "partial_json": args},
-                                },
-                            )
+                            },
+                        )
+                        state["started"] = True
+                    elif isinstance(name, str) and name and not state.get("name"):
+                        state["name"] = name
+                        yield _sse_event(
+                            "content_block_delta",
+                            {
+                                "index": state["index"],
+                                "delta": {"type": "tool_use_delta", "name": name},
+                            },
+                        )
+                    if isinstance(args, str) and args:
+                        state["buffer"] += args
+                        yield _sse_event(
+                            "content_block_delta",
+                            {
+                                "index": state["index"],
+                                "delta": {"type": "input_json_delta", "partial_json": args},
+                            },
+                        )
 
             usage = data.get("usage")
             if isinstance(usage, dict):

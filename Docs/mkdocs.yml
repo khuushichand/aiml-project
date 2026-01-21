@@ -164,6 +164,7 @@ nav:
   - User Guides:
       - Overview: User_Guides/index.md
       - Media→Embeddings→RAG→Evals Workflow: User_Guides/Media_to_RAG_Evals_Workflow.md
+      - Web Scraping and Ingestion: User_Guides/Web_Scraping_Ingestion_Guide.md
       - WebUI - Vector Backends: User_Guides/WebUI_Vector_Backends.md
       - Usage Module: User_Guides/Usage_Module.md
       - Authentication Setup: User_Guides/Authentication_Setup.md

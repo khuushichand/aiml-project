@@ -61,7 +61,7 @@ providers:
 
   # PocketTTS ONNX Configuration (local; voice cloning)
   pocket_tts:
-    enabled: true  # Disabled by default; enable after downloading assets
+    enabled: false  # Disabled by default; enable after downloading assets
     model_path: "models/pocket_tts_onnx/onnx"  # Directory with ONNX files
     tokenizer_path: "models/pocket_tts_onnx/tokenizer.model"
     module_path: "models/pocket_tts_onnx"  # Directory containing pocket_tts_onnx.py or package

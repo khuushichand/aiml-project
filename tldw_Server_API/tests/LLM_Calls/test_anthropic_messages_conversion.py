@@ -84,6 +84,19 @@ async def test_openai_stream_to_anthropic_emits_events():
 
 
 @pytest.mark.asyncio
+async def test_openai_stream_to_anthropic_tool_calls_no_duplicate_start():
+    async def _stream():
+        yield 'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\\"q\\": \\"x\\"}"}}]}, "finish_reason": null}]}\n\n'
+        yield 'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "search", "arguments": "}"}}]}, "finish_reason": null}]}\n\n'
+        yield 'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}\n\n'
+
+    chunks = [chunk async for chunk in openai_stream_to_anthropic(_stream(), model="gpt-4")]
+
+    content_block_starts = [chunk for chunk in chunks if "event: content_block_start" in chunk]
+    assert len(content_block_starts) == 1
+
+
+@pytest.mark.asyncio
 async def test_openai_stream_to_anthropic_closes_stream():
     class _ClosableStream:
         def __init__(self, items):

@@ -674,7 +674,17 @@ async def _handle_content_job(
     chunk_overlap: int,
     root_uuid: Optional[str],
 ) -> Dict[str, Any]:
-    if payload.get("collection_name") and payload.get("document_id"):
+    collection_name = payload.get("collection_name")
+    document_id = payload.get("document_id")
+    has_collection_name = bool(collection_name)
+    has_document_id = bool(document_id)
+    if has_collection_name != has_document_id:
+        missing = "collection_name" if not has_collection_name else "document_id"
+        raise EmbeddingsJobError(
+            f"Custom content job requires both collection_name and document_id; missing {missing}",
+            retryable=False,
+        )
+    if has_collection_name and has_document_id:
         return await _handle_custom_content_job(
             job=job,
             payload=payload,

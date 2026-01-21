@@ -9,6 +9,7 @@ Notes:
 | Tag | Documentation |
 |-----|---------------|
 | `chat` | API-related/Chat_API_Documentation.md |
+| `messages` | API-related/Anthropic_Messages_API.md |
 | `chat-dictionaries` | API-related/Chatbook_Features_API_Documentation.md#chat-dictionary-api |
 | `chat-documents` | API-related/Chatbook_Features_API_Documentation.md#document-generator-api |
 | `rag-unified` | API-related/RAG-API-Guide.md |

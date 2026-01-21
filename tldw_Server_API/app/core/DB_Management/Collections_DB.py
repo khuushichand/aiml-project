@@ -271,7 +271,12 @@ class CollectionsDatabase:
             return set()
         try:
             result = self.backend.execute(f"PRAGMA table_info({table})", tuple())
-        except Exception:
+        except Exception as exc:
+            logger.exception(
+                "collections_db: failed to read sqlite columns for table {}: {}",
+                table,
+                exc,
+            )
             return set()
         columns: set[str] = set()
         for row in result.rows:

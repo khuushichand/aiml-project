@@ -734,6 +734,275 @@ def test_speech_to_text_return_language_consistent_for_parakeet(monkeypatch, tmp
 
 
 @pytest.mark.unit
+def test_speech_to_text_parakeet_mlx_uses_buffered_chunking_when_long(monkeypatch, tmp_path):
+    pytest.importorskip("librosa")
+
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import librosa
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription as buffered_mod
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX as mlx_mod
+
+    monkeypatch.setattr(atlib, "get_stt_config", lambda: {
+        "mlx_chunk_duration": "30.0",
+        "mlx_overlap_duration": "5.0",
+        "buffered_merge_algo": "lcs",
+    })
+    monkeypatch.setattr(librosa, "get_duration", lambda path: 120.0)
+    monkeypatch.setattr(mlx_mod, "check_mlx_available", lambda: True)
+
+    captured = {}
+
+    def fake_transcribe_long_audio(
+        audio_path,
+        model_name="parakeet",
+        variant="mlx",
+        chunk_duration=None,
+        total_buffer=None,
+        merge_algo="middle",
+        **_kwargs,
+    ):
+        captured.update({
+            "audio_path": audio_path,
+            "model_name": model_name,
+            "variant": variant,
+            "chunk_duration": chunk_duration,
+            "total_buffer": total_buffer,
+            "merge_algo": merge_algo,
+        })
+        return "chunked text"
+
+    monkeypatch.setattr(buffered_mod, "transcribe_long_audio", fake_transcribe_long_audio)
+
+    segments = atlib.speech_to_text_parakeet(
+        str(audio_file),
+        variant="mlx",
+        selected_source_lang="en",
+        vad_filter=False,
+    )
+
+    assert captured["audio_path"] == str(audio_file)
+    assert captured["chunk_duration"] == 30.0
+    assert captured["total_buffer"] == 40.0
+    assert captured["merge_algo"] == "lcs"
+    assert segments[0]["Text"] == "chunked text"
+
+
+@pytest.mark.unit
+def test_speech_to_text_parakeet_mlx_passes_chunk_duration_when_short(monkeypatch, tmp_path):
+    pytest.importorskip("librosa")
+
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import librosa
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription as buffered_mod
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX as mlx_mod
+
+    monkeypatch.setattr(atlib, "get_stt_config", lambda: {
+        "mlx_chunk_duration": "30.0",
+        "mlx_overlap_duration": "5.0",
+    })
+    monkeypatch.setattr(librosa, "get_duration", lambda path: 10.0)
+    monkeypatch.setattr(mlx_mod, "check_mlx_available", lambda: True)
+
+    def fail_transcribe_long_audio(*_args, **_kwargs):
+        raise AssertionError("Buffered chunking should not be used for short audio")
+
+    monkeypatch.setattr(buffered_mod, "transcribe_long_audio", fail_transcribe_long_audio)
+
+    captured = {}
+
+    def fake_transcribe_with_parakeet_mlx(audio_path, **kwargs):
+        captured.update(kwargs)
+        return "short text"
+
+    monkeypatch.setattr(mlx_mod, "transcribe_with_parakeet_mlx", fake_transcribe_with_parakeet_mlx)
+
+    segments = atlib.speech_to_text_parakeet(
+        str(audio_file),
+        variant="mlx",
+        selected_source_lang="en",
+        vad_filter=False,
+    )
+
+    assert captured["chunk_duration"] == 30.0
+    assert captured["overlap_duration"] == 5.0
+    assert segments[0]["Text"] == "short text"
+
+
+@pytest.mark.unit
+def test_speech_to_text_parakeet_mlx_uses_buffered_chunking_when_duration_unknown(monkeypatch, tmp_path):
+    pytest.importorskip("librosa")
+
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import librosa
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription as buffered_mod
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX as mlx_mod
+
+    monkeypatch.setattr(atlib, "get_stt_config", lambda: {
+        "mlx_chunk_duration": "30.0",
+        "mlx_overlap_duration": "5.0",
+    })
+
+    def raise_duration(*_args, **_kwargs):
+        raise RuntimeError("duration lookup failed")
+
+    monkeypatch.setattr(librosa, "get_duration", raise_duration)
+    monkeypatch.setattr(mlx_mod, "check_mlx_available", lambda: True)
+
+    def fail_transcribe_with_parakeet_mlx(*_args, **_kwargs):
+        raise AssertionError("Direct MLX path should not be used when duration is unknown")
+
+    monkeypatch.setattr(mlx_mod, "transcribe_with_parakeet_mlx", fail_transcribe_with_parakeet_mlx)
+
+    captured = {}
+
+    def fake_transcribe_long_audio(*_args, **kwargs):
+        captured.update(kwargs)
+        return "chunked text"
+
+    monkeypatch.setattr(buffered_mod, "transcribe_long_audio", fake_transcribe_long_audio)
+
+    segments = atlib.speech_to_text_parakeet(
+        str(audio_file),
+        variant="mlx",
+        selected_source_lang="en",
+        vad_filter=False,
+    )
+
+    assert captured.get("chunk_duration") == 30.0
+    assert segments[0]["Text"] == "chunked text"
+
+
+@pytest.mark.unit
+def test_speech_to_text_parakeet_mlx_falls_back_on_invalid_buffered_settings(monkeypatch, tmp_path):
+    pytest.importorskip("librosa")
+
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import librosa
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription as buffered_mod
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX as mlx_mod
+
+    monkeypatch.setattr(atlib, "get_stt_config", lambda: {
+        "mlx_chunk_duration": "30.0",
+        "mlx_overlap_duration": "5.0",
+        "buffered_total_buffer": "10.0",
+        "buffered_merge_algo": "bogus",
+    })
+    monkeypatch.setattr(librosa, "get_duration", lambda path: 120.0)
+    monkeypatch.setattr(mlx_mod, "check_mlx_available", lambda: True)
+
+    captured = {}
+
+    def fake_transcribe_long_audio(*_args, **kwargs):
+        captured.update(kwargs)
+        return "chunked text"
+
+    monkeypatch.setattr(buffered_mod, "transcribe_long_audio", fake_transcribe_long_audio)
+
+    segments = atlib.speech_to_text_parakeet(
+        str(audio_file),
+        variant="mlx",
+        selected_source_lang="en",
+        vad_filter=False,
+    )
+
+    assert captured.get("total_buffer") is None
+    assert captured.get("merge_algo") == "middle"
+    assert segments[0]["Text"] == "chunked text"
+
+
+@pytest.mark.unit
+def test_speech_to_text_parakeet_mlx_defaults_when_chunk_duration_missing(monkeypatch, tmp_path):
+    pytest.importorskip("librosa")
+
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import librosa
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription as buffered_mod
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX as mlx_mod
+
+    monkeypatch.setattr(atlib, "get_stt_config", lambda: {})
+    monkeypatch.setattr(librosa, "get_duration", lambda path: 120.0)
+    monkeypatch.setattr(mlx_mod, "check_mlx_available", lambda: True)
+
+    captured = {}
+
+    def fake_transcribe_long_audio(*_args, **kwargs):
+        captured.update(kwargs)
+        return "chunked text"
+
+    monkeypatch.setattr(buffered_mod, "transcribe_long_audio", fake_transcribe_long_audio)
+
+    segments = atlib.speech_to_text_parakeet(
+        str(audio_file),
+        variant="mlx",
+        selected_source_lang="en",
+        vad_filter=False,
+    )
+
+    assert captured.get("chunk_duration") == 30.0
+    assert captured.get("total_buffer") == 40.0
+    assert segments[0]["Text"] == "chunked text"
+
+
+@pytest.mark.unit
+def test_speech_to_text_parakeet_mlx_disables_chunking_when_zero(monkeypatch, tmp_path):
+    pytest.importorskip("librosa")
+
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import librosa
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription as buffered_mod
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX as mlx_mod
+
+    monkeypatch.setattr(atlib, "get_stt_config", lambda: {
+        "mlx_chunk_duration": "0",
+        "mlx_overlap_duration": "0",
+    })
+    monkeypatch.setattr(librosa, "get_duration", lambda path: 120.0)
+    monkeypatch.setattr(mlx_mod, "check_mlx_available", lambda: True)
+
+    def fail_transcribe_long_audio(*_args, **_kwargs):
+        raise AssertionError("Buffered chunking should be disabled when chunk duration is zero")
+
+    monkeypatch.setattr(buffered_mod, "transcribe_long_audio", fail_transcribe_long_audio)
+
+    captured = {}
+
+    def fake_transcribe_with_parakeet_mlx(_audio_path, **kwargs):
+        captured.update(kwargs)
+        return "direct text"
+
+    monkeypatch.setattr(mlx_mod, "transcribe_with_parakeet_mlx", fake_transcribe_with_parakeet_mlx)
+
+    segments = atlib.speech_to_text_parakeet(
+        str(audio_file),
+        variant="mlx",
+        selected_source_lang="en",
+        vad_filter=False,
+    )
+
+    assert captured.get("chunk_duration") is None
+    assert captured.get("overlap_duration") == 15.0
+    assert segments[0]["Text"] == "direct text"
+
+
+@pytest.mark.unit
 def test_speech_to_text_return_language_consistent_for_qwen2audio(monkeypatch, tmp_path):
     """When return_language=True, Qwen2Audio branch should return (segments, lang_or_none)."""
     audio_file = tmp_path / "sample.wav"

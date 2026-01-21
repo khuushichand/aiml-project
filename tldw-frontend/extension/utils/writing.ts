@@ -71,12 +71,8 @@ export const regexIndexOf = (value: string, regex: RegExp, start = 0) => {
 }
 
 export const regexLastIndexOf = (value: string, regex: RegExp, start?: number) => {
-  const globalRegex = regex.global
-    ? regex
-    : new RegExp(
-        regex.source,
-        `g${regex.ignoreCase ? "i" : ""}${regex.multiLine ? "m" : ""}`
-      )
+  const flags = Array.from(new Set((regex.flags || "") + "g")).join("")
+  const newRegex = new RegExp(regex.source, flags)
   let startPos = start
   if (typeof startPos === "undefined") {
     startPos = value.length
@@ -87,9 +83,9 @@ export const regexLastIndexOf = (value: string, regex: RegExp, start?: number) =
   let lastIndex = -1
   let nextStop = 0
   let result: RegExpExecArray | null
-  while ((result = globalRegex.exec(stringToWorkWith)) != null) {
+  while ((result = newRegex.exec(stringToWorkWith)) != null) {
     lastIndex = result.index
-    globalRegex.lastIndex = ++nextStop
+    newRegex.lastIndex = ++nextStop
   }
   return lastIndex
 }

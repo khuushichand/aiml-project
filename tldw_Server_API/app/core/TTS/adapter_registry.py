@@ -544,7 +544,31 @@ class TTSAdapterRegistry:
         """
         capabilities = {}
 
+        def _get_enabled_flag(provider: TTSProvider) -> Optional[bool]:
+            if self.config_manager:
+                provider_cfg = self.config_manager.get_provider_config(provider.value)
+                if provider_cfg is not None:
+                    return provider_cfg.enabled
+                return None
+            if isinstance(self.config, dict):
+                providers_cfg = self.config.get("providers")
+                if isinstance(providers_cfg, dict):
+                    provider_cfg = providers_cfg.get(provider.value)
+                    if isinstance(provider_cfg, dict) and "enabled" in provider_cfg:
+                        return parse_bool(provider_cfg.get("enabled"), default=None)
+                enabled_key = f"{provider.value}_enabled"
+                if enabled_key in self.config:
+                    return parse_bool(self.config.get(enabled_key), default=None)
+            return None
+
         for provider in TTSProvider:
+            if provider not in self._adapter_specs:
+                continue
+
+            enabled_flag = _get_enabled_flag(provider)
+            if enabled_flag is False:
+                continue
+
             # Skip providers that are disabled or have failed
             retry_after = self._failed_providers.get(provider)
             if retry_after:
@@ -559,14 +583,8 @@ class TTSAdapterRegistry:
             if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
                            TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.SUPERTONIC,
                            TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS]:
-                # Check if explicitly enabled in config
-                if self.config_manager:
-                    if not self.config_manager.is_provider_enabled(provider.value):
-                        continue
-                else:
-                    enabled_key = f"{provider.value}_enabled"
-                    if not self.config.get(enabled_key, False):
-                        continue
+                if enabled_flag is not True:
+                    continue
 
             try:
                 # Try to get adapter with a timeout to avoid hanging

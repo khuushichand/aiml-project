@@ -205,8 +205,13 @@ def _path_for_config(path: Path, repo_root: Optional[Path]) -> str:
     if repo_root:
         try:
             return path.relative_to(repo_root).as_posix()
-        except Exception:
-            pass
+        except ValueError as exc:
+            logger.debug(
+                "relative_to failed for {} relative to {}: {}",
+                path,
+                repo_root,
+                exc,
+            )
     return str(path)
 
 
@@ -393,10 +398,17 @@ def _resolve_config_path(config_path_arg: Optional[str]) -> Optional[Path]:
     try:
         from tldw_Server_API.app.core import config_paths
         return config_paths.resolve_module_yaml("tts")
-    except Exception:
+    except ImportError as exc:
         if repo_root:
             candidate = repo_root / "tldw_Server_API" / "Config_Files" / "tts_providers_config.yaml"
+            logger.warning(
+                "config_paths import failed ({}); falling back to {}",
+                exc,
+                candidate,
+            )
+            logger.opt(exception=exc).debug("config_paths import error")
             return candidate
+        logger.opt(exception=exc).debug("config_paths import error; no fallback path available")
     return None
 
 
@@ -420,11 +432,11 @@ def main() -> int:
     output_dir = Path(args.output_dir).expanduser()
 
     if not args.force and output_dir.exists():
-        onnx_dir = output_dir / args.onnx_subdir
-        tokenizer_path = output_dir / args.tokenizer_name
-        if onnx_dir.exists() and tokenizer_path.exists():
+        rc = _validate_assets(output_dir, str(args.onnx_subdir), str(args.tokenizer_name))
+        if rc == 0:
             logger.info("Assets already present; use --force to re-download.")
             return 0
+        logger.warning("Existing assets appear incomplete; continuing with download.")
 
     rc = _download_repo(
         repo_id=str(args.repo_id),

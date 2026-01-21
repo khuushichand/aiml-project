@@ -1,9 +1,12 @@
+"""API v1 message endpoints and Anthropic conversion helpers."""
+
 from __future__ import annotations
 
 import os
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
+from loguru import logger
 from starlette.responses import JSONResponse, StreamingResponse
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -26,7 +29,10 @@ from tldw_Server_API.app.core.LLM_Calls.anthropic_messages import (
     openai_stream_to_anthropic,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-from tldw_Server_API.app.core.http_client import create_client as http_client_factory
+from tldw_Server_API.app.core.http_client import (
+    create_async_client as async_http_client_factory,
+    create_client as http_client_factory,
+)
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
@@ -42,6 +48,14 @@ public_router = APIRouter()
 
 MESSAGES_NATIVE_PROVIDERS = {"anthropic", "llama.cpp"}
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
+
+logger.debug(
+    "messages module initialized; router={}, public_router={}, native_providers={}, default_anthropic_version={}",
+    router,
+    public_router,
+    sorted(MESSAGES_NATIVE_PROVIDERS),
+    DEFAULT_ANTHROPIC_VERSION,
+)
 
 
 def _config_default_llm_provider() -> Optional[str]:
@@ -119,7 +133,7 @@ def _join_messages_endpoint(base_url: str, suffix: str) -> str:
 def _normalize_llamacpp_base_url(base_url: str) -> str:
     normalized = base_url.strip().rstrip("/")
     lowered = normalized.lower()
-    for suffix in ("/v1/chat/completions", "/chat/completions", "/completion"):
+    for suffix in ("/v1/chat/completions", "/v1/completions", "/chat/completions", "/completions", "/completion"):
         if lowered.endswith(suffix):
             normalized = normalized[: -len(suffix)]
             break
@@ -226,7 +240,8 @@ def _build_native_headers(
 ) -> Dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if provider == "anthropic":
-        headers["x-api-key"] = api_key or ""
+        if api_key:
+            headers["x-api-key"] = api_key
         headers["anthropic-version"] = anthropic_version or DEFAULT_ANTHROPIC_VERSION
         if anthropic_beta:
             headers["anthropic-beta"] = anthropic_beta
@@ -373,8 +388,8 @@ async def _handle_messages(
                 _proxy_native_stream(url, headers, payload, timeout=timeout),
                 media_type="text/event-stream",
             )
-        with http_client_factory(timeout=timeout) as client:
-            resp = client.post(url, headers=headers, json=payload)
+        async with async_http_client_factory(timeout=timeout) as client:
+            resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
         return JSONResponse(data)
@@ -464,8 +479,8 @@ async def _handle_count_tokens(
         anthropic_version=anthropic_version,
         anthropic_beta=anthropic_beta,
     )
-    with http_client_factory(timeout=timeout) as client:
-        resp = client.post(url, headers=headers, json=payload)
+    async with async_http_client_factory(timeout=timeout) as client:
+        resp = await client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
         data = resp.json()
     return JSONResponse(data)
