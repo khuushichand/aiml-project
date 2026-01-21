@@ -1,7 +1,9 @@
+"""Writing Playground API endpoints and helpers."""
+
 from __future__ import annotations
 
 import functools
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NoReturn, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from loguru import logger
@@ -44,17 +46,15 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import get_allowed_fields
 
 
 router = APIRouter()
 
 
-class TokenizerUnavailable(Exception):
-    pass
-
-
 async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
+    """Enforce a rate limit for the given user and scope."""
     try:
         allowed, meta = await rate_limiter.check_user_rate_limit(int(user_id), scope)
     except Exception as exc:
@@ -77,22 +77,28 @@ async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: st
         )
 
 
-def _handle_db_errors(exc: Exception, entity_label: str) -> None:
+def _handle_db_errors(exc: Exception, entity_label: str) -> NoReturn:
+    """Translate database exceptions into HTTP errors."""
     if isinstance(exc, HTTPException):
         raise exc
     if isinstance(exc, InputError):
+        logger.warning("Input error for {}: {}", entity_label, exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if isinstance(exc, ConflictError):
         message = str(exc)
         lowered = message.lower()
         if "not found" in lowered or "soft-deleted" in lowered or "soft deleted" in lowered:
+            logger.debug("Entity not found for {}: {}", entity_label, exc)
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{entity_label} not found") from exc
+        logger.warning("Conflict error for {}: {}", entity_label, exc)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message) from exc
     if isinstance(exc, CharactersRAGDBError):
+        logger.error("Database error for {}: {}", entity_label, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database error while processing {entity_label}",
         ) from exc
+    logger.exception("Unexpected error for {}: {}", entity_label, exc)
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail=f"Unexpected error while processing {entity_label}",
@@ -100,7 +106,8 @@ def _handle_db_errors(exc: Exception, entity_label: str) -> None:
 
 
 @functools.lru_cache(maxsize=128)
-def _resolve_tiktoken_encoding(model: str):
+def _resolve_tiktoken_encoding(model: str) -> Any:
+    """Resolve a tiktoken encoding for the given model name."""
     try:
         import tiktoken  # type: ignore
     except Exception as exc:  # pragma: no cover - dependency missing
@@ -112,6 +119,10 @@ def _resolve_tiktoken_encoding(model: str):
 
 
 def _resolve_tokenizer(provider: str, model: str) -> Tuple[Any, str]:
+    """Resolve a tokenizer using tiktoken (OpenAI-style model mappings only).
+
+    Provider is validated but not used for resolution; non-OpenAI models may be unavailable.
+    """
     if not provider or not provider.strip():
         raise TokenizerUnavailable("Provider is required")
     if not model or not model.strip():
@@ -122,6 +133,7 @@ def _resolve_tokenizer(provider: str, model: str) -> Tuple[Any, str]:
 
 
 def _provider_features(provider: str) -> Dict[str, bool]:
+    """Build a provider feature map from allowed capability fields."""
     fields = get_allowed_fields(provider)
     return {
         "logprobs": "logprobs" in fields,
@@ -140,6 +152,7 @@ def _provider_features(provider: str) -> Dict[str, bool]:
 
 
 def _coerce_model_name(model: Any) -> Optional[str]:
+    """Coerce a provider model payload into a normalized model name."""
     if isinstance(model, str):
         return model.strip() or None
     if isinstance(model, dict):
@@ -150,7 +163,14 @@ def _coerce_model_name(model: Any) -> Optional[str]:
     return None
 
 
+def _normalize_theme_response(theme: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize DB theme dict to API response format."""
+    theme["order"] = theme.pop("order_index", 0)
+    return theme
+
+
 def _tokenizer_support(provider: str, model: str) -> WritingTokenizerSupport:
+    """Build tokenizer support metadata for a provider/model pair."""
     try:
         _, tokenizer_name = _resolve_tokenizer(provider, model)
         return WritingTokenizerSupport(available=True, tokenizer=tokenizer_name)
@@ -169,6 +189,7 @@ async def get_writing_version(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.version")),
 ) -> WritingVersionResponse:
+    """Return the writing API version."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.version")
     return WritingVersionResponse(version=1)
 
@@ -188,6 +209,7 @@ async def get_writing_capabilities(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.capabilities")),
 ) -> WritingCapabilitiesResponse:
+    """Return writing capabilities and provider metadata."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.capabilities")
 
     server = WritingServerCapabilities(
@@ -208,8 +230,8 @@ async def get_writing_capabilities(
             name = provider_info.get("name") or "unknown"
             raw_models = provider_info.get("models") or []
             models: List[str] = []
-            for model in raw_models:
-                model_name = _coerce_model_name(model)
+            for raw_model in raw_models:
+                model_name = _coerce_model_name(raw_model)
                 if model_name:
                     models.append(model_name)
             capabilities = provider_info.get("capabilities") or {}
@@ -276,6 +298,7 @@ async def list_writing_sessions(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.sessions.list")),
 ) -> WritingSessionListResponse:
+    """List writing sessions for the current user."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.list")
     try:
         sessions = db.list_writing_sessions(limit=limit, offset=offset)
@@ -300,10 +323,14 @@ async def create_writing_session(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.sessions.create")),
 ) -> WritingSessionResponse:
+    """Create a new writing session."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.create")
+    session_name = payload.name.strip()
+    if not session_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Session name cannot be empty")
     try:
         session_id = db.add_writing_session(
-            name=payload.name,
+            name=session_name,
             payload=payload.payload,
             schema_version=payload.schema_version,
             session_id=payload.id,
@@ -331,6 +358,7 @@ async def get_writing_session(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.sessions.get")),
 ) -> WritingSessionResponse:
+    """Fetch a writing session by id."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.get")
     try:
         session = db.get_writing_session(session_id)
@@ -357,6 +385,7 @@ async def update_writing_session(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.sessions.update")),
 ) -> WritingSessionResponse:
+    """Update a writing session with optimistic locking."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.update")
     update_data: Dict[str, Any] = {}
     if payload.name is not None:
@@ -364,7 +393,7 @@ async def update_writing_session(
         if not update_data["name"]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Session name cannot be empty")
     if payload.payload is not None:
-        update_data["payload_json"] = db._serialize_writing_payload(payload.payload, "Session")
+        update_data["payload"] = payload.payload
     if payload.schema_version is not None:
         update_data["schema_version"] = payload.schema_version
     if payload.version_parent_id is not None:
@@ -396,6 +425,7 @@ async def delete_writing_session(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.sessions.delete")),
 ) -> None:
+    """Soft-delete a writing session."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.delete")
     try:
         db.soft_delete_writing_session(session_id, expected_version)
@@ -418,6 +448,7 @@ async def clone_writing_session(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.sessions.clone")),
 ) -> WritingSessionResponse:
+    """Clone a writing session."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.clone")
     try:
         cloned = db.clone_writing_session(session_id, name=payload.name)
@@ -441,6 +472,7 @@ async def list_writing_templates(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.templates.list")),
 ) -> WritingTemplateListResponse:
+    """List writing templates for the current user."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.templates.list")
     try:
         templates = db.list_writing_templates(limit=limit, offset=offset)
@@ -469,16 +501,20 @@ async def create_writing_template(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.templates.create")),
 ) -> WritingTemplateResponse:
+    """Create a new writing template."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.templates.create")
+    template_name = payload.name.strip()
+    if not template_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Template name cannot be empty")
     try:
         db.add_writing_template(
-            name=payload.name,
+            name=template_name,
             payload=payload.payload,
             schema_version=payload.schema_version,
             version_parent_id=payload.version_parent_id,
             is_default=payload.is_default,
         )
-        template = db.get_writing_template_by_name(payload.name)
+        template = db.get_writing_template_by_name(template_name)
         if not template:
             raise CharactersRAGDBError("Template created but could not be retrieved")
         template["payload"] = template.get("payload") or {}
@@ -500,6 +536,7 @@ async def get_writing_template(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.templates.get")),
 ) -> WritingTemplateResponse:
+    """Fetch a writing template by name."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.templates.get")
     try:
         template = db.get_writing_template_by_name(name)
@@ -526,6 +563,7 @@ async def update_writing_template(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.templates.update")),
 ) -> WritingTemplateResponse:
+    """Update a writing template with optimistic locking."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.templates.update")
     update_data: Dict[str, Any] = {}
     if payload.name is not None:
@@ -533,7 +571,7 @@ async def update_writing_template(
         if not update_data["name"]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Template name cannot be empty")
     if payload.payload is not None:
-        update_data["payload_json"] = db._serialize_writing_payload(payload.payload, "Template")
+        update_data["payload"] = payload.payload
     if payload.schema_version is not None:
         update_data["schema_version"] = payload.schema_version
     if payload.version_parent_id is not None:
@@ -568,6 +606,7 @@ async def delete_writing_template(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.templates.delete")),
 ) -> None:
+    """Soft-delete a writing template."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.templates.delete")
     try:
         db.soft_delete_writing_template(name, expected_version)
@@ -590,12 +629,13 @@ async def list_writing_themes(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.themes.list")),
 ) -> WritingThemeListResponse:
+    """List writing themes for the current user."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.themes.list")
     try:
         themes = db.list_writing_themes(limit=limit, offset=offset)
         total = db.count_writing_themes()
         for theme in themes:
-            theme["order"] = theme.pop("order_index", 0)
+            _normalize_theme_response(theme)
         return WritingThemeListResponse(
             themes=[WritingThemeResponse(**theme) for theme in themes],
             total=total,
@@ -618,10 +658,14 @@ async def create_writing_theme(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.themes.create")),
 ) -> WritingThemeResponse:
+    """Create a new writing theme."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.themes.create")
+    theme_name = payload.name.strip()
+    if not theme_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Theme name cannot be empty")
     try:
         db.add_writing_theme(
-            name=payload.name,
+            name=theme_name,
             class_name=payload.class_name,
             css=payload.css,
             schema_version=payload.schema_version,
@@ -629,10 +673,10 @@ async def create_writing_theme(
             is_default=payload.is_default,
             order_index=payload.order,
         )
-        theme = db.get_writing_theme_by_name(payload.name)
+        theme = db.get_writing_theme_by_name(theme_name)
         if not theme:
             raise CharactersRAGDBError("Theme created but could not be retrieved")
-        theme["order"] = theme.pop("order_index", 0)
+        _normalize_theme_response(theme)
         return WritingThemeResponse(**theme)
     except Exception as exc:
         _handle_db_errors(exc, "writing theme")
@@ -651,12 +695,13 @@ async def get_writing_theme(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.themes.get")),
 ) -> WritingThemeResponse:
+    """Fetch a writing theme by name."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.themes.get")
     try:
         theme = db.get_writing_theme_by_name(name)
         if not theme:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Theme not found")
-        theme["order"] = theme.pop("order_index", 0)
+        _normalize_theme_response(theme)
         return WritingThemeResponse(**theme)
     except Exception as exc:
         _handle_db_errors(exc, "writing theme")
@@ -677,6 +722,7 @@ async def update_writing_theme(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.themes.update")),
 ) -> WritingThemeResponse:
+    """Update a writing theme with optimistic locking."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.themes.update")
     update_data: Dict[str, Any] = {}
     if payload.name is not None:
@@ -703,7 +749,7 @@ async def update_writing_theme(
         theme = db.get_writing_theme_by_name(theme_name)
         if not theme:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Theme not found")
-        theme["order"] = theme.pop("order_index", 0)
+        _normalize_theme_response(theme)
         return WritingThemeResponse(**theme)
     except Exception as exc:
         _handle_db_errors(exc, "writing theme")
@@ -723,6 +769,7 @@ async def delete_writing_theme(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.themes.delete")),
 ) -> None:
+    """Soft-delete a writing theme."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.themes.delete")
     try:
         db.soft_delete_writing_theme(name, expected_version)
@@ -735,6 +782,7 @@ async def delete_writing_theme(
     "/tokenize",
     response_model=WritingTokenizeResponse,
     summary="Tokenize text for a provider/model",
+    description="Uses tiktoken encodings (OpenAI-style). Special tokens are allowed (disallowed_special=()).",
     tags=["writing"],
 )
 async def tokenize_writing_text(
@@ -743,6 +791,7 @@ async def tokenize_writing_text(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.tokenize")),
 ) -> WritingTokenizeResponse:
+    """Tokenize text for the requested provider/model."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.tokenize")
     include_strings = True
     if payload.options is not None:
@@ -770,6 +819,7 @@ async def tokenize_writing_text(
     "/token-count",
     response_model=WritingTokenCountResponse,
     summary="Count tokens for a provider/model",
+    description="Uses tiktoken encodings (OpenAI-style). Special tokens are allowed (disallowed_special=()).",
     tags=["writing"],
 )
 async def count_writing_tokens(
@@ -778,6 +828,7 @@ async def count_writing_tokens(
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.token_count")),
 ) -> WritingTokenCountResponse:
+    """Count tokens for the requested provider/model."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.token_count")
     try:
         encoding, tokenizer_name = _resolve_tokenizer(payload.provider, payload.model)

@@ -24,6 +24,10 @@ class JSONDecodeError(Exception):
     """Raised when a response expected to be JSON cannot be decoded or is invalid."""
 
 
+class TokenizerUnavailable(Exception):
+    """Raised when tokenizer support is unavailable."""
+
+
 class BadRequestError(ValueError):
     """Raised when a caller provides invalid arguments for an operation."""
 
@@ -201,6 +205,16 @@ class DataTablesJobError(RuntimeError):
 
 class FileArtifactsJobError(RuntimeError):
     """Raised for file artifact job processing failures."""
+
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        if backoff_seconds is not None:
+            self.backoff_seconds = backoff_seconds
+
+
+class ReadingDigestJobError(RuntimeError):
+    """Raised for reading digest job processing failures."""
 
     def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
         super().__init__(message)

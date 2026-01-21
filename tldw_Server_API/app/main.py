@@ -1086,6 +1086,10 @@ else:
         router as llamacpp_router,
         public_router as llamacpp_public_router,
     )
+    from tldw_Server_API.app.api.v1.endpoints.messages import (
+        router as messages_router,
+        public_router as messages_public_router,
+    )
     from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
 
     # Web Scraping Management Endpoints
@@ -3146,6 +3150,17 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # Stop AuthNZ scheduler early so it can't keep the loop alive during shutdown.
+    try:
+        if "_authnz_sched_started" in locals() and _authnz_sched_started:
+            from tldw_Server_API.app.core.AuthNZ.scheduler import stop_authnz_scheduler
+
+            await stop_authnz_scheduler()
+            _authnz_sched_started = False
+            logger.info("AuthNZ scheduler stopped")
+    except Exception as _e:
+        logger.debug(f"AuthNZ scheduler shutdown skipped: {_e}")
+
     # Shutdown: Clean up resources
     logger.info("App Shutdown: Cleaning up resources...")
 
@@ -3285,6 +3300,7 @@ async def lifespan(app: FastAPI):
             shutdown_all_audit_services,
         )
 
+        logger.info("App Shutdown: Shutting down unified audit services...")
         await shutdown_all_audit_services()
         logger.info("App Shutdown: Unified audit services stopped")
     except Exception as e:
@@ -5069,9 +5085,15 @@ elif _MINIMAL_TEST_APP:
             router as llamacpp_router,
             public_router as llamacpp_public_router,
         )
+        from tldw_Server_API.app.api.v1.endpoints.messages import (
+            router as messages_router,
+            public_router as messages_public_router,
+        )
 
         app.include_router(llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
         app.include_router(llamacpp_public_router, prefix="", tags=["llamacpp"])
+        app.include_router(messages_router, prefix=f"{API_V1_PREFIX}", tags=["messages"])
+        app.include_router(messages_public_router, prefix="", tags=["messages"])
     except Exception as _llama_min_err:  # noqa: BLE001
         logger.debug(f"Skipping llamacpp router in minimal test app: {_llama_min_err}")
     # Workflows + scheduler routers are lightweight enough to enable in minimal
@@ -5509,6 +5531,8 @@ else:
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     _include_if_enabled("llm", mlx_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
     _include_if_enabled("llm", llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
+    _include_if_enabled("llm", messages_router, prefix=f"{API_V1_PREFIX}", tags=["messages"])
+    _include_if_enabled("llm", messages_public_router, prefix="", tags=["messages"])
     _include_if_enabled("llamacpp", llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
     _include_if_enabled("llamacpp", llamacpp_public_router, prefix="", tags=["llamacpp"])
     _include_if_enabled("web-scraping", web_scraping_router, tags=["web-scraping"])

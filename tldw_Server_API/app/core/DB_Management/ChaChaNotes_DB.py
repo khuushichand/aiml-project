@@ -9679,11 +9679,37 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     # --- Writing Playground Methods ---
     def _normalize_writing_name(self, name: str, entity_label: str) -> str:
+        """
+        Normalize and validate a writing entity name.
+
+        Args:
+            name: Raw name value supplied by the caller.
+            entity_label: Label used in error messages (e.g., "Session", "Template").
+
+        Returns:
+            The normalized name string.
+
+        Raises:
+            InputError: If the name is empty or whitespace-only.
+        """
         if not name or not str(name).strip():
             raise InputError(f"{entity_label} name cannot be empty.")
         return str(name).strip()
 
     def _serialize_writing_payload(self, payload: Dict[str, Any], entity_label: str) -> str:
+        """
+        Serialize a writing payload to JSON for storage.
+
+        Args:
+            payload: Payload dictionary to serialize.
+            entity_label: Label used in error messages (e.g., "Session", "Template").
+
+        Returns:
+            JSON-serialized payload string.
+
+        Raises:
+            InputError: If the payload is None or not JSON-serializable.
+        """
         if payload is None:
             raise InputError(f"{entity_label} payload cannot be None.")
         try:
@@ -9700,6 +9726,24 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         session_id: Optional[str] = None,
         version_parent_id: Optional[str] = None,
     ) -> str:
+        """
+        Create a writing session for the Writing Playground.
+
+        Args:
+            name: User-facing session name.
+            payload: Session payload to store; will be JSON-serialized.
+            schema_version: Payload schema version (must be >= 1).
+            session_id: Optional explicit session UUID to store.
+            version_parent_id: Optional parent session ID for versioning.
+
+        Returns:
+            The session ID for the newly created record.
+
+        Raises:
+            InputError: If inputs are invalid or payload cannot be serialized.
+            ConflictError: If the session ID already exists.
+            CharactersRAGDBError: For database errors.
+        """
         if not isinstance(schema_version, int) or schema_version < 1:
             raise InputError("Session schema_version must be an integer >= 1.")
         session_name = self._normalize_writing_name(name, "Session")
@@ -9763,6 +9807,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Backend error adding writing session: {exc}") from exc
 
     def get_writing_session(self, session_id: str, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a writing session by ID.
+
+        Args:
+            session_id: The session UUID.
+            include_deleted: Whether to include soft-deleted records.
+
+        Returns:
+            The session record with a deserialized "payload", or None if not found.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = f"SELECT * FROM writing_sessions WHERE id = ? {deleted_clause}"
         try:
@@ -9779,6 +9836,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     def list_writing_sessions(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        List non-deleted writing sessions with pagination.
+
+        Args:
+            limit: Maximum number of sessions to return.
+            offset: Number of sessions to skip.
+
+        Returns:
+            A list of session summaries (id, name, last_modified, version).
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
         query = (
             "SELECT id, name, last_modified, version "
             "FROM writing_sessions WHERE deleted = 0 "
@@ -9792,6 +9862,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     def count_writing_sessions(self) -> int:
+        """
+        Return the count of non-deleted writing sessions.
+
+        Returns:
+            The number of active (non-deleted) sessions.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
         query = "SELECT COUNT(*) AS cnt FROM writing_sessions WHERE deleted = 0"
         try:
             cursor = self.execute_query(query)
@@ -9807,12 +9886,38 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         update_data: Dict[str, Any],
         expected_version: int,
     ) -> bool | None:
+        """
+        Update a writing session using optimistic locking.
+
+        Args:
+            session_id: The session UUID to update.
+            update_data: Fields to update; payload can be provided as "payload" (dict)
+                or "payload_json" (str-like).
+            expected_version: The version the client expects to update.
+
+        Returns:
+            True if the update succeeds.
+
+        Raises:
+            InputError: If update_data is empty or payload is invalid.
+            ConflictError: If the session is missing, deleted, or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
         payload = update_data.get("payload")
         if isinstance(payload, dict):
+            update_data = dict(update_data)
             update_data["payload_json"] = self._serialize_writing_payload(
                 update_data.pop("payload"),
                 "Session",
             )
+        else:
+            payload_json = update_data.get("payload_json")
+            if payload_json is not None and not isinstance(payload_json, str):
+                update_data = dict(update_data)
+                update_data["payload_json"] = self._serialize_writing_payload(
+                    payload_json,
+                    "Session",
+                )
         allowed_fields = ["name", "payload_json", "schema_version", "version_parent_id"]
         return self._update_generic_item(
             "writing_sessions",
@@ -9824,9 +9929,37 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
 
     def soft_delete_writing_session(self, session_id: str, expected_version: int) -> bool | None:
+        """
+        Soft-delete a writing session using optimistic locking.
+
+        Args:
+            session_id: The session UUID to soft-delete.
+            expected_version: The version the client expects to delete.
+
+        Returns:
+            True if the session was deleted or already deleted.
+
+        Raises:
+            ConflictError: If the session is missing or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
         return self._soft_delete_generic_item("writing_sessions", session_id, expected_version, pk_col_name="id")
 
     def clone_writing_session(self, session_id: str, *, name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Clone a writing session, optionally renaming the copy.
+
+        Args:
+            session_id: The source session UUID to clone.
+            name: Optional name for the cloned session.
+
+        Returns:
+            The newly created session record.
+
+        Raises:
+            ConflictError: If the source session does not exist.
+            CharactersRAGDBError: If the cloned session cannot be retrieved.
+        """
         existing = self.get_writing_session(session_id)
         if not existing:
             raise ConflictError("Writing session not found.", entity="writing_sessions", entity_id=session_id)
@@ -9853,6 +9986,24 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         version_parent_id: Optional[str] = None,
         is_default: bool = False,
     ) -> Optional[int]:
+        """
+        Create a writing template for the Writing Playground.
+
+        Args:
+            name: Template name.
+            payload: Template payload to store; will be JSON-serialized.
+            schema_version: Payload schema version (must be >= 1).
+            version_parent_id: Optional parent template ID for versioning.
+            is_default: Whether the template should be marked as default.
+
+        Returns:
+            The template ID for the newly created record.
+
+        Raises:
+            InputError: If inputs are invalid or payload cannot be serialized.
+            ConflictError: If a template with the same name already exists.
+            CharactersRAGDBError: For database errors.
+        """
         if not isinstance(schema_version, int) or schema_version < 1:
             raise InputError("Template schema_version must be an integer >= 1.")
         template_name = self._normalize_writing_name(name, "Template")
@@ -9872,6 +10023,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return self._add_generic_item("writing_templates", "name", item_data, template_name, other_fields_map)
 
     def get_writing_template_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a writing template by name.
+
+        Args:
+            name: Template name.
+
+        Returns:
+            The template record with a deserialized "payload", or None if not found.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
         template_name = self._normalize_writing_name(name, "Template")
         row = self._get_generic_item_by_unique_text("writing_templates", "name", template_name)
         if not row:
@@ -9889,6 +10052,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return item
 
     def list_writing_templates(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        List non-deleted writing templates with pagination.
+
+        Args:
+            limit: Maximum number of templates to return.
+            offset: Number of templates to skip.
+
+        Returns:
+            A list of template records with deserialized "payload".
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
         query = (
             "SELECT * FROM writing_templates WHERE deleted = 0 "
             "ORDER BY name ASC LIMIT ? OFFSET ?"
@@ -9914,6 +10090,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     def count_writing_templates(self) -> int:
+        """
+        Return the count of non-deleted writing templates.
+
+        Returns:
+            The number of active (non-deleted) templates.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
         query = "SELECT COUNT(*) AS cnt FROM writing_templates WHERE deleted = 0"
         try:
             cursor = self.execute_query(query)
@@ -9929,13 +10114,39 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         update_data: Dict[str, Any],
         expected_version: int,
     ) -> bool | None:
+        """
+        Update a writing template using optimistic locking.
+
+        Args:
+            name: Template name to update.
+            update_data: Fields to update; payload can be provided as "payload" (dict)
+                or "payload_json" (str-like).
+            expected_version: The version the client expects to update.
+
+        Returns:
+            True if the update succeeds.
+
+        Raises:
+            InputError: If update_data is empty or payload is invalid.
+            ConflictError: If the template is missing, deleted, or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
         template_name = self._normalize_writing_name(name, "Template")
         payload = update_data.get("payload")
         if isinstance(payload, dict):
+            update_data = dict(update_data)
             update_data["payload_json"] = self._serialize_writing_payload(
                 update_data.pop("payload"),
                 "Template",
             )
+        else:
+            payload_json = update_data.get("payload_json")
+            if payload_json is not None and not isinstance(payload_json, str):
+                update_data = dict(update_data)
+                update_data["payload_json"] = self._serialize_writing_payload(
+                    payload_json,
+                    "Template",
+                )
         allowed_fields = ["name", "payload_json", "schema_version", "version_parent_id", "is_default"]
         return self._update_generic_item(
             "writing_templates",
@@ -9948,6 +10159,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
 
     def soft_delete_writing_template(self, name: str, expected_version: int) -> bool | None:
+        """
+        Soft-delete a writing template using optimistic locking.
+
+        Args:
+            name: Template name to delete.
+            expected_version: The version the client expects to delete.
+
+        Returns:
+            True if the template was deleted or already deleted.
+
+        Raises:
+            ConflictError: If the template is missing or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
         template_name = self._normalize_writing_name(name, "Template")
         return self._soft_delete_generic_item("writing_templates", template_name, expected_version, pk_col_name="name")
 
@@ -9962,6 +10187,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         is_default: bool = False,
         order_index: int = 0,
     ) -> Optional[int]:
+        """
+        Create a writing theme for the Writing Playground.
+
+        Args:
+            name: Theme name.
+            class_name: Optional CSS class name for the theme.
+            css: Optional raw CSS string.
+            schema_version: Theme schema version (must be >= 1).
+            version_parent_id: Optional parent theme ID for versioning.
+            is_default: Whether the theme should be marked as default.
+            order_index: Ordering index for theme lists.
+
+        Returns:
+            The theme ID for the newly created record.
+
+        Raises:
+            InputError: If inputs are invalid.
+            ConflictError: If a theme with the same name already exists.
+            CharactersRAGDBError: For database errors.
+        """
         if not isinstance(schema_version, int) or schema_version < 1:
             raise InputError("Theme schema_version must be an integer >= 1.")
         theme_name = self._normalize_writing_name(name, "Theme")
@@ -9986,11 +10231,36 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return self._add_generic_item("writing_themes", "name", item_data, theme_name, other_fields_map)
 
     def get_writing_theme_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a writing theme by name.
+
+        Args:
+            name: Theme name.
+
+        Returns:
+            The theme record, or None if not found.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
         theme_name = self._normalize_writing_name(name, "Theme")
         row = self._get_generic_item_by_unique_text("writing_themes", "name", theme_name)
         return dict(row) if row else None
 
     def list_writing_themes(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        List non-deleted writing themes ordered by sort index.
+
+        Args:
+            limit: Maximum number of themes to return.
+            offset: Number of themes to skip.
+
+        Returns:
+            A list of theme records.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
         query = (
             "SELECT * FROM writing_themes WHERE deleted = 0 "
             "ORDER BY order_index ASC, name ASC LIMIT ? OFFSET ?"
@@ -10003,6 +10273,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     def count_writing_themes(self) -> int:
+        """
+        Return the count of non-deleted writing themes.
+
+        Returns:
+            The number of active (non-deleted) themes.
+
+        Raises:
+            CharactersRAGDBError: For database errors.
+        """
         query = "SELECT COUNT(*) AS cnt FROM writing_themes WHERE deleted = 0"
         try:
             cursor = self.execute_query(query)
@@ -10018,6 +10297,22 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         update_data: Dict[str, Any],
         expected_version: int,
     ) -> bool | None:
+        """
+        Update a writing theme using optimistic locking.
+
+        Args:
+            name: Theme name to update.
+            update_data: Fields to update.
+            expected_version: The version the client expects to update.
+
+        Returns:
+            True if the update succeeds.
+
+        Raises:
+            InputError: If update_data is empty.
+            ConflictError: If the theme is missing, deleted, or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
         theme_name = self._normalize_writing_name(name, "Theme")
         allowed_fields = [
             "name",
@@ -10039,6 +10334,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
 
     def soft_delete_writing_theme(self, name: str, expected_version: int) -> bool | None:
+        """
+        Soft-delete a writing theme using optimistic locking.
+
+        Args:
+            name: Theme name to delete.
+            expected_version: The version the client expects to delete.
+
+        Returns:
+            True if the theme was deleted or already deleted.
+
+        Raises:
+            ConflictError: If the theme is missing or version-mismatched.
+            CharactersRAGDBError: For database errors.
+        """
         theme_name = self._normalize_writing_name(name, "Theme")
         return self._soft_delete_generic_item("writing_themes", theme_name, expected_version, pk_col_name="name")
 

@@ -22,25 +22,27 @@ describe('Writing Playground components', () => {
     const { ref, cleanup } = createPromptRef('Hello world world')
     const onUpdatePrompt = vi.fn()
 
-    render(
-      <SearchReplaceModal
-        open
-        onClose={vi.fn()}
-        promptRef={ref}
-        onUpdatePrompt={onUpdatePrompt}
-        promptText={ref.current?.value ?? ''}
-      />
-    )
+    try {
+      render(
+        <SearchReplaceModal
+          open
+          onClose={vi.fn()}
+          promptRef={ref}
+          onUpdatePrompt={onUpdatePrompt}
+          promptText={ref.current?.value ?? ''}
+        />
+      )
 
-    const user = userEvent.setup()
-    await user.type(screen.getByPlaceholderText('Search'), 'world')
-    await user.type(screen.getByPlaceholderText('Replace'), 'planet')
-    await user.click(screen.getByRole('button', { name: /replace all/i }))
+      const user = userEvent.setup()
+      await user.type(screen.getByPlaceholderText('Search'), 'world')
+      await user.type(screen.getByPlaceholderText('Replace'), 'planet')
+      await user.click(screen.getByRole('button', { name: /replace all/i }))
 
-    expect(ref.current?.value).toBe('Hello planet planet')
-    expect(onUpdatePrompt).toHaveBeenCalledWith('Hello planet planet')
-
-    cleanup()
+      expect(ref.current?.value).toBe('Hello planet planet')
+      expect(onUpdatePrompt).toHaveBeenCalledWith('Hello planet planet')
+    } finally {
+      cleanup()
+    }
   })
 
   it('builds an instruct prompt with context', async () => {

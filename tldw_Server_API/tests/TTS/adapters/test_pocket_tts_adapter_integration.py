@@ -2,6 +2,7 @@
 # Description: Integration tests for PocketTTS ONNX adapter
 #
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,20 @@ from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, ProviderStat
 def _has_runtime_deps() -> bool:
     try:
         import pocket_tts_onnx  # noqa: F401
+    except Exception:
+        module_dir = Path("models/pocket_tts_onnx")
+        module_file = module_dir / "pocket_tts_onnx.py"
+        module_pkg = module_dir / "pocket_tts_onnx"
+        if module_file.exists() or module_pkg.exists():
+            sys.path.insert(0, str(module_dir))
+            try:
+                import pocket_tts_onnx  # noqa: F401
+            except Exception:
+                return False
+        else:
+            return False
+
+    try:
         import soundfile  # noqa: F401
         import sentencepiece  # noqa: F401
         import onnxruntime  # noqa: F401

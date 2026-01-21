@@ -88,13 +88,20 @@ def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optio
     """Resolve the Kanban DB path for the active user context."""
     user_id: Optional[Any] = None
     try:
-        if current_user is not None and getattr(current_user, "id", None) is not None:
-            user_id = current_user.id
+        if current_user is not None:
+            for attr in ("id", "id_int", "username"):
+                value = getattr(current_user, attr, None)
+                if value is not None:
+                    user_id = value
+                    break
         elif request_user_id:
             user_id = request_user_id
     except Exception:
         logger.debug("Failed to resolve user_id for kanban DB path", exc_info=True)
-        user_id = request_user_id
+        if current_user is None:
+            user_id = request_user_id
+        else:
+            user_id = None
     if user_id is None:
         try:
             user_id = DatabasePaths.get_single_user_id()
@@ -1389,6 +1396,7 @@ async def unified_search_stream_endpoint(
                         media_db_path=(media_db.db_path if media_db else None),
                         notes_db_path=(chacha_db.db_path if chacha_db else None),
                         character_db_path=(chacha_db.db_path if chacha_db else None),
+                        kanban_db_path=kanban_db_path,
                         search_mode=request.search_mode,
                         fts_level=request.fts_level,
                         hybrid_alpha=request.hybrid_alpha,

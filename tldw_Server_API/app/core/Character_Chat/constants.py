@@ -77,8 +77,8 @@ DEFAULT_RATE_LIMIT_OPS = 100
 DEFAULT_MAX_CHARACTERS_PER_USER = 1000
 """Default maximum characters per user."""
 
-DEFAULT_MAX_CHATS_PER_USER = 100
-"""Default maximum chat sessions per user."""
+DEFAULT_MAX_CHATS_PER_USER = 100000
+"""Default maximum chat sessions (total) per user."""
 
 DEFAULT_MAX_MESSAGES_PER_CHAT = 1000
 """Default maximum messages per chat session."""

@@ -831,9 +831,9 @@ def load_settings():
     except Exception:
         _character_rate_limit_ops = 100
         _character_rate_limit_window = 3600
-        _max_characters_per_user = 1000
+        _max_characters_per_user = 10000
         _max_character_import_size_mb = 10
-        _max_chats_per_user = 100
+        _max_chats_per_user = 100000
         _max_messages_per_chat = 1000
         _max_messages_per_chat_soft = _max_messages_per_chat
         _max_chat_completions_per_minute = 20

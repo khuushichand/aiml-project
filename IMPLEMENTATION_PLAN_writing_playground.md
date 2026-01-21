@@ -21,4 +21,5 @@
 **Goal**: End-to-end validation and polish.
 **Success Criteria**: Streaming generation works with logprobs; token highlighting + logit bias functional; provider gating verified; no CSP violations.
 **Tests**: Integration tests for streaming + provider capability fallbacks; manual UI regression checklist.
-**Status**: Not Started
+**Status**: In Progress
+**Notes**: Backend endpoint polish underway (error logging, tokenizer docs, payload serialization encapsulation, theme normalization).

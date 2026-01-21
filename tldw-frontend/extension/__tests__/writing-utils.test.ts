@@ -38,6 +38,7 @@ describe('writing utils', () => {
 
   it('assembles world info when keys match', () => {
     const worldInfo = {
+      mikuPediaVersion: 1,
       prefix: '',
       suffix: '',
       entries: [

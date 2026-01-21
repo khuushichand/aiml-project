@@ -7,8 +7,17 @@ import type {
 } from "@/types/writing"
 import { DEFAULT_SESSION } from "@/components/Option/WritingPlayground/presets"
 
+const MAX_CACHE_SIZE = 100
 const lenientPrefixCache = new Map<string, RegExp>()
 const lenientCache = new Map<string, RegExp>()
+
+const boundedSet = <K, V>(map: Map<K, V>, key: K, value: V) => {
+  if (map.size >= MAX_CACHE_SIZE) {
+    const firstKey = map.keys().next().value
+    if (firstKey !== undefined) map.delete(firstKey)
+  }
+  map.set(key, value)
+}
 
 export const joinPrompt = (prompt: WritingPromptChunk[]) =>
   prompt.map((chunk) => chunk.content).join("")
@@ -98,7 +107,7 @@ export const createLenientPrefixRegex = (prefix: string) => {
   const cached = lenientPrefixCache.get(prefix)
   if (cached) return cached
   const regex = new RegExp(`^${makeWhiteSpaceLenient(escapeRegExp(prefix))}`, "i")
-  lenientPrefixCache.set(prefix, regex)
+  boundedSet(lenientPrefixCache, prefix, regex)
   return regex
 }
 
@@ -110,7 +119,7 @@ export const createLenientRegex = (value: string) => {
     makeWhiteSpaceLenient(escapeRegExp(value)).replace(/^\\s\*/, "(^\\s*)?"),
     "i"
   )
-  lenientCache.set(value, regex)
+  boundedSet(lenientCache, value, regex)
   return regex
 }
 
@@ -236,17 +245,17 @@ export const applyFimTemplate = (
       const [sides, separators] = regexSplitString(chunk.content, placeholderRegex, 1)
       foundPlaceholder = separators[0]
       let left = sides[0]
-      if ((left.at(-2) !== " " || left.at(-2) !== "\t") && left.at(-1) === " ") {
+      if ((left.at(-2) !== " " && left.at(-2) !== "\t") && left.at(-1) === " ") {
         left = left.substring(0, left.length - 1)
       }
       leftPromptChunks = [
         ...promptChunks.slice(0, i),
-        ...(left ? [{ type: "user", content: left }] : [])
+        ...(left ? [{ type: "user" as const, content: left }] : [])
       ]
 
       const right = sides[1]
       rightPromptChunks = [
-        ...(right ? [{ type: "user", content: right }] : []),
+        ...(right ? [{ type: "user" as const, content: right }] : []),
         ...promptChunks.slice(i + 1)
       ]
       break
@@ -298,13 +307,11 @@ export const assembleWorldInfo = (
     const resolvedRange = Number.isFinite(searchRange) ? searchRange : 2048
     const sliceLength = Math.max(0, Math.round(resolvedRange * tokenRatio))
     const searchPrompt = prompt.substring(Math.max(0, prompt.length - sliceLength))
+    const searchPromptLower = searchPrompt.toLowerCase()
     return entry.keys.some((key) => {
-      if (!searchPrompt.length) return false
-      try {
-        return new RegExp(key, "i").test(searchPrompt) && key !== ""
-      } catch {
-        return false
-      }
+      if (!searchPromptLower.length) return false
+      if (!key) return false
+      return searchPromptLower.includes(key.toLowerCase())
     })
   })
 

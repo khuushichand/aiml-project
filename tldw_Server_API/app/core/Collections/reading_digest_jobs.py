@@ -12,6 +12,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Collections.reading_service import ReadingService
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import ReadingDigestJobError
 from tldw_Server_API.app.services.outputs_service import (
     _build_output_filename,
     _outputs_dir_for_user,
@@ -23,6 +24,7 @@ from tldw_Server_API.app.services.outputs_service import (
 
 READING_DIGEST_DOMAIN = "reading"
 READING_DIGEST_JOB_TYPE = "reading_digest"
+LOGGER = logger.bind(module="reading_digest_jobs")
 
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -48,20 +50,6 @@ READING_DIGEST_SUGGESTIONS_MAX_CANDIDATES = _env_int("READING_DIGEST_SUGGESTIONS
 _SUGGESTION_ALLOWED_STATUSES = {"saved", "reading", "read", "archived"}
 
 
-class ReadingDigestJobError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        retryable: bool = False,
-        backoff_seconds: Optional[int] = None,
-    ) -> None:
-        super().__init__(message)
-        self.retryable = retryable
-        if backoff_seconds is not None:
-            self.backoff_seconds = backoff_seconds
-
-
 def reading_digest_queue() -> str:
     queue = (os.getenv("READING_DIGEST_JOBS_QUEUE") or "reading-digest").strip()
     return queue or "reading-digest"
@@ -73,7 +61,8 @@ def _parse_payload(payload: Any) -> Dict[str, Any]:
     if isinstance(payload, str):
         try:
             parsed = json.loads(payload)
-        except Exception:
+        except json.JSONDecodeError as exc:
+            LOGGER.debug("Failed to parse reading digest payload {}: {}", payload, exc)
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
@@ -89,7 +78,8 @@ def _resolve_user_id(job: Dict[str, Any], payload: Dict[str, Any]) -> int:
 def _safe_int(value: Any, default: int) -> int:
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        LOGGER.debug("Failed to coerce int from {}: {}", value, exc)
         return default
 
 
@@ -98,7 +88,8 @@ def _parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
         return None
     try:
         parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        LOGGER.debug("Failed to parse ISO datetime from {}: {}", raw, exc)
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
@@ -132,8 +123,17 @@ def _normalize_suggestions_config(filters: Dict[str, Any]) -> Optional[Dict[str,
     limit = _safe_int(raw.get("limit"), READING_DIGEST_SUGGESTIONS_DEFAULT_LIMIT)
     limit = max(1, min(READING_DIGEST_SUGGESTIONS_MAX_LIMIT, limit))
 
-    include_read = bool(raw.get("include_read", False))
-    include_archived = bool(raw.get("include_archived", False))
+    include_read = raw.get("include_read", False)
+    if isinstance(include_read, str):
+        include_read = include_read.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        include_read = bool(include_read)
+
+    include_archived = raw.get("include_archived", False)
+    if isinstance(include_archived, str):
+        include_archived = include_archived.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        include_archived = bool(include_archived)
 
     statuses = raw.get("status")
     if isinstance(statuses, str):
@@ -457,19 +457,21 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
         limit = max(1, min(READING_DIGEST_MAX_LIMIT, limit))
 
         service = ReadingService(user_id)
-        rows, _total = service.list_items(
-            status=status if isinstance(status, list) else None,
-            tags=tags if isinstance(tags, list) else None,
-            favorite=favorite if isinstance(favorite, bool) else None,
-            q=q if isinstance(q, str) else None,
-            domain=domain if isinstance(domain, str) else None,
-            date_from=str(date_from) if date_from else None,
-            date_to=str(date_to) if date_to else None,
-            page=1,
-            size=limit,
-            offset=0,
-            limit=limit,
-            sort=sort if isinstance(sort, str) else None,
+        rows, _total = await asyncio.to_thread(
+            lambda: service.list_items(
+                status=status if isinstance(status, list) else None,
+                tags=tags if isinstance(tags, list) else None,
+                favorite=favorite if isinstance(favorite, bool) else None,
+                q=q if isinstance(q, str) else None,
+                domain=domain if isinstance(domain, str) else None,
+                date_from=str(date_from) if date_from else None,
+                date_to=str(date_to) if date_to else None,
+                page=1,
+                size=limit,
+                offset=0,
+                limit=limit,
+                sort=sort if isinstance(sort, str) else None,
+            )
         )
 
         if isinstance(status, list):
@@ -605,14 +607,16 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
                 metadata["template_description"] = output_template.description
 
         try:
-            row = collections_db.create_output_artifact(
-                type_="reading_digest",
-                title=title,
-                format_=output_format,
-                storage_path=filename,
-                metadata_json=json.dumps(metadata),
-                job_id=job.get("id"),
-                retention_until=retention_until,
+            row = await asyncio.to_thread(
+                lambda: collections_db.create_output_artifact(
+                    type_="reading_digest",
+                    title=title,
+                    format_=output_format,
+                    storage_path=filename,
+                    metadata_json=json.dumps(metadata),
+                    job_id=job.get("id"),
+                    retention_until=retention_until,
+                )
             )
         except Exception as exc:
             try:
@@ -641,14 +645,17 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
         try:
             collections_db.set_reading_digest_history(schedule.id, last_status="succeeded")
         except Exception:
-            pass
+            logger.exception(
+                "reading_digest: failed to call set_reading_digest_history for schedule {}",
+                schedule.id,
+            )
 
         return {
             "status": "succeeded",
             "output_id": row.id,
             "item_count": len(items_context),
         }
-    except Exception as exc:
+    except Exception:
         try:
             collections_db.set_reading_digest_history(schedule.id, last_status="error")
         except Exception as inner_exc:

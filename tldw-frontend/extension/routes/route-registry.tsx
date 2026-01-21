@@ -268,7 +268,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       group: "workspace",
       labelToken: "settings:manageShare.title",
       icon: ShareIcon,
-      order: 7
+      order: 8
     }
   },
   { kind: "options", path: "/settings/processed", element: <OptionProcessed /> },
@@ -407,7 +407,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       group: "workspace",
       labelToken: "option:header.writingPlayground",
       icon: PenLine,
-      order: 6
+      order: 7
     }
   },
   { kind: "options", path: "/chatbooks", element: <OptionChatbooksPlayground /> },
@@ -421,7 +421,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       group: "workspace",
       labelToken: "option:header.dataTables",
       icon: Table2,
-      order: 8,
+      order: 9,
       beta: true
     }
   },
@@ -433,7 +433,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       group: "workspace",
       labelToken: "option:header.collections",
       icon: Library,
-      order: 9,
+      order: 10,
       beta: true
     }
   },

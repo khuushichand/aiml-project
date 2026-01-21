@@ -109,6 +109,42 @@ def test_writing_templates_and_themes_versioning():
         assert db.get_writing_theme_by_name("Theme A") is None
 
 
+def test_update_writing_session_payload_json_dict_serialized():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "ChaChaNotes.db")
+        db = CharactersRAGDB(db_path, client_id="test")
+
+        session_id = db.add_writing_session(name="Draft", payload={"prompt": "Original"})
+        update_payload = {"prompt": "Direct payload_json", "tokens": 5}
+        db.update_writing_session(
+            session_id,
+            {"payload_json": update_payload},
+            expected_version=1,
+        )
+        updated = db.get_writing_session(session_id)
+        assert updated is not None
+        assert updated["payload"] == update_payload
+        assert updated["version"] == 2
+
+
+def test_update_writing_template_payload_json_dict_serialized():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "ChaChaNotes.db")
+        db = CharactersRAGDB(db_path, client_id="test")
+
+        db.add_writing_template(name="Template B", payload={"preset": "alpha"})
+        update_payload = {"preset": "beta", "notes": "direct payload_json"}
+        db.update_writing_template(
+            "Template B",
+            {"payload_json": update_payload},
+            expected_version=1,
+        )
+        updated = db.get_writing_template_by_name("Template B")
+        assert updated is not None
+        assert updated["payload"] == update_payload
+        assert updated["version"] == 2
+
+
 _ASCII_CHARS = st.characters(min_codepoint=32, max_codepoint=126)
 _PAYLOAD_VALUES = st.one_of(
     st.none(),

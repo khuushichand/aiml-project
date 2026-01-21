@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from loguru import logger
@@ -16,11 +17,23 @@ from tldw_Server_API.app.core.Slides.slides_db import SlidesDatabase, SlidesData
 
 _MAX_CACHED_SLIDES_DB = 20
 _slides_db_lock = threading.Lock()
-_slides_db_instances: Dict[str, SlidesDatabase] = {}
+_slides_db_instances: "OrderedDict[str, SlidesDatabase]" = OrderedDict()
 
 
 def _get_slides_db_path_for_user(user_id: int) -> Path:
+    """Return the per-user Slides database path."""
     return DatabasePaths.get_slides_db_path(user_id)
+
+
+def cleanup_slides_db_cache() -> None:
+    """Close all cached SlidesDatabase connections on shutdown."""
+    with _slides_db_lock:
+        for user_id, db in list(_slides_db_instances.items()):
+            try:
+                db.close_connection()
+            except Exception as exc:
+                logger.warning("Failed to close Slides DB for user {} on shutdown: {}", user_id, exc)
+        _slides_db_instances.clear()
 
 
 def get_slides_db_for_user(
@@ -35,13 +48,11 @@ def get_slides_db_for_user(
     with _slides_db_lock:
         db_instance = _slides_db_instances.get(db_key)
         if db_instance:
+            _slides_db_instances.move_to_end(db_key)
             return db_instance
         try:
-            db_path = _get_slides_db_path_for_user(user_id)
-            db_instance = SlidesDatabase(db_path=str(db_path), client_id=str(current_user.id))
             if len(_slides_db_instances) >= _MAX_CACHED_SLIDES_DB:
-                oldest_key = next(iter(_slides_db_instances))
-                oldest_db = _slides_db_instances.pop(oldest_key)
+                oldest_key, oldest_db = _slides_db_instances.popitem(last=False)
                 try:
                     oldest_db.close_connection()
                 except Exception as exc:
@@ -50,6 +61,8 @@ def get_slides_db_for_user(
                         oldest_key,
                         exc,
                     )
+            db_path = _get_slides_db_path_for_user(user_id)
+            db_instance = SlidesDatabase(db_path=str(db_path), client_id=str(current_user.id))
             _slides_db_instances[db_key] = db_instance
             return db_instance
         except (SlidesDatabaseError, SchemaError) as exc:

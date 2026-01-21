@@ -501,6 +501,22 @@ def _map_openai_audio_model_to_whisper(model: Optional[str]) -> str:
     m = raw.lower()
 
     valid_sizes = _valid_whisper_model_sizes()
+    valid_sizes_lower = {s.lower() for s in valid_sizes}
+    if not valid_sizes_lower:
+        valid_sizes_lower = {
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en",
+            "medium",
+            "medium.en",
+            "large-v1",
+            "large-v2",
+            "large-v3",
+            "large",
+        }
 
     # Pass through known internal sizes and HF ids
     if raw in valid_sizes or m in valid_sizes or "/" in raw:
@@ -509,6 +525,12 @@ def _map_openai_audio_model_to_whisper(model: Optional[str]) -> str:
     # OpenAI-compatible aliases
     if m == "whisper-1":
         return default_model
+    if m in {"whisper-large-v3-turbo", "whisper-large-v3-turbo-ct2", "large-v3-turbo"}:
+        return "deepdml/faster-whisper-large-v3-turbo-ct2"
+    if m.startswith("whisper-") and m.endswith("-ct2"):
+        ct2_tail = m[len("whisper-"):-4]
+        if ct2_tail in valid_sizes_lower:
+            return ct2_tail
 
     # Fallback to default
     return default_model

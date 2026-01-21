@@ -1016,6 +1016,7 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def main() -> None:
+    """Run the legacy embeddings jobs worker loop."""
     worker_id = (os.getenv("EMBEDDINGS_JOBS_WORKER_ID") or f"embeddings-jobs-{os.getpid()}").strip()
     queue = (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip() or "default"
 

@@ -61,10 +61,10 @@ providers:
 
   # PocketTTS ONNX Configuration (local; voice cloning)
   pocket_tts:
-    enabled: false            # Disabled by default; enable after downloading assets
-    model_path: "models/pocket_tts_onnx/onnx"          # Directory with ONNX files
+    enabled: true  # Disabled by default; enable after downloading assets
+    model_path: "models/pocket_tts_onnx/onnx"  # Directory with ONNX files
     tokenizer_path: "models/pocket_tts_onnx/tokenizer.model"
-    module_path: "models/pocket_tts_onnx"             # Directory containing pocket_tts_onnx.py or package
+    module_path: "models/pocket_tts_onnx"  # Directory containing pocket_tts_onnx.py or package
     precision: "int8"         # "int8" (CPU optimized) or "fp32"
     device: "auto"            # "auto" | "cpu" | "cuda"
     temperature: 0.7

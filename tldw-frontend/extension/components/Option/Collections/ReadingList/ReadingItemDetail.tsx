@@ -637,6 +637,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     highlightEndOffset,
     highlightAnchorStrategy,
     clearSelection,
+    addHighlight,
     t
   ])
 

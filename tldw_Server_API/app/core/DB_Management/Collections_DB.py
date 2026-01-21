@@ -49,6 +49,23 @@ def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
 
 
+_SQLITE_PRAGMA_TABLES = {
+    "collection_tags",
+    "content_item_tags",
+    "content_items",
+    "file_artifacts",
+    "output_templates",
+    "outputs",
+    "reading_digest_schedules",
+    "reading_highlights",
+}
+
+
+def _is_backfill_noop_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "duplicate column" in message or "already exists" in message
+
+
 @dataclass
 class OutputTemplateRow:
     id: int
@@ -122,6 +139,7 @@ class ContentItemRow:
 
 @dataclass
 class ReadingDigestScheduleRow:
+    """Row model for reading_digest_schedules entries."""
     id: str
     tenant_id: str
     user_id: str
@@ -248,6 +266,8 @@ class CollectionsDatabase:
 
     def _sqlite_columns(self, table: str) -> set[str]:
         if self.backend.backend_type != BackendType.SQLITE:
+            return set()
+        if table not in _SQLITE_PRAGMA_TABLES:
             return set()
         try:
             result = self.backend.execute(f"PRAGMA table_info({table})", tuple())
@@ -503,8 +523,11 @@ class CollectionsDatabase:
             try:
                 # Attempt to add metadata_json if missing
                 self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
+                else:
+                    raise
         # Outputs table backfills
         if "deleted" not in output_columns:
             try:
@@ -514,22 +537,34 @@ class CollectionsDatabase:
                     f"ALTER TABLE outputs ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
                     tuple(),
                 )
-            except Exception:
-                logger.debug("collections backfill: outputs.deleted already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: outputs.deleted already exists or skipped")
+                else:
+                    raise
         if "deleted_at" not in output_columns:
             try:
                 self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
+                else:
+                    raise
         if "retention_until" not in output_columns:
             try:
                 self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: outputs.retention_until already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: outputs.retention_until already exists or skipped")
+                else:
+                    raise
         try:
             self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
-        except Exception:
-            logger.debug("collections backfill: outputs unique index already exists or skipped")
+        except Exception as exc:
+            if _is_backfill_noop_error(exc):
+                logger.debug("collections backfill: outputs unique index already exists or skipped")
+            else:
+                raise
         # Reading digest schedule backfills
         if "enabled" not in digest_columns:
             try:
@@ -539,8 +574,11 @@ class CollectionsDatabase:
                     f"ALTER TABLE reading_digest_schedules ADD COLUMN enabled {enabled_type} NOT NULL DEFAULT {enabled_default}",
                     tuple(),
                 )
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.enabled already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.enabled already exists or skipped")
+                else:
+                    raise
         if "require_online" not in digest_columns:
             try:
                 online_type = "BOOLEAN" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
@@ -549,49 +587,76 @@ class CollectionsDatabase:
                     f"ALTER TABLE reading_digest_schedules ADD COLUMN require_online {online_type} NOT NULL DEFAULT {online_default}",
                     tuple(),
                 )
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.require_online already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.require_online already exists or skipped")
+                else:
+                    raise
         if "filters_json" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.filters_json already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.filters_json already exists or skipped")
+                else:
+                    raise
         if "template_id" not in digest_columns:
             try:
                 template_id_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
                 self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", tuple())
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.template_id already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.template_id already exists or skipped")
+                else:
+                    raise
         if "template_name" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.template_name already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.template_name already exists or skipped")
+                else:
+                    raise
         if "format" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.format already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.format already exists or skipped")
+                else:
+                    raise
         if "retention_days" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", tuple())
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.retention_days already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.retention_days already exists or skipped")
+                else:
+                    raise
         if "last_run_at" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.last_run_at already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.last_run_at already exists or skipped")
+                else:
+                    raise
         if "next_run_at" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.next_run_at already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.next_run_at already exists or skipped")
+                else:
+                    raise
         if "last_status" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: reading_digest_schedules.last_status already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: reading_digest_schedules.last_status already exists or skipped")
+                else:
+                    raise
         # File artifacts backfills
         if "deleted" not in file_artifact_columns:
             try:
@@ -601,59 +666,92 @@ class CollectionsDatabase:
                     f"ALTER TABLE file_artifacts ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
                     tuple(),
                 )
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.deleted already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.deleted already exists or skipped")
+                else:
+                    raise
         if "deleted_at" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
+                else:
+                    raise
         if "retention_until" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
+                else:
+                    raise
         if "export_status" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
+                else:
+                    raise
         if "export_format" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
+                else:
+                    raise
         if "export_storage_path" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
+                else:
+                    raise
         if "export_bytes" not in file_artifact_columns:
             try:
                 export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
                 self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
+                else:
+                    raise
         if "export_content_type" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
+                else:
+                    raise
         if "export_job_id" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
+                else:
+                    raise
         if "export_expires_at" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
+                else:
+                    raise
         if "export_consumed_at" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
-            except Exception:
-                logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
+                else:
+                    raise
         # Collections layer tables
         fts_available = self.backend.backend_type == BackendType.SQLITE
         if self.backend.backend_type == BackendType.POSTGRESQL:
@@ -789,8 +887,11 @@ class CollectionsDatabase:
                 continue
             try:
                 self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", tuple())
-            except Exception:
-                pass
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: content_items.%s already exists or skipped", column)
+                else:
+                    raise
         self._fts_available = fts_available
 
     def _seed_watchlists_output_templates(self) -> None:

@@ -182,6 +182,7 @@ Note: PocketTTS ONNX is not published on PyPI. The runtime module and weights ar
 ```bash
 python Helper_Scripts/TTS_Installers/install_tts_pocket_tts_onnx.py --output-dir models/pocket_tts_onnx
 ```
+The installer updates `tts_providers_config.yaml` by default. Use `--no-config-update` to skip or `--config-path` for a custom file.
 
 #### Download Models (Manual)
 ```bash
