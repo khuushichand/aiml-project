@@ -452,6 +452,23 @@ async def add_media_orchestrate(
             # --- 5. Prepare Inputs and Options ---
             uploaded_file_paths = [str(pf["path"]) for pf in saved_files_info]
             url_list = form_data.urls or []
+            if url_list and form_data.media_type in ["video", "audio"]:
+                try:
+                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import (
+                        parse_and_expand_urls,
+                    )
+                    expanded_urls = parse_and_expand_urls(url_list)
+                    if expanded_urls != url_list:
+                        logging.info(
+                            "Expanded playlist and shortcut URLs into %d concrete entries.",
+                            len(expanded_urls),
+                        )
+                    url_list = expanded_urls
+                except Exception as expand_err:
+                    logger.warning(
+                        "Failed to expand playlist URLs; continuing with originals: %s",
+                        expand_err,
+                    )
             all_valid_input_sources = url_list + uploaded_file_paths
 
             # Check if any valid sources remain after potential save errors
