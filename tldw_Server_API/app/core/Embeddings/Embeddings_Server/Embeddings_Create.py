@@ -12,6 +12,7 @@ import time
 import threading
 import hashlib
 import re
+import weakref
 from pathlib import Path
 from functools import wraps
 from typing import Any, Dict, List, Optional
@@ -368,7 +369,8 @@ def _release_model_in_use(model_id: str) -> None:
 # Prometheus Metrics (Ensure these are correctly defined and registered in your application)
 ACTIVE_EMBEDDERS = Gauge("active_embedder_instances", "Number of active embedder instances",
                          labelnames=("provider", "model_id"))
-EMBEDDINGS_REQUESTS = Counter("embedding_requests_total", "Total number of embedding requests",
+# Use a distinct metric name to avoid collisions with API-level embedding_requests_total.
+EMBEDDINGS_REQUESTS = Counter("embedding_backend_requests_total", "Total number of backend embedding requests",
                               labelnames=("provider", "model_id"))
 MODEL_CACHE_HITS = Counter("embedding_model_cache_hits_total", "Total number of model cache hits",
                            labelnames=("model_id",))
@@ -547,8 +549,9 @@ class TokenBucketLimiter:
 # --- Resource Governor plumbing (optional) for embeddings server -------------
 _rg_emb_server_governor = None
 _rg_emb_server_loader = None
-_rg_emb_server_lock = asyncio.Lock()
 _rg_emb_server_log_lock = threading.Lock()
+_rg_emb_server_lock_guard = threading.Lock()
+_rg_emb_server_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = weakref.WeakKeyDictionary()
 _rg_emb_server_init_error: Optional[str] = None
 _rg_emb_server_init_error_logged = False
 _rg_emb_server_fallback_logged = False
@@ -647,6 +650,21 @@ except Exception:  # pragma: no cover - safe fallback when RG not installed
     rg_enabled = None  # type: ignore
 
 
+def _rg_emb_server_async_lock() -> asyncio.Lock:
+    """Return a loop-bound async lock for RG initialization."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Should not happen in async context; return a fresh lock just in case.
+        return asyncio.Lock()
+    with _rg_emb_server_lock_guard:
+        lock = _rg_emb_server_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _rg_emb_server_locks[loop] = lock
+        return lock
+
+
 def _should_enforce_rg_in_production() -> bool:
     env = (os.getenv("ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENV") or "dev").lower()
     if env not in {"prod", "production"}:
@@ -701,7 +719,7 @@ async def _get_embeddings_server_rg_governor():
         return None
     if _rg_emb_server_governor is not None:
         return _rg_emb_server_governor
-    async with _rg_emb_server_lock:
+    async with _rg_emb_server_async_lock():
         if _rg_emb_server_governor is not None:
             return _rg_emb_server_governor
         try:
@@ -777,7 +795,8 @@ def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object
     Synchronous helper for RG enforcement around create_embeddings_batch.
 
     Uses asyncio.run when no event loop is running in the current thread; if a
-    loop is already running, skips RG to avoid blocking and returns None.
+    loop is already running, runs RG enforcement in a worker thread to avoid
+    cross-loop locks while still enforcing RG.
     """
     if not _rg_embeddings_server_enabled():
         return None
@@ -787,11 +806,36 @@ def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object
         except RuntimeError:
             # No running loop in this thread; safe to use asyncio.run.
             return asyncio.run(_maybe_enforce_with_rg_embeddings_server_async())
-        # Running inside an event loop; avoid blocking.
-        logger.debug(
-            "Embeddings server RG sync helper invoked inside running event loop; "
-            "skipping RG enforcement to avoid blocking."
-        )
+        # Running inside an event loop; execute RG check in a worker thread.
+        decision_holder: Dict[str, object] = {}
+        error_holder: Dict[str, Exception] = {}
+        done = threading.Event()
+
+        def _run_in_thread() -> None:
+            try:
+                decision_holder["decision"] = asyncio.run(
+                    _maybe_enforce_with_rg_embeddings_server_async()
+                )
+            except Exception as exc:
+                error_holder["error"] = exc
+            finally:
+                done.set()
+
+        t = threading.Thread(target=_run_in_thread, daemon=True)
+        t.start()
+        timeout_s = float(os.getenv("RG_EMBEDDINGS_SERVER_SYNC_TIMEOUT_SEC", "5") or "5")
+        done.wait(timeout=timeout_s)
+        if not done.is_set():
+            logger.debug(
+                "Embeddings server RG sync helper timed out after {}s", timeout_s
+            )
+            return None
+        if error_holder:
+            logger.debug("Embeddings server RG sync helper failed: {}", error_holder.get("error"))
+            return None
+        decision = decision_holder.get("decision")
+        if isinstance(decision, dict):
+            return decision
         return None
     except Exception:
         # Best-effort: treat RG as unavailable on any unexpected error.

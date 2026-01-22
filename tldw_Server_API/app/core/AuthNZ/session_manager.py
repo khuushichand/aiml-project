@@ -695,12 +695,13 @@ class SessionManager:
             try:
                 if not path.exists():
                     continue
+                if not self._is_valid_key_file(path):
+                    logger.warning(
+                        f"Persisted session encryption key at {path} is invalid or insecure; ignoring."
+                    )
+                    continue
                 content = path.read_text(encoding="utf-8").strip()
                 if not content:
-                    continue
-                decoded = base64.urlsafe_b64decode(content.encode("utf-8"))
-                if len(decoded) != 32:
-                    logger.warning(f"Persisted session encryption key at {path} is invalid; ignoring.")
                     continue
                 # Use the first valid candidate found
                 self._persisted_key_path = path
@@ -766,6 +767,22 @@ class SessionManager:
             if not path.exists():
                 return False
             if not path.is_file():
+                return False
+            try:
+                st = os.stat(path, follow_symlinks=False)
+                if not stat.S_ISREG(st.st_mode):
+                    return False
+                if hasattr(os, "getuid") and st.st_uid != os.getuid():
+                    logger.warning(f"Session key file {path} is not owned by the current user; ignoring.")
+                    return False
+                mode = stat.S_IMODE(st.st_mode)
+                if mode & (stat.S_IRWXG | stat.S_IRWXO):
+                    logger.warning(
+                        f"Session key file {path} has insecure permissions {oct(mode)}; ignoring."
+                    )
+                    return False
+            except Exception as exc:
+                logger.warning(f"Failed to inspect session key file {path}: {exc}")
                 return False
             content = path.read_text(encoding="utf-8").strip()
             return bool(content) and self._is_valid_key_content(content)

@@ -197,6 +197,40 @@ def test_create_note(client: TestClient):
     mock_chacha_db_instance.get_note_by_id.assert_called_once_with(note_id=note_id_val)
 
 
+def test_create_note_keyword_conflict_refetch(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    kw_id = 7
+    expected_db_client_id = "test_api_client_for_user_db"
+    mock_chacha_db_instance.add_note.return_value = note_id_val
+    mock_chacha_db_instance.get_note_by_id.return_value = create_timestamped_data(
+        {"id": note_id_val, "title": "Note", "content": "Body"},
+        expected_db_client_id,
+    )
+    mock_chacha_db_instance.get_keywords_for_note.return_value = []
+    mock_chacha_db_instance.get_keyword_by_text.side_effect = [
+        None,
+        {"id": kw_id, "keyword": "alpha"},
+    ]
+    mock_chacha_db_instance.add_keyword.side_effect = Actual_ConflictError(
+        "Keyword already exists.",
+        entity="keywords",
+        entity_id="alpha",
+    )
+
+    response = client.post(
+        "/api/v1/notes/",
+        json={"title": "Note", "content": "Body", "keywords": ["alpha"]},
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+    mock_chacha_db_instance.add_keyword.assert_called_once_with("alpha")
+    assert mock_chacha_db_instance.get_keyword_by_text.call_count == 2
+    mock_chacha_db_instance.link_note_to_keyword.assert_called_once_with(
+        note_id=note_id_val,
+        keyword_id=kw_id,
+    )
+
+
 def test_create_note_rejects_overlong_keyword(client: TestClient):
     long_kw = "k" * 101
     response = client.post(

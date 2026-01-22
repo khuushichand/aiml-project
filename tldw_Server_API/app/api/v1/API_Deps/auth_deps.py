@@ -4,6 +4,7 @@
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 from collections.abc import Mapping
+import inspect
 import asyncio
 import threading
 import re
@@ -46,6 +47,7 @@ from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     authenticate_api_key_user,
     verify_jwt_and_fetch_user,
+    get_single_user_instance,
 )
 from tldw_Server_API.app.core.exceptions import InactiveUserError
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
@@ -93,6 +95,25 @@ def _looks_like_jwt(token: Optional[str]) -> bool:
     if not isinstance(token, str):
         return False
     return token.count(".") == 2
+
+
+_SINGLE_USER_BEARER_PREFIX = "single-user-token-"
+
+
+def _parse_single_user_bearer_token(token: Optional[str]) -> Optional[int]:
+    """Extract the user id from a single-user bearer token."""
+    if not isinstance(token, str):
+        return None
+    raw = token.strip()
+    if not raw.startswith(_SINGLE_USER_BEARER_PREFIX):
+        return None
+    suffix = raw[len(_SINGLE_USER_BEARER_PREFIX) :]
+    if not suffix:
+        return None
+    try:
+        return int(suffix)
+    except (TypeError, ValueError):
+        return None
 
 
 async def _authenticate_api_key_from_request(request: Request, api_key: str) -> Dict[str, Any]:
@@ -675,11 +696,106 @@ async def get_current_user(
         except Exception:
             settings = None
         if settings and getattr(settings, "AUTH_MODE", None) == "single_user":
-            x_api_key = credentials.credentials
-            credentials = None
+            if _parse_single_user_bearer_token(credentials.credentials) is None:
+                x_api_key = credentials.credentials
+                credentials = None
 
     bearer_token = credentials.credentials if credentials else None
     bearer_is_jwt = _looks_like_jwt(bearer_token) if bearer_token else False
+
+    # Single-user bearer token support (tokens issued by /auth/login).
+    if bearer_token:
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        if settings and getattr(settings, "AUTH_MODE", None) == "single_user":
+            parsed_id = _parse_single_user_bearer_token(bearer_token)
+            if parsed_id is not None:
+                client_ip = None
+                try:
+                    client = getattr(request, "client", None)
+                    if client is not None:
+                        client_ip = getattr(client, "host", None)
+                except Exception:
+                    client_ip = None
+                if not is_single_user_ip_allowed(client_ip, settings):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Authentication required",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                user = get_single_user_instance()
+                fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
+                if fixed_id is not None and parsed_id != int(fixed_id):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Authentication required",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                if user.id_int is not None and parsed_id != user.id_int:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Authentication required",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                principal = AuthPrincipal(
+                    kind="user",
+                    user_id=user.id_int,
+                    api_key_id=None,
+                    username=getattr(user, "username", None),
+                    email=getattr(user, "email", None),
+                    subject="single_user",
+                    token_type="access",
+                    jti=None,
+                    roles=list(user.roles or []),
+                    permissions=list(user.permissions or []),
+                    is_admin=bool(user.is_admin),
+                    org_ids=[],
+                    team_ids=[],
+                )
+                ip = request.client.host if getattr(request, "client", None) else None
+                user_agent = (
+                    request.headers.get("User-Agent")
+                    if getattr(request, "headers", None)
+                    else None
+                )
+                request_id = (
+                    request.headers.get("X-Request-ID")
+                    if getattr(request, "headers", None)
+                    else None
+                ) or getattr(request.state, "request_id", None)
+                try:
+                    request.state.auth = AuthContext(
+                        principal=principal,
+                        ip=ip,
+                        user_agent=user_agent,
+                        request_id=request_id,
+                    )
+                    request.state._auth_user = user
+                    request.state.user_id = user.id_int
+                    request.state.api_key_id = None
+                    request.state.team_ids = []
+                    request.state.org_ids = []
+                except Exception as exc:
+                    logger.debug(
+                        "get_current_user: unable to attach single-user bearer context: {}",
+                        exc,
+                    )
+                _activate_scope_context(
+                    request,
+                    user_id=user.id_int,
+                    org_ids=[],
+                    team_ids=[],
+                    is_admin=bool(user.is_admin),
+                )
+                if hasattr(user, "model_dump"):
+                    user_dict = user.model_dump()  # type: ignore[call-arg]
+                elif hasattr(user, "dict"):
+                    user_dict = user.dict()  # type: ignore[call-arg]
+                else:
+                    user_dict = {"id": getattr(user, "id", None)}
+                return _public_user_dict(user_dict)
     api_key_candidate = x_api_key
     if not api_key_candidate and bearer_token and not bearer_is_jwt:
         api_key_candidate = bearer_token
@@ -720,6 +836,13 @@ async def get_current_user(
             detail="Inactive user",
         ) from exc
     except HTTPException as exc:
+        # If a JWT fails but an explicit X-API-KEY is present, fall back to API key auth.
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED and x_api_key:
+            try:
+                return await _authenticate_api_key_from_request(request, x_api_key)
+            except HTTPException:
+                # If API key auth fails, continue with the JWT failure handling below.
+                pass
         if exc.status_code == status.HTTP_401_UNAUTHORIZED:
             # Normalize 401 semantics for callers: detail must contain
             # "Authentication required" and include WWW-Authenticate header.
@@ -1620,15 +1743,55 @@ def require_token_scope(
         token = credentials.credentials if credentials else None
         token_is_jwt = _looks_like_jwt(token) if token else False
 
+        # Optional admin bypass based on the resolved principal (not token claims).
+        if allow_admin_bypass:
+            principal = None
+            try:
+                ctx = getattr(request.state, "auth", None)
+                if isinstance(ctx, AuthContext):
+                    principal = ctx.principal
+            except Exception:
+                principal = None
+            if principal is None and credentials:
+                try:
+                    resolver = get_auth_principal
+                    try:
+                        app = getattr(request, "app", None)
+                        if app is not None:
+                            override_fn = app.dependency_overrides.get(get_auth_principal)
+                            if override_fn is not None:
+                                resolver = override_fn
+                    except Exception:
+                        resolver = get_auth_principal
+
+                    if resolver is get_auth_principal:
+                        principal = await resolver(request)
+                    else:
+                        try:
+                            sig = inspect.signature(resolver)
+                            has_no_params = len(sig.parameters) == 0
+                        except (TypeError, ValueError):
+                            has_no_params = False
+                        try:
+                            result = resolver() if has_no_params else resolver(request)
+                        except TypeError:
+                            result = resolver()
+                        if inspect.isawaitable(result):
+                            result = await result
+                        principal = result
+                except HTTPException:
+                    principal = None
+                except Exception:
+                    principal = None
+            if principal is not None and principal.is_admin:
+                return None
+
         # If we have Authorization bearer and it looks like a JWT, apply JWT-based checks.
         if token and token_is_jwt:
             try:
                 payload = jwt_service.decode_access_token(token)
             except (InvalidTokenError, TokenExpiredError):
                 # Defensive: malformed tokens should fall back to upstream auth handling.
-                return None
-            # Optional admin bypass based on token role claim
-            if allow_admin_bypass and str(payload.get("role", "")) == "admin":
                 return None
             tok_scope = str(payload.get("scope") or "").strip()
             if tok_scope:

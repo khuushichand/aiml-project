@@ -127,6 +127,53 @@ def validate_model_id(model_id: str) -> str:
 
     return model_id
 
+
+def _coerce_config_dict(raw: Any) -> Dict[str, Any]:
+    """Best-effort conversion of config-like objects into plain dicts."""
+    if isinstance(raw, dict):
+        return raw.copy()
+    for attr in ("model_dump", "dict", "to_dict"):
+        fn = getattr(raw, attr, None)
+        if callable(fn):
+            try:
+                return dict(fn())
+            except Exception:
+                pass
+    items = getattr(raw, "items", None)
+    if callable(items):
+        try:
+            return dict(items())
+        except Exception:
+            return {}
+    return {}
+
+
+def _normalize_user_embedding_config(raw_config: Any) -> Dict[str, Any]:
+    """Ensure user_embedding_config always includes an embedding_config mapping."""
+    cfg = _coerce_config_dict(raw_config)
+    embedding_config = cfg.get("embedding_config")
+    if embedding_config is None:
+        embedding_config = cfg.get("EMBEDDING_CONFIG")
+    if embedding_config is None:
+        reserved = {
+            "USER_DB_BASE_DIR",
+            "chroma_client_settings",
+            "openai_api",
+            "local_api",
+            "cohere_api",
+            "google_api",
+            "voyage_api",
+            "mistral_api",
+        }
+        embedding_config = {k: v for k, v in cfg.items() if k not in reserved}
+    if embedding_config is None:
+        embedding_config = {}
+    if not isinstance(embedding_config, dict):
+        embedding_config = _coerce_config_dict(embedding_config)
+    normalized = cfg.copy()
+    normalized["embedding_config"] = embedding_config
+    return normalized
+
 #
 # Functions:
 ChromaIncludeLiteral = Literal["documents", "embeddings", "metadatas", "distances", "uris", "data"]
@@ -164,7 +211,10 @@ class ChromaDBManager:
             logger.error(f"Initialization failed: {e}")
             raise
 
-        self.user_embedding_config = user_embedding_config
+        self.user_embedding_config = _normalize_user_embedding_config(user_embedding_config)
+        if not self.user_embedding_config:
+            logger.error("Initialization failed: normalized user_embedding_config is empty.")
+            raise ValueError("user_embedding_config cannot be empty for ChromaDBManager.")
         self._lock = threading.RLock()  # Instance-specific lock
 
         # --- Configuration Usage (Point 1) ---

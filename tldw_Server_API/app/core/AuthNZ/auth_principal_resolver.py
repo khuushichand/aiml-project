@@ -23,6 +23,8 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import (
 )
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.exceptions import InactiveUserError
 
 
@@ -64,24 +66,64 @@ def _extract_api_key(request: Request) -> Optional[str]:
     except (AttributeError, TypeError):
         return None
 
-    # Legacy compatibility: allow "Token: Bearer <api_key>" header
-    try:
-        legacy = request.headers.get("Token")
-        if not isinstance(legacy, str) or not legacy.strip():
-            return None
-        legacy = legacy.strip()
-        if legacy.lower().startswith("bearer "):
-            extracted = legacy[len("Bearer ") :].strip()
-            return extracted if extracted else None
-        return None
-    except (AttributeError, TypeError):
-        return None
-
 
 def _looks_like_jwt(token: Optional[str]) -> bool:
     if not isinstance(token, str):
         return False
     return token.count(".") == 2
+
+
+_SINGLE_USER_BEARER_PREFIX = "single-user-token-"
+
+
+def _parse_single_user_bearer_token(token: Optional[str]) -> Optional[int]:
+    """Extract the user id from a single-user bearer token."""
+    if not isinstance(token, str):
+        return None
+    raw = token.strip()
+    if not raw.startswith(_SINGLE_USER_BEARER_PREFIX):
+        return None
+    suffix = raw[len(_SINGLE_USER_BEARER_PREFIX) :]
+    if not suffix:
+        return None
+    try:
+        return int(suffix)
+    except (TypeError, ValueError):
+        return None
+
+
+def _peek_jwt_token_type(token: str) -> Optional[str]:
+    """Return the unverified token type claim when available."""
+    try:
+        from jose import jwt as _jwt  # local import to avoid top-level dependency
+
+        claims = _jwt.get_unverified_claims(token)
+        if isinstance(claims, dict):
+            raw_type = claims.get("type")
+            if raw_type:
+                return str(raw_type)
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_service_identity(payload: dict) -> tuple[str, list[str]]:
+    """Derive service name and permissions list from a verified service token."""
+    service_name = payload.get("service")
+    if not service_name:
+        subject = payload.get("sub")
+        if isinstance(subject, str) and subject.startswith("service:"):
+            service_name = subject.split("service:", 1)[1]
+        else:
+            service_name = subject or "service"
+    permissions_raw = payload.get("permissions") or []
+    if isinstance(permissions_raw, str):
+        permissions = [permissions_raw]
+    elif isinstance(permissions_raw, (list, tuple, set)):
+        permissions = [str(p) for p in permissions_raw if p]
+    else:
+        permissions = []
+    return str(service_name), permissions
 
 
 def _is_test_context() -> bool:
@@ -246,6 +288,59 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         except Exception:
             auth_mode = None
         if auth_mode == "single_user":
+            # Allow single-user bearer tokens returned by /auth/login.
+            parsed_id = _parse_single_user_bearer_token(token)
+            if parsed_id is not None:
+                client_ip = None
+                try:
+                    client = getattr(request, "client", None)
+                    if client is not None:
+                        client_ip = getattr(client, "host", None)
+                except Exception:
+                    client_ip = None
+                if not is_single_user_ip_allowed(client_ip, settings):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Not authenticated (provide Bearer token or X-API-KEY)",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                user = User_DB_Handling.get_single_user_instance()
+                fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
+                if fixed_id is not None and parsed_id != int(fixed_id):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Not authenticated (provide Bearer token or X-API-KEY)",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                if user.id_int is not None and parsed_id != user.id_int:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Not authenticated (provide Bearer token or X-API-KEY)",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                principal = _build_principal_from_user(
+                    user=user,
+                    kind="user",
+                    request=request,
+                    token_type="access",
+                    jti=None,
+                    subject="single_user",
+                    api_key_id=None,
+                )
+                ctx = _build_context(principal, request)
+                try:
+                    request.state.auth = ctx
+                    request.state._auth_user = user
+                    request.state.user_id = user.id_int
+                    request.state.api_key_id = None
+                    request.state.team_ids = []
+                    request.state.org_ids = []
+                except Exception as state_exc:
+                    logger.debug(
+                        "auth_principal_resolver: unable to attach single-user state context: {}",
+                        state_exc,
+                    )
+                return principal
             api_key = token
             token = None
         elif not token_is_jwt and not test_context:
@@ -262,6 +357,56 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
 
     # JWT path
     if token:
+        # Service token path (planned usage): verify and construct a service principal.
+        if token_is_jwt:
+            token_type = _peek_jwt_token_type(token)
+            if token_type == "service":
+                try:
+                    jwt_service = get_jwt_service()
+                    payload = jwt_service.verify_service_token(token)
+                except (InvalidTokenError, TokenExpiredError) as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Could not validate credentials",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    ) from exc
+                except Exception as exc:
+                    logger.exception("Error verifying service token: {}", exc)
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Could not validate credentials",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    ) from exc
+
+                service_name, permissions = _resolve_service_identity(payload)
+                principal = AuthPrincipal(
+                    kind="service",
+                    user_id=None,
+                    api_key_id=None,
+                    username=None,
+                    email=None,
+                    subject=f"service:{service_name}",
+                    token_type="service",
+                    jti=payload.get("jti"),
+                    roles=[],
+                    permissions=permissions,
+                    is_admin=("admin" in permissions),
+                    org_ids=[],
+                    team_ids=[],
+                    active_org_id=None,
+                    active_team_id=None,
+                )
+                ctx = _build_context(principal, request)
+                try:
+                    request.state.auth = ctx
+                    request.state.api_key_id = None
+                    request.state.user_id = None
+                except Exception as state_exc:
+                    logger.debug(
+                        "auth_principal_resolver: unable to attach service principal context: {}",
+                        state_exc,
+                    )
+                return principal
         try:
             user = await User_DB_Handling.verify_jwt_and_fetch_user(request, token)
         except InactiveUserError as exc:
@@ -270,7 +415,9 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 detail="Inactive user",
             ) from exc
         except HTTPException as exc:
-            if raw_token and not token_is_jwt and test_context:
+            if exc.status_code == status.HTTP_401_UNAUTHORIZED and api_key:
+                token = None
+            elif raw_token and not token_is_jwt and test_context:
                 api_key = raw_token
                 token = None
             else:

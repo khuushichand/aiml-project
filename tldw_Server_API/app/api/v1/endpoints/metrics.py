@@ -3,6 +3,7 @@
 
 from fastapi import APIRouter, Response, HTTPException, status, Depends
 from typing import Dict, Any, Optional
+from datetime import datetime, timezone
 
 from loguru import logger
 
@@ -127,7 +128,7 @@ async def get_json_metrics() -> Dict[str, Any]:
         return {
             "metrics": all_metrics,
             "active_operations": active_operations,
-            "timestamp": None  # Will be set to current time by FastAPI
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         }
     except Exception as e:
         logger.error(f"Error getting metrics: {e}")

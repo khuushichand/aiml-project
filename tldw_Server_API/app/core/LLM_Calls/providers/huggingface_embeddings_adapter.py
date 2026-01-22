@@ -94,5 +94,10 @@ class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
                 raise ChatProviderError(provider=self.name, message=str(e))
 
         # Fallback: do not attempt legacy path; endpoint will fall back
-        logger.debug("HuggingFaceEmbeddingsAdapter: native HTTP disabled and no legacy fallback; returning empty result")
-        return {"data": [], "object": "list", "model": model}
+        msg = (
+            "HuggingFaceEmbeddingsAdapter: native HTTP disabled "
+            "(set LLM_EMBEDDINGS_NATIVE_HTTP_HUGGINGFACE=1 to enable)"
+        )
+        logger.debug(msg)
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider=self.name, message=msg)

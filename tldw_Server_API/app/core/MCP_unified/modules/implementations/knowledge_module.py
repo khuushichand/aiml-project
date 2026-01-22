@@ -103,6 +103,63 @@ class KnowledgeModule(BaseModule):
             return None
         return await module.execute_with_circuit_breaker(module.execute_tool, tool, arguments, context)
 
+    async def _resolve_tool_write_flag(self, tool: str, module: Any) -> Optional[bool]:
+        """Best-effort determination of whether a tool is write-capable."""
+        try:
+            if module is None:
+                return None
+            tool_def = None
+            try:
+                get_def = getattr(module, "get_tool_def", None)
+                if callable(get_def):
+                    tool_def = await get_def(tool)
+            except Exception:
+                tool_def = None
+            if tool_def is None:
+                try:
+                    tool_defs = await module.get_tools()
+                    for _t in tool_defs:
+                        if isinstance(_t, dict) and _t.get("name") == tool:
+                            tool_def = _t
+                            break
+                except Exception:
+                    tool_def = None
+            if tool_def is not None:
+                return module.is_write_tool_def(tool_def)
+        except Exception:
+            return None
+        return None
+
+    async def _tool_allowed(self, tool: str, context: Any | None) -> bool:
+        """Enforce per-source RBAC for underlying tools."""
+        if context is None:
+            return False
+        try:
+            # Use MCPProtocol's permission logic for consistency.
+            from tldw_Server_API.app.core.MCP_unified.server import get_mcp_server
+            server = get_mcp_server()
+            protocol = getattr(server, "protocol", None)
+            if protocol is None:
+                from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+                protocol = MCPProtocol()
+            registry = get_module_registry()
+            module = await registry.find_module_for_tool(tool)
+            is_write = await self._resolve_tool_write_flag(tool, module)
+            return await protocol._has_tool_permission(context, tool, is_write=is_write)  # type: ignore[attr-defined]
+        except Exception:
+            return False
+
+    def _tool_for_source(self, source: str, action: str) -> Optional[str]:
+        """Map knowledge sources to underlying tool names."""
+        mapping = {
+            "notes": f"notes.{action}",
+            "media": f"media.{action}",
+            "chats": f"chats.{action}",
+            "characters": f"characters.{action}",
+            "prompts": f"prompts.{action}",
+        }
+        return mapping.get(source)
+
     def _collect_seen(self, context: Any | None) -> set[str]:
         seen: set[str] = set()
         try:
@@ -149,6 +206,26 @@ class KnowledgeModule(BaseModule):
 
         # Seed dedupe with session-persisted URIs if any
         seen = self._collect_seen(context)
+
+        # Enforce per-source RBAC before fan-out calls
+        allowed_sources: List[str] = []
+        for src in sources:
+            tool = self._tool_for_source(src, "search")
+            if tool is None:
+                continue
+            allowed = await self._tool_allowed(tool, context)
+            if allowed:
+                allowed_sources.append(src)
+            else:
+                try:
+                    if context and getattr(context, "logger", None):
+                        context.logger.debug("Knowledge source filtered by RBAC", source=src, tool=tool)
+                except Exception:
+                    pass
+        sources = allowed_sources
+
+        if not sources:
+            return {"results": [], "has_more": False, "next_offset": None, "total_estimated": 0}
 
         # Fan-out calls
         tasks = []
@@ -237,6 +314,15 @@ class KnowledgeModule(BaseModule):
         if mode == "auto" and isinstance(retrieval.get("max_tokens"), (int, float)):
             retrieval = dict(retrieval)
             retrieval["mode"] = "chunk_with_siblings"
+
+        tool = self._tool_for_source(source, "get")
+        if not tool:
+            raise ValueError(f"Unsupported source for get: {source}")
+
+        # Enforce per-source RBAC for direct fetch
+        allowed = await self._tool_allowed(tool, context)
+        if not allowed:
+            raise PermissionError(f"Permission denied for source: {source}")
 
         # Map to source tools
         if source == "notes":

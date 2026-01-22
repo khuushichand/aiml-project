@@ -104,6 +104,19 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
         client.csrf_token = csrf_token
 
     # Add CSRF token to headers
+    headers = dict(headers)
+    # In single-user mode, ensure X-API-KEY is present so AuthNZ deps pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+        settings = get_settings()
+        if settings.AUTH_MODE == "single_user" and "X-API-KEY" not in headers:
+            api_key = settings.SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+            if api_key:
+                headers["X-API-KEY"] = api_key
+    except Exception:
+        pass
+
     headers["X-CSRF-Token"] = getattr(client, "csrf_token", "")
 
     # Make the request
@@ -525,7 +538,7 @@ def test_commercial_provider_non_streaming_no_template(
     print(
         f"\nTesting NON-STREAMING (no template) with {provider_name} using model {request_body.get('model', '<server-default>')}"
     )
-    response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
+    response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Authorization": valid_auth_token})
     # XFAIL policy for known upstream/provider issues (stabilize CI)
     if provider_name == "cohere" and (response.status_code in (400, 404) or response.status_code >= 500):
         pytest.xfail(f"Cohere upstream not stable for /v1/chat (status {response.status_code}). {response.text[:180]}")
@@ -583,7 +596,7 @@ def test_commercial_provider_streaming_no_template(
     )
 
     # Use streaming context to avoid buffering entire body and potential hangs
-    headers = {"Token": valid_auth_token, "X-CSRF-Token": getattr(client, "csrf_token", "")}
+    headers = {"Authorization": valid_auth_token, "X-CSRF-Token": getattr(client, "csrf_token", "")}
     full_content = ""
     received_done = False
     raw_stream_text_for_debug = ""
@@ -710,7 +723,7 @@ def test_commercial_provider_with_template_and_char_data_openai_integration(
 
         print(f"\nTesting TEMPLATING with {provider_name} model {request_body.get('model', '<server-default>')}")
         response = client.post_with_csrf(
-            "/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token}
+            "/api/v1/chat/completions", json=request_body, headers={"Authorization": valid_auth_token}
         )
 
         assert response.status_code == status.HTTP_200_OK, f"{provider_name} with template failed: {response.text}"
@@ -795,7 +808,7 @@ def test_local_provider_non_streaming_no_template(
     }
 
     print(f"\nTesting LOCAL NON-STREAMING (no template) with {provider_name} using model {request_body['model']}")
-    response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
+    response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Authorization": valid_auth_token})
 
     assert response.status_code == status.HTTP_200_OK, f"Local provider {provider_name} failed: {response.text}"
     data = response.json()
@@ -829,7 +842,7 @@ def test_chat_integration_invalid_key_for_commercial_provider_standalone(
         "model": "gpt-4o-mini",
         "messages": [msg.model_dump(exclude_none=True) for msg in INTEGRATION_MESSAGES_NO_SYS_SCHEMA],
     }
-    response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
+    response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Authorization": valid_auth_token})
     print(f"CI DEBUG: Status Code: {response.status_code}")
     print(f"CI DEBUG: Response Headers: {response.headers}")
     print(f"CI DEBUG: Response Text: {response.text}")
@@ -859,7 +872,7 @@ def test_chat_integration_bad_request_missing_messages_standalone(
         "model": "test-model",
         # "messages" field is intentionally missing
     }
-    response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
+    response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Authorization": valid_auth_token})
     # This is a Pydantic validation error from FastAPI itself before hitting your logic.
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     errors = response.json().get("detail")

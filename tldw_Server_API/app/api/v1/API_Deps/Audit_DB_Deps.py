@@ -122,6 +122,13 @@ def _shared_audit_db_path() -> str:
     return str(DatabasePaths.get_shared_audit_db_path())
 
 
+def _mark_service_used(service: UnifiedAuditService) -> None:
+    try:
+        service._last_used_ts = time.monotonic()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService, reason: str) -> None:
     """Schedule graceful shutdown of an audit service instance."""
     if service is None:
@@ -131,6 +138,11 @@ def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService,
         return
 
     service._tldw_stop_scheduled = True  # type: ignore[attr-defined]
+    evicted_at = time.monotonic()
+    try:
+        service._tldw_evicted_at = evicted_at  # type: ignore[attr-defined]
+    except Exception:
+        pass
     service_key = id(service)
 
     with _services_stopping_lock:
@@ -145,6 +157,29 @@ def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService,
 
     async def _stop():
         try:
+            while True:
+                if EVICTION_GRACE_SECONDS > 0:
+                    await asyncio.sleep(EVICTION_GRACE_SECONDS)
+                else:
+                    # Yield control to avoid a tight loop if grace is disabled.
+                    await asyncio.sleep(0)
+                last_used = getattr(service, "_last_used_ts", None)
+                evicted_ts = getattr(service, "_tldw_evicted_at", None)
+                if (
+                    last_used is not None
+                    and evicted_ts is not None
+                    and last_used > evicted_ts
+                ):
+                    try:
+                        service._tldw_evicted_at = last_used  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    logger.debug(
+                        "Audit service for user {} reused after eviction; delaying stop.",
+                        user_id,
+                    )
+                    continue
+                break
             await service.stop()
             logger.info(f"Audit service for user {user_id} stopped ({reason}).")
         except Exception as exc:
@@ -156,8 +191,17 @@ def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService,
             _clear_stopping_flag()
 
     owner_loop = getattr(service, "owner_loop", None)
-    if owner_loop and owner_loop.is_closed():
-        owner_loop = None
+    if owner_loop:
+        try:
+            if owner_loop.is_closed():
+                owner_loop = None
+            elif not owner_loop.is_running():
+                logger.warning(
+                    "Audit service owner loop not running; shutting down on current loop."
+                )
+                owner_loop = None
+        except Exception:
+            owner_loop = None
 
     try:
         current_loop = asyncio.get_running_loop()
@@ -296,6 +340,12 @@ if _HAS_CACHETOOLS:
 
 # --- Configuration ---
 MAX_CACHED_AUDIT_INSTANCES = _settings_int("MAX_CACHED_AUDIT_INSTANCES", 20, min_value=1, max_value=1000)
+EVICTION_GRACE_SECONDS = _settings_float(
+    "AUDIT_EVICTION_GRACE_SECONDS",
+    2.0,
+    min_value=0.0,
+    max_value=300.0,
+)
 
 _CACHE_IMPL = "cachetools.LRUCache" if _HAS_CACHETOOLS else "_SmallLRUCache"
 logger.info(
@@ -422,6 +472,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
         service_instance = state.cache.get(cache_key)
 
     if service_instance:
+        _mark_service_used(service_instance)
         logger.debug(f"Using cached audit service instance for user_id: {user_id}")
         return service_instance
 
@@ -475,6 +526,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
         with state.cache_lock:
             service_instance = state.cache.get(cache_key)
             if service_instance:
+                _mark_service_used(service_instance)
                 return service_instance
 
     if should_initialize:
@@ -483,6 +535,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
             with state.cache_lock:
                 service_instance = state.cache.get(cache_key)
                 if service_instance:
+                    _mark_service_used(service_instance)
                     logger.debug(f"Audit service for user {user_id} created concurrently.")
                     return service_instance
 
@@ -497,6 +550,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
             with state.cache_lock:
                 state.cache[cache_key] = service_instance
 
+            _mark_service_used(service_instance)
             logger.info(f"Audit service created and cached successfully for user {user_id}")
 
         except Exception as e:

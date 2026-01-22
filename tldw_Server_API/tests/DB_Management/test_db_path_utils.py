@@ -72,6 +72,24 @@ def test_invalid_user_id_rejected_outside_tests(monkeypatch, tmp_path):
         DatabasePaths.get_user_base_directory("..")
 
 
+def test_non_numeric_user_id_rejected_outside_tests(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+    monkeypatch.setattr(db_path_utils, "_is_test_context", lambda: False)
+
+    with pytest.raises(ValueError, match="Invalid user_id"):
+        DatabasePaths.get_user_base_directory("user_abc")
+
+
+def test_non_numeric_user_id_allowed_in_tests(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+    monkeypatch.setattr(db_path_utils, "_is_test_context", lambda: True)
+
+    user_dir = DatabasePaths.get_user_base_directory("user_abc")
+    assert user_dir.name == "user_abc"
+
+
 def test_user_db_base_dir_relative_escape_rejected(monkeypatch, tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()

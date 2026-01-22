@@ -377,7 +377,7 @@ Quick start (local dev):
   - `ENABLE_TRACING`: Enable tracing pipeline (`true|false`, default `true`).
   - `ENABLE_OTEL_LOGGING`: Enable OTEL logging integration (`true|false`, default `false`).
   - `ENABLE_OTEL_CONSOLE_METRICS_EXPORTER`: Add the console metrics exporter (`true|false`, default `false`).
-  - `METRICS_RING_BUFFER_MAXLEN`: Rolling metrics sample window size (default `10000`). Set `0` or a negative value to disable the limit.
+  - `METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED`: Rolling metrics sample window size (default `10000`). Set `0` or a negative value for an unbounded buffer.
   - `OTEL_METRICS_EXPORTER`: Comma list of metrics exporters (`prometheus` by default).
   - `OTEL_TRACES_EXPORTER`: Comma list of traces exporters (`console` by default).
 
@@ -407,7 +407,7 @@ Notes
 | `ENABLE_TRACING`                | `true`              | Enable tracing pipeline |
 | `ENABLE_OTEL_LOGGING`           | `false`             | Enable OTEL logging integration |
 | `ENABLE_OTEL_CONSOLE_METRICS_EXPORTER` | `false`      | Add console metrics exporter |
-| `METRICS_RING_BUFFER_MAXLEN`    | `10000`             | Rolling metrics sample window size |
+| `METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED` | `10000`    | Rolling metrics sample window size |
 | `OTEL_METRICS_EXPORTER`         | `prometheus`        | Comma-separated exporters |
 | `OTEL_TRACES_EXPORTER`          | `console`           | Comma-separated exporters |
 | `PROMETHEUS_HOST`               | `0.0.0.0`           | Bind host for Prometheus exporter |

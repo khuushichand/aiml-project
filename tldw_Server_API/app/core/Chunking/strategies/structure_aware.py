@@ -175,7 +175,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
             'markdown_header': re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE),
             # Broaden code fence support: ``` or ~~~, flexible language tags, optional newline before close
             # Groups: 1=fence, 2=language spec (may contain non-word chars), 3=body
-            'code_block': re.compile(r'(?:\A|\n)(```|~~~)([^\n]*)\n(.*?)(?:\n\1|\1)', re.DOTALL),
+            'code_block': re.compile(r'(?:\A|\n)(`{3,}|~{3,})([^\n]*)\n(.*?)(?:\n\1|\1)', re.DOTALL),
             'table_markdown': re.compile(r'^\|.*\|.*$', re.MULTILINE),
             'list_item': re.compile(r'^[\s]*[-*+]\s+(.+)$', re.MULTILINE),
             'numbered_list': re.compile(r'^[\s]*\d+\.\s+(.+)$', re.MULTILINE),

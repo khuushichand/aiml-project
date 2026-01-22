@@ -66,11 +66,12 @@ async def create_dataset(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
         if idempotency_key:
             try:
                 existing_id = svc.db.lookup_idempotency("dataset", idempotency_key, user_id)
                 if existing_id:
-                    existing = await svc.get_dataset(existing_id)
+                    existing = await svc.get_dataset(existing_id, created_by=stable_user_id)
                     if existing:
                         try:
                             if response is not None:
@@ -86,9 +87,9 @@ async def create_dataset(
             samples=[model_dump_compat(s) for s in dataset_request.samples],
             description=dataset_request.description or "",
             metadata=model_dump_compat(dataset_request.metadata) if dataset_request.metadata else None,
-            created_by=user_id,
+            created_by=stable_user_id,
         )
-        row = await svc.get_dataset(dataset_id)
+        row = await svc.get_dataset(dataset_id, created_by=stable_user_id)
         normalized = _normalize_dataset_payload(row)
         try:
             if idempotency_key:
@@ -114,9 +115,12 @@ async def list_datasets(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        items, total = svc.db.list_datasets(limit=limit, offset=offset)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        items, has_more = svc.db.list_datasets(limit=limit, offset=offset, created_by=stable_user_id)
         resp = [DatasetResponse(**_normalize_dataset_payload(r)) for r in items]
-        return DatasetListResponse(data=resp, total=total)
+        first_id = resp[0].id if resp else None
+        last_id = resp[-1].id if resp else None
+        return DatasetListResponse(data=resp, has_more=has_more, first_id=first_id, last_id=last_id)
     except Exception as e:
         logger.exception(f"Failed to list datasets: {e}")
         raise create_error_response(
@@ -134,7 +138,8 @@ async def get_dataset(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        row = svc.db.get_dataset(dataset_id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        row = svc.db.get_dataset(dataset_id, created_by=stable_user_id)
         if not row:
             raise create_error_response(
                 message="Dataset not found",
@@ -165,7 +170,8 @@ async def delete_dataset(
 ) -> Response:
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        ok = await svc.delete_dataset(dataset_id, deleted_by=user_id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        ok = await svc.delete_dataset(dataset_id, deleted_by=stable_user_id, created_by=stable_user_id)
         if not ok:
             raise create_error_response(
                 message="Dataset not found",

@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections import deque
 from contextlib import suppress
 from types import MethodType, SimpleNamespace
 from unittest.mock import Mock
@@ -837,3 +838,60 @@ def test_build_user_app_config_normalizes_local_provider():
     model_entry = app_config["embedding_config"]["models"]["local:mini"]
     assert model_entry["provider"] == "local_api"
     assert app_config["local_api"]["api_url"] == "http://localhost:8080/v1/embeddings"
+
+
+@pytest.mark.asyncio
+async def test_processing_task_restarts_when_queue_has_pending_items(monkeypatch):
+    keepalive = asyncio.Event()
+
+    async def stub_process_queue(self, queue_key):
+        await keepalive.wait()
+
+    monkeypatch.setattr(
+        RequestBatcher,
+        "_process_queue",
+        stub_process_queue,
+        raising=True,
+    )
+
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="openai",
+                api_key="sk-test",
+                models=["text-embedding-3-small"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=True,
+            max_batch_size=2,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="openai",
+        default_model="text-embedding-3-small",
+    )
+
+    batcher = RequestBatcher(config=config)
+    queue_key = batcher._queue_key("openai", "text-embedding-3-small", None)
+    batcher.queues[queue_key] = deque()
+    batcher.queues[queue_key].append(object())
+
+    completed_task = asyncio.create_task(asyncio.sleep(0))
+    batcher.processing_tasks[queue_key] = completed_task
+    await completed_task
+
+    batcher._handle_task_done(queue_key, completed_task)
+
+    restarted_task = batcher.processing_tasks.get(queue_key)
+    assert restarted_task is not None
+    assert not restarted_task.done()
+
+    batcher.queues[queue_key].clear()
+    restarted_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await restarted_task
+
+    keepalive.set()
+    await asyncio.wait_for(batcher.shutdown(), timeout=1.0)

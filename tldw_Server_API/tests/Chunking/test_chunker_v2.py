@@ -185,6 +185,28 @@ class TestV2Chunker:
         counts = [len(c["text"].split()) for c in paragraph_chunks]
         assert max(counts) >= 5
 
+    def test_hierarchical_template_bold_subsection_boundary(self):
+        """Template-driven bold_subsection boundaries should create nested sections."""
+        chunker = Chunker()
+        text = "Intro paragraph.\n\n**Bold Heading**\n\nBody paragraph."
+        template = {
+            "boundaries": [
+                {"kind": "bold_subsection", "pattern": r"^\s*\*\*[^*]+\*\*\s*$", "flags": "m"}
+            ]
+        }
+
+        chunks = chunker.chunk_text_hierarchical_flat(
+            text,
+            method="words",
+            max_size=50,
+            overlap=0,
+            template=template,
+        )
+        assert chunks
+        # Expect the bold heading itself to be tagged and the body to carry its section path
+        assert any(c.get("metadata", {}).get("paragraph_kind") == "bold_subsection" for c in chunks)
+        assert any("Bold Heading" in (c.get("metadata", {}).get("section_path") or "") for c in chunks)
+
     def test_hierarchical_preserves_raw_bidi_override(self):
         """Hierarchical output should keep raw text slices for fidelity."""
         chunker = Chunker()
@@ -404,6 +426,40 @@ class TestV2Chunker:
         primary = rows[0]
         assert primary["text"].strip() == '{"third": 3}'
         assert primary["metadata"]["initial_document_json_metadata"] == {"meta": "y"}
+
+    def test_process_text_frontmatter_offsets_use_original_text(self):
+        """Offsets from process_text should refer to the original input even after frontmatter removal."""
+        chunker = Chunker()
+        frontmatter = '{"meta": "x", "__tldw_frontmatter__": true}\n'
+        body = "Hello world."
+        payload = frontmatter + body
+        timecode_map = [
+            {
+                "start_offset": len(frontmatter),
+                "end_offset": len(payload),
+                "start_time": 0.0,
+                "end_time": 5.0,
+            }
+        ]
+
+        rows = chunker.process_text(
+            payload,
+            options={
+                "method": "words",
+                "max_size": 10,
+                "overlap": 0,
+                "hierarchical": True,
+                "timecode_map": timecode_map,
+            },
+        )
+
+        assert rows
+        row = rows[0]
+        md = row.get("metadata", {})
+        assert md.get("start_offset") == len(frontmatter)
+        assert row.get("text") == payload[md["start_offset"] : md["end_offset"]]
+        assert md.get("start_time") == 0.0
+        assert md.get("end_time") == 5.0
 
     def test_process_text_parses_multiline_frontmatter(self):
         """Frontmatter parsing should handle nested, pretty-printed JSON blocks."""

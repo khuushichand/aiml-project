@@ -416,6 +416,18 @@ class EmbeddingABTestRepository:
                 session.expunge(row)
             return rows, total
 
+    def delete_test(self, test_id: str) -> int:
+        """Delete an A/B test and cascade to related rows."""
+        with self._session_factory() as session:
+            entity = session.execute(
+                select(EmbeddingABTest).where(EmbeddingABTest.test_id == test_id)
+            ).scalar_one_or_none()
+            if not entity:
+                return 0
+            session.delete(entity)
+            session.commit()
+            return 1
+
 
 def serialize_test(entity: EmbeddingABTest) -> Dict[str, Any]:
     return {
@@ -482,6 +494,30 @@ class EmbeddingsABTestStore:
     def __init__(self, repository: EmbeddingABTestRepository) -> None:
         self._repo = repository
 
+    @staticmethod
+    def _created_by_matches(entity_created_by: Optional[str], created_by: Optional[str]) -> bool:
+        if not created_by:
+            return True
+        if not entity_created_by:
+            return False
+        raw = str(created_by).strip()
+        if not raw:
+            return False
+        variants = {raw}
+        if raw.startswith("user_"):
+            core = raw[5:]
+            if core:
+                variants.add(core)
+        elif raw.isdigit():
+            variants.add(f"user_{raw}")
+        return entity_created_by in variants
+
+    def _authorized(self, test_id: str, created_by: Optional[str]) -> bool:
+        if not created_by:
+            return True
+        entity = self._repo.get_test(test_id)
+        return self._created_by_matches(getattr(entity, "created_by", None), created_by)
+
     def create_abtest(self, name: str, config: Dict[str, Any], created_by: Optional[str] = None) -> str:
         test_id = f"abtest_{uuid.uuid4().hex[:12]}"
         self._repo.create_test(
@@ -541,7 +577,9 @@ class EmbeddingsABTestStore:
             )
         return ids
 
-    def set_abtest_status(self, test_id: str, status: str, stats_json: Optional[Dict[str, Any]] = None) -> None:
+    def set_abtest_status(self, test_id: str, status: str, stats_json: Optional[Dict[str, Any]] = None, *, created_by: Optional[str] = None) -> None:
+        if not self._authorized(test_id, created_by):
+            return
         self._repo.update_test_status(test_id=test_id, status=status, stats=stats_json)
 
     def insert_abtest_result(
@@ -575,13 +613,15 @@ class EmbeddingsABTestStore:
         )
         return rid
 
-    def get_abtest(self, test_id: str) -> Optional[Dict[str, Any]]:
+    def get_abtest(self, test_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
         entity = self._repo.get_test(test_id)
-        if not entity:
+        if not entity or not self._created_by_matches(entity.created_by, created_by):
             return None
         return serialize_test(entity)
 
-    def get_abtest_arms(self, test_id: str) -> List[Dict[str, Any]]:
+    def get_abtest_arms(self, test_id: str, *, created_by: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not self._authorized(test_id, created_by):
+            return []
         return [serialize_arm(arm) for arm in self._repo.list_arms(test_id)]
 
     def find_reusable_abtest_arm(
@@ -600,12 +640,21 @@ class EmbeddingsABTestStore:
             return None
         return serialize_arm(arm)
 
-    def get_abtest_queries(self, test_id: str) -> List[Dict[str, Any]]:
+    def get_abtest_queries(self, test_id: str, *, created_by: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not self._authorized(test_id, created_by):
+            return []
         return [serialize_query(q) for q in self._repo.list_queries(test_id)]
 
-    def list_abtest_results(self, test_id: str, limit: int, offset: int) -> Tuple[List[Dict[str, Any]], int]:
+    def list_abtest_results(self, test_id: str, limit: int, offset: int, *, created_by: Optional[str] = None) -> Tuple[List[Dict[str, Any]], int]:
+        if not self._authorized(test_id, created_by):
+            return [], 0
         rows, total = self._repo.list_results(test_id, limit, offset)
         return [serialize_result(r) for r in rows], total
+
+    def delete_abtest(self, test_id: str, *, created_by: Optional[str] = None) -> int:
+        if not self._authorized(test_id, created_by):
+            return 0
+        return self._repo.delete_test(test_id)
 
 
 def _sqlite_url_from_path(path: str) -> str:

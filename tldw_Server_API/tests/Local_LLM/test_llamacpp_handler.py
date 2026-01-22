@@ -1,4 +1,5 @@
 import asyncio
+import platform
 from pathlib import Path
 
 import pytest
@@ -90,6 +91,74 @@ async def test_llamacpp_start_server_wildcard_host_uses_loopback(monkeypatch, tm
     res = await handler.start_server(model.name, server_args={"host": "0.0.0.0", "port": 8099})
     assert res["status"] == "started"
     assert captured["base_url"] == "http://127.0.0.1:8099"
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_start_server_ignores_empty_args(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model = model_dir / "toy.gguf"
+    model.write_text("fake")
+
+    cfg = LlamaCppConfig(
+        executable_path=exe,
+        models_dir=model_dir,
+        default_host="127.0.0.1",
+        default_port=8099,
+    )
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    async def _fake_cpe(*a, **k):
+        return DummyProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
+    from tldw_Server_API.app.core.Local_LLM import http_utils
+
+    monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
+
+    res = await handler.start_server(model.name, server_args={"port": "", "threads": None})
+    assert res["status"] == "started"
+    assert res["port"] == 8099
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_start_server_starts_stream_drainers(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model = model_dir / "toy.gguf"
+    model.write_text("fake")
+
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, default_port=8101)
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    class DummyStream:
+        async def read(self, n: int = -1):
+            return b""
+
+    class ProcWithStreams:
+        pid = 123
+        returncode = None
+        stdout = DummyStream()
+        stderr = DummyStream()
+
+        async def wait(self):
+            return 0
+
+    async def _fake_cpe(*a, **k):
+        return ProcWithStreams()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
+    from tldw_Server_API.app.core.Local_LLM import http_utils
+
+    monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
+
+    res = await handler.start_server(model.name, server_args={"port": 8101})
+    assert res["status"] == "started"
+    assert handler._stream_tasks
 
 
 @pytest.mark.asyncio
@@ -294,6 +363,42 @@ async def test_llamacpp_stop_timeout(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(_os, "killpg", lambda *a, **k: None, raising=False)
 
     msg = await handler.stop_server()
+    assert "stopped" in msg.lower() or "terminated" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_stop_server_by_pid(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "toy.gguf").write_text("fake")
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    class Proc:
+        def __init__(self):
+            self.pid = 77
+            self.returncode = None
+            self.terminated = False
+
+        async def wait(self):
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = 0
+
+    proc = Proc()
+    handler._active_server_process = proc
+    handler._active_server_model = "toy.gguf"
+    handler._active_server_host = "127.0.0.1"
+    handler._active_server_port = 8082
+
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    msg = await handler.stop_server(pid=77)
+    assert proc.terminated
     assert "stopped" in msg.lower() or "terminated" in msg.lower()
 
 

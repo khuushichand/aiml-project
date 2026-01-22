@@ -11,14 +11,13 @@ import numpy as np
 
 from loguru import logger
 from tldw_Server_API.app.core.Embeddings.connection_pool import get_pool_manager
-from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics, track_embedding_request
+from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Embeddings.error_recovery import get_recovery_manager
 from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
 from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
 from tldw_Server_API.app.core.Embeddings.request_batching import get_batcher
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 
 
 def _normalize_embedding_response(payload: Any) -> List[float]:
@@ -47,17 +46,6 @@ def _normalize_embedding_response(payload: Any) -> List[float]:
 
     raise ValueError(f"Unexpected embedding response shape: {array.shape}")
 
-
-async def _close_response(resp: Any) -> None:
-    if resp is None:
-        return
-    close = getattr(resp, "aclose", None)
-    if callable(close):
-        await close()
-        return
-    close = getattr(resp, "close", None)
-    if callable(close):
-        close()
 
 
 class AsyncEmbeddingProvider:
@@ -100,11 +88,18 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
         super().__init__("openai", api_key)
         self.base_url = "https://api.openai.com/v1/embeddings"
 
+    def _resolve_url(self, base_url_override: Optional[str]) -> str:
+        url = base_url_override or self.base_url
+        if url.endswith("/embeddings"):
+            return url
+        return f"{url.rstrip('/')}/embeddings"
+
     async def create_embedding(
         self,
         text: str,
         model: str = "text-embedding-3-small",
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        base_url_override: Optional[str] = None,
     ) -> List[float]:
         """Create embedding using OpenAI API"""
         import time as _time
@@ -137,43 +132,39 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
 
         # Get connection pool for this provider
         pool = self.pool_manager.get_pool(self.provider_name)
-        async with pool.acquire_connection():
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
-            payload = {
-                "input": text,
-                "model": model
-            }
+        payload = {
+            "input": text,
+            "model": model
+        }
 
-            resp = None
-            try:
-                retry_policy = RetryPolicy(attempts=max(1, int(getattr(pool, "retry_attempts", 3))))
-                resp = await afetch(
-                    method="POST",
-                    url=self.base_url,
-                    json=payload,
-                    headers=headers,
-                    timeout=getattr(pool, "timeout_seconds", 30),
-                    retry=retry_policy,
-                )
-                if resp.status_code >= 400:
-                    status = "failure"
-                    self.metrics.log_error(self.provider_name, f"HTTP {resp.status_code}")
-                    raise Exception(f"HTTP {resp.status_code}")
-                data = resp.json()
-                return data["data"][0]["embedding"]
-            except Exception as e:
+        try:
+            data = await pool.request(
+                method="POST",
+                url=self._resolve_url(base_url_override),
+                headers=headers,
+                json_data=payload,
+            )
+            if isinstance(data, dict) and "error" in data:
                 status = "failure"
-                self.metrics.log_error(self.provider_name, str(type(e).__name__))
-                raise
-            finally:
-                await _close_response(resp)
-                # Emit metrics with the actual requested model
-                elapsed = _time.perf_counter() - t0
-                self.metrics.log_request(self.provider_name, model, status=status)
-                self.metrics.log_request_latency(self.provider_name, model, elapsed)
+                self.metrics.log_error(self.provider_name, "APIError")
+                raise ValueError(str(data.get("error")))
+            if isinstance(data, dict) and data.get("data"):
+                return data["data"][0]["embedding"]
+            status = "failure"
+            raise ValueError("Invalid OpenAI embeddings response format")
+        except Exception as e:
+            status = "failure"
+            self.metrics.log_error(self.provider_name, str(type(e).__name__))
+            raise
+        finally:
+            # Emit metrics with the actual requested model
+            elapsed = _time.perf_counter() - t0
+            self.metrics.log_request(self.provider_name, model, status=status)
+            self.metrics.log_request_latency(self.provider_name, model, elapsed)
 
 
 class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
@@ -188,7 +179,8 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
         self,
         text: str,
         model: str = "sentence-transformers/all-MiniLM-L6-v2",
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        base_url_override: Optional[str] = None,
     ) -> List[float]:
         """Create embedding using HuggingFace API"""
 
@@ -215,44 +207,32 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
                 )
                 raise Exception(f"Rate limit exceeded.{retry_after_msg}")
 
-        url = f"{self.base_url}/{model}"
+        base_url = base_url_override or self.base_url
+        url = f"{base_url.rstrip('/')}/{model}"
 
         # Get connection pool for this provider
         pool = self.pool_manager.get_pool(self.provider_name)
-        async with pool.acquire_connection():
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
-            payload = {
-                "inputs": text,
-                "options": {"wait_for_model": True}
-            }
+        payload = {
+            "inputs": text,
+            "options": {"wait_for_model": True}
+        }
 
-            resp = None
-            try:
-                retry_policy = RetryPolicy(attempts=max(1, int(getattr(pool, "retry_attempts", 3))))
-                resp = await afetch(
-                    method="POST",
-                    url=url,
-                    json=payload,
-                    headers=headers,
-                    timeout=getattr(pool, "timeout_seconds", 30),
-                    retry=retry_policy,
-                )
-                if resp.status_code >= 400:
-                    self.metrics.log_error(self.provider_name, f"HTTP {resp.status_code}")
-                    raise Exception(f"HTTP {resp.status_code}")
-                data = resp.json()
-
-                # Usage is already recorded in check_rate_limit_async
-                return _normalize_embedding_response(data)
-
-            except Exception as e:
-                self.metrics.log_error(self.provider_name, str(type(e).__name__))
-                raise
-            finally:
-                await _close_response(resp)
+        try:
+            data = await pool.request(
+                method="POST",
+                url=url,
+                headers=headers,
+                json_data=payload,
+            )
+            # Usage is already recorded in check_rate_limit_async
+            return _normalize_embedding_response(data)
+        except Exception as e:
+            self.metrics.log_error(self.provider_name, str(type(e).__name__))
+            raise
 
 
 class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
@@ -296,39 +276,28 @@ class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
                 raise Exception(f"Rate limit exceeded.{retry_after_msg}")
 
         pool = self.pool_manager.get_pool(self.provider_name)
-        async with pool.acquire_connection():
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
-            payload = {"texts": [text], "model": model}
+        payload = {"texts": [text], "model": model}
 
-            resp = None
-            try:
-                retry_policy = RetryPolicy(attempts=max(1, int(getattr(pool, "retry_attempts", 3))))
-                resp = await afetch(
-                    method="POST",
-                    url=self.api_url,
-                    json=payload,
-                    headers=headers,
-                    timeout=getattr(pool, "timeout_seconds", 30),
-                    retry=retry_policy,
-                )
-                if resp.status_code >= 400:
-                    status = "failure"
-                    self.metrics.log_error(self.provider_name, f"HTTP {resp.status_code}")
-                    raise Exception(f"HTTP {resp.status_code}")
-                data = resp.json()
-                return _normalize_embedding_response(data)
-            except Exception as e:
-                status = "failure"
-                self.metrics.log_error(self.provider_name, str(type(e).__name__))
-                raise
-            finally:
-                await _close_response(resp)
-                elapsed = _time.perf_counter() - t0
-                self.metrics.log_request(self.provider_name, model, status=status)
-                self.metrics.log_request_latency(self.provider_name, model, elapsed)
+        try:
+            data = await pool.request(
+                method="POST",
+                url=self.api_url,
+                headers=headers,
+                json_data=payload,
+            )
+            return _normalize_embedding_response(data)
+        except Exception as e:
+            status = "failure"
+            self.metrics.log_error(self.provider_name, str(type(e).__name__))
+            raise
+        finally:
+            elapsed = _time.perf_counter() - t0
+            self.metrics.log_request(self.provider_name, model, status=status)
+            self.metrics.log_request_latency(self.provider_name, model, elapsed)
 
 
 class AsyncLocalProvider(AsyncEmbeddingProvider):
@@ -422,6 +391,7 @@ class AsyncEmbeddingService:
             if not provider_config.enabled:
                 continue
 
+            pool_key = provider_config.name
             if provider_config.name == "openai":
                 self.providers["openai"] = AsyncOpenAIProvider(
                     api_key=provider_config.api_key
@@ -436,6 +406,7 @@ class AsyncEmbeddingService:
                         api_url=provider_config.api_url,
                         api_key=provider_config.api_key,
                     )
+                    pool_key = "local_api"
                 else:
                     self.providers["local"] = AsyncLocalProvider()
             elif provider_config.name == "local_api":
@@ -444,6 +415,16 @@ class AsyncEmbeddingService:
                         api_url=provider_config.api_url,
                         api_key=provider_config.api_key,
                     )
+                    pool_key = "local_api"
+
+            try:
+                self.pool_manager.get_pool(
+                    pool_key,
+                    max_connections=provider_config.max_connections,
+                    timeout_seconds=provider_config.timeout_seconds,
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to initialize connection pool for provider '{pool_key}': {exc}")
 
             logger.info(f"Initialized provider: {provider_config.name}")
 
@@ -471,9 +452,19 @@ class AsyncEmbeddingService:
             Embedding vector
         """
         # Use defaults if not specified
+        explicit_provider = provider is not None
         provider = provider or self.config.default_provider
         model = model or self.config.default_model
         provider = self._resolve_provider_alias(provider)
+        actual_provider = provider
+        actual_model = model
+        provider_config = self.config.get_provider(provider)
+        base_url_override: Optional[str] = None
+        if explicit_provider and provider_config and provider in {"openai", "huggingface"}:
+            if provider_config.api_url:
+                base_url_override = provider_config.api_url
+                # Ensure explicit provider overrides reach the async providers directly.
+                use_batching = False
 
         # Create deterministic cache key across processes
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -502,19 +493,19 @@ class AsyncEmbeddingService:
             provider_instance = self.providers[provider]
 
             try:
-                embedding = await provider_instance.create_embedding(
-                    text=text,
-                    model=model,
-                    user_id=user_id
-                )
+                call_kwargs = {"text": text, "model": model, "user_id": user_id}
+                if base_url_override and provider in {"openai", "huggingface"}:
+                    call_kwargs["base_url_override"] = base_url_override
+                embedding = await provider_instance.create_embedding(**call_kwargs)
             except Exception as e:
                 # Try fallback provider
-                embedding = await self._try_fallback_providers(
+                embedding, actual_provider, actual_model = await self._try_fallback_providers(
                     text, model, provider, user_id, e
                 )
 
         # Cache the result
         if use_cache:
+            cache_key = f"{actual_provider}:{actual_model}:{text_hash}"
             await self.cache.set_async(cache_key, embedding)
 
         return embedding
@@ -574,7 +565,7 @@ class AsyncEmbeddingService:
         failed_provider: str,
         user_id: Optional[str],
         original_error: Exception
-    ) -> List[float]:
+    ) -> Tuple[List[float], str, str]:
         """Try fallback providers when primary fails"""
 
         # Get provider config
@@ -592,12 +583,10 @@ class AsyncEmbeddingService:
                     provider_instance = self.providers[fallback]
                     fallback_model = model
                     fallback_config = self.config.get_provider(fallback)
-                    if fallback_config is None:
-                        fallback_model = None
-                    elif fallback_config.fallback_model:
+                    if fallback_config and fallback_config.fallback_model:
                         fallback_model = fallback_config.fallback_model
                     else:
-                        available_models = fallback_config.models or []
+                        available_models = (fallback_config.models or []) if fallback_config else []
                         if available_models and model not in available_models:
                             fallback_model = available_models[0]
                             logger.debug(
@@ -608,9 +597,11 @@ class AsyncEmbeddingService:
                                 model=model,
                             )
                     call_kwargs = {"text": text, "user_id": user_id}
-                    if fallback_model:
+                    if fallback_model is not None:
                         call_kwargs["model"] = fallback_model
-                    return await provider_instance.create_embedding(**call_kwargs)
+                    embedding = await provider_instance.create_embedding(**call_kwargs)
+                    used_model = fallback_model or model
+                    return embedding, fallback, used_model
                 except Exception as e:
                     logger.error(f"Fallback provider {fallback} also failed: {e}")
 

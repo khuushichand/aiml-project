@@ -369,6 +369,7 @@ class ChunkerConfig:
                  max_text_size: int = 100_000_000,  # 100MB
                  enable_metrics: bool = True,
                  verbose_logging: bool = False,
+                 strategy_cache_mode: str = "shared",
                  # Execution/concurrency knobs (used by AsyncChunker; optional here)
                  max_workers: int = 4,
                  max_concurrent: int = 10):
@@ -386,6 +387,7 @@ class ChunkerConfig:
             enable_metrics: Whether to collect metrics
             max_workers: Default worker threads for async execution helpers
             max_concurrent: Default concurrency semaphore for async helpers
+            strategy_cache_mode: Strategy reuse policy ('shared', 'thread', 'call')
         """
         # Convert string to enum if needed
         if isinstance(default_method, str):
@@ -414,6 +416,14 @@ class ChunkerConfig:
             raise ValueError(f"max_workers must be a positive integer, got {max_workers}")
         if not isinstance(max_concurrent, int) or max_concurrent <= 0:
             raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
+        if not isinstance(strategy_cache_mode, str):
+            raise ValueError(f"strategy_cache_mode must be a string, got {type(strategy_cache_mode).__name__}")
+        strategy_cache_mode = strategy_cache_mode.strip().lower()
+        if strategy_cache_mode not in {"shared", "thread", "call"}:
+            raise ValueError(
+                "strategy_cache_mode must be one of 'shared', 'thread', or 'call', "
+                f"got {strategy_cache_mode!r}"
+            )
 
         self.default_method = default_method
         self.default_max_size = default_max_size
@@ -429,6 +439,7 @@ class ChunkerConfig:
         self.max_text_size = max_text_size
         self.enable_metrics = enable_metrics
         self.verbose_logging = bool(verbose_logging)
+        self.strategy_cache_mode = strategy_cache_mode
         # Execution/concurrency knobs (used by AsyncChunker)
         self.max_workers = max_workers
         self.max_concurrent = max_concurrent

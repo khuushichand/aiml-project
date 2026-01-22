@@ -136,3 +136,23 @@ class TestAuthLoginLockoutRealRateLimiter:
             assert "Too many failed login attempts" in body.get("detail", "")
             retry_after = int(r3.headers.get("Retry-After", "0"))
             assert retry_after > 0
+
+    def test_lockout_blocks_correct_password(self):
+        """Once locked out, even correct credentials should be rejected."""
+        locked = False
+        for _ in range(5):
+            r = self.client.post(
+                "/api/v1/auth/login",
+                data={"username": self.username, "password": "WrongPassword1!"},
+            )
+            if r.status_code == 429:
+                locked = True
+                break
+
+        assert locked, "Expected lockout to trigger after repeated failures"
+
+        r_ok = self.client.post(
+            "/api/v1/auth/login",
+            data={"username": self.username, "password": self.password},
+        )
+        assert r_ok.status_code == 429

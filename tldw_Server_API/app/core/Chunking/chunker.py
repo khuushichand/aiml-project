@@ -5,6 +5,7 @@ This is the primary entry point for the chunking module.
 """
 
 from typing import List, Dict, Any, Optional, Union, Generator, Tuple
+from contextlib import nullcontext
 import re
 import json
 import hashlib
@@ -75,6 +76,8 @@ except Exception:  # pragma: no cover - safety fallback
     MetricType = None  # type: ignore
     _METRICS_AVAILABLE = False
 
+
+_LLM_UNSET = object()
 
 def _ensure_chunker_metrics_registered() -> None:
     """Register chunker-specific cache metrics once."""
@@ -304,6 +307,9 @@ class Chunker:
         self._strategies = {}
         self._strategy_factories = {}
         self._register_strategy_factories()
+        self._strategy_cache_mode = str(getattr(self.config, 'strategy_cache_mode', 'thread')).strip().lower()
+        self._strategy_lock = threading.RLock()
+        self._thread_local = threading.local()
 
         # Cache for processed results - using LRU cache
         self._cache = (
@@ -452,6 +458,7 @@ class Chunker:
         def classify_line(s: str) -> Optional[str]:
             k = match_template(s)
             if k:
+                # Custom kinds (e.g., "bold_subsection") are template-driven; no built-in detection.
                 return k
             if re.match(r'^\s*$', s):
                 return 'blank'
@@ -459,7 +466,7 @@ class Chunker:
                 return 'header_atx'
             if re.match(r'^\s*(\*{3,}|-{3,}|_{3,})\s*$', s):
                 return 'hr'
-            if re.match(r'^\s*(```|~~~)', s):
+            if re.match(r'^\s*(`{3,}|~{3,})', s):
                 return 'code_fence'
             if re.match(r'^\s*([-+*])\s+\S', s):
                 return 'list_unordered'
@@ -476,10 +483,13 @@ class Chunker:
             if code_fence_start is not None:
                 try:
                     marker = code_fence_marker or ''
-                    if marker and re.match(rf'^\s*{re.escape(marker)}\s*$', content):
-                        spans.append((code_fence_start, end, 'code_fence'))
-                        code_fence_start = None
-                        code_fence_marker = None
+                    if marker:
+                        stripped = content.strip()
+                        # Closing fence must use the same fence char and be at least as long as the opener.
+                        if stripped and all(ch == marker[0] for ch in stripped) and len(stripped) >= len(marker):
+                            spans.append((code_fence_start, end, 'code_fence'))
+                            code_fence_start = None
+                            code_fence_marker = None
                     continue
                 except Exception:
                     spans.append((code_fence_start, end, 'code_fence'))
@@ -498,7 +508,7 @@ class Chunker:
                     spans.append((buf_start, start, 'paragraph'))
                     buf_start = None
                 try:
-                    marker_match = re.match(r'^\s*(```|~~~)', content)
+                    marker_match = re.match(r'^\s*(`{3,}|~{3,})', content)
                     code_fence_marker = marker_match.group(1) if marker_match else '```'
                 except Exception:
                     code_fence_marker = '```'
@@ -610,63 +620,64 @@ class Chunker:
             # Method-aware offset mapping to avoid misplacing spans on repeated content
             try:
                 if method == 'words':
-                    # Map word tokens back to their character spans within the segment
-                    # Build token list equivalent to the words strategy
+                    # Use the word strategy's own record builder to keep offsets aligned
                     from .strategies.words import WordChunkingStrategy  # local import to avoid cycle at module import
                     ws = WordChunkingStrategy(language=language)
-                    tokens = ws._tokenize_text(segment_clean)  # noqa: SLF001 (internal, but stable in-project)
-                    tok_spans: List[Tuple[int, int]] = []
-                    cur = 0
-                    for tok in tokens:
-                        idx = segment_clean.find(tok, cur)
-                        if idx == -1:
-                            idx = cur
-                        tok_spans.append((idx, idx + len(tok)))
-                        cur = idx + len(tok)
-
-                    # Reconstruct chunk spans based on token counts
-                    step = max(1, (max_size if isinstance(max_size, int) else 0) - (overlap if isinstance(overlap, int) else 0)) or 1
-                    t_i = 0
-                    for ch in chunks:
-                        ch_text = ch if isinstance(ch, str) else str(ch)
-                        # Derive token count in this chunk by splitting the chunk text similarly
-                        if language in ['zh', 'zh-cn', 'zh-tw', 'ja', 'th']:
-                            # Unknown separation; approximate by consuming tokens until we match the chunk length
-                            k = 0
-                            acc_len = 0
-                            while t_i + k < len(tokens) and acc_len < len(ch_text):
-                                acc_len += len(tokens[t_i + k])
-                                k += 1
-                            k = max(1, k)
-                        else:
-                            k = max(1, len(ch_text.split()))
-
-                        # Clamp k to remaining tokens
-                        k = min(k, max(1, len(tokens) - t_i))
-                        s0 = tok_spans[t_i][0] if t_i < len(tok_spans) else 0
-                        e0 = tok_spans[t_i + k - 1][1] if (t_i + k - 1) < len(tok_spans) else len(segment_clean)
-                        # Emit exact source slice matching computed offsets
-                        _gstart = start + s0
-                        _gend = start + e0
-                        exact_text = text[_gstart:_gend]
-                        out_chunks.append({
-                            'type': 'text',
-                            'text': exact_text,
-                            'metadata': {
-                                'method': method,
-                                'start_offset': _gstart,
-                                'end_offset': _gend,
-                                'language': language,
-                                'paragraph_kind': kind,
-                            }
-                        })
-                        # Advance pointer by the actual token count emitted minus overlap.
-                        # This stays aligned even when strategy merges windows via min_chunk_size.
-                        try:
-                            adv = max(1, k - (overlap if isinstance(overlap, int) else 0))
-                        except Exception:
-                            adv = step
-                        t_i = min(len(tokens), t_i + adv)
+                    records, _tokens, spans = ws._prepare_chunk_records(  # noqa: SLF001
+                        segment_clean,
+                        max_size,
+                        overlap,
+                        **method_opts,
+                    )
+                    if records:
+                        for record in records:
+                            token_indices = record.get('token_indices') or []
+                            if not token_indices:
+                                continue
+                            start_idx = token_indices[0]
+                            end_idx = token_indices[-1]
+                            s0 = spans[start_idx][0] if spans and start_idx < len(spans) else 0
+                            e0 = spans[end_idx][1] if spans and end_idx < len(spans) else len(segment_clean)
+                            # Emit exact source slice matching computed offsets
+                            _gstart = start + s0
+                            _gend = start + e0
+                            exact_text = text[_gstart:_gend]
+                            out_chunks.append({
+                                'type': 'text',
+                                'text': exact_text,
+                                'metadata': {
+                                    'method': method,
+                                    'start_offset': _gstart,
+                                    'end_offset': _gend,
+                                    'language': language,
+                                    'paragraph_kind': kind,
+                                }
+                            })
+                    else:
+                        # Fallback: bound search within the segment using a rolling cursor
+                        cursor = 0
+                        for ch in chunks:
+                            ch_text = ch if isinstance(ch, str) else str(ch)
+                            idx = segment_clean.find(ch_text, cursor)
+                            if idx == -1:
+                                idx = cursor
+                            _gstart = min(start + idx, end)
+                            _gend = min(start + idx + len(ch_text), end)
+                            if _gend < _gstart:
+                                _gend = _gstart
+                            exact_text = text[_gstart:_gend]
+                            out_chunks.append({
+                                'type': 'text',
+                                'text': exact_text,
+                                'metadata': {
+                                    'method': method,
+                                    'start_offset': _gstart,
+                                    'end_offset': _gend,
+                                    'language': language,
+                                    'paragraph_kind': kind,
+                                }
+                            })
+                            cursor = idx + len(ch_text)
                 elif method == 'sentences':
                     # Compute sentence spans and group by sentence count to mirror strategy behavior
                     from .strategies.sentences import SentenceChunkingStrategy  # local import
@@ -736,8 +747,10 @@ class Chunker:
                             idx = segment_clean.find(ch_text, cursor)
                             if idx == -1:
                                 idx = cursor
-                            _gstart = start + idx
-                            _gend = start + idx + len(ch_text)
+                            _gstart = min(start + idx, end)
+                            _gend = min(start + idx + len(ch_text), end)
+                            if _gend < _gstart:
+                                _gend = _gstart
                             exact_text = text[_gstart:_gend]
                             out_chunks.append({
                                 'type': 'text',
@@ -774,8 +787,10 @@ class Chunker:
                         if idx == -1:
                             # If not found, place at cursor to keep monotonicity
                             idx = cursor
-                        _gstart = start + idx
-                        _gend = start + idx + len(ch_text)
+                        _gstart = min(start + idx, end)
+                        _gend = min(start + idx + len(ch_text), end)
+                        if _gend < _gstart:
+                            _gend = _gstart
                         exact_text = text[_gstart:_gend]
                         out_chunks.append({
                             'type': 'text',
@@ -796,8 +811,10 @@ class Chunker:
                 for ch in chunks:
                     ch_text = ch if isinstance(ch, str) else str(ch)
                     local_end = min(len(segment_clean), cursor + len(ch_text))
-                    _gstart = start + cursor
-                    _gend = start + local_end
+                    _gstart = min(start + cursor, end)
+                    _gend = min(start + local_end, end)
+                    if _gend < _gstart:
+                        _gend = _gstart
                     exact_text = text[_gstart:_gend]
                     out_chunks.append({
                         'type': 'text',
@@ -1495,7 +1512,11 @@ class Chunker:
             except Exception:
                 cache_reason = "policy_error"
         # Attempt get if allowed
-        llm_signature = self._get_llm_signature()
+        effective_llm_call, effective_llm_cfg = self._get_effective_llm_hooks()
+        llm_signature = self._get_llm_signature(
+            llm_call_func=effective_llm_call,
+            llm_config=effective_llm_cfg,
+        )
         if self._cache is not None and cache_allowed:
             cache_key = self._get_cache_key(
                 text,
@@ -1526,31 +1547,33 @@ class Chunker:
             except Exception:
                 pass
 
-        # Get strategy lazily
-        strategy = self.get_strategy(method)
-        self._sync_strategy_llm(strategy)
-        # Allow token strategy to switch tokenizer dynamically
-        if method == ChunkingMethod.TOKENS.value and tokenizer_override:
-            try:
-                if getattr(strategy, "tokenizer_name", None) != tokenizer_override:
-                    setattr(strategy, "tokenizer_name", tokenizer_override)
-                    if hasattr(strategy, "_tokenizer"):
-                        setattr(strategy, "_tokenizer", None)
-                    if hasattr(strategy, "_tokenizer_init_attempted"):
-                        setattr(strategy, "_tokenizer_init_attempted", False)
-            except Exception:
-                logger.debug("Failed to update tokenizer override", exc_info=True)
-
-        # Update strategy language if different
-        if language != strategy.language:
-            self._apply_strategy_language(strategy, language)
-
+        strategy_lock = self._strategy_lock if self._strategy_cache_mode == "shared" else nullcontext()
         try:
-            # Perform chunking
-            logger.debug(f"Chunking with method={method}, max_size={max_size}, "
-                        f"overlap={overlap}, language={language}")
+            with strategy_lock:
+                # Get strategy lazily per cache mode
+                strategy = self._get_strategy_for_call(method)
+                self._sync_strategy_llm(strategy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
+                # Allow token strategy to switch tokenizer dynamically
+                if method == ChunkingMethod.TOKENS.value and tokenizer_override:
+                    try:
+                        if getattr(strategy, "tokenizer_name", None) != tokenizer_override:
+                            setattr(strategy, "tokenizer_name", tokenizer_override)
+                            if hasattr(strategy, "_tokenizer"):
+                                setattr(strategy, "_tokenizer", None)
+                            if hasattr(strategy, "_tokenizer_init_attempted"):
+                                setattr(strategy, "_tokenizer_init_attempted", False)
+                    except Exception:
+                        logger.debug("Failed to update tokenizer override", exc_info=True)
 
-            chunks = strategy.chunk(text, max_size, overlap, **strategy_options)
+                # Update strategy language if different
+                if language != strategy.language:
+                    self._apply_strategy_language(strategy, language)
+
+                # Perform chunking
+                logger.debug(f"Chunking with method={method}, max_size={max_size}, "
+                            f"overlap={overlap}, language={language}")
+
+                chunks = strategy.chunk(text, max_size, overlap, **strategy_options)
 
             # Cache result if enabled
             if self._cache is not None and len(chunks) > 0 and cache_allowed and cache_key is not None:
@@ -1650,27 +1673,30 @@ class Chunker:
         strategy_options.pop("tokenizer_name", None)
         strategy_options.pop("tokenizer_name_or_path", None)
 
-        # Get strategy lazily (supports factory registration)
-        strategy = self.get_strategy(method)
-        self._sync_strategy_llm(strategy)
-        if method == ChunkingMethod.TOKENS.value and tokenizer_override:
-            try:
-                if getattr(strategy, "tokenizer_name", None) != tokenizer_override:
-                    setattr(strategy, "tokenizer_name", tokenizer_override)
-                    if hasattr(strategy, "_tokenizer"):
-                        setattr(strategy, "_tokenizer", None)
-                    if hasattr(strategy, "_tokenizer_init_attempted"):
-                        setattr(strategy, "_tokenizer_init_attempted", False)
-            except Exception:
-                logger.debug("Failed to update tokenizer override", exc_info=True)
-
-        # Update strategy language if different
-        if language != strategy.language:
-            self._apply_strategy_language(strategy, language)
-
+        effective_llm_call, effective_llm_cfg = self._get_effective_llm_hooks()
+        strategy_lock = self._strategy_lock if self._strategy_cache_mode == "shared" else nullcontext()
         try:
-            # Get chunks with metadata
-            results = strategy.chunk_with_metadata(text, max_size, overlap, **strategy_options)
+            with strategy_lock:
+                # Get strategy lazily (supports factory registration)
+                strategy = self._get_strategy_for_call(method)
+                self._sync_strategy_llm(strategy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
+                if method == ChunkingMethod.TOKENS.value and tokenizer_override:
+                    try:
+                        if getattr(strategy, "tokenizer_name", None) != tokenizer_override:
+                            setattr(strategy, "tokenizer_name", tokenizer_override)
+                            if hasattr(strategy, "_tokenizer"):
+                                setattr(strategy, "_tokenizer", None)
+                            if hasattr(strategy, "_tokenizer_init_attempted"):
+                                setattr(strategy, "_tokenizer_init_attempted", False)
+                    except Exception:
+                        logger.debug("Failed to update tokenizer override", exc_info=True)
+
+                # Update strategy language if different
+                if language != strategy.language:
+                    self._apply_strategy_language(strategy, language)
+
+                # Get chunks with metadata
+                results = strategy.chunk_with_metadata(text, max_size, overlap, **strategy_options)
         except Exception as e:
             logger.error(f"Chunking with metadata failed: {e}")
             if isinstance(e, ChunkingError):
@@ -1756,33 +1782,36 @@ class Chunker:
         strategy_options.pop("tokenizer_name", None)
         strategy_options.pop("tokenizer_name_or_path", None)
 
-        # Get strategy lazily (supports factory registration)
-        strategy = self.get_strategy(method)
-        self._sync_strategy_llm(strategy)
-        if method == ChunkingMethod.TOKENS.value and tokenizer_override:
-            try:
-                if getattr(strategy, "tokenizer_name", None) != tokenizer_override:
-                    setattr(strategy, "tokenizer_name", tokenizer_override)
-                    if hasattr(strategy, "_tokenizer"):
-                        setattr(strategy, "_tokenizer", None)
-                    if hasattr(strategy, "_tokenizer_init_attempted"):
-                        setattr(strategy, "_tokenizer_init_attempted", False)
-            except Exception:
-                logger.debug("Failed to update tokenizer override", exc_info=True)
+        effective_llm_call, effective_llm_cfg = self._get_effective_llm_hooks()
+        strategy_lock = self._strategy_lock if self._strategy_cache_mode == "shared" else nullcontext()
+        with strategy_lock:
+            # Get strategy lazily (supports factory registration)
+            strategy = self._get_strategy_for_call(method)
+            self._sync_strategy_llm(strategy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
+            if method == ChunkingMethod.TOKENS.value and tokenizer_override:
+                try:
+                    if getattr(strategy, "tokenizer_name", None) != tokenizer_override:
+                        setattr(strategy, "tokenizer_name", tokenizer_override)
+                        if hasattr(strategy, "_tokenizer"):
+                            setattr(strategy, "_tokenizer", None)
+                        if hasattr(strategy, "_tokenizer_init_attempted"):
+                            setattr(strategy, "_tokenizer_init_attempted", False)
+                except Exception:
+                    logger.debug("Failed to update tokenizer override", exc_info=True)
 
-        # Update strategy language if different
-        if language != strategy.language:
-            self._apply_strategy_language(strategy, language)
+            # Update strategy language if different
+            if language != strategy.language:
+                self._apply_strategy_language(strategy, language)
 
-        # Use generator method when available, otherwise fall back to eager chunking
-        chunk_gen = getattr(strategy, 'chunk_generator', None)
-        if callable(chunk_gen):
-            for chunk in chunk_gen(text, max_size, overlap, **strategy_options):
-                yield chunk
-        else:
-            logger.debug(f"{strategy.__class__.__name__} lacks chunk_generator; falling back to chunk()")
-            for chunk in strategy.chunk(text, max_size, overlap, **strategy_options):
-                yield chunk
+            # Use generator method when available, otherwise fall back to eager chunking
+            chunk_gen = getattr(strategy, 'chunk_generator', None)
+            if callable(chunk_gen):
+                for chunk in chunk_gen(text, max_size, overlap, **strategy_options):
+                    yield chunk
+            else:
+                logger.debug(f"{strategy.__class__.__name__} lacks chunk_generator; falling back to chunk()")
+                for chunk in strategy.chunk(text, max_size, overlap, **strategy_options):
+                    yield chunk
 
     def get_available_methods(self) -> List[str]:
         """
@@ -1808,33 +1837,57 @@ class Chunker:
         """
         if method in self._strategies:
             return self._strategies[method]
+        instance = self._create_strategy_instance(method)
+        self._strategies[method] = instance
+        return instance
+
+    def _create_strategy_instance(self, method: str):
+        """Instantiate a strategy without caching it."""
         factory = self._strategy_factories.get(method)
         if factory is None:
             available = ', '.join(sorted(list(self._strategies.keys()) + list(self._strategy_factories.keys())))
             raise InvalidChunkingMethodError(f"Unknown chunking method: {method}. Available methods: {available}")
         try:
-            instance = factory()
-            self._strategies[method] = instance
-            return instance
+            return factory()
         except Exception as e:
             raise InvalidChunkingMethodError(f"Failed to initialize strategy '{method}': {e}")
 
-    def _sync_strategy_llm(self, strategy: Any) -> None:
+    def _get_strategy_for_call(self, method: str):
+        """Return a strategy instance scoped per cache mode to avoid shared-state mutation."""
+        mode = self._strategy_cache_mode or "shared"
+        # Respect explicit overrides/injected strategies regardless of cache mode
+        if method in self._strategies:
+            return self._strategies[method]
+        if mode == "call":
+            return self._create_strategy_instance(method)
+        if mode == "thread":
+            cache = getattr(self._thread_local, "strategies", None)
+            if cache is None:
+                cache = {}
+                setattr(self._thread_local, "strategies", cache)
+            if method not in cache:
+                cache[method] = self._create_strategy_instance(method)
+            return cache[method]
+        # shared (legacy) cache
+        return self.get_strategy(method)
+
+    def _sync_strategy_llm(self, strategy: Any, *, llm_call_func: Any = _LLM_UNSET, llm_config: Any = _LLM_UNSET) -> None:
         """Ensure cached strategies see the latest LLM hooks/config."""
         if strategy is None:
             return
+        effective_llm_call = self.llm_call_func if llm_call_func is _LLM_UNSET else llm_call_func
+        effective_llm_cfg = self.llm_config if llm_config is _LLM_UNSET else llm_config
         try:
             if hasattr(strategy, 'llm_call_func'):
-                strategy.llm_call_func = getattr(self, 'llm_call_func', None)
+                strategy.llm_call_func = effective_llm_call
         except Exception:
             logger.debug("Failed to update strategy llm_call_func", exc_info=True)
         try:
             if hasattr(strategy, 'llm_config'):
-                cfg = getattr(self, 'llm_config', None)
-                if isinstance(cfg, dict):
-                    strategy.llm_config = dict(cfg)
+                if isinstance(effective_llm_cfg, dict):
+                    strategy.llm_config = dict(effective_llm_cfg)
                 else:
-                    strategy.llm_config = cfg
+                    strategy.llm_config = effective_llm_cfg
         except Exception:
             logger.debug("Failed to update strategy llm_config", exc_info=True)
 
@@ -1978,9 +2031,22 @@ class Chunker:
         except Exception:
             return str(value)
 
-    def _get_llm_signature(self) -> str:
-        """Produce a stable signature for the current LLM hook/config."""
+    def _get_effective_llm_hooks(self) -> Tuple[Any, Any]:
+        """Return per-call LLM overrides if present, else defaults."""
         func = getattr(self, "llm_call_func", None)
+        cfg = getattr(self, "llm_config", None)
+        overrides = getattr(self._thread_local, "llm_overrides", None)
+        if isinstance(overrides, tuple) and len(overrides) == 2:
+            o_func, o_cfg = overrides
+            if o_func is not _LLM_UNSET:
+                func = o_func
+            if o_cfg is not _LLM_UNSET:
+                cfg = o_cfg
+        return func, cfg
+
+    def _get_llm_signature(self, *, llm_call_func: Any = _LLM_UNSET, llm_config: Any = _LLM_UNSET) -> str:
+        """Produce a stable signature for the current LLM hook/config."""
+        func = getattr(self, "llm_call_func", None) if llm_call_func is _LLM_UNSET else llm_call_func
         if func is None:
             func_sig = "llm_fn:none"
         else:
@@ -1990,7 +2056,7 @@ class Chunker:
                 func_sig = f"llm_fn:{module}.{name}:{id(func)}"
             except Exception:
                 func_sig = f"llm_fn:repr:{repr(func)}"
-        cfg = getattr(self, "llm_config", None)
+        cfg = getattr(self, "llm_config", None) if llm_config is _LLM_UNSET else llm_config
         if isinstance(cfg, dict):
             try:
                 cfg_sig = json.dumps(
@@ -2050,13 +2116,16 @@ class Chunker:
             return ""
         options = options or {}
         method_norm = (method or "").lower()
+        effective_llm_call, effective_llm_cfg = self._get_effective_llm_hooks()
+        strategy_lock = self._strategy_lock if self._strategy_cache_mode == "shared" else nullcontext()
         try:
             if method_norm == ChunkingMethod.WORDS.value:
-                strategy = self.get_strategy(ChunkingMethod.WORDS.value)
-                self._sync_strategy_llm(strategy)
-                if language and strategy.language != language:
-                    self._apply_strategy_language(strategy, language)
-                tokens, spans = strategy._tokenize_with_spans(text)  # noqa: SLF001
+                with strategy_lock:
+                    strategy = self._get_strategy_for_call(ChunkingMethod.WORDS.value)
+                    self._sync_strategy_llm(strategy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
+                    if language and strategy.language != language:
+                        self._apply_strategy_language(strategy, language)
+                    tokens, spans = strategy._tokenize_with_spans(text)  # noqa: SLF001
                 if not spans:
                     return ""
                 count = min(len(spans), max(0, overlap))
@@ -2066,11 +2135,12 @@ class Chunker:
                     end_idx += 1
                 return text[start_idx:end_idx]
             if method_norm == ChunkingMethod.SENTENCES.value:
-                strategy = self.get_strategy(ChunkingMethod.SENTENCES.value)
-                self._sync_strategy_llm(strategy)
-                if language and strategy.language != language:
-                    self._apply_strategy_language(strategy, language)
-                sentence_spans = strategy._split_sentences_with_spans(text)  # noqa: SLF001
+                with strategy_lock:
+                    strategy = self._get_strategy_for_call(ChunkingMethod.SENTENCES.value)
+                    self._sync_strategy_llm(strategy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
+                    if language and strategy.language != language:
+                        self._apply_strategy_language(strategy, language)
+                    sentence_spans = strategy._split_sentences_with_spans(text)  # noqa: SLF001
                 if not sentence_spans:
                     return ""
                 count = min(len(sentence_spans), max(0, overlap))
@@ -2122,11 +2192,12 @@ class Chunker:
                     end_idx += 1
                 return text[start_idx:end_idx]
             if method_norm == ChunkingMethod.TOKENS.value:
-                strategy = self.get_strategy(ChunkingMethod.TOKENS.value)
-                self._sync_strategy_llm(strategy)
-                if language and strategy.language != language:
-                    self._apply_strategy_language(strategy, language)
-                tokenizer = strategy.tokenizer
+                with strategy_lock:
+                    strategy = self._get_strategy_for_call(ChunkingMethod.TOKENS.value)
+                    self._sync_strategy_llm(strategy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
+                    if language and strategy.language != language:
+                        self._apply_strategy_language(strategy, language)
+                    tokenizer = strategy.tokenizer
                 try:
                     add_special = bool(options.get("add_special_tokens", False))
                     if hasattr(tokenizer, "tokenizer"):
@@ -2212,6 +2283,9 @@ class Chunker:
         fm_start = time.perf_counter()
         json_meta: Dict[str, Any] = {}
         processed_text = text
+        # Offsets emitted by process_text are relative to the original input text.
+        # Track how many leading characters we strip so we can restore offsets later.
+        prefix_offset = 0
         if frontmatter_enabled:
             try:
                 stripped = processed_text.lstrip()
@@ -2229,7 +2303,12 @@ class Chunker:
                         and bool(parsed_candidate.get(sentinel_key))
                     ):
                         json_meta = {k: v for k, v in parsed_candidate.items() if k != sentinel_key}
-                        processed_text = stripped[end_idx:].lstrip("\n\r")
+                        # Account for any leading whitespace trimmed before JSON parsing.
+                        leading_ws = len(processed_text) - len(stripped)
+                        tail = stripped[end_idx:]
+                        tail_trimmed = tail.lstrip("\n\r")
+                        prefix_offset += leading_ws + end_idx + (len(tail) - len(tail_trimmed))
+                        processed_text = tail_trimmed
             except Exception:
                 pass
         observe_histogram("chunker_frontmatter_duration_seconds", time.perf_counter() - fm_start, labels=labels)
@@ -2245,7 +2324,10 @@ class Chunker:
             m = header_re.match(processed_text)
             if m:
                 header_text = m.group(1)
-                processed_text = processed_text[len(header_text):].lstrip()
+                tail = processed_text[len(header_text):]
+                tail_trimmed = tail.lstrip()
+                prefix_offset += len(header_text) + (len(tail) - len(tail_trimmed))
+                processed_text = tail_trimmed
         except Exception:
             pass
         observe_histogram("chunker_header_extract_seconds", time.perf_counter() - hdr_start, labels=labels)
@@ -2369,13 +2451,13 @@ class Chunker:
         hierarchical = bool(opts.get('hierarchical'))
         hier_template = opts.get('hierarchical_template') if isinstance(opts.get('hierarchical_template'), dict) else None
 
-        # Temporarily set LLM hooks for strategies that need them
-        prev_llm_call = getattr(self, 'llm_call_func', None)
-        prev_llm_cfg = getattr(self, 'llm_config', None)
-        if llm_call_func is not None:
-            self.llm_call_func = llm_call_func
-        if llm_config is not None:
-            self.llm_config = llm_config
+        # Set per-call LLM overrides without mutating shared state
+        prev_llm_overrides = getattr(self._thread_local, "llm_overrides", _LLM_UNSET)
+        apply_llm_overrides = (llm_call_func is not None) or (llm_config is not None)
+        if apply_llm_overrides:
+            o_func = llm_call_func if llm_call_func is not None else _LLM_UNSET
+            o_cfg = llm_config if llm_config is not None else _LLM_UNSET
+            self._thread_local.llm_overrides = (o_func, o_cfg)
 
         # Multi-level paragraph-aware chunking for words/sentences (parity with legacy)
         multi_level = bool(opts.get('multi_level', False)) and method in ('words', 'sentences') and not (hierarchical or hier_template)
@@ -2505,14 +2587,33 @@ class Chunker:
                         norm_chunks.append({'text': str(c), 'metadata': {}})
             observe_histogram("chunker_chunking_duration_seconds", time.perf_counter() - chunk_start, labels=labels)
         finally:
-            # Restore previous LLM hooks even if chunking fails
-            self.llm_call_func = prev_llm_call
-            self.llm_config = prev_llm_cfg
+            # Restore previous LLM overrides even if chunking fails
+            if apply_llm_overrides:
+                if prev_llm_overrides is _LLM_UNSET:
+                    try:
+                        delattr(self._thread_local, "llm_overrides")
+                    except Exception:
+                        pass
+                else:
+                    self._thread_local.llm_overrides = prev_llm_overrides
+
+        # Normalize offsets back to original input coordinates when we stripped a prefix.
+        if prefix_offset:
+            for item in norm_chunks:
+                if not isinstance(item, dict):
+                    continue
+                md = item.get('metadata')
+                if not isinstance(md, dict):
+                    continue
+                for key in ('start_offset', 'end_offset', 'start_char', 'end_char'):
+                    val = md.get(key)
+                    if isinstance(val, int):
+                        md[key] = val + prefix_offset
 
         total = len(norm_chunks)
         out: List[Dict[str, Any]] = []
         norm_start = time.perf_counter()
-        # Optional timecode mapping for media transcripts: segments with offsets and times
+        # Optional timecode mapping for media transcripts: offsets are in original input coordinates.
         time_segments = None
         try:
             segs = opts.get('timecode_map')
@@ -2556,7 +2657,8 @@ class Chunker:
                 start = md.get('start_offset'); end = md.get('end_offset')
                 if isinstance(start, int) and isinstance(end, int) and end > start:
                     mid = 0.5 * (float(start) + float(end))
-                    rel = mid / max(1.0, float(len(processed_text)))
+                    # Offsets are in original input coordinates, so relative_position uses the original length.
+                    rel = mid / max(1.0, float(len(text)))
                     if time_segments is not None and ('start_time' not in md or 'end_time' not in md):
                         try:
                             chunk_start = int(start)
@@ -2709,6 +2811,15 @@ class Chunker:
         language_lower = (language or "").lower()
         languages_no_space = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
 
+        def _should_withhold_last_chunk() -> bool:
+            """Whether to carry the final chunk forward instead of emitting it immediately."""
+            if overlap <= 0:
+                return True
+            # For non-word methods, carry the full last chunk to preserve cross-buffer overlap.
+            return method_lower != ChunkingMethod.WORDS.value
+
+        withhold_last = _should_withhold_last_chunk()
+
         def _coerce_overlap_value(value: Any) -> str:
             """Normalize overlap carry-over into a textual buffer."""
             if isinstance(value, str):
@@ -2747,13 +2858,22 @@ class Chunker:
                         if buffer:
                             overlap_text = _coerce_overlap_value(overlap_buffer)
                             combined_tail = _compose_with_overlap(overlap_text, buffer)
+                            last_chunk = None
                             for text_chunk in self.chunk_text_generator(
                                 combined_tail, method, max_size, overlap, language, **options_dict
                             ):
-                                yield text_chunk
-                            overlap_buffer = self._compute_overlap_buffer_text(
-                                combined_tail, method, overlap, language, options_dict
-                            )
+                                if withhold_last:
+                                    if last_chunk is not None:
+                                        yield last_chunk
+                                    last_chunk = text_chunk
+                                else:
+                                    yield text_chunk
+                            if withhold_last:
+                                overlap_buffer = _coerce_overlap_value(last_chunk)
+                            else:
+                                overlap_buffer = self._compute_overlap_buffer_text(
+                                    combined_tail, method, overlap, language, options_dict
+                                )
                         break
 
                     buffer += chunk
@@ -2779,16 +2899,25 @@ class Chunker:
                         to_process = buffer[:split_point]
                         overlap_text = _coerce_overlap_value(overlap_buffer)
                         combined = _compose_with_overlap(overlap_text, to_process)
+                        last_chunk = None
                         for text_chunk in self.chunk_text_generator(
                             combined,
                             method, max_size, overlap, language, **options_dict
                         ):
-                            yield text_chunk
+                            if withhold_last:
+                                if last_chunk is not None:
+                                    yield last_chunk
+                                last_chunk = text_chunk
+                            else:
+                                yield text_chunk
 
-                        # Keep overlap for next iteration using strategy-aware logic
-                        overlap_buffer = self._compute_overlap_buffer_text(
-                            combined, method, overlap, language, options_dict
-                        )
+                        if withhold_last:
+                            overlap_buffer = _coerce_overlap_value(last_chunk)
+                        else:
+                            # Keep overlap for next iteration using strategy-aware logic
+                            overlap_buffer = self._compute_overlap_buffer_text(
+                                combined, method, overlap, language, options_dict
+                            )
 
                         # Keep the rest in buffer
                         buffer = buffer[split_point:]
@@ -2801,6 +2930,10 @@ class Chunker:
         except Exception as e:
             logger.error(f"File stream processing failed: {e}")
             raise ChunkingError(f"Failed to process file stream: {str(e)}")
+
+        # Flush any withheld tail chunk at end-of-stream.
+        if withhold_last and overlap_buffer:
+            yield _coerce_overlap_value(overlap_buffer)
 
     def _estimate_stream_flush_threshold(self, method: str, max_size: int) -> int:
         """Estimate a character-based flush threshold for streaming chunking."""

@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelNotFoundError, ModelDownloadError, \
     InferenceError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import HuggingFaceConfig
+from tldw_Server_API.app.core.Local_LLM import handler_utils
 
 try:
     import torch
@@ -34,7 +35,24 @@ class HuggingFaceHandler(BaseLLMHandler):
         self.models_dir = Path(self.config.models_dir)
         if not self.models_dir.exists():
             self.models_dir.mkdir(parents=True, exist_ok=True)
-        self.loaded_models: Dict[str, Any] = {} # Cache for loaded models and tokenizers
+        self.loaded_models: Dict[tuple, Any] = {} # Cache for loaded models and tokenizers
+
+    def _is_path_allowed(self, p: Path) -> bool:
+        base_dirs = handler_utils.build_allowed_paths(
+            self.models_dir,
+            getattr(self.config, "allowed_paths", None),
+        )
+        return handler_utils.is_path_allowed(p, base_dirs)
+
+    def _freeze_config(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return tuple((k, self._freeze_config(v)) for k, v in sorted(value.items()))
+        if isinstance(value, (list, tuple)):
+            return tuple(self._freeze_config(v) for v in value)
+        return value
+
+    def _cache_key(self, model_name_or_path: str, quantization_config: Optional[Dict]) -> tuple:
+        return (model_name_or_path, self._freeze_config(quantization_config))
 
     async def list_models(self) -> List[str]:
         """Lists locally available Hugging Face models (directories in models_dir)."""
@@ -62,14 +80,19 @@ class HuggingFaceHandler(BaseLLMHandler):
                         If None, uses the last part of model_identifier.
         """
         if save_directory:
-            model_save_path = self.models_dir / save_directory
+            candidate = Path(save_directory)
+            model_save_path = candidate if candidate.is_absolute() else (self.models_dir / candidate)
         else:
             model_save_path = self.models_dir / model_identifier.split('/')[-1]
+
+        if not self._is_path_allowed(model_save_path):
+            raise ModelDownloadError("Model save path must resolve under allowed directories.")
 
         if model_save_path.exists() and (model_save_path / "config.json").exists():
             self.logger.info(f"Model '{model_identifier}' already downloaded at {model_save_path}")
             return str(model_save_path)
 
+        model_save_path.parent.mkdir(parents=True, exist_ok=True)
         model_save_path.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"Downloading model '{model_identifier}' to {model_save_path}...")
 
@@ -110,8 +133,9 @@ class HuggingFaceHandler(BaseLLMHandler):
 
     async def _load_model_and_tokenizer(self, model_name_or_path: str, quantization_config: Optional[Dict] = None):
         """Loads model and tokenizer, applying quantization if specified."""
-        if model_name_or_path in self.loaded_models:
-            return self.loaded_models[model_name_or_path]
+        cache_key = self._cache_key(model_name_or_path, quantization_config)
+        if cache_key in self.loaded_models:
+            return self.loaded_models[cache_key]
 
         actual_path = model_name_or_path
         if not Path(actual_path).is_dir(): # If not a full path, assume it's in models_dir
@@ -151,7 +175,7 @@ class HuggingFaceHandler(BaseLLMHandler):
 
         try:
             model, tokenizer = await asyncio.to_thread(_load)
-            self.loaded_models[model_name_or_path] = (model, tokenizer)
+            self.loaded_models[cache_key] = (model, tokenizer)
             self.logger.info(f"Model and tokenizer for '{model_name_or_path}' loaded successfully.")
             return model, tokenizer
         except Exception as e:
@@ -160,8 +184,10 @@ class HuggingFaceHandler(BaseLLMHandler):
 
     async def unload_model(self, model_name_or_path: str):
         """Unloads a model from memory to free up resources."""
-        if model_name_or_path in self.loaded_models:
-            del self.loaded_models[model_name_or_path]
+        keys_to_remove = [k for k in self.loaded_models.keys() if k[0] == model_name_or_path]
+        if keys_to_remove:
+            for key in keys_to_remove:
+                del self.loaded_models[key]
             # Python's garbage collector should handle freeing GPU memory if model/tokenizer are no longer referenced.
             # For more explicit control, especially with CUDA:
             if torch.cuda.is_available():
@@ -183,6 +209,8 @@ class HuggingFaceHandler(BaseLLMHandler):
         Generates a chat completion using a Hugging Face model.
         Assumes model_name_or_path is a local path or a name of a model in self.models_dir.
         """
+        if not messages:
+            raise InferenceError("messages must be a non-empty list for chat_completion.")
         if not await self.is_model_available(model_name_or_path):
             self.logger.error(f"Model {model_name_or_path} not found locally. Please download it first.")
             raise ModelNotFoundError(f"Model {model_name_or_path} not found locally.")

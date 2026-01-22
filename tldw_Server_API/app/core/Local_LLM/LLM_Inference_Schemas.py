@@ -4,7 +4,7 @@
 # Imports
 from pathlib import Path
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 #
 #########################################################################################################################
 #
@@ -63,12 +63,12 @@ class LlamaCppConfig(BaseHandlerConfig):
     # executable_path/models_dir are validated at runtime by handlers instead of on config creation.
 
 class LLMManagerConfig(BaseModel):
-    ollama: Optional[OllamaConfig] = OllamaConfig()
-    huggingface: Optional[HuggingFaceConfig] = HuggingFaceConfig()
-    llamafile: Optional[LlamafileConfig] = LlamafileConfig()
+    ollama: Optional[OllamaConfig] = Field(default_factory=OllamaConfig)
+    huggingface: Optional[HuggingFaceConfig] = Field(default_factory=HuggingFaceConfig)
+    llamafile: Optional[LlamafileConfig] = Field(default_factory=LlamafileConfig)
     llamacpp: Optional[LlamaCppConfig] = None
     # Global settings for the library
-    app_config: Dict[str, Any] = {} # To pass through parts of your project_config.settings
+    app_config: Dict[str, Any] = Field(default_factory=dict) # To pass through parts of your project_config.settings
 
 #
 # End of LLM_Inference_Schemas.py

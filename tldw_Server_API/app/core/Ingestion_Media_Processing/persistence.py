@@ -29,6 +29,9 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import
     prepare_chunking_options_dict,
     prepare_common_options,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
+    DEFAULT_MEDIA_TYPE_CONFIG,
+)
 from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     extract_claims_if_requested,
     persist_claims_if_applicable,
@@ -118,6 +121,27 @@ def _media_has_source_hash_column(db: MediaDatabase) -> bool:
         except Exception:
             continue
     return False
+
+
+def _allowed_url_extensions(media_type: str, form_data: Any) -> Optional[set[str]]:
+    media_key = str(media_type).lower()
+    if media_key == "json":
+        return {".json"}
+    if media_key == "email":
+        allowed = {".eml"}
+        if getattr(form_data, "accept_archives", False):
+            allowed.add(".zip")
+        if getattr(form_data, "accept_mbox", False):
+            allowed.add(".mbox")
+        if getattr(form_data, "accept_pst", False):
+            allowed.update({".pst", ".ost"})
+        return allowed
+    cfg = DEFAULT_MEDIA_TYPE_CONFIG.get(media_key) if isinstance(DEFAULT_MEDIA_TYPE_CONFIG, dict) else None
+    if cfg:
+        extensions = cfg.get("allowed_extensions")
+        if isinstance(extensions, (set, list, tuple)):
+            return {str(ext).lower() for ext in extensions if ext}
+    return None
 
 
 def validate_add_media_inputs(
@@ -2176,30 +2200,34 @@ async def process_document_like_item(
                     )
                     raise exc
 
-            from tldw_Server_API.app.core.Utils.Utils import (  # type: ignore
-                smart_download as _default_smart_download,
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (  # type: ignore  # noqa: E501
+                download_url_async as _core_download_url_async,
             )
 
-            # Allow tests to patch `media.smart_download` while falling
+            # Allow tests to patch `media._download_url_async` while falling
             # back to the core helper in normal operation.
             if _media_mod is not None:
                 try:
-                    smart_download_func = getattr(  # type: ignore[assignment]
+                    download_url_async = getattr(  # type: ignore[assignment]
                         _media_mod,
-                        "smart_download",
-                        _default_smart_download,
+                        "_download_url_async",
+                        _core_download_url_async,
                     )
                 except Exception:  # pragma: no cover - defensive fallback
-                    smart_download_func = _default_smart_download
+                    download_url_async = _core_download_url_async
             else:  # pragma: no cover - minimal profiles
-                smart_download_func = _default_smart_download
+                download_url_async = _core_download_url_async
 
-            download_func = functools.partial(
-                smart_download_func,
-                processing_source,
-                temp_dir,
+            allowed_extensions = _allowed_url_extensions(media_type, form_data)
+            check_extension = bool(allowed_extensions)
+            downloaded_path = await download_url_async(
+                client=None,
+                url=processing_source,
+                target_dir=temp_dir,
+                allowed_extensions=allowed_extensions,
+                check_extension=check_extension,
+                media_type_key=None,
             )
-            downloaded_path = await loop.run_in_executor(None, download_func)
             if (
                 downloaded_path
                 and isinstance(downloaded_path, FilePath)

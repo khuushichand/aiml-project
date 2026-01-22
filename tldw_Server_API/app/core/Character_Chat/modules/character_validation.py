@@ -264,8 +264,41 @@ def parse_v1_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def parse_pygmalion_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Parse Pygmalion format character card."""
     try:
-        # Pygmalion cards have a similar structure to V1 cards
-        return parse_v1_card(card_data_json)
+        # Create a copy to avoid mutating the input
+        card_data = dict(card_data_json)
+
+        # Pygmalion cards typically use char_* fields
+        if 'char_name' in card_data and 'name' not in card_data:
+            card_data['name'] = card_data['char_name']
+
+        if 'name' not in card_data:
+            seed = f"{card_data.get('char_persona', '')}|{card_data.get('char_greeting', '')}"
+            digest = hashlib.sha256(seed.encode('utf-8')).hexdigest()[:8]
+            card_data['name'] = f"Pygmalion-{digest}"
+
+        if 'char_persona' in card_data:
+            card_data.setdefault('description', card_data['char_persona'])
+            card_data.setdefault('personality', card_data['char_persona'])
+
+        if 'world_scenario' in card_data and 'scenario' not in card_data:
+            card_data['scenario'] = card_data['world_scenario']
+        if 'scenario' not in card_data and 'char_persona' in card_data:
+            card_data['scenario'] = card_data['char_persona']
+
+        if 'char_greeting' in card_data and 'first_mes' not in card_data:
+            card_data['first_mes'] = card_data['char_greeting']
+
+        if 'example_dialogue' in card_data and 'mes_example' not in card_data:
+            card_data['mes_example'] = card_data['example_dialogue']
+
+        # Ensure required V1 fields exist (empty strings are acceptable)
+        card_data.setdefault('description', "")
+        card_data.setdefault('personality', "")
+        card_data.setdefault('scenario', "")
+        card_data.setdefault('first_mes', "")
+        card_data.setdefault('mes_example', "")
+
+        return parse_v1_card(card_data)
     except Exception as e:
         logger.error(f"Error parsing Pygmalion card: {e}", exc_info=True)
         return None

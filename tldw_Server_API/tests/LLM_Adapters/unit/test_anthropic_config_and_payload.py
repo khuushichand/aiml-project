@@ -118,6 +118,53 @@ def test_anthropic_tool_choice_specific_maps(monkeypatch):
     assert payload.get("tool_choice") == {"type": "tool", "name": "lookup"}
 
 
+def test_anthropic_tool_results_and_calls_mapped(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+    import tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter as anth_mod
+
+    captured: Dict[str, Any] = {}
+    monkeypatch.setattr(anth_mod, "http_client_factory", lambda *a, **k: _FakeClient(captured), raising=True)
+
+    request = {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "Calling tool",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{\"query\":\"mars\"}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "tool result"},
+        ],
+        "model": "claude-opus-4.1",
+        "api_key": "k",
+    }
+    _ = AnthropicAdapter().chat(request)
+    payload = captured.get("json") or {}
+    msgs: List[Dict[str, Any]] = payload.get("messages", [])
+
+    assistant_msg = next((m for m in msgs if m.get("role") == "assistant"), {})
+    tool_use_blocks = [b for b in assistant_msg.get("content", []) if b.get("type") == "tool_use"]
+    assert tool_use_blocks
+    assert tool_use_blocks[0]["id"] == "call_1"
+    assert tool_use_blocks[0]["name"] == "lookup"
+    assert tool_use_blocks[0]["input"] == {"query": "mars"}
+
+    tool_result_msgs = [
+        m for m in msgs
+        if m.get("role") == "user" and any(b.get("type") == "tool_result" for b in m.get("content", []))
+    ]
+    assert tool_result_msgs
+    tool_block = next(b for b in tool_result_msgs[0]["content"] if b.get("type") == "tool_result")
+    assert tool_block["tool_use_id"] == "call_1"
+    assert tool_block["content"] == "tool result"
+
+
 def test_anthropic_malformed_tools_rejected(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter as anth_mod

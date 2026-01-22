@@ -193,8 +193,17 @@ class WordChunkingStrategy(BaseChunkingStrategy):
                 })
             else:
                 prev = records[-1]
-                prev['token_indices'].extend(token_indices)
-                prev['text'] = self._merge_chunk_texts(prev.get('text', ''), chunk_text)
+                prev_indices = prev.get('token_indices') or []
+                last_idx = prev_indices[-1] if prev_indices else -1
+                # Only append the non-overlapping tail to avoid duplicated tokens
+                tail_indices = [idx for idx in token_indices if idx > last_idx]
+                if not tail_indices:
+                    continue
+                prev_indices.extend(tail_indices)
+                prev['token_indices'] = prev_indices
+                tail_tokens = [tokens[idx] for idx in tail_indices]
+                tail_text = self._join_words(tail_tokens)
+                prev['text'] = self._merge_chunk_texts(prev.get('text', ''), tail_text)
 
         return records, tokens, spans
 

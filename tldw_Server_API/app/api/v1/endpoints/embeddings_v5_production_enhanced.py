@@ -674,11 +674,35 @@ def _chroma_manager_for_user(user: User) -> ChromaDBManager:
     return ChromaDBManager(user_id=str(user_id), user_embedding_config=cfg)
 
 
+def _split_provider_model(model: str) -> Tuple[Optional[str], str]:
+    """Split provider-qualified model IDs like 'openai:model'."""
+    if not isinstance(model, str):
+        return None, str(model)
+    if ":" in model:
+        prefix, rest = model.split(":", 1)
+        prefix = prefix.strip().lower()
+        rest = rest.strip()
+        if prefix and rest:
+            return prefix, rest
+    return None, model
+
+
 def _resolve_model_and_provider(model: Optional[str], provider: Optional[str]) -> Tuple[str, str]:
     cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
     default_model = model or cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
-    resolved_provider = guess_provider_for_model(default_model, provider)
-    return default_model, resolved_provider
+    prefix_provider, stripped_model = _split_provider_model(default_model)
+    if provider:
+        resolved_provider = provider.lower()
+        if prefix_provider and prefix_provider != resolved_provider:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model provider prefix '{prefix_provider}' does not match provider '{resolved_provider}'",
+            )
+        return stripped_model, resolved_provider
+    if prefix_provider:
+        return stripped_model, prefix_provider
+    resolved_provider = guess_provider_for_model(stripped_model, None)
+    return stripped_model, resolved_provider
 
 
 def _get_allowed_models() -> Optional[List[str]]:
@@ -1790,6 +1814,19 @@ async def create_embeddings_batch_async(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> List[List[float]]:
     """Async wrapper for embeddings with caching and circuit breaker"""
+
+    if model_id:
+        prefix_provider, stripped_model = _split_provider_model(model_id)
+        if prefix_provider:
+            if provider and prefix_provider != provider.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Model provider prefix '{prefix_provider}' does not match provider '{provider}'"
+                    ),
+                )
+            provider = prefix_provider
+            model_id = stripped_model
 
     embeddings = []
     uncached_texts = []

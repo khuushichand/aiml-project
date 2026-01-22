@@ -233,7 +233,21 @@ def check_denylist(
         return
 
     deny = denylist if denylist is not None else DEFAULT_SECRET_DENYLIST
-    bad = [k for k in args.keys() if k in deny]
+
+    def _normalize_key(key: str) -> str:
+        return str(key).strip().lower().replace("-", "_")
+
+    def _compact_key(key: str) -> str:
+        return _normalize_key(key).replace("_", "")
+
+    deny_normalized = {_normalize_key(k) for k in deny}
+    deny_compact = {_compact_key(k) for k in deny}
+
+    bad = [
+        k
+        for k in args.keys()
+        if _normalize_key(k) in deny_normalized or _compact_key(k) in deny_compact
+    ]
     if bad:
         raise ValueError(
             f"Refusing secret flags {bad}. Set environment variables "

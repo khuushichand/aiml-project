@@ -65,10 +65,6 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
     get_or_create_audit_service_for_user_id,
 )
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    AuthenticationError,
-    InvalidCredentialsError,
-    UserNotFoundError,
-    AccountInactiveError,
     InvalidTokenError,
     TokenExpiredError,
     RegistrationError,
@@ -171,6 +167,25 @@ def _get_mfa_login_ttl_seconds() -> int:
     except (TypeError, ValueError):
         ttl = 600
     return max(ttl, 60)
+
+async def _ensure_mfa_cache_available(session_manager: SessionManager, settings: Settings) -> None:
+    """Ensure MFA ephemeral storage is backed by Redis (mandatory for MFA flows)."""
+    if not settings.REDIS_URL:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MFA requires Redis-backed ephemeral storage",
+        )
+    try:
+        if not getattr(session_manager, "_initialized", False):
+            await session_manager.initialize()
+    except Exception:
+        # If initialization fails, we'll fall through to the redis_client check below.
+        pass
+    if getattr(session_manager, "redis_client", None) is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MFA requires Redis-backed ephemeral storage",
+        )
 
 
 #######################################################################################################################
@@ -551,6 +566,33 @@ async def login(
                 pass
         # user already normalized to dict in service
 
+        # Enforce username lockout before password verification (true lockout).
+        if getattr(rate_limiter, 'enabled', False):
+            user_locked, user_lockout_expires = await auth_gov.check_lockout(
+                user['username'],
+                attempt_type="login",
+                rate_limiter=rate_limiter,
+            )
+            if user_locked:
+                logger.warning(f"Login attempt for locked account: {user['username']}")
+                log_counter("auth_login_locked_user")
+                retry_after_seconds = 900
+                if isinstance(user_lockout_expires, datetime):
+                    try:
+                        from datetime import timezone as _tz
+
+                        now = datetime.now(user_lockout_expires.tzinfo or _tz.utc)
+                        retry_after_seconds = max(0, int((user_lockout_expires - now).total_seconds()))
+                    except Exception as exc:
+                        logger.debug(
+                            f"login: failed to compute user lockout expiry; using default Retry-After: {exc}"
+                        )
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many failed login attempts. Account temporarily locked.",
+                    headers={"Retry-After": str(retry_after_seconds)},
+                )
+
         # Verify password
         is_test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
         is_valid, needs_rehash = password_service.verify_password(form_data.password, user['password_hash'])
@@ -670,9 +712,19 @@ async def login(
 
         # Generate tokens based on auth mode
         if settings.AUTH_MODE == "single_user":
-            # For single-user mode, return simple tokens
-            access_token = f"single-user-token-{user['id']}"
-            refresh_token = f"single-user-refresh-{user['id']}"
+            # For single-user mode, return the configured API key as the access token.
+            single_user_key = (
+                settings.SINGLE_USER_API_KEY
+                or os.getenv("SINGLE_USER_API_KEY")
+                or os.getenv("API_KEY")
+            )
+            if not single_user_key:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Single-user API key is not configured",
+                )
+            access_token = single_user_key
+            refresh_token = single_user_key
 
             # Create session with tokens
             session_info = await session_manager.create_session(
@@ -699,6 +751,7 @@ async def login(
             session_id = temp_session_info['session_id']
 
             if mfa_required:
+                await _ensure_mfa_cache_available(session_manager, settings)
                 session_token = secrets.token_urlsafe(32)
                 ttl_seconds = _get_mfa_login_ttl_seconds()
                 payload = {
@@ -1100,7 +1153,16 @@ async def refresh_token(
         # Handle based on auth mode
         if settings.AUTH_MODE == "single_user":
             # Simple token validation for single-user mode
-            if not request.refresh_token.startswith("single-user-refresh-"):
+            single_user_key = (
+                settings.SINGLE_USER_API_KEY
+                or os.getenv("SINGLE_USER_API_KEY")
+                or os.getenv("API_KEY")
+            )
+            if single_user_key and request.refresh_token == single_user_key:
+                user_id = int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+            elif request.refresh_token.startswith("single-user-refresh-"):
+                user_id = int(request.refresh_token.split("-")[-1])
+            else:
                 if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "validate"
@@ -1108,7 +1170,6 @@ async def refresh_token(
                     except Exception:
                         pass
                 raise InvalidTokenError("Invalid refresh token format")
-            user_id = int(request.refresh_token.split("-")[-1])
         else:
             # JWT validation for multi-user mode
             try:
@@ -1167,7 +1228,7 @@ async def refresh_token(
                     response.headers["X-TLDW-Refresh-Reason"] = "user-not-found"
                 except Exception:
                     pass
-            raise UserNotFoundError(f"User {user_id}")
+            raise InvalidTokenError("Invalid or expired refresh token")
 
         # Convert to dict
         if not isinstance(user, dict):
@@ -1179,8 +1240,15 @@ async def refresh_token(
 
         # Generate new tokens based on auth mode and session linkage
         if settings.AUTH_MODE == "single_user":
-            new_access_token = f"single-user-token-{user['id']}"
-            new_refresh_token = request.refresh_token  # no rotation in single-user mode
+            single_user_key = (
+                settings.SINGLE_USER_API_KEY
+                or os.getenv("SINGLE_USER_API_KEY")
+                or os.getenv("API_KEY")
+            )
+            if not single_user_key:
+                raise InvalidTokenError("Single-user API key is not configured")
+            new_access_token = single_user_key
+            new_refresh_token = single_user_key
         else:
             # Access token always refreshed; preserve session_id claim when available
             scope_claims = await _build_scope_claims(int(user["id"]))
@@ -1435,9 +1503,16 @@ async def reset_password(
         # Optional per-IP throttling
         try:
             ip_addr = request.client.host if request and getattr(request, "client", None) else "unknown"
-            await rate_limiter.check_rate_limit(
+            allowed, _ = await rate_limiter.check_rate_limit(
                 identifier=f"ip:{ip_addr}", endpoint="auth:reset_password", limit=20, window_minutes=5
             )
+            if not allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many password reset attempts. Please try again later.",
+                )
+        except HTTPException:
+            raise
         except Exception:
             pass
         # Verify token
@@ -1639,8 +1714,10 @@ async def verify_email(
 @router.post("/resend-verification", status_code=status.HTTP_200_OK)
 async def resend_verification(
     data: ResendVerificationRequest,
+    request: Request,
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
+    rate_limiter=Depends(get_rate_limiter_dep),
 ) -> Dict[str, str]:
     """
     Resend email verification link.
@@ -1648,6 +1725,16 @@ async def resend_verification(
     Sends a new verification email if the account exists and is not verified.
     """
     try:
+        # Simple per-IP throttling to mitigate email spam
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            allowed, _ = await rate_limiter.check_rate_limit(
+                identifier=f"ip:{client_ip}", endpoint="auth:resend_verification", limit=10, window_minutes=1
+            )
+            if not allowed:
+                return {"message": "If the account exists and needs verification, an email has been sent"}
+        except Exception:
+            pass
         # Check if user exists and needs verification
         is_pg = await is_postgres_backend()
         if is_pg:
@@ -1713,6 +1800,7 @@ async def setup_mfa(
     """
     try:
         await _ensure_mfa_available()
+        await _ensure_mfa_cache_available(session_manager, get_settings())
         mfa_service = _get_mfa_service()
 
         # Check if MFA is already enabled
@@ -1739,9 +1827,13 @@ async def setup_mfa(
         backup_codes = mfa_service.generate_backup_codes()
 
         try:
+            payload = json.dumps({
+                "secret": secret,
+                "backup_codes": backup_codes,
+            })
             await session_manager.store_ephemeral_value(
                 _mfa_setup_cache_key(current_user.id),
-                secret,
+                payload,
                 _get_mfa_setup_ttl_seconds(),
             )
         except Exception as exc:
@@ -1782,14 +1874,27 @@ async def verify_mfa_setup(
     """
     try:
         await _ensure_mfa_available()
+        await _ensure_mfa_cache_available(session_manager, get_settings())
         mfa_service = _get_mfa_service()
 
-        secret = await session_manager.get_ephemeral_value(_mfa_setup_cache_key(current_user.id))
-        if not secret:
+        cached = await session_manager.get_ephemeral_value(_mfa_setup_cache_key(current_user.id))
+        if not cached:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="MFA setup not found or expired. Please restart setup.",
             )
+        secret = None
+        backup_codes = None
+        try:
+            parsed = json.loads(cached)
+            if isinstance(parsed, dict):
+                secret = parsed.get("secret")
+                backup_codes = parsed.get("backup_codes")
+        except Exception:
+            secret = None
+            backup_codes = None
+        if not secret:
+            secret = cached
 
         # Basic per-user rate limit for MFA verification attempts
         try:
@@ -1807,8 +1912,9 @@ async def verify_mfa_setup(
                 detail="Invalid TOTP token",
             )
 
-        # Generate final backup codes
-        backup_codes = mfa_service.generate_backup_codes()
+        # Generate final backup codes if none were staged during setup
+        if not isinstance(backup_codes, list) or not backup_codes:
+            backup_codes = mfa_service.generate_backup_codes()
 
         # Enable MFA
         success = await mfa_service.enable_mfa(
@@ -1930,6 +2036,7 @@ async def mfa_login(
     log_counter("auth_mfa_login_attempt")
     try:
         await _ensure_mfa_available()
+        await _ensure_mfa_cache_available(session_manager, settings)
 
         cache_key = _mfa_login_cache_key(data.session_token)
         payload_raw = await session_manager.get_ephemeral_value(cache_key)

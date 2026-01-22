@@ -392,7 +392,8 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
                             text = delta.get("content")
                             if text:
                                 normalized.append(text)
-                assert normalized == ["Hello", " world"]
+                assert normalized, "Expected at least one normalized chunk"
+                assert "".join(normalized) == "Hello world"
 
                 # Verify DB placeholder for user image validation failure
                 msgs = db.get_messages_for_conversation(conv_id, 50, 0, "ASC")

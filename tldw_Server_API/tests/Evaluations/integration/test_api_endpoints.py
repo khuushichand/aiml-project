@@ -538,7 +538,7 @@ class TestWebhookEndpoints:
         import asyncio
 
         # Register webhook directly with manager (skip validation for localhost)
-        user_id = "1"  # single-user mode default id
+        user_id = "user_1"  # single-user mode webhook id
         url = webhook_receiver_server["url"]
         await webhook_manager.register_webhook(
             user_id=user_id,

@@ -782,6 +782,32 @@ class StreamingResponseHandler:
                             logger.debug(f"Finalize callback error after cancel: {finalize_err}")
                     return
 
+                # Flush any pending tail from text_transform (e.g., moderation holdback)
+                if not self.error_occurred and self.text_transform:
+                    flush_fn = getattr(self.text_transform, "flush", None)
+                    if callable(flush_fn):
+                        try:
+                            flush_text = flush_fn()
+                        except Exception as flush_err:
+                            logger.debug(f"text_transform flush error ignored: {flush_err}")
+                            flush_text = None
+                        if flush_text:
+                            try:
+                                flush_text = str(flush_text)
+                            except Exception:
+                                flush_text = ""
+                            if flush_text:
+                                if not append_content(flush_text):
+                                    err_payload = {"error": {"message": "Response size limit exceeded"}}
+                                    self._attach_stream_metadata(err_payload)
+                                    yield f"data: {json.dumps(err_payload)}\n\n"
+                                    self.error_occurred = True
+                                else:
+                                    content_payload = {"choices": [{"delta": {"content": flush_text}}]}
+                                    self._attach_stream_metadata(content_payload)
+                                    yield f"data: {json.dumps(content_payload)}\n\n"
+                                    self.update_activity()
+
                 # Save the full response/tool calls if callback provided (only when not cancelled)
                 has_output = self.has_accumulated_output()
                 if (

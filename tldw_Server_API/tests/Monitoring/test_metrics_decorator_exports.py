@@ -9,7 +9,7 @@ pytestmark = pytest.mark.monitoring
 def test_measure_latency_exports_default_buckets(monkeypatch):
 
 
-    monkeypatch.setenv("METRICS_RING_BUFFER_MAXLEN", "50")
+    monkeypatch.setenv("METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED", "50")
     metrics_manager._metrics_registry = None
     registry = metrics_manager.get_metrics_registry()
 
@@ -30,7 +30,7 @@ def test_measure_latency_exports_default_buckets(monkeypatch):
 def test_cache_hit_ratio_uses_cumulative_counters(monkeypatch):
 
 
-    monkeypatch.setenv("METRICS_RING_BUFFER_MAXLEN", "2")
+    monkeypatch.setenv("METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED", "2")
     metrics_manager._metrics_registry = None
     registry = metrics_manager.get_metrics_registry()
 

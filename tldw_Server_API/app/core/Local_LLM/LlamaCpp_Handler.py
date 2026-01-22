@@ -57,6 +57,7 @@ class LlamaCppHandler(BaseLLMHandler):
         self._active_server_port: Optional[int] = None
         self._active_server_host: Optional[str] = None
         self._active_server_log_handle = None
+        self._stream_tasks: list[asyncio.Task] = []
 
         # Apply environment overrides for handler config
         handler_utils.apply_env_overrides(self.config)
@@ -113,6 +114,93 @@ class LlamaCppHandler(BaseLLMHandler):
     def _safe_log(self, level: str, msg: str, *args):
         """Log defensively to avoid errors when sinks are closed during atexit."""
         handler_utils.safe_log(self.logger, level, msg, *args)
+
+    async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        is_windows = platform.system().lower().startswith("win")
+        if is_windows:
+            if hasattr(process, "terminate"):
+                process.terminate()
+        else:
+            try:
+                pgid = await asyncio.to_thread(os.getpgid, process.pid)
+                await asyncio.to_thread(os.killpg, pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                if hasattr(process, "terminate"):
+                    process.terminate()
+            except Exception:
+                if hasattr(process, "terminate"):
+                    process.terminate()
+        try:
+            if hasattr(process, "wait"):
+                await asyncio.wait_for(process.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            if is_windows:
+                if hasattr(process, "kill"):
+                    process.kill()
+            else:
+                try:
+                    pgid = await asyncio.to_thread(os.getpgid, process.pid)
+                    await asyncio.to_thread(os.killpg, pgid, signal.SIGKILL)
+                except Exception:
+                    if hasattr(process, "kill"):
+                        process.kill()
+            try:
+                if hasattr(process, "wait"):
+                    await process.wait()
+            except Exception:
+                pass
+
+    async def _drain_stream(self, stream, label: str) -> None:
+        if stream is None:
+            return
+        try:
+            while True:
+                chunk = await stream.read(1024)
+                if not chunk:
+                    break
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            # Best-effort drain; ignore errors
+            return
+
+    def _start_stream_drainers(self, process: asyncio.subprocess.Process) -> None:
+        tasks: list[asyncio.Task] = []
+        if getattr(process, "stdout", None) is not None:
+            tasks.append(asyncio.create_task(self._drain_stream(process.stdout, "stdout")))
+        if getattr(process, "stderr", None) is not None:
+            tasks.append(asyncio.create_task(self._drain_stream(process.stderr, "stderr")))
+        if tasks:
+            self._stream_tasks = tasks
+
+    def _stop_stream_drainers(self) -> None:
+        for task in self._stream_tasks:
+            if not task.done():
+                task.cancel()
+        self._stream_tasks = []
+
+    async def _stop_unmanaged_pid(self, pid: int) -> str:
+        try:
+            if platform.system() == "Windows":
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                await asyncio.to_thread(os.kill, pid, signal.SIGTERM)
+            return f"Attempted to send SIGTERM to unmanaged llama.cpp server with PID {pid}."
+        except ProcessLookupError:
+            return f"No process found with PID {pid}."
+        except subprocess.CalledProcessError as e_taskkill:
+            self.logger.error(f"taskkill failed for PID {pid}: {e_taskkill.stderr.decode()}")
+            return f"Failed to stop unmanaged PID {pid} with taskkill."
+        except Exception as e:
+            self.logger.error(f"Error stopping unmanaged PID {pid}: {e}", exc_info=True)
+            raise ServerError(f"Error stopping unmanaged PID {pid}: {e}")
 
     def _is_chat_endpoint(self, api_endpoint: str) -> bool:
         endpoint = f"/{api_endpoint.lstrip('/')}"
@@ -188,7 +276,7 @@ class LlamaCppHandler(BaseLLMHandler):
                 self._active_server_log_handle = prev_log_handle
                 raise ServerError(f"Model swap failed: could not stop existing server: {e}")
 
-        args = server_args or {}
+        args = {k: v for k, v in (server_args or {}).items() if v is not None and v != ""}
         self._denylist_check(args)
 
         # Allowlist of supported args (internal key -> formatter)
@@ -443,7 +531,7 @@ class LlamaCppHandler(BaseLLMHandler):
                 try:
                     if process.returncode is None:
                         # Stop server if it started but not ready
-                        process.terminate()
+                        await self._terminate_process(process)
                 except Exception:
                     pass
                 self.metrics["start_errors"] += 1
@@ -461,6 +549,7 @@ class LlamaCppHandler(BaseLLMHandler):
                 self._active_server_log_handle = log_file_handle
             else:
                 self._active_server_log_handle = None
+            self._start_stream_drainers(process)
 
             self.logger.info(f"Llama.cpp server started for {model_filename} on {host}:{port} with PID {process.pid}.")
             return {"status": "started", "pid": process.pid, "model": model_filename, "port": port, "host": host,
@@ -470,7 +559,16 @@ class LlamaCppHandler(BaseLLMHandler):
             self.logger.error(f"Exception starting Llama.cpp server for {model_filename}: {e}", exc_info=True)
             raise ServerError(f"Exception starting Llama.cpp server: {e}")
 
-    async def stop_server(self) -> str:
+    async def stop_server(self, pid: Optional[int] = None, port: Optional[int] = None) -> str:
+        if pid is not None:
+            if self._active_server_process and pid == self._active_server_process.pid:
+                port = None
+            else:
+                return await self._stop_unmanaged_pid(pid)
+        if port is not None:
+            if not self._active_server_process or self._active_server_port is None or int(port) != int(self._active_server_port):
+                return f"No managed Llama.cpp server found on port {port}."
+
         if not self._active_server_process:
             return "No Llama.cpp server managed by this handler is currently running."
 
@@ -548,6 +646,7 @@ class LlamaCppHandler(BaseLLMHandler):
             if self._active_server_log_handle:
                 self._active_server_log_handle.close()
                 self._active_server_log_handle = None
+            self._stop_stream_drainers()
 
             self._active_server_process = None
             self._active_server_model = None
@@ -562,6 +661,7 @@ class LlamaCppHandler(BaseLLMHandler):
             if self._active_server_log_handle:
                 self._active_server_log_handle.close()
                 self._active_server_log_handle = None
+            self._stop_stream_drainers()
             self._active_server_process = None
             self._active_server_model = None
             self._active_server_port = None
@@ -621,7 +721,16 @@ class LlamaCppHandler(BaseLLMHandler):
 
         payload["stream"] = False
 
-        self.logger.debug(f"Sending Llama.cpp inference request to {target_url} with payload: {payload}")
+        if self._is_chat_endpoint(api_endpoint):
+            msg_count = len(payload.get("messages", [])) if isinstance(payload.get("messages"), list) else 0
+            self.logger.debug(
+                f"Sending Llama.cpp chat inference request to {target_url} (messages={msg_count})"
+            )
+        else:
+            prompt_len = len(str(payload.get("prompt", "")))
+            self.logger.debug(
+                f"Sending Llama.cpp completion inference request to {target_url} (prompt_len={prompt_len})"
+            )
 
         t0 = time.perf_counter()
         http_timeout = timeout if timeout is not None else getattr(self.config, "http_timeout", 120.0)
@@ -787,6 +896,7 @@ class LlamaCppHandler(BaseLLMHandler):
                     self._active_server_log_handle.close()
                 except Exception:
                     pass
+            self._stop_stream_drainers()
 
         self._active_server_process = None
         self._active_server_model = None

@@ -6,7 +6,7 @@ import threading
 import os
 from pathlib import Path
 from loguru import logger
-from typing import Dict, Optional
+from typing import Dict, Optional, AsyncGenerator
 
 # 3rd-party Libraries
 from fastapi import Header, HTTPException, status, Depends, Request
@@ -108,35 +108,12 @@ def _get_db_path_for_user(user_id: int) -> Path:
         logger.error(f"Could not resolve database directory for user_id {user_id}: {e}", exc_info=True)
         raise IOError(f"Could not initialize storage directory for user {user_id}.") from e
 
-# --- Main Dependency Function ---
-
-async def get_media_db_for_user(
-    request: Request,
-    # Depends on the primary authentication/identification dependency
-    current_user: User = Depends(get_request_user)
-) -> MediaDatabase:
-    """
-    FastAPI dependency to get the Database instance for the identified user.
-
-    Works in both single-user (using fixed ID from settings) and multi-user modes.
-    Handles caching, initialization, and schema checks. Uses configuration
-    values assigned from the 'settings' dictionary.
-
-    Args:
-        current_user: The User object (either fixed or fetched) provided by `get_request_user`.
-
-    Returns:
-        A Database instance connected to the appropriate user's database file.
-
-    Raises:
-        HTTPException: If authentication fails (handled by `get_request_user`),
-                       or if the database cannot be initialized.
-    """
+def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
     if not current_user or not isinstance(current_user.id, int):
         logger.error("get_media_db_for_user called without a valid User object/ID.")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User identification failed.")
 
-    user_id = current_user.id # Will be SINGLE_USER_FIXED_ID in single-user mode
+    user_id = current_user.id  # Will be SINGLE_USER_FIXED_ID in single-user mode
     db_instance: Optional[MediaDatabase] = None
     backend_mode_hint = (os.getenv("CONTENT_DB_MODE") or str(settings.get("CONTENT_DB_BACKEND", "sqlite"))).strip().lower()
     require_shared_backend = backend_mode_hint in {"postgres", "postgresql"}
@@ -163,7 +140,6 @@ async def get_media_db_for_user(
         use_shared_backend = True
 
     # --- Check Cache ---
-    # Read lock implicitly handled by context manager
     with _user_db_lock:
         db_instance = _user_db_instances.get(user_id)
     # TEST_MODE: log cache hit/miss visibility for debugging
@@ -176,15 +152,12 @@ async def get_media_db_for_user(
         pass
 
     if db_instance:
-        # Optional: Add connection check if needed, though Database class might handle it
         logger.debug(f"Using cached Database instance for user_id: {user_id}")
         return db_instance
 
     # --- Instance Not Cached: Create New One ---
     logger.info(f"No cached DB instance found for user_id: {user_id}. Initializing.")
-    # Acquire write lock
     with _user_db_lock:
-        # Double-check cache in case another thread created it while waiting
         db_instance = _user_db_instances.get(user_id)
         if db_instance:
             logger.debug(f"DB instance for user {user_id} created concurrently.")
@@ -196,8 +169,7 @@ async def get_media_db_for_user(
                 pass
             return db_instance
 
-        # --- Get Path and Initialize ---
-        db_path: Optional[Path] = None # Define scope for logging in except block
+        db_path: Optional[Path] = None
         try:
             if use_shared_backend:
                 db_path = Path(":memory:")
@@ -210,12 +182,8 @@ async def get_media_db_for_user(
             else:
                 db_path = _get_db_path_for_user(user_id)
                 logger.info(f"Initializing Database instance for user {user_id} at path: {db_path}")
-
-                # Instantiate the Database class for the specific user ID's path
-                # Use SERVER_CLIENT_ID assigned from settings dict
                 db_instance = MediaDatabase(db_path=str(db_path), client_id=str(current_user.id))
 
-            # --- Store in Cache ---
             _user_db_instances[user_id] = db_instance
             logger.info(f"Database instance created and cached successfully for user {user_id}")
             try:
@@ -232,21 +200,20 @@ async def get_media_db_for_user(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Could not initialize database for user: {e}"
             ) from e
-        except IOError as e: # Catch error from _get_db_path_for_user
+        except IOError as e:
             logger.error(f"Failed to get DB path for user {user_id}: {e}", exc_info=True)
             raise HTTPException(
                  status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                 detail=str(e) # Use the message from IOError
+                 detail=str(e)
              ) from e
         except Exception as e:
             log_path = db_path or f"directory for user_id {user_id}"
             logger.error(f"Unexpected error initializing database for user {user_id} at {log_path}: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"An unexpected error occurred during database setup for user."
+                detail="An unexpected error occurred during database setup for user."
             ) from e
 
-    # Return the newly created and cached instance
     try:
         scope = get_scope()
         if scope:
@@ -255,6 +222,23 @@ async def get_media_db_for_user(
     except Exception:
         pass
     return db_instance
+
+
+# --- Main Dependency Function ---
+
+async def get_media_db_for_user(
+    request: Request,
+    current_user: User = Depends(get_request_user)
+) -> AsyncGenerator[MediaDatabase, None]:
+    db_instance = _resolve_media_db_for_user(current_user)
+    try:
+        yield db_instance
+    finally:
+        try:
+            if hasattr(db_instance, "release_context_connection"):
+                db_instance.release_context_connection()
+        except Exception:
+            pass
 
 
 def reset_media_db_cache() -> None:
@@ -269,6 +253,8 @@ def reset_media_db_cache() -> None:
             )
             for db in list(values_iter):  # type: ignore[arg-type]
                 try:
+                    if hasattr(db, "release_context_connection"):
+                        db.release_context_connection()
                     if hasattr(db, "close_connection"):
                         db.close_connection()
                 except Exception:
@@ -284,24 +270,35 @@ def reset_media_db_cache() -> None:
 async def try_get_media_db_for_user(
     request: Request,
     current_user: User = Depends(get_request_user),
-) -> Optional[MediaDatabase]:
+) -> AsyncGenerator[Optional[MediaDatabase], None]:
     """
     Optional version of get_media_db_for_user for endpoints that can operate without DB.
     Returns None instead of raising on initialization failures.
     """
+    db_instance: Optional[MediaDatabase] = None
     try:
-        return await get_media_db_for_user(request=request, current_user=current_user)
+        db_instance = _resolve_media_db_for_user(current_user)
     except HTTPException as e:
         if e.status_code in {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN}:
             raise
         logger.warning(f"Optional Media DB unavailable for user {getattr(current_user, 'id', '?')}: {e.detail}")
-        return None
+        yield None
+        return
     except Exception as e:
         logger.warning(
             f"Optional Media DB unexpected error for user {getattr(current_user, 'id', '?')}: {e}",
             exc_info=True
         )
-        return None
+        yield None
+        return
+    try:
+        yield db_instance
+    finally:
+        try:
+            if db_instance and hasattr(db_instance, "release_context_connection"):
+                db_instance.release_context_connection()
+        except Exception:
+            pass
 
 #
 # End of DB_Deps.py

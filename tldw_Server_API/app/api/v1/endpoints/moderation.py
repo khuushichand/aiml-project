@@ -316,6 +316,42 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
     phase_enabled = eff.enabled and (eff.input_enabled if payload.phase == 'input' else eff.output_enabled)
     if not phase_enabled:
         return ModerationTestResponse(flagged=False, action='pass', sample=None, redacted_text=None, effective=eff.to_dict())
+    if hasattr(svc, 'evaluate_action_with_match'):
+        eval_res = svc.evaluate_action_with_match(payload.text, eff, payload.phase)
+        match_span = None
+        matched_pattern = None
+        if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+            action, redacted, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
+            category = eval_res[3] if len(eval_res) >= 4 else None
+            match_span = eval_res[4] if len(eval_res) >= 5 else None
+        else:
+            action, redacted, matched_pattern = eval_res  # type: ignore
+            category = None
+        flagged = (action != 'pass')
+        sanitized_sample = None
+        if flagged:
+            try:
+                if match_span and hasattr(svc, "build_sanitized_snippet"):
+                    sanitized_sample = svc.build_sanitized_snippet(payload.text, eff, match_span, matched_pattern)
+                else:
+                    _, sanitized_sample = svc.check_text(payload.text, eff, payload.phase)
+            except Exception:
+                logger.exception(
+                    "moderation.test: failed to sanitize sample",
+                    extra={"user_id": payload.user_id, "phase": payload.phase},
+                )
+                sanitized_sample = None
+        redacted_text = redacted if action == "redact" else None
+        if action == "redact" and redacted_text is None:
+            redacted_text = svc.redact_text(payload.text, eff)
+        return ModerationTestResponse(
+            flagged=flagged,
+            action=action if action else 'pass',
+            sample=sanitized_sample,
+            redacted_text=redacted_text,
+            effective=eff.to_dict(),
+            category=category,
+        )
     if hasattr(svc, 'evaluate_action'):
         eval_res = svc.evaluate_action(payload.text, eff, payload.phase)
         if isinstance(eval_res, tuple) and len(eval_res) >= 3:
@@ -327,9 +363,8 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
         flagged = (action != 'pass')
         sanitized_sample = None
         if flagged:
-            # evaluate_action returns the matched pattern; check_text builds a safe, redacted snippet for the response.
             try:
-                _, sanitized_sample = svc.check_text(payload.text, eff)
+                _, sanitized_sample = svc.check_text(payload.text, eff, payload.phase)
             except Exception:
                 logger.exception(
                     "moderation.test: failed to sanitize sample",
@@ -348,7 +383,7 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
             category=category,
         )
     else:
-        flagged, sample = svc.check_text(payload.text, eff)
+        flagged, sample = svc.check_text(payload.text, eff, payload.phase)
         if not flagged:
             return ModerationTestResponse(flagged=False, action='pass', sample=None, redacted_text=None, effective=eff.to_dict())
         action = eff.input_action if payload.phase == 'input' else eff.output_action

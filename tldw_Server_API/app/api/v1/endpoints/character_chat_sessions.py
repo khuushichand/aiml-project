@@ -987,6 +987,13 @@ async def character_chat_completion(
             try:
                 # Feature flag: use unified SSEStream when enabled
                 if streams_unified:
+                    # Unified path expects an iterator; fall back to text streaming for non-iterables.
+                    if not hasattr(llm_resp, "__aiter__") and not (
+                        hasattr(llm_resp, "__iter__") and not isinstance(llm_resp, (str, bytes, dict, list))
+                    ):
+                        assistant_text_fallback = _extract_text(llm_resp).strip()
+                        return _stream_text_as_sse(assistant_text_fallback)
+
                     stream = SSEStream(
                         labels={"component": "chat", "endpoint": "character_chat_stream"}
                     )

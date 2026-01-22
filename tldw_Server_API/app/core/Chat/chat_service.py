@@ -1028,18 +1028,41 @@ async def moderate_input_messages(
         sample = None
         redacted = None
         category = None
-        if hasattr(moderation_service, "evaluate_action"):
+        matched_pattern = None
+        match_span = None
+        if hasattr(moderation_service, "evaluate_action_with_match"):
+            try:
+                eval_res = moderation_service.evaluate_action_with_match(text, eff_policy, "input")
+                if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                    resolved_action, redacted, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
+                    category = eval_res[3] if len(eval_res) >= 4 else None
+                    match_span = eval_res[4] if len(eval_res) >= 5 else None
+                else:
+                    resolved_action, redacted, matched_pattern = eval_res  # type: ignore
+            except Exception:
+                resolved_action = None
+            if match_span and hasattr(moderation_service, "build_sanitized_snippet"):
+                try:
+                    sample = moderation_service.build_sanitized_snippet(text, eff_policy, match_span, matched_pattern)
+                except Exception:
+                    sample = None
+        elif hasattr(moderation_service, "evaluate_action"):
             try:
                 eval_res = moderation_service.evaluate_action(text, eff_policy, "input")
                 if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-                    resolved_action, redacted, sample = eval_res[0], eval_res[1], eval_res[2]
+                    resolved_action, redacted, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
                     category = eval_res[3] if len(eval_res) >= 4 else None
                 else:
-                    resolved_action, redacted, sample = eval_res  # type: ignore
+                    resolved_action, redacted, matched_pattern = eval_res  # type: ignore
             except Exception:
                 resolved_action = None
+            if resolved_action and resolved_action != "pass" and sample is None:
+                try:
+                    _, sample = moderation_service.check_text(text, eff_policy, "input")
+                except Exception:
+                    sample = None
         if not resolved_action:
-            flagged, sample = moderation_service.check_text(text, eff_policy)
+            flagged, sample = moderation_service.check_text(text, eff_policy, "input")
             if not flagged:
                 return text
             resolved_action = eff_policy.input_action
@@ -1049,7 +1072,7 @@ async def moderate_input_messages(
                 else None
             )
 
-        if resolved_action == "pass" or (resolved_action == "warn" and sample is None):
+        if resolved_action == "pass":
             return text
 
         try:
@@ -1203,11 +1226,32 @@ async def build_context_and_messages(
             0,
             db_order,
         )
-        if db_order == "DESC":
-            raw_hist = list(reversed(raw_hist))
         for db_msg in raw_hist:
             sender_val = str(db_msg.get("sender", "") or "")
-            role = map_sender_to_role(sender_val, character_card.get("name") if character_card else None)
+            metadata = None
+            try:
+                metadata = await loop.run_in_executor(None, chat_db.get_message_metadata, db_msg.get("id"))
+            except Exception as meta_err:
+                logger.debug("Metadata lookup failed for message {}: {}", db_msg.get("id"), meta_err)
+
+            tool_calls_meta = None
+            function_call_meta = None
+            content_placeholder_reason = None
+            tool_call_id_meta = None
+            stored_role = None
+            stored_name = None
+            if metadata:
+                tool_calls_meta = metadata.get("tool_calls")
+                extra_meta = metadata.get("extra") or {}
+                if isinstance(extra_meta, dict):
+                    function_call_meta = extra_meta.get("function_call")
+                    content_placeholder_reason = extra_meta.get("content_placeholder_reason")
+                    tool_call_id_meta = extra_meta.get("tool_call_id")
+                    stored_role = extra_meta.get("sender_role")
+                    stored_name = extra_meta.get("sender_name")
+
+            role_initial = map_sender_to_role(sender_val, character_card.get("name") if character_card else None)
+            role = stored_role if stored_role in {"user", "assistant", "system", "tool"} else role_initial
             if not should_persist_message_role(role):
                 continue
             char_name_hist = character_card.get("name", "Char") if character_card else "Char"
@@ -1246,28 +1290,13 @@ async def build_context_and_messages(
                     hist_entry["content"] = msg_parts[0].get("text", "")
                 else:
                     hist_entry["content"] = msg_parts
-                if role == "assistant" and character_card and character_card.get("name"):
-                    name = sanitize_sender_name(character_card.get("name"))
-                    if name:
-                        hist_entry["name"] = name
+                if role == "assistant":
+                    name_source = stored_name or (character_card.get("name") if character_card else None)
+                    if name_source:
+                        name = sanitize_sender_name(name_source)
+                        if name:
+                            hist_entry["name"] = name
 
-                metadata = None
-                try:
-                    metadata = await loop.run_in_executor(None, chat_db.get_message_metadata, db_msg.get("id"))
-                except Exception as meta_err:
-                    logger.debug("Metadata lookup failed for message {}: {}", db_msg.get("id"), meta_err)
-
-                tool_calls_meta = None
-                function_call_meta = None
-                content_placeholder_reason = None
-                tool_call_id_meta = None
-                if metadata:
-                    tool_calls_meta = metadata.get("tool_calls")
-                    extra_meta = metadata.get("extra") or {}
-                    if isinstance(extra_meta, dict):
-                        function_call_meta = extra_meta.get("function_call")
-                        content_placeholder_reason = extra_meta.get("content_placeholder_reason")
-                        tool_call_id_meta = extra_meta.get("tool_call_id")
                 if tool_calls_meta is not None:
                     hist_entry["tool_calls"] = tool_calls_meta
                 if function_call_meta and not hist_entry.get("tool_calls"):
@@ -1284,7 +1313,15 @@ async def build_context_and_messages(
     for msg_model in request_data.messages:
         if not should_persist_message_role(msg_model.role):
             continue
-        request_messages.append(msg_model.model_dump(exclude_none=True))
+        msg_dict = msg_model.model_dump(exclude_none=True)
+        raw_name = msg_dict.get("name")
+        if isinstance(raw_name, str) and raw_name.strip():
+            sanitized = sanitize_sender_name(raw_name)
+            if sanitized:
+                msg_dict["name"] = sanitized
+            else:
+                msg_dict.pop("name", None)
+        request_messages.append(msg_dict)
 
     # If the client included history with conversation_id, trim overlaps against DB history
     overlap_cut = 0
@@ -1315,7 +1352,13 @@ async def build_context_and_messages(
                 return str(payload)
 
         if has_non_user_role:
-            hist_sigs = [_msg_sig(m) for m in historical_msgs]
+            # Overlap detection assumes chronological ordering for comparison.
+            # If history is requested newest-first, reverse a copy for overlap checks
+            # while preserving the requested order in the final payload.
+            hist_for_overlap = (
+                list(reversed(historical_msgs)) if history_order == "desc" else historical_msgs
+            )
+            hist_sigs = [_msg_sig(m) for m in hist_for_overlap]
             req_sigs = [_msg_sig(m) for m in request_messages]
             max_k = min(len(hist_sigs), len(req_sigs))
             overlap_start = None
@@ -1354,7 +1397,11 @@ async def build_context_and_messages(
                 msg_for_llm["name"] = name
         current_turn.append(msg_for_llm)
 
-    llm_payload_messages = historical_msgs + current_turn
+    historical_msgs_for_payload = historical_msgs
+    if history_order == "desc":
+        historical_msgs_for_payload = list(reversed(historical_msgs))
+
+    llm_payload_messages = historical_msgs_for_payload + current_turn
 
     return character_card, character_db_id, conv_id, conversation_created, llm_payload_messages, should_persist
 
@@ -1388,6 +1435,37 @@ def _extract_system_messages(messages: List[Dict[str, Any]]) -> List[str]:
     return system_messages
 
 
+def _extract_system_messages_from_request(messages: List[Any]) -> List[str]:
+    """Extract system messages from request model objects."""
+    system_messages: List[str] = []
+    for msg in messages or []:
+        try:
+            if getattr(msg, "role", None) != "system":
+                continue
+            content = getattr(msg, "content", None)
+            if isinstance(content, str):
+                text_val = content.strip()
+                if text_val:
+                    system_messages.append(text_val)
+                continue
+            if isinstance(content, list):
+                text_parts: List[str] = []
+                for part in content:
+                    try_type = getattr(part, "type", None)
+                    if try_type is None and isinstance(part, dict):
+                        try_type = part.get("type")
+                    if try_type == "text":
+                        text_val = getattr(part, "text", None) if not isinstance(part, dict) else part.get("text")
+                        if isinstance(text_val, str) and text_val.strip():
+                            text_parts.append(text_val)
+                combined = "\n".join(text_parts).strip()
+                if combined:
+                    system_messages.append(combined)
+        except Exception:
+            continue
+    return system_messages
+
+
 def apply_prompt_templating(
     request_data: Any,
     character_card: Dict[str, Any],
@@ -1404,13 +1482,17 @@ def apply_prompt_templating(
         template_data["char_name"] = character_card.get("name", "Character")
         template_data["character_system_prompt"] = character_card.get("system_prompt", "")
 
-    sys_msg_from_req = next(
-        (m.content for m in request_data.messages if m.role == "system" and isinstance(m.content, str)),
-        None,
-    )
+    system_msgs_from_request = _extract_system_messages_from_request(getattr(request_data, "messages", []))
+    sys_msg_from_req = system_msgs_from_request[0] if system_msgs_from_request else None
     template_data["original_system_message_from_request"] = sys_msg_from_req or ""
+    template_data["system_messages_from_request"] = "\n\n".join(system_msgs_from_request) if system_msgs_from_request else ""
     system_msgs_from_payload = _extract_system_messages(llm_payload_messages)
     payload_system_message = system_msgs_from_payload[-1] if system_msgs_from_payload else None
+    template_data["system_messages_from_payload"] = "\n\n".join(system_msgs_from_payload) if system_msgs_from_payload else ""
+    template_data["system_messages_combined"] = (
+        template_data["system_messages_from_request"]
+        or (payload_system_message or "")
+    )
 
     final_system_message: Optional[str] = None
     logger.debug(
@@ -1557,9 +1639,17 @@ async def execute_streaming_call(
             except Exception:
                 stream_channel_maxsize = 100
             stream_channel: asyncio.Queue = asyncio.Queue(maxsize=stream_channel_maxsize)
-            est_tokens_for_queue = max(1, len(request_json) // 4)
+            est_tokens_for_queue = estimate_tokens_from_json(request_json)
+
+            def _refresh_params_sync(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
+                """Resolve provider params inside a sync queue processor."""
+                refreshed = refresh_provider_params(target_provider)
+                if inspect.isawaitable(refreshed):
+                    return asyncio.run(refreshed)  # Safe in executor thread
+                return refreshed  # type: ignore[return-value]
 
             def _queued_processor():
+                nonlocal selected_provider, model, llm_call_func
                 local_start = time.time()
                 try:
                     result = llm_call_func()
@@ -1589,6 +1679,53 @@ async def execute_streaming_call(
                     )
                     if provider_manager:
                         provider_manager.record_failure(selected_provider, proc_error)
+                        name_lower = type(proc_error).__name__.lower()
+                        client_like_error = (
+                            "authentication" in name_lower
+                            or "ratelimit" in name_lower
+                            or "rate_limit" in name_lower
+                            or "badrequest" in name_lower
+                            or "bad_request" in name_lower
+                            or "configuration" in name_lower
+                        )
+                        if enable_provider_fallback and isinstance(proc_error, (ChatProviderError, ChatAPIError)) and not client_like_error:
+                            fallback_provider = provider_manager.get_available_provider(exclude=[selected_provider])
+                            if fallback_provider:
+                                logger.warning(
+                                    f"Trying fallback provider {fallback_provider} after {selected_provider} failed (queued)"
+                                )
+                                try:
+                                    refreshed_args, refreshed_model = _refresh_params_sync(fallback_provider)
+                                    if not isinstance(refreshed_args, dict) or "messages_payload" not in refreshed_args:
+                                        raise ValueError(
+                                            f"Invalid refreshed params for {fallback_provider}: missing required fields"
+                                        )
+                                except Exception as refresh_error:
+                                    provider_manager.record_failure(fallback_provider, refresh_error)
+                                    raise
+                                model = refreshed_model or model
+                                llm_call_func_fb = lambda: perform_chat_api_call(**refreshed_args)
+                                try:
+                                    fb_start = time.time()
+                                    result = llm_call_func_fb()
+                                    fb_latency = time.time() - fb_start
+                                    provider_manager.record_success(fallback_provider, fb_latency)
+                                    metrics.track_llm_call(fallback_provider, model, fb_latency, success=True)
+                                    selected_provider = fallback_provider
+                                    llm_call_func = llm_call_func_fb
+                                    try:
+                                        metrics.track_provider_fallback_success(
+                                            requested_provider=provider,
+                                            selected_provider=fallback_provider,
+                                            streaming=True,
+                                            queued=True,
+                                        )
+                                    except Exception:
+                                        pass
+                                    return result
+                                except Exception as fallback_error:
+                                    provider_manager.record_failure(fallback_provider, fallback_error)
+                                    raise fallback_error
                     raise
 
             queue_request_id = get_request_id() or "unknown"
@@ -1842,15 +1979,35 @@ async def execute_streaming_call(
                 redacted = None
                 sample = None
                 category = None
-                if hasattr(moderation, "evaluate_action"):
+                matched_pattern = None
+                match_span = None
+                if hasattr(moderation, "evaluate_action_with_match"):
+                    eval_res = moderation.evaluate_action_with_match(full_reply, eff_policy, "output")
+                    if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                        action, redacted, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
+                        category = eval_res[3] if len(eval_res) >= 4 else None
+                        match_span = eval_res[4] if len(eval_res) >= 5 else None
+                    else:
+                        action, redacted, matched_pattern = eval_res  # type: ignore
+                    if match_span and hasattr(moderation, "build_sanitized_snippet"):
+                        try:
+                            sample = moderation.build_sanitized_snippet(full_reply, eff_policy, match_span, matched_pattern)
+                        except Exception:
+                            sample = None
+                elif hasattr(moderation, "evaluate_action"):
                     eval_res = moderation.evaluate_action(full_reply, eff_policy, "output")
                     if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-                        action, redacted, sample = eval_res[0], eval_res[1], eval_res[2]
+                        action, redacted, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
                         category = eval_res[3] if len(eval_res) >= 4 else None
                     else:
-                        action, redacted, sample = eval_res  # type: ignore
-                else:
-                    flagged, sample = moderation.check_text(full_reply, eff_policy)
+                        action, redacted, matched_pattern = eval_res  # type: ignore
+                if action and action != "pass" and sample is None:
+                    try:
+                        _, sample = moderation.check_text(full_reply, eff_policy, "output")
+                    except Exception:
+                        sample = None
+                if action is None:
+                    flagged, sample = moderation.check_text(full_reply, eff_policy, "output")
                     if flagged:
                         action = eff_policy.output_action
                         if action == "redact":
@@ -2041,7 +2198,7 @@ async def execute_streaming_call(
                         pass
                 task.add_done_callback(_cleanup)
 
-            stream_mod_buffer = ""
+            stream_holdback = ""
             try:
                 stream_buffer_limit = int(os.getenv("MODERATION_STREAM_BUFFER_CHARS", "1024"))
             except Exception:
@@ -2049,27 +2206,27 @@ async def execute_streaming_call(
             if stream_buffer_limit < 0:
                 stream_buffer_limit = 0
 
-            def _update_stream_buffer(emitted: str) -> None:
-                nonlocal stream_mod_buffer
+            def _emit_with_holdback(text: str) -> str:
+                nonlocal stream_holdback
                 if stream_buffer_limit <= 0:
-                    stream_mod_buffer = ""
-                    return
-                if emitted:
-                    stream_mod_buffer = (stream_mod_buffer + emitted)[-stream_buffer_limit:]
+                    stream_holdback = ""
+                    return text
+                if not text:
+                    return ""
+                if len(text) <= stream_buffer_limit:
+                    stream_holdback = text
+                    return ""
+                emit = text[:-stream_buffer_limit]
+                stream_holdback = text[-stream_buffer_limit:]
+                return emit
 
-            def _resolve_replacement(pattern: Optional[str]) -> str:
-                if not pattern:
-                    return eff_policy.redact_replacement
-                for rule in eff_policy.block_patterns or []:
-                    regex = getattr(rule, "regex", None)
-                    if regex is None:
-                        continue
-                    if getattr(regex, "pattern", None) != pattern:
-                        continue
-                    replacement = getattr(rule, "replacement", None)
-                    if replacement:
-                        return replacement
-                return eff_policy.redact_replacement
+            def _flush_holdback() -> str:
+                nonlocal stream_holdback
+                if not stream_holdback:
+                    return ""
+                out = stream_holdback
+                stream_holdback = ""
+                return out
 
             def _out_transform(s: str) -> str:
                 nonlocal chunk_seq
@@ -2105,59 +2262,55 @@ async def execute_streaming_call(
                 except Exception as _e:
                     logger.debug(f"Topic monitoring (stream chunk) skipped: {_e}")
                 if not eff_policy.enabled or not eff_policy.output_enabled:
-                    _update_stream_buffer(s)
+                    if stream_holdback:
+                        out = f"{stream_holdback}{s}"
+                        _flush_holdback()
+                        return out
                     return s
+                combined = f"{stream_holdback}{s}" if stream_holdback else s
                 resolved_action = None
+                matched_pattern = None
                 sample = None
-                redacted_s = None
+                redacted_combined = None
                 out_category = None
                 match_span = None
-                buffer_len = len(stream_mod_buffer)
                 if hasattr(moderation, "evaluate_action_with_match"):
-                    combined = f"{stream_mod_buffer}{s}" if stream_mod_buffer else s
                     try:
                         eval_res = moderation.evaluate_action_with_match(combined, eff_policy, "output")
                         if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-                            resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
+                            resolved_action, redacted_combined, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
                             out_category = eval_res[3] if len(eval_res) >= 4 else None
                             match_span = eval_res[4] if len(eval_res) >= 5 else None
                         else:
-                            resolved_action, redacted_s, sample = eval_res  # type: ignore
+                            resolved_action, redacted_combined, matched_pattern = eval_res  # type: ignore
                     except Exception:
                         resolved_action = None
-                    # If the match is entirely in the buffer, re-evaluate on the current chunk only.
-                    if match_span and buffer_len > 0 and match_span[1] <= buffer_len:
+                    if match_span and hasattr(moderation, "build_sanitized_snippet"):
                         try:
-                            eval_res = moderation.evaluate_action_with_match(s, eff_policy, "output")
-                            if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-                                resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
-                                out_category = eval_res[3] if len(eval_res) >= 4 else None
-                                match_span = eval_res[4] if len(eval_res) >= 5 else None
-                            else:
-                                resolved_action, redacted_s, sample = eval_res  # type: ignore
-                                match_span = None
-                            buffer_len = 0
+                            sample = moderation.build_sanitized_snippet(combined, eff_policy, match_span, matched_pattern)
                         except Exception:
-                            resolved_action = None
-                            match_span = None
+                            sample = None
                 elif hasattr(moderation, "evaluate_action"):
                     try:
-                        eval_res = moderation.evaluate_action(s, eff_policy, "output")
+                        eval_res = moderation.evaluate_action(combined, eff_policy, "output")
                         if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-                            resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
+                            resolved_action, redacted_combined, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
                             out_category = eval_res[3] if len(eval_res) >= 4 else None
                         else:
-                            resolved_action, redacted_s, sample = eval_res  # type: ignore
+                            resolved_action, redacted_combined, matched_pattern = eval_res  # type: ignore
                     except Exception:
                         resolved_action = None
+                if resolved_action and resolved_action != "pass" and sample is None:
+                    try:
+                        _, sample = moderation.check_text(combined, eff_policy, "output")
+                    except Exception:
+                        sample = None
                 if not resolved_action:
-                    flagged, sample = moderation.check_text(s, eff_policy)
+                    flagged, sample = moderation.check_text(combined, eff_policy, "output")
                     if not flagged:
-                        _update_stream_buffer(s)
-                        return s
+                        return _emit_with_holdback(combined)
                     resolved_action = eff_policy.output_action
-                    redacted_s = moderation.redact_text(s, eff_policy) if resolved_action == "redact" else None
-                crosses_boundary = bool(match_span and buffer_len > 0 and match_span[0] < buffer_len < match_span[1])
+                    redacted_combined = moderation.redact_text(combined, eff_policy) if resolved_action == "redact" else None
                 if resolved_action == "block":
                     if not stream_mod_state["block_logged"]:
                         try:
@@ -2213,19 +2366,19 @@ async def execute_streaming_call(
                         except Exception:
                             pass
                         stream_mod_state["redact_logged"] = True
-                    if crosses_boundary and match_span:
-                        replacement = _resolve_replacement(sample)
-                        overlap_start = max(0, match_span[0] - buffer_len)
-                        overlap_end = max(0, match_span[1] - buffer_len)
-                        overlap_start = min(len(s), overlap_start)
-                        overlap_end = min(len(s), overlap_end)
-                        redacted_out = f"{s[:overlap_start]}{replacement}{s[overlap_end:]}"
-                    else:
-                        redacted_out = moderation.redact_text(s, eff_policy)
-                    _update_stream_buffer(redacted_out)
-                    return redacted_out
-                _update_stream_buffer(s)
-                return s
+                    redacted_out = (
+                        redacted_combined
+                        if isinstance(redacted_combined, str)
+                        else moderation.redact_text(combined, eff_policy)
+                    )
+                    return _emit_with_holdback(redacted_out)
+                return _emit_with_holdback(combined)
+
+            # Allow streaming handler to flush any held-back tail at stream end
+            try:
+                setattr(_out_transform, "flush", _flush_holdback)
+            except Exception:
+                pass
 
             async def _finalize_stream(*, success: bool, cancelled: bool, error: bool) -> None:
                 if success:
@@ -2386,7 +2539,7 @@ async def execute_non_stream_call(
             and queue_is_active(queue_for_exec)
         )
         if queue_enabled:
-            est_tokens_for_queue = max(1, len(request_json) // 4)
+            est_tokens_for_queue = estimate_tokens_from_json(request_json)
             def _queued_processor():
                 local_start = time.time()
                 try:
@@ -2642,18 +2795,41 @@ async def execute_non_stream_call(
                 sample = None
                 redacted_val = None
                 out_category2 = None
-                if hasattr(moderation, "evaluate_action"):
+                matched_pattern = None
+                match_span = None
+                if hasattr(moderation, "evaluate_action_with_match"):
+                    try:
+                        eval_res = moderation.evaluate_action_with_match(content_to_save, eff_policy, "output")
+                        if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                            resolved_action, redacted_val, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
+                            out_category2 = eval_res[3] if len(eval_res) >= 4 else None
+                            match_span = eval_res[4] if len(eval_res) >= 5 else None
+                        else:
+                            resolved_action, redacted_val, matched_pattern = eval_res  # type: ignore
+                    except Exception:
+                        resolved_action = None
+                    if match_span and hasattr(moderation, "build_sanitized_snippet"):
+                        try:
+                            sample = moderation.build_sanitized_snippet(content_to_save, eff_policy, match_span, matched_pattern)
+                        except Exception:
+                            sample = None
+                elif hasattr(moderation, "evaluate_action"):
                     try:
                         eval_res = moderation.evaluate_action(content_to_save, eff_policy, "output")
                         if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-                            resolved_action, redacted_val, sample = eval_res[0], eval_res[1], eval_res[2]
+                            resolved_action, redacted_val, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
                             out_category2 = eval_res[3] if len(eval_res) >= 4 else None
                         else:
-                            resolved_action, redacted_val, sample = eval_res  # type: ignore
+                            resolved_action, redacted_val, matched_pattern = eval_res  # type: ignore
                     except Exception:
                         resolved_action = None
+                if resolved_action and resolved_action != "pass" and sample is None:
+                    try:
+                        _, sample = moderation.check_text(content_to_save, eff_policy, "output")
+                    except Exception:
+                        sample = None
                 if not resolved_action:
-                    flagged, sample = moderation.check_text(content_to_save, eff_policy)
+                    flagged, sample = moderation.check_text(content_to_save, eff_policy, "output")
                     if flagged:
                         resolved_action = eff_policy.output_action
                         redacted_val = moderation.redact_text(content_to_save, eff_policy) if resolved_action == "redact" else None

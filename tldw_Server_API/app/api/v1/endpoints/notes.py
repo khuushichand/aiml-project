@@ -240,6 +240,26 @@ def _keyword_text_from_row(row: Any) -> Optional[str]:
     return _normalize_keyword_text(row)
 
 
+def _get_or_create_keyword_row(db: CharactersRAGDB, keyword_text: Any) -> Optional[Dict[str, Any]]:
+    text = _normalize_keyword_text(keyword_text)
+    if not text:
+        return None
+    kw_row = db.get_keyword_by_text(text)
+    if kw_row:
+        return kw_row
+    try:
+        kw_id = db.add_keyword(text)
+    except ConflictError as err:
+        # Keyword may have been created concurrently; refetch and return if present.
+        kw_row = db.get_keyword_by_text(text)
+        if kw_row:
+            return kw_row
+        raise err
+    if kw_id is None:
+        return None
+    return db.get_keyword_by_id(kw_id)
+
+
 def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: List[str]) -> None:
     desired: Dict[str, str] = {}
     for kw in keywords:
@@ -281,10 +301,7 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: List[str]) 
         if key in existing_by_key:
             continue
         try:
-            kw_row = db.get_keyword_by_text(text)
-            if not kw_row:
-                kw_id = db.add_keyword(text)
-                kw_row = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+            kw_row = _get_or_create_keyword_row(db, text)
             if kw_row and kw_row.get("id") is not None:
                 db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row["id"]))
         except Exception as err:
@@ -517,10 +534,7 @@ async def create_note(
                 for kw in kw_list:
                     try:
                         # Find or create keyword (case-insensitive uniqueness enforced by DB schema)
-                        kw_row = db.get_keyword_by_text(kw)
-                        if not kw_row:
-                            kw_id = db.add_keyword(kw)
-                            kw_row = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+                        kw_row = _get_or_create_keyword_row(db, kw)
                         if kw_row and kw_row.get('id') is not None:
                             db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row['id']))
                     except Exception as kw_err:
@@ -935,13 +949,19 @@ async def update_note(
         _: None = Depends(rbac_rate_limit("notes.update")),
 ):
     keywords_supplied = _field_supplied(note_in, "keywords")
+    conversation_supplied = _field_supplied(note_in, "conversation_id")
+    message_supplied = _field_supplied(note_in, "message_id")
     kw_list = note_in.normalized_keywords if keywords_supplied else None
-    update_data = {
-        key: value
-        for key, value in note_in.model_dump(exclude_unset=True).items()
-        if value is not None
-    }
-    update_data.pop("keywords", None)
+    raw_data = note_in.model_dump(exclude_unset=True)
+    update_data: Dict[str, Any] = {}
+    if "title" in raw_data and raw_data["title"] is not None:
+        update_data["title"] = raw_data["title"]
+    if "content" in raw_data and raw_data["content"] is not None:
+        update_data["content"] = raw_data["content"]
+    if conversation_supplied:
+        update_data["conversation_id"] = raw_data.get("conversation_id")
+    if message_supplied:
+        update_data["message_id"] = raw_data.get("message_id")
     if "title" in update_data and isinstance(update_data["title"], str):
         stripped_title = update_data["title"].strip()
         if not stripped_title:
@@ -971,22 +991,16 @@ async def update_note(
                     entity="notes",
                     entity_id=note_id,
                 )
-        if "conversation_id" in update_data or "message_id" in update_data:
+        if conversation_supplied or message_supplied:
             validated_conversation_id, validated_message_id = _validate_note_links(
                 db,
                 update_data.get("conversation_id"),
                 update_data.get("message_id"),
             )
-            if "conversation_id" in update_data:
-                if validated_conversation_id is None:
-                    update_data.pop("conversation_id", None)
-                else:
-                    update_data["conversation_id"] = validated_conversation_id
-            if "message_id" in update_data:
-                if validated_message_id is None:
-                    update_data.pop("message_id", None)
-                else:
-                    update_data["message_id"] = validated_message_id
+            if conversation_supplied:
+                update_data["conversation_id"] = validated_conversation_id
+            if message_supplied:
+                update_data["message_id"] = validated_message_id
         data_keys = list(update_data.keys())
         if keywords_supplied:
             data_keys.append("keywords")
@@ -1063,13 +1077,19 @@ async def patch_note(
     """PATCH variant that allows updates without an explicit expected-version header.
     If header is not provided, it fetches current version and applies the update."""
     keywords_supplied = _field_supplied(note_in, "keywords")
+    conversation_supplied = _field_supplied(note_in, "conversation_id")
+    message_supplied = _field_supplied(note_in, "message_id")
     kw_list = note_in.normalized_keywords if keywords_supplied else None
-    update_data = {
-        key: value
-        for key, value in note_in.model_dump(exclude_unset=True).items()
-        if value is not None
-    }
-    update_data.pop("keywords", None)
+    raw_data = note_in.model_dump(exclude_unset=True)
+    update_data: Dict[str, Any] = {}
+    if "title" in raw_data and raw_data["title"] is not None:
+        update_data["title"] = raw_data["title"]
+    if "content" in raw_data and raw_data["content"] is not None:
+        update_data["content"] = raw_data["content"]
+    if conversation_supplied:
+        update_data["conversation_id"] = raw_data.get("conversation_id")
+    if message_supplied:
+        update_data["message_id"] = raw_data.get("message_id")
     if "title" in update_data and isinstance(update_data["title"], str):
         stripped_title = update_data["title"].strip()
         if not stripped_title:
@@ -1106,22 +1126,16 @@ async def patch_note(
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for notes.update",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
-        if "conversation_id" in update_data or "message_id" in update_data:
+        if conversation_supplied or message_supplied:
             validated_conversation_id, validated_message_id = _validate_note_links(
                 db,
                 update_data.get("conversation_id"),
                 update_data.get("message_id"),
             )
-            if "conversation_id" in update_data:
-                if validated_conversation_id is None:
-                    update_data.pop("conversation_id", None)
-                else:
-                    update_data["conversation_id"] = validated_conversation_id
-            if "message_id" in update_data:
-                if validated_message_id is None:
-                    update_data.pop("message_id", None)
-                else:
-                    update_data["message_id"] = validated_message_id
+            if conversation_supplied:
+                update_data["conversation_id"] = validated_conversation_id
+            if message_supplied:
+                update_data["message_id"] = validated_message_id
         data_keys = list(update_data.keys())
         if keywords_supplied:
             data_keys.append("keywords")
@@ -1317,10 +1331,7 @@ async def bulk_create_notes(
                 if kw_list:
                     for kw in kw_list:
                         try:
-                            kw_row = db.get_keyword_by_text(kw)
-                            if not kw_row:
-                                kw_id = db.add_keyword(kw)
-                                kw_row = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+                            kw_row = _get_or_create_keyword_row(db, kw)
                             if kw_row and kw_row.get('id') is not None:
                                 db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row['id']))
                         except Exception as kw_err:

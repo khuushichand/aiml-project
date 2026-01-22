@@ -464,7 +464,10 @@ def _convert_insert_boolean_literals(query: str) -> str:
 
 
 def _replace_boolean_comparisons(query: str) -> str:
-    """Convert common boolean equality checks to TRUE/FALSE literals."""
+    """Convert common boolean equality checks to TRUE/FALSE literals.
+
+    Skips replacements inside quoted strings and SQL comments.
+    """
 
     def _false_sub(match: re.Match[str]) -> str:
         column = match.group(1)
@@ -474,8 +477,104 @@ def _replace_boolean_comparisons(query: str) -> str:
         column = match.group(1)
         return f"{column} = TRUE"
 
-    query = _BOOLEAN_EQ_FALSE_PATTERN.sub(_false_sub, query)
-    return _BOOLEAN_EQ_TRUE_PATTERN.sub(_true_sub, query)
+    def _apply_rewrites(segment: str) -> str:
+        segment = _BOOLEAN_EQ_FALSE_PATTERN.sub(_false_sub, segment)
+        return _BOOLEAN_EQ_TRUE_PATTERN.sub(_true_sub, segment)
+
+    if "=" not in query:
+        return query
+
+    result: List[str] = []
+    buf: List[str] = []
+    in_single = False
+    in_double = False
+    in_line_comment = False
+    in_block_comment = False
+    i = 0
+    length = len(query)
+
+    def _flush_buf() -> None:
+        if buf:
+            result.append(_apply_rewrites("".join(buf)))
+            buf.clear()
+
+    while i < length:
+        ch = query[i]
+        nxt = query[i + 1] if i + 1 < length else ""
+
+        if in_line_comment:
+            result.append(ch)
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+
+        if in_block_comment:
+            result.append(ch)
+            if ch == "*" and nxt == "/":
+                result.append(nxt)
+                i += 2
+                in_block_comment = False
+                continue
+            i += 1
+            continue
+
+        if in_single:
+            result.append(ch)
+            if ch == "'" and nxt == "'":
+                result.append(nxt)
+                i += 2
+                continue
+            if ch == "'":
+                in_single = False
+            i += 1
+            continue
+
+        if in_double:
+            result.append(ch)
+            if ch == '"' and nxt == '"':
+                result.append(nxt)
+                i += 2
+                continue
+            if ch == '"':
+                in_double = False
+            i += 1
+            continue
+
+        # code context
+        if ch == "-" and nxt == "-":
+            _flush_buf()
+            result.append("--")
+            i += 2
+            in_line_comment = True
+            continue
+
+        if ch == "/" and nxt == "*":
+            _flush_buf()
+            result.append("/*")
+            i += 2
+            in_block_comment = True
+            continue
+
+        if ch == "'":
+            _flush_buf()
+            result.append(ch)
+            in_single = True
+            i += 1
+            continue
+
+        if ch == '"':
+            _flush_buf()
+            result.append(ch)
+            in_double = True
+            i += 1
+            continue
+
+        buf.append(ch)
+        i += 1
+
+    _flush_buf()
+    return "".join(result)
 
 
 def transform_sqlite_query_for_postgres(

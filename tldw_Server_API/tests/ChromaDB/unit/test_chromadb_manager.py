@@ -99,6 +99,39 @@ class TestChromaDBManagerInit:
         with cdl._TEST_STUB_CLIENTS_LOCK:
             assert expected_key in cdl._TEST_STUB_CLIENTS
 
+    def test_init_accepts_uppercase_embedding_config(self):
+
+        """Ensure EMBEDDING_CONFIG is normalized into embedding_config."""
+        import tempfile
+        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
+        manager = ChromaDBManager(
+            user_id="upper_cfg_user",
+            user_embedding_config={
+                "USER_DB_BASE_DIR": base_dir,
+                "EMBEDDING_CONFIG": {"embedding_model": "sentence-transformers/all-MiniLM-L6-v2"},
+                "chroma_client_settings": {"backend": "stub"},
+            },
+            client=MagicMock(),
+        )
+        assert manager.embedding_config.get("embedding_model") == "sentence-transformers/all-MiniLM-L6-v2"
+
+    def test_init_accepts_raw_embedding_config(self):
+
+        """Ensure raw embedding config is wrapped when embedding_config is missing."""
+        import tempfile
+        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
+        manager = ChromaDBManager(
+            user_id="raw_cfg_user",
+            user_embedding_config={
+                "USER_DB_BASE_DIR": base_dir,
+                "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+                "embedding_provider": "huggingface",
+                "chroma_client_settings": {"backend": "stub"},
+            },
+            client=MagicMock(),
+        )
+        assert manager.embedding_config.get("embedding_model") == "sentence-transformers/all-MiniLM-L6-v2"
+
     def test_init_fallback_to_stub_records_cache_key(self):
 
         """Test stub fallback init uses base dir in stub cache key."""

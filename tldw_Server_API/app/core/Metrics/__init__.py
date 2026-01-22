@@ -15,6 +15,7 @@ from .telemetry import (
     get_telemetry_manager,
     initialize_telemetry,
     shutdown_telemetry,
+    instrument_fastapi_app,
     OTEL_AVAILABLE
 )
 
@@ -74,6 +75,7 @@ __all__ = [
     "get_telemetry_manager",
     "initialize_telemetry",
     "shutdown_telemetry",
+    "instrument_fastapi_app",
     "OTEL_AVAILABLE",
 
     # Metrics

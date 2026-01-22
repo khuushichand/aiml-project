@@ -370,6 +370,62 @@ def test_bulk_create_preserves_conversation_and_message_ids(client_with_notes_db
     assert fetched_note.get("message_id") == first_note.get("message_id")
 
 
+def test_update_allows_clearing_links(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+    from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+    db_override = client.app.dependency_overrides.get(get_chacha_db_for_user)
+    assert db_override is not None
+    db = db_override()
+    char_id = db.add_character_card({"name": "Clear Links Character"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Clear Links Conversation"})
+    msg_id = db.add_message({"conversation_id": conv_id, "sender": "user", "content": "Hello"})
+
+    create_resp = client.post(
+        "/api/v1/notes/",
+        json={
+            "title": "Linked Note",
+            "content": "Has links",
+            "conversation_id": conv_id,
+            "message_id": msg_id,
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    note = create_resp.json()
+    note_id = note["id"]
+    version = note.get("version", 1)
+
+    clear_conv = client.patch(
+        f"/api/v1/notes/{note_id}",
+        json={"conversation_id": None},
+        headers={"expected-version": str(version)},
+    )
+    assert clear_conv.status_code == 200, clear_conv.text
+    note = clear_conv.json()
+    assert note.get("conversation_id") is None
+    assert note.get("message_id") == msg_id
+    version = note.get("version", version + 1)
+
+    clear_msg = client.patch(
+        f"/api/v1/notes/{note_id}",
+        json={"message_id": None},
+        headers={"expected-version": str(version)},
+    )
+    assert clear_msg.status_code == 200, clear_msg.text
+    note = clear_msg.json()
+    assert note.get("message_id") is None
+    version = note.get("version", version + 1)
+
+    clear_both = client.patch(
+        f"/api/v1/notes/{note_id}",
+        json={"conversation_id": None, "message_id": None},
+        headers={"expected-version": str(version)},
+    )
+    assert clear_both.status_code == 200, clear_both.text
+    note = clear_both.json()
+    assert note.get("conversation_id") is None
+    assert note.get("message_id") is None
+
+
 def test_missing_note_update_and_delete_return_404(client_with_notes_db: TestClient):
     client = client_with_notes_db
     missing_id = "missing-note-id"

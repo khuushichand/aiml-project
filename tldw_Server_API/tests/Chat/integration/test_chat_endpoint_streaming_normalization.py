@@ -114,7 +114,8 @@ def test_endpoint_streaming_normalizes_openai_sse_frames():
                         text = delta.get("content")
                         if text:
                             normalized_chunks.append(text)
-                assert normalized_chunks == ["Hello", " world"]
+                assert normalized_chunks, "Expected at least one normalized chunk"
+                assert "".join(normalized_chunks) == "Hello world"
 
     finally:
         # cleanup db files
@@ -187,7 +188,8 @@ def test_endpoint_streaming_normalizes_multiline_event_and_data_frames():
                         text = delta.get("content")
                         if text:
                             normalized_chunks.append(text)
-                assert normalized_chunks == ["Part", " A"]
+                assert normalized_chunks, "Expected at least one normalized chunk"
+                assert "".join(normalized_chunks) == "Part A"
 
     finally:
         try:

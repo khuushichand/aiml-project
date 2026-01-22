@@ -140,6 +140,81 @@ class TestJWTServiceUnit:
         assert payload["session_id"] == "session-123"
         assert payload["custom_claim"] == "custom_value"
 
+    def test_additional_claims_cannot_override_reserved_access_claims(self, jwt_service):
+
+        token = jwt_service.create_access_token(
+            user_id=1,
+            username="testuser",
+            role="user",
+            additional_claims={
+                "sub": "99",
+                "username": "evil",
+                "role": "admin",
+                "type": "refresh",
+                "exp": 0,
+                "iat": 0,
+                "jti": "override",
+                "iss": "evil-issuer",
+                "aud": "evil-aud",
+                "session_id": "session-123",
+            },
+        )
+
+        payload = jwt_service.decode_access_token(token)
+
+        assert payload["sub"] == "1"
+        assert payload["username"] == "testuser"
+        assert payload["role"] == "user"
+        assert payload["type"] == "access"
+        assert payload["session_id"] == "session-123"
+        assert payload.get("iss") is None
+        assert payload.get("aud") is None
+
+    def test_additional_claims_cannot_override_reserved_refresh_claims(self, jwt_service):
+
+        token = jwt_service.create_refresh_token(
+            user_id=1,
+            username="testuser",
+            additional_claims={
+                "sub": "99",
+                "type": "access",
+                "exp": 0,
+                "iat": 0,
+                "jti": "override",
+                "iss": "evil-issuer",
+                "aud": "evil-aud",
+                "session_id": "session-999",
+            },
+        )
+
+        payload = jwt_service.decode_refresh_token(token)
+
+        assert payload["sub"] == "1"
+        assert payload["type"] == "refresh"
+        assert payload["session_id"] == "session-999"
+        assert payload.get("iss") is None
+        assert payload.get("aud") is None
+
+    def test_virtual_access_token_ignores_reserved_claim_overrides(self, jwt_service):
+
+        token = jwt_service.create_virtual_access_token(
+            user_id=1,
+            username="testuser",
+            role="user",
+            scope="workflows",
+            additional_claims={
+                "sub": "99",
+                "type": "refresh",
+                "scope": "override",
+            },
+        )
+
+        payload = jwt_service.decode_access_token(token)
+
+        assert payload["sub"] == "1"
+        assert payload["type"] == "access"
+        assert payload["scope"] == "workflows"
+
     def test_issuer_audience_enforced(self):
 
         """Ensure tokens with wrong/missing iss/aud fail and correct ones pass (HS)."""

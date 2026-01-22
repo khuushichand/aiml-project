@@ -68,6 +68,53 @@ def test_gemini_filedata_mapping_for_urls_and_multi_parts(monkeypatch):
     assert any("fileData" in p and p["fileData"]["mimeType"].startswith("video/") for p in parts)
 
 
+def test_gemini_filedata_mapping_disabled_by_false_env(monkeypatch):
+    monkeypatch.setenv("LLM_ADAPTERS_GEMINI_IMAGE_URLS_BETA", "0")
+    monkeypatch.setenv("LLM_ADAPTERS_GEMINI_AUDIO_URLS_BETA", "false")
+    monkeypatch.setenv("LLM_ADAPTERS_GEMINI_VIDEO_URLS_BETA", "off")
+
+    captured: Dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured
+        payload = json.loads(request.content.decode("utf-8"))
+        captured = payload
+        return httpx.Response(200, json={"responseId": "r", "candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+
+    def fake_create_client(*args: Any, **kwargs: Any) -> httpx.Client:
+        return httpx.Client(transport=_mock_transport(handler))
+
+    import tldw_Server_API.app.core.http_client as hc
+    monkeypatch.setattr(hc, "create_client", fake_create_client)
+    import tldw_Server_API.app.core.LLM_Calls.providers.google_adapter as gmod
+    monkeypatch.setattr(gmod, "_hc_create_client", fake_create_client)
+    monkeypatch.setattr(gmod, "http_client_factory", fake_create_client)
+
+    adapter = GoogleAdapter()
+    request = {
+        "model": "models/gemini-pro",
+        "api_key": "sk-test",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                    {"type": "audio_url", "audio_url": {"url": "https://example.com/a.mp3"}},
+                    {"type": "video_url", "video_url": {"url": "https://example.com/v.mp4"}},
+                ],
+            }
+        ],
+    }
+    _ = adapter.chat(request)
+    parts = captured.get("contents")[0]["parts"]
+    assert not any("fileData" in p for p in parts)
+    text_blob = " ".join(p.get("text", "") for p in parts if isinstance(p, dict))
+    assert "Image:" in text_blob
+    assert "Audio:" in text_blob
+    assert "Video:" in text_blob
+
+
 def test_gemini_tool_calls_and_usage_mapping(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         # Return a functionCall in parts and usageMetadata

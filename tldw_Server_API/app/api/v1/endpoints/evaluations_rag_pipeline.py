@@ -46,8 +46,9 @@ async def create_or_update_pipeline_preset(
         db = svc.db
         if db is None:
             raise ValueError("Database not available")
-        db.upsert_pipeline_preset(preset.name, preset.config, user_id=current_user.id_str)
-        row = db.get_pipeline_preset(preset.name)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        db.upsert_pipeline_preset(preset.name, preset.config, user_id=stable_user_id)
+        row = db.get_pipeline_preset(preset.name, user_id=stable_user_id)
 
         def to_ts(x: str) -> Optional[int]:
             try:
@@ -89,7 +90,8 @@ async def list_pipeline_presets(
         db = svc.db
         if db is None:
             raise ValueError("Database not available")
-        items, total = db.list_pipeline_presets(limit=limit, offset=offset)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        items, total = db.list_pipeline_presets(limit=limit, offset=offset, user_id=stable_user_id)
         resp_items = []
 
         def to_ts(x: str) -> Optional[int]:
@@ -133,7 +135,8 @@ async def get_pipeline_preset(
         db = svc.db
         if db is None:
             raise ValueError("Database not available")
-        row = db.get_pipeline_preset(name)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        row = db.get_pipeline_preset(name, user_id=stable_user_id)
         if not row:
             raise create_error_response(
                 message=f"Preset {name} not found",
@@ -183,7 +186,8 @@ async def delete_pipeline_preset(
         db = svc.db
         if db is None:
             raise ValueError("Database not available")
-        ok = db.delete_pipeline_preset(name)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        ok = db.delete_pipeline_preset(name, user_id=stable_user_id)
         if not ok:
             raise create_error_response(
                 message=f"Preset {name} not found",

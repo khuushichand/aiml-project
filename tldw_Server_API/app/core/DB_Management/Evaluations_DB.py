@@ -737,14 +737,14 @@ class EvaluationsDatabase:
         logger.info(f"Created evaluation: {eval_id}")
         return eval_id
 
-    def get_evaluation(self, eval_id: str) -> Optional[Dict[str, Any]]:
+    def get_evaluation(self, eval_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get evaluation by ID"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM evaluations
-                WHERE id = ? AND deleted_at IS NULL
-            """, (eval_id,))
+            query = "SELECT * FROM evaluations WHERE id = ? AND deleted_at IS NULL"
+            params: List[Any] = [eval_id]
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
+            cursor.execute(query, params)
 
             row = cursor.fetchone()
             if row:
@@ -769,9 +769,7 @@ class EvaluationsDatabase:
                 query += " AND eval_type = ?"
                 params.append(eval_type)
 
-            if created_by:
-                query += " AND created_by = ?"
-                params.append(created_by)
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
 
             if after:
                 query += " AND created_at < (SELECT created_at FROM evaluations WHERE id = ?)"
@@ -936,16 +934,16 @@ class EvaluationsDatabase:
             conn.commit()
         return ids
 
-    def set_abtest_status(self, test_id: str, status: str, stats_json: Optional[Dict[str, Any]] = None):
+    def set_abtest_status(self, test_id: str, status: str, stats_json: Optional[Dict[str, Any]] = None, *, created_by: Optional[str] = None):
         if self._abtest_store:
-            self._abtest_store.set_abtest_status(test_id, status, stats_json)
+            self._abtest_store.set_abtest_status(test_id, status, stats_json, created_by=created_by)
             return
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE embedding_abtests SET status = ?, stats_json = COALESCE(?, stats_json) WHERE test_id = ?",
-                (status, json.dumps(stats_json) if stats_json else None, test_id)
-            )
+            query = "UPDATE embedding_abtests SET status = ?, stats_json = COALESCE(?, stats_json) WHERE test_id = ?"
+            params: List[Any] = [status, json.dumps(stats_json) if stats_json else None, test_id]
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
+            cursor.execute(query, params)
             conn.commit()
 
     def insert_abtest_result(
@@ -1001,23 +999,37 @@ class EvaluationsDatabase:
             conn.commit()
         return rid
 
-    def get_abtest(self, test_id: str) -> Optional[Dict[str, Any]]:
+    def get_abtest(self, test_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
         if self._abtest_store:
-            return self._abtest_store.get_abtest(test_id)
+            return self._abtest_store.get_abtest(test_id, created_by=created_by)
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM embedding_abtests WHERE test_id = ?", (test_id,))
+            query = "SELECT * FROM embedding_abtests WHERE test_id = ?"
+            params: List[Any] = [test_id]
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
+            cursor.execute(query, params)
             row = cursor.fetchone()
             if row:
                 return dict(row)
         return None
 
-    def get_abtest_arms(self, test_id: str) -> List[Dict[str, Any]]:
+    def get_abtest_arms(self, test_id: str, *, created_by: Optional[str] = None) -> List[Dict[str, Any]]:
         if self._abtest_store:
-            return self._abtest_store.get_abtest_arms(test_id)
+            return self._abtest_store.get_abtest_arms(test_id, created_by=created_by)
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM embedding_abtest_arms WHERE test_id = ? ORDER BY arm_index ASC", (test_id,))
+            if created_by:
+                query = (
+                    "SELECT a.* FROM embedding_abtest_arms a "
+                    "JOIN embedding_abtests t ON t.test_id = a.test_id "
+                    "WHERE a.test_id = ?"
+                )
+                params: List[Any] = [test_id]
+                query, params = self._append_user_filter(query, params, "t.created_by", created_by)
+                query += " ORDER BY a.arm_index ASC"
+                cursor.execute(query, params)
+            else:
+                cursor.execute("SELECT * FROM embedding_abtest_arms WHERE test_id = ? ORDER BY arm_index ASC", (test_id,))
             return [dict(r) for r in cursor.fetchall()]
 
     def find_reusable_abtest_arm(
@@ -1057,56 +1069,145 @@ class EvaluationsDatabase:
                 return dict(row)
         return None
 
-    def get_abtest_queries(self, test_id: str) -> List[Dict[str, Any]]:
+    def get_abtest_queries(self, test_id: str, *, created_by: Optional[str] = None) -> List[Dict[str, Any]]:
         if self._abtest_store:
-            return self._abtest_store.get_abtest_queries(test_id)
+            return self._abtest_store.get_abtest_queries(test_id, created_by=created_by)
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM embedding_abtest_queries WHERE test_id = ?", (test_id,))
+            if created_by:
+                query = (
+                    "SELECT q.* FROM embedding_abtest_queries q "
+                    "JOIN embedding_abtests t ON t.test_id = q.test_id "
+                    "WHERE q.test_id = ?"
+                )
+                params: List[Any] = [test_id]
+                query, params = self._append_user_filter(query, params, "t.created_by", created_by)
+                cursor.execute(query, params)
+            else:
+                cursor.execute("SELECT * FROM embedding_abtest_queries WHERE test_id = ?", (test_id,))
             return [dict(r) for r in cursor.fetchall()]
 
-    def list_abtest_results(self, test_id: str, limit: int = 100, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+    def list_abtest_results(self, test_id: str, limit: int = 100, offset: int = 0, *, created_by: Optional[str] = None) -> Tuple[List[Dict[str, Any]], int]:
         if self._abtest_store:
-            return self._abtest_store.list_abtest_results(test_id, limit, offset)
+            return self._abtest_store.list_abtest_results(test_id, limit, offset, created_by=created_by)
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT COUNT(*) FROM embedding_abtest_results WHERE test_id = ?",
-                (test_id,)
-            )
+            if created_by:
+                count_query = (
+                    "SELECT COUNT(*) FROM embedding_abtest_results r "
+                    "JOIN embedding_abtests t ON t.test_id = r.test_id "
+                    "WHERE r.test_id = ?"
+                )
+                count_params: List[Any] = [test_id]
+                count_query, count_params = self._append_user_filter(count_query, count_params, "t.created_by", created_by)
+                cursor.execute(count_query, count_params)
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM embedding_abtest_results WHERE test_id = ?",
+                    (test_id,)
+                )
             total = cursor.fetchone()[0] or 0
-            cursor.execute(
-                """
-                SELECT * FROM embedding_abtest_results WHERE test_id = ?
-                ORDER BY created_at ASC LIMIT ? OFFSET ?
-                """,
-                (test_id, limit, offset)
-            )
+            if created_by:
+                list_query = (
+                    "SELECT r.* FROM embedding_abtest_results r "
+                    "JOIN embedding_abtests t ON t.test_id = r.test_id "
+                    "WHERE r.test_id = ?"
+                )
+                list_params: List[Any] = [test_id]
+                list_query, list_params = self._append_user_filter(list_query, list_params, "t.created_by", created_by)
+                list_query += " ORDER BY r.created_at ASC LIMIT ? OFFSET ?"
+                list_params.extend([limit, offset])
+                cursor.execute(list_query, list_params)
+            else:
+                cursor.execute(
+                    """
+                    SELECT * FROM embedding_abtest_results WHERE test_id = ?
+                    ORDER BY created_at ASC LIMIT ? OFFSET ?
+                    """,
+                    (test_id, limit, offset)
+                )
             rows = [dict(r) for r in cursor.fetchall()]
         return rows, total
 
-    def delete_abtest(self, test_id: str, *, delete_idempotency: bool = True) -> int:
+    def delete_abtest(self, test_id: str, *, delete_idempotency: bool = True, created_by: Optional[str] = None) -> int:
         """Delete an embeddings A/B test and related rows."""
+        if self._abtest_store:
+            deleted = int(self._abtest_store.delete_abtest(test_id, created_by=created_by) or 0)
+            if delete_idempotency:
+                try:
+                    with self.get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            """
+                            DELETE FROM idempotency_keys
+                            WHERE entity_type LIKE ? AND (entity_id = ? OR entity_id LIKE ?)
+                            """,
+                            ("emb_abtest%", test_id, f"{test_id}:%"),
+                        )
+                        deleted += int(cursor.rowcount or 0)
+                        try:
+                            conn.commit()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            return deleted
         deleted = 0
         with self.get_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute("DELETE FROM embedding_abtest_results WHERE test_id = ?", (test_id,))
+                if created_by:
+                    query = (
+                        "DELETE FROM embedding_abtest_results "
+                        "WHERE test_id = ? AND EXISTS (SELECT 1 FROM embedding_abtests t WHERE t.test_id = ?"
+                    )
+                    params: List[Any] = [test_id, test_id]
+                    query, params = self._append_user_filter(query, params, "t.created_by", created_by)
+                    query += ")"
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute("DELETE FROM embedding_abtest_results WHERE test_id = ?", (test_id,))
                 deleted += int(cursor.rowcount or 0)
             except Exception:
                 pass
             try:
-                cursor.execute("DELETE FROM embedding_abtest_queries WHERE test_id = ?", (test_id,))
+                if created_by:
+                    query = (
+                        "DELETE FROM embedding_abtest_queries "
+                        "WHERE test_id = ? AND EXISTS (SELECT 1 FROM embedding_abtests t WHERE t.test_id = ?"
+                    )
+                    params: List[Any] = [test_id, test_id]
+                    query, params = self._append_user_filter(query, params, "t.created_by", created_by)
+                    query += ")"
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute("DELETE FROM embedding_abtest_queries WHERE test_id = ?", (test_id,))
                 deleted += int(cursor.rowcount or 0)
             except Exception:
                 pass
             try:
-                cursor.execute("DELETE FROM embedding_abtest_arms WHERE test_id = ?", (test_id,))
+                if created_by:
+                    query = (
+                        "DELETE FROM embedding_abtest_arms "
+                        "WHERE test_id = ? AND EXISTS (SELECT 1 FROM embedding_abtests t WHERE t.test_id = ?"
+                    )
+                    params: List[Any] = [test_id, test_id]
+                    query, params = self._append_user_filter(query, params, "t.created_by", created_by)
+                    query += ")"
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute("DELETE FROM embedding_abtest_arms WHERE test_id = ?", (test_id,))
                 deleted += int(cursor.rowcount or 0)
             except Exception:
                 pass
             try:
-                cursor.execute("DELETE FROM embedding_abtests WHERE test_id = ?", (test_id,))
+                if created_by:
+                    query = "DELETE FROM embedding_abtests WHERE test_id = ?"
+                    params: List[Any] = [test_id]
+                    query, params = self._append_user_filter(query, params, "created_by", created_by)
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute("DELETE FROM embedding_abtests WHERE test_id = ?", (test_id,))
                 deleted += int(cursor.rowcount or 0)
             except Exception:
                 pass
@@ -1221,7 +1322,7 @@ class EvaluationsDatabase:
             return 0
         return int(deleted)
 
-    def update_evaluation(self, eval_id: str, updates: Dict[str, Any]) -> bool:
+    def update_evaluation(self, eval_id: str, updates: Dict[str, Any], *, created_by: Optional[str] = None) -> bool:
         """Update evaluation definition"""
         allowed_fields = {"name", "description", "eval_spec", "dataset_id", "metadata"}
         updates = {k: v for k, v in updates.items() if k in allowed_fields}
@@ -1253,24 +1354,23 @@ class EvaluationsDatabase:
             set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
             values = list(updates.values()) + [eval_id]
 
-            cursor.execute(f"""
-                UPDATE evaluations
-                SET {set_clause}
-                WHERE id = ? AND deleted_at IS NULL
-            """, values)
+            query = f"UPDATE evaluations SET {set_clause} WHERE id = ? AND deleted_at IS NULL"
+            params = list(values)
+            if created_by:
+                query, params = self._append_user_filter(query, params, "created_by", created_by)
+            cursor.execute(query, params)
 
             conn.commit()
             return cursor.rowcount > 0
 
-    def delete_evaluation(self, eval_id: str) -> bool:
+    def delete_evaluation(self, eval_id: str, *, created_by: Optional[str] = None) -> bool:
         """Soft delete evaluation"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE evaluations
-                SET deleted_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND deleted_at IS NULL
-            """, (eval_id,))
+            query = "UPDATE evaluations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL"
+            params: List[Any] = [eval_id]
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
+            cursor.execute(query, params)
             conn.commit()
             return cursor.rowcount > 0
 
@@ -1311,11 +1411,21 @@ class EvaluationsDatabase:
         logger.info(f"Created run: {run_id} for evaluation: {eval_id}")
         return run_id
 
-    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+    def get_run(self, run_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get run by ID"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM evaluation_runs WHERE id = ?", (run_id,))
+            if created_by:
+                query = (
+                    "SELECT r.* FROM evaluation_runs r "
+                    "JOIN evaluations e ON e.id = r.eval_id "
+                    "WHERE r.id = ? AND e.deleted_at IS NULL"
+                )
+                params: List[Any] = [run_id]
+                query, params = self._append_user_filter(query, params, "e.created_by", created_by)
+                cursor.execute(query, params)
+            else:
+                cursor.execute("SELECT * FROM evaluation_runs WHERE id = ?", (run_id,))
             row = cursor.fetchone()
             if row:
                 return self._row_to_run_dict(row)
@@ -1328,6 +1438,7 @@ class EvaluationsDatabase:
         limit: int = 20,
         after: Optional[str] = None,
         return_has_more: bool = False,
+        created_by: Optional[str] = None,
     ) -> Any:
         """List runs with optional filtering.
 
@@ -1337,20 +1448,30 @@ class EvaluationsDatabase:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            query = "SELECT * FROM evaluation_runs WHERE 1=1"
+            if created_by:
+                query = (
+                    "SELECT r.* FROM evaluation_runs r "
+                    "JOIN evaluations e ON e.id = r.eval_id "
+                    "WHERE e.deleted_at IS NULL"
+                )
+            else:
+                query = "SELECT * FROM evaluation_runs WHERE 1=1"
             params = []
 
             if eval_id:
-                query += " AND eval_id = ?"
+                query += " AND r.eval_id = ?" if created_by else " AND eval_id = ?"
                 params.append(eval_id)
 
             if status:
-                query += " AND status = ?"
+                query += " AND r.status = ?" if created_by else " AND status = ?"
                 params.append(status)
 
             if after:
-                query += " AND created_at < (SELECT created_at FROM evaluation_runs WHERE id = ?)"
+                query += " AND r.created_at < (SELECT created_at FROM evaluation_runs WHERE id = ?)" if created_by else " AND created_at < (SELECT created_at FROM evaluation_runs WHERE id = ?)"
                 params.append(after)
+
+            if created_by:
+                query, params = self._append_user_filter(query, params, "e.created_by", created_by)
 
             query += " ORDER BY created_at DESC LIMIT ?"
             params.append(limit + 1)
@@ -1461,11 +1582,14 @@ class EvaluationsDatabase:
         logger.info(f"Created dataset: {dataset_id} with {len(samples)} samples")
         return dataset_id
 
-    def get_dataset(self, dataset_id: str) -> Optional[Dict[str, Any]]:
+    def get_dataset(self, dataset_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get dataset by ID"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM datasets WHERE id = ?", (dataset_id,))
+            query = "SELECT * FROM datasets WHERE id = ?"
+            params: List[Any] = [dataset_id]
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
+            cursor.execute(query, params)
             row = cursor.fetchone()
             if row:
                 return self._row_to_dataset_dict(row)
@@ -1475,7 +1599,8 @@ class EvaluationsDatabase:
         self,
         limit: int = 20,
         after: Optional[str] = None,
-        offset: int = 0
+        offset: int = 0,
+        created_by: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], bool]:
         """List datasets with pagination"""
         with self.get_connection() as conn:
@@ -1487,6 +1612,8 @@ class EvaluationsDatabase:
             if after:
                 query += " AND created_at < (SELECT created_at FROM datasets WHERE id = ?)"
                 params.append(after)
+
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
 
             query += " ORDER BY created_at DESC LIMIT ?"
             params.append(limit + 1)
@@ -1503,11 +1630,14 @@ class EvaluationsDatabase:
 
             return datasets, has_more
 
-    def delete_dataset(self, dataset_id: str) -> bool:
+    def delete_dataset(self, dataset_id: str, *, created_by: Optional[str] = None) -> bool:
         """Delete dataset"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+            query = "DELETE FROM datasets WHERE id = ?"
+            params: List[Any] = [dataset_id]
+            query, params = self._append_user_filter(query, params, "created_by", created_by)
+            cursor.execute(query, params)
             conn.commit()
             return cursor.rowcount > 0
 
@@ -1578,6 +1708,41 @@ class EvaluationsDatabase:
             return value
         logger.debug(f"Unsupported JSON field type: {type(value)} value={value!r}")
         return default
+
+    def _user_id_variants(self, user_id: Optional[str]) -> List[str]:
+        """Return acceptable user id variants for filtering."""
+        if not user_id:
+            return []
+        raw = str(user_id).strip()
+        if not raw:
+            return []
+        variants = {raw}
+        if raw.startswith("user_"):
+            core = raw[5:]
+            if core:
+                variants.add(core)
+        elif raw.isdigit():
+            variants.add(f"user_{raw}")
+        return list(variants)
+
+    def _append_user_filter(
+        self,
+        query: str,
+        params: List[Any],
+        field: str,
+        user_id: Optional[str],
+    ) -> Tuple[str, List[Any]]:
+        variants = self._user_id_variants(user_id)
+        if not variants:
+            return query, params
+        if len(variants) == 1:
+            query += f" AND {field} = ?"
+            params.append(variants[0])
+            return query, params
+        placeholders = ", ".join(["?"] * len(variants))
+        query += f" AND {field} IN ({placeholders})"
+        params.extend(variants)
+        return query, params
 
     def _row_to_eval_dict(self, row) -> Dict[str, Any]:
         """Convert database row to evaluation dictionary"""
@@ -1839,10 +2004,13 @@ class EvaluationsDatabase:
             conn.commit()
             return True
 
-    def get_pipeline_preset(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_pipeline_preset(self, name: str, *, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM pipeline_presets WHERE name = ?", (name,))
+            query = "SELECT * FROM pipeline_presets WHERE name = ?"
+            params: List[Any] = [name]
+            query, params = self._append_user_filter(query, params, "user_id", user_id)
+            cursor.execute(query, params)
             row = cursor.fetchone()
             if not row:
                 return None
@@ -1854,19 +2022,22 @@ class EvaluationsDatabase:
                 "user_id": row["user_id"],
             }
 
-    def list_pipeline_presets(self, limit: int = 50, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+    def list_pipeline_presets(self, limit: int = 50, offset: int = 0, *, user_id: Optional[str] = None) -> Tuple[List[Dict[str, Any]], int]:
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM pipeline_presets")
+            count_query = "SELECT COUNT(*) FROM pipeline_presets WHERE 1=1"
+            count_params: List[Any] = []
+            count_query, count_params = self._append_user_filter(count_query, count_params, "user_id", user_id)
+            cursor.execute(count_query, count_params)
             total = cursor.fetchone()[0]
-            cursor.execute(
-                """
-                SELECT * FROM pipeline_presets
-                ORDER BY updated_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                (limit, offset),
+            list_query = (
+                "SELECT * FROM pipeline_presets WHERE 1=1"
             )
+            list_params: List[Any] = []
+            list_query, list_params = self._append_user_filter(list_query, list_params, "user_id", user_id)
+            list_query += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+            list_params.extend([limit, offset])
+            cursor.execute(list_query, list_params)
             rows = cursor.fetchall()
             items = [
                 {
@@ -1880,10 +2051,13 @@ class EvaluationsDatabase:
             ]
             return items, total
 
-    def delete_pipeline_preset(self, name: str) -> bool:
+    def delete_pipeline_preset(self, name: str, *, user_id: Optional[str] = None) -> bool:
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM pipeline_presets WHERE name = ?", (name,))
+            query = "DELETE FROM pipeline_presets WHERE name = ?"
+            params: List[Any] = [name]
+            query, params = self._append_user_filter(query, params, "user_id", user_id)
+            cursor.execute(query, params)
             conn.commit()
             return cursor.rowcount > 0
 

@@ -8,6 +8,7 @@ import hashlib
 import threading
 import builtins
 import io
+import os
 from typing import Dict, Any, Optional, List, Tuple, Union, Callable
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -139,6 +140,8 @@ class L1MemoryCache:
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Set value in cache"""
+        if ttl is not None and ttl <= 0:
+            return False
         with self._lock:
             # Calculate size
             size_bytes = self._estimate_size(value)
@@ -160,7 +163,7 @@ class L1MemoryCache:
                 created_at=time.time(),
                 last_accessed=time.time(),
                 access_count=0,
-                ttl=ttl or self.default_ttl
+                ttl=self.default_ttl if ttl is None else ttl
             )
 
             # Add to cache
@@ -319,6 +322,8 @@ class L2DiskCache:
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Set value in cache"""
+        if ttl is not None and ttl <= 0:
+            return False
         with self._lock:
             # Generate file name
             file_name = f"{hashlib.md5(key.encode()).hexdigest()}.cache"
@@ -367,7 +372,7 @@ class L2DiskCache:
                     'created_at': time.time(),
                     'last_accessed': time.time(),
                     'access_count': 0,
-                    'ttl': ttl or self.default_ttl
+                    'ttl': self.default_ttl if ttl is None else ttl
                 }
 
                 # Save index
@@ -450,12 +455,21 @@ class L2DiskCache:
     def _save_index(self):
         """Save index to disk"""
         index_file = self.cache_dir / "index.json"
+        tmp_file = index_file.with_suffix(".json.tmp")
 
         try:
-            with open(index_file, 'w') as f:
+            with open(tmp_file, 'w') as f:
                 json.dump(self.index, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_file, index_file)
         except Exception as e:
             logger.error(f"Error saving L2 cache index: {e}")
+            try:
+                if tmp_file.exists():
+                    tmp_file.unlink()
+            except Exception:
+                pass
 
     def clear(self):
         """Clear all cache entries"""
@@ -585,6 +599,8 @@ class L3RemoteCache:
         """Set value in cache"""
         if not self.enabled:
             return False
+        if ttl is not None and ttl <= 0:
+            return False
 
         full_key = f"{self.key_prefix}{key}"
 
@@ -592,7 +608,7 @@ class L3RemoteCache:
             data = pickle.dumps(value)
             self.redis_client.setex(
                 full_key,
-                ttl or self.default_ttl,
+                self.default_ttl if ttl is None else ttl,
                 data
             )
             return True
@@ -735,25 +751,10 @@ class MultiTierCache:
         return None
 
     def _get_sync(self, key: str) -> Optional[Any]:
-        """Synchronous get with tier promotion for use inside a running loop."""
+        """Synchronous get for use inside a running loop (L1 only to avoid blocking)."""
         value = self.l1.get(key)
         if value is not None:
             return value
-
-        value = self.l2.get(key)
-        if value is not None:
-            access_count = self.l2.get_access_count(key)
-            if access_count >= self.l2_to_l1_threshold:
-                self.l1.set(key, value)
-            return value
-
-        if self.l3.enabled:
-            value = self.l3.get(key)
-            if value is not None:
-                self.l2.set(key, value, None)
-                self.l1.set(key, value)
-                return value
-
         return None
 
     def get(self, key: str) -> Optional[Any]:
@@ -770,6 +771,8 @@ class MultiTierCache:
 
     async def set_async(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Async set in cache"""
+        if ttl is not None and ttl <= 0:
+            return False
         # Always write to L1 for immediate access
         success = self.l1.set(key, value, ttl)
 
@@ -783,13 +786,10 @@ class MultiTierCache:
         return success
 
     def _set_sync(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
-        """Synchronous set for use inside a running loop."""
-        success = self.l1.set(key, value, ttl)
-        if success:
-            self.l2.set(key, value, ttl)
-            if self.l3.enabled:
-                self.l3.set(key, value, ttl)
-        return success
+        """Synchronous set for use inside a running loop (L1 only to avoid blocking)."""
+        if ttl is not None and ttl <= 0:
+            return False
+        return self.l1.set(key, value, ttl)
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Synchronous set in cache"""

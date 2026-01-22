@@ -6126,6 +6126,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         filters: List[str] = []
         params: List[Any] = []
+        keyword_table = self._map_table_for_backend("keywords")
 
         if self.backend_type == BackendType.POSTGRESQL:
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
@@ -6169,7 +6170,6 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 filters.append(f"{date_expr} <= ?")
                 params.append(end_date)
             if keywords:
-                keyword_table = self._map_table_for_backend("keywords")
                 for kw in keywords:
                     filters.append(
                         f"EXISTS (SELECT 1 FROM conversation_keywords ck "
@@ -6232,7 +6232,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             for kw in keywords:
                 filters.append(
                     "EXISTS (SELECT 1 FROM conversation_keywords ck "
-                    "JOIN keywords k ON k.id = ck.keyword_id "
+                    f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
                     "WHERE ck.conversation_id = c.id AND k.deleted = 0 AND LOWER(k.keyword) = ?)"
                 )
                 params.append(kw.lower())
@@ -7434,7 +7434,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def count_keywords(self) -> int:
         """Return count of active (non-deleted) keywords."""
-        query = "SELECT COUNT(*) AS cnt FROM keywords WHERE deleted = 0"
+        keyword_table = self._map_table_for_backend("keywords")
+        query = f"SELECT COUNT(*) AS cnt FROM {keyword_table} WHERE deleted = 0"
         try:
             cursor = self.execute_query(query)
             row = cursor.fetchone()
@@ -7968,7 +7969,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     FROM notes_fts
                     JOIN notes AS n ON notes_fts.rowid = n.rowid
                     JOIN note_keywords nk ON n.id = nk.note_id
-                    JOIN keywords k ON k.id = nk.keyword_id
+                    JOIN {keyword_table} k ON k.id = nk.keyword_id
                     WHERE notes_fts MATCH ?
                       AND n.deleted = 0
                       AND k.deleted = 0
@@ -7982,7 +7983,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     SELECT DISTINCT n.*
                     FROM notes n
                     JOIN note_keywords nk ON n.id = nk.note_id
-                    JOIN keywords k ON k.id = nk.keyword_id
+                    JOIN {keyword_table} k ON k.id = nk.keyword_id
                     WHERE n.deleted = 0
                       AND k.deleted = 0
                       AND ({like_clause})
@@ -8136,10 +8137,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                  "unlink")
 
     def get_keywords_for_conversation(self, conversation_id: str) -> List[Dict[str, Any]]:
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN conversation_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.conversation_id = ? \
                   AND k.deleted = 0 \
@@ -8171,10 +8173,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                  "unlink")
 
     def get_keywords_for_collection(self, collection_id: int) -> List[Dict[str, Any]]:
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN collection_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.collection_id = ? \
                   AND k.deleted = 0 \
@@ -8205,10 +8208,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return self._manage_link("note_keywords", "note_id", note_id, "keyword_id", keyword_id, "unlink")
 
     def get_keywords_for_note(self, note_id: str) -> List[Dict[str, Any]]: # note_id is str
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN note_keywords nk ON k.id = nk.keyword_id
                 WHERE nk.note_id = ? \
                   AND k.deleted = 0 \
@@ -8221,11 +8225,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Return keywords for multiple notes as a map of note_id -> keywords list."""
         if not note_ids:
             return {}
+        keyword_table = self._map_table_for_backend("keywords")
         placeholders = ",".join(["?"] * len(note_ids))
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT nk.note_id AS note_id, k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN note_keywords nk ON k.id = nk.keyword_id
                 WHERE nk.note_id IN ({placeholders}) \
                   AND k.deleted = 0 \
@@ -8531,6 +8536,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """List flashcards with filters. due_status in {'new','learning','due','all'}."""
         where_clauses = ["1=1"]
         params: List[Any] = []
+        keyword_table = self._map_table_for_backend("keywords")
         if not include_deleted:
             if self.backend_type == BackendType.POSTGRESQL:
                 where_clauses.append("f.deleted = FALSE")
@@ -8552,7 +8558,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # tag filter (single tag)
         join_tag = ""
         if tag:
-            join_tag = "JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN keywords kw ON kw.id = fk.keyword_id"
+            join_tag = f"JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN {keyword_table} kw ON kw.id = fk.keyword_id"
             where_clauses.append("kw.keyword = ?")
             params.append(tag)
 
@@ -8603,6 +8609,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Count flashcards matching filters. Mirrors list_flashcards filters."""
         where_clauses = ["1=1"]
         params: List[Any] = []
+        keyword_table = self._map_table_for_backend("keywords")
         if not include_deleted:
             if self.backend_type == BackendType.POSTGRESQL:
                 where_clauses.append("f.deleted = FALSE")
@@ -8623,7 +8630,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         join_tag = ""
         if tag:
-            join_tag = "JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN keywords kw ON kw.id = fk.keyword_id"
+            join_tag = f"JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN {keyword_table} kw ON kw.id = fk.keyword_id"
             where_clauses.append("kw.keyword = ?")
             params.append(tag)
 
@@ -8953,12 +8960,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def get_keywords_for_flashcard(self, card_uuid: str) -> List[Dict[str, Any]]:
         """Return keywords linked to a flashcard."""
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("kw.keyword")
         query = f"""
             SELECT kw.*
               FROM flashcards f
               JOIN flashcard_keywords fk ON fk.card_id = f.id
-              JOIN keywords kw ON kw.id = fk.keyword_id
+              JOIN {keyword_table} kw ON kw.id = fk.keyword_id
              WHERE f.uuid = ? AND f.deleted = 0 AND kw.deleted = 0
              {order_clause}
         """

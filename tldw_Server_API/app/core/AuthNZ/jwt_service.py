@@ -43,6 +43,22 @@ class JWTService:
         "service",
     })
 
+    @staticmethod
+    def _filter_additional_claims(
+        additional_claims: Optional[Dict[str, Any]],
+        *,
+        reserved: set[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Strip reserved claim keys from additional_claims to prevent overrides."""
+        if not additional_claims:
+            return None
+        filtered = {
+            key: value
+            for key, value in additional_claims.items()
+            if key not in reserved
+        }
+        return filtered or None
+
     def __init__(self, settings: Optional[Settings] = None):
         """Initialize JWT service"""
         self.settings = settings or get_settings()
@@ -138,9 +154,13 @@ class JWTService:
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
 
-        # Add any additional claims
-        if additional_claims:
-            payload.update(additional_claims)
+        # Add any additional claims (excluding reserved JWT fields)
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
 
         # Encode the token
         try:
@@ -189,9 +209,13 @@ class JWTService:
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
 
-        # Add any additional claims
-        if additional_claims:
-            payload.update(additional_claims)
+        # Add any additional claims (excluding reserved JWT fields)
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
 
         # Encode the token
         try:
@@ -499,8 +523,12 @@ class JWTService:
             payload["iss"] = self.settings.JWT_ISSUER
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
-        if additional_claims:
-            payload.update(additional_claims)
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             logger.debug(

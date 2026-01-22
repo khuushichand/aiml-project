@@ -338,7 +338,19 @@ class LiveMeetingInsights:
             return
         task = self._loop.create_task(coro_func())
         self._pending.add(task)
-        task.add_done_callback(self._pending.discard)
+        def _on_done(done_task: asyncio.Task) -> None:
+            self._pending.discard(done_task)
+            try:
+                exc = done_task.exception()
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(f"LiveMeetingInsights: task exception check failed: {exc}")
+                return
+            if exc:
+                logger.debug(f"LiveMeetingInsights: background task failed: {exc}")
+
+        task.add_done_callback(_on_done)
 
     async def _emit_live_update(self) -> None:
         async with self._lock:

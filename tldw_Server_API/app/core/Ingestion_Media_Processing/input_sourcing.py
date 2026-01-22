@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     FileValidationError,
     FileValidator,
     process_and_validate_file,
+    _extension_candidates,
 )
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Utils.Utils import logging, sanitize_filename
@@ -133,13 +134,11 @@ async def save_uploaded_files(
                 )
                 continue
 
-            suffixes = [s.lower() for s in FilePath(original_filename).suffixes]
-            candidates: List[str] = []
-            for idx in range(len(suffixes)):
-                joined = "".join(suffixes[idx:])
-                if joined:
-                    candidates.append(joined)
-            file_extension = candidates[0] if candidates else FilePath(original_filename).suffix.lower()
+            original_name = FilePath(original_filename).name
+            candidates = _extension_candidates(original_name)
+            file_extension = (
+                candidates[0] if candidates else FilePath(original_name).suffix.lower()
+            )
 
             blocked_extensions = {
                 ".exe",
@@ -223,7 +222,9 @@ async def save_uploaded_files(
                 )
                 continue
 
-            original_stem = FilePath(original_filename).stem
+            original_stem = FilePath(original_name).stem
+            if file_extension and original_name.lower().endswith(file_extension):
+                original_stem = original_name[: -len(file_extension)] or original_stem
             max_total_filename_len = 200
             secure_base = sanitize_filename(
                 original_stem,

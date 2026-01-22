@@ -105,8 +105,11 @@ class ModerationService:
         self._config = load_and_log_configs() or {}
         self._lock = threading.RLock()
         # Safety/performance limits (overridable via config or env)
+        # NOTE: _max_scan_chars is used as the scan chunk size; the full text is scanned in chunks.
         self._max_scan_chars = int(os.getenv("MODERATION_MAX_SCAN_CHARS", "200000"))
         self._max_replacements_per_pattern = int(os.getenv("MODERATION_MAX_REPLACEMENTS_PER_PATTERN", "1000"))
+        # Window extension to detect matches spanning chunk boundaries
+        self._match_window_chars = int(os.getenv("MODERATION_MATCH_WINDOW_CHARS", "4096"))
         # Optional debounce for blocklist writes (ms); default disabled
         self._write_debounce_ms = int(os.getenv("MODERATION_BLOCKLIST_WRITE_DEBOUNCE_MS", "0") or 0)
         self._last_blocklist_write: float = 0.0
@@ -176,6 +179,10 @@ class ModerationService:
             pass
         try:
             self._max_replacements_per_pattern = int(mod_cfg.get("max_replacements_per_pattern", self._max_replacements_per_pattern))
+        except Exception:
+            pass
+        try:
+            self._match_window_chars = int(mod_cfg.get("match_window_chars", self._match_window_chars))
         except Exception:
             pass
         # Optional debounce for blocklist writes (ms)
@@ -263,20 +270,55 @@ class ModerationService:
                     text = before.strip()
         # Parse action/replacement from the (categories-trimmed) text
         if '->' in text:
-            parts = text.split('->', 1)
-            text = parts[0].strip()
-            rhs = parts[1].strip()
-            if rhs:
-                rhs_l = rhs.lower()
-                if rhs_l.startswith('redact:'):
-                    action = 'redact'
-                    repl = rhs[len('redact:'):].strip()
-                elif rhs_l in ('block', 'warn', 'redact'):
-                    action = rhs_l
-                else:
-                    # Unknown directive; treat as literal action text
-                    action = rhs
+            lhs, rhs = self._split_action_directive(text)
+            if rhs is not None:
+                text = lhs
+                if rhs:
+                    rhs_l = rhs.lower()
+                    if rhs_l.startswith('redact:'):
+                        action = 'redact'
+                        repl = rhs[len('redact:'):].strip()
+                    elif rhs_l in ('block', 'warn', 'redact'):
+                        action = rhs_l
+                    else:
+                        # Unknown directive; treat as literal action text
+                        action = rhs
         return text, action, repl, categories
+
+    @staticmethod
+    def _split_action_directive(text: str) -> Tuple[str, Optional[str]]:
+        """Split text into (pattern, rhs) on the first unescaped '->' outside /regex/."""
+        if '->' not in text:
+            return text, None
+        in_regex = False
+        escape = False
+        for i in range(len(text) - 1):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == '\\':
+                escape = True
+                continue
+            if ch == '/' and i == 0:
+                in_regex = True
+                continue
+            if ch == '/' and in_regex:
+                in_regex = False
+                continue
+            if not in_regex and text[i:i + 2] == '->':
+                # Skip escaped separators (e.g., \\->)
+                bs = 0
+                j = i - 1
+                while j >= 0 and text[j] == '\\':
+                    bs += 1
+                    j -= 1
+                if bs % 2 == 1:
+                    continue
+                lhs = text[:i].strip()
+                rhs = text[i + 2:].strip()
+                return lhs, rhs
+        return text, None
 
     def _load_block_patterns(self, path: Optional[str]) -> List[PatternRule]:
         patterns: List[PatternRule] = []
@@ -456,7 +498,7 @@ class ModerationService:
             if isinstance(data, dict):
                 ro: Dict[str, object] = {}
                 if "pii_enabled" in data:
-                    ro["pii_enabled"] = bool(data.get("pii_enabled"))
+                    ro["pii_enabled"] = self._parse_bool_value(data.get("pii_enabled"))
                 cats = data.get("categories_enabled")
                 if isinstance(cats, list):
                     ro["categories_enabled"] = {str(c).strip().lower() for c in cats if str(c).strip()}
@@ -548,13 +590,38 @@ class ModerationService:
             return default
         return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
 
+    @staticmethod
+    def _parse_bool_value(v: object) -> bool:
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return False
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            val = v.strip().lower()
+            if val in {"1", "true", "yes", "y", "on"}:
+                return True
+            if val in {"0", "false", "no", "n", "off"}:
+                return False
+        return bool(v)
+
     # --------------- Checking and transformations ---------------
-    def check_text(self, text: str, policy: ModerationPolicy) -> Tuple[bool, Optional[str]]:
+    def check_text(self, text: str, policy: ModerationPolicy, phase: Optional[str] = None) -> Tuple[bool, Optional[str]]:
         """Return (is_flagged, matched_sample)."""
         if not policy.enabled or not text:
             return False, None
         if not policy.block_patterns:
             return False, None
+        default_action = "warn"
+        if phase == "input":
+            default_action = policy.input_action
+        elif phase == "output":
+            default_action = policy.output_action
+        best_rank = 0
+        best_match_span: Optional[Tuple[int, int]] = None
+        best_match_pos: Optional[int] = None
+        best_replacement: Optional[str] = None
         for rule in policy.block_patterns:
             # Category gating mirrors evaluate_action() behavior
             if isinstance(rule, PatternRule) and policy.categories_enabled:
@@ -563,24 +630,76 @@ class ModerationService:
                     continue
             pat = rule.regex if isinstance(rule, PatternRule) else rule
             match_span = self._find_match_span(pat, text)
-            if match_span:
-                # Build a sanitized snippet with context that does not expose matched content
-                start, end = match_span
-                left_start = max(0, start - 16)
-                right_end = min(len(text), end + 16)
-                left = text[left_start:start]
-                right = text[end:right_end]
-                mask = None
+            if not match_span:
+                continue
+            action = None
+            if isinstance(rule, PatternRule) and rule.action:
+                action = rule.action
+            else:
+                action = default_action
+            action = (action or "warn").lower()
+            if action not in {"block", "redact", "warn"}:
+                action = "warn"
+            rank = {"warn": 1, "redact": 2, "block": 3}.get(action, 1)
+            match_pos = match_span[0]
+            if rank > best_rank or (rank == best_rank and (best_match_pos is None or match_pos < best_match_pos)):
+                best_rank = rank
+                best_match_pos = match_pos
+                best_match_span = match_span
                 if isinstance(rule, PatternRule) and rule.replacement:
-                    mask = rule.replacement
+                    best_replacement = rule.replacement
                 else:
-                    mask = policy.redact_replacement
-                snippet = (left + (mask or "[REDACTED]") + right).strip()
-                # Bound snippet length
-                if len(snippet) > 80:
-                    snippet = snippet[:77] + "..."
-                return True, snippet
+                    best_replacement = policy.redact_replacement
+        if best_match_span:
+            snippet = self._build_sanitized_snippet(text, best_match_span, best_replacement or "[REDACTED]")
+            return True, snippet
         return False, None
+
+    @staticmethod
+    def _build_sanitized_snippet(text: str, match_span: Tuple[int, int], replacement: str) -> Optional[str]:
+        if not text or not match_span:
+            return None
+        start, end = match_span
+        if start < 0:
+            start = 0
+        if end < start:
+            end = start
+        if start > len(text):
+            start = len(text)
+        if end > len(text):
+            end = len(text)
+        left_start = max(0, start - 16)
+        right_end = min(len(text), end + 16)
+        left = text[left_start:start]
+        right = text[end:right_end]
+        snippet = (left + (replacement or "[REDACTED]") + right).strip()
+        if len(snippet) > 80:
+            snippet = snippet[:77] + "..."
+        return snippet
+
+    def build_sanitized_snippet(
+        self,
+        text: str,
+        policy: ModerationPolicy,
+        match_span: Optional[Tuple[int, int]],
+        pattern: Optional[str] = None,
+    ) -> Optional[str]:
+        """Create a sanitized snippet for a known match span and pattern."""
+        if not text or not match_span:
+            return None
+        replacement = policy.redact_replacement or "[REDACTED]"
+        if pattern and policy.block_patterns:
+            for rule in policy.block_patterns:
+                if not isinstance(rule, PatternRule):
+                    continue
+                try:
+                    if getattr(rule.regex, "pattern", None) == pattern:
+                        if rule.replacement:
+                            replacement = rule.replacement
+                        break
+                except Exception:
+                    continue
+        return self._build_sanitized_snippet(text, match_span, replacement)
 
     def redact_text(self, text: str, policy: ModerationPolicy) -> str:
         if not text or not policy.block_patterns:
@@ -598,8 +717,16 @@ class ModerationService:
                 repl = rule.replacement
             try:
                 replacement = repl or policy.redact_replacement
+                limit_raw = self._max_replacements_per_pattern
+                try:
+                    limit_int = int(limit_raw) if limit_raw is not None else 0
+                except Exception:
+                    limit_int = 0
+                # Treat non-positive values as unlimited (re.sub uses 0 for no limit)
+                if limit_int <= 0:
+                    limit_int = 0
                 if len(redacted) <= self._max_scan_chars:
-                    redacted = pat.sub(replacement, redacted, count=self._max_replacements_per_pattern)
+                    redacted = pat.sub(lambda _m: replacement, redacted, count=limit_int)
                 else:
                     matches = self._collect_rule_matches(redacted, pat)
                     if matches:
@@ -709,12 +836,15 @@ class ModerationService:
             start += step
 
     def _find_match_span(self, pat: re.Pattern, text: str) -> Optional[Tuple[int, int]]:
+        text_len = len(text)
+        window = max(0, int(self._match_window_chars))
         for start, end in self._iter_scan_chunks(text):
+            window_end = min(text_len, end + window)
             try:
-                m = pat.search(text, start, end)
+                m = pat.search(text, start, window_end)
             except re.error:
                 return None
-            if m:
+            if m and m.start() < end:
                 return m.start(), m.end()
         return None
 
@@ -726,9 +856,14 @@ class ModerationService:
         if limit is not None and int(limit) <= 0:
             limit = None
         matches_by_span: Dict[Tuple[int, int], re.Match] = {}
+        text_len = len(text)
+        window = max(0, int(self._match_window_chars))
         for start, end in self._iter_scan_chunks(text):
+            window_end = min(text_len, end + window)
             try:
-                for m in pat.finditer(text, start, end):
+                for m in pat.finditer(text, start, window_end):
+                    if m.start() >= end:
+                        break
                     span = m.span()
                     if span[0] == span[1]:
                         continue
@@ -757,10 +892,7 @@ class ModerationService:
             if start < last:
                 continue
             out_parts.append(text[last:start])
-            try:
-                out_parts.append(m.expand(replacement))
-            except re.error:
-                return text
+            out_parts.append(replacement)
             last = end
         out_parts.append(text[last:])
         return "".join(out_parts)

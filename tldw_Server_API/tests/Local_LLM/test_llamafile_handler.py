@@ -7,7 +7,7 @@ import pytest
 
 from tldw_Server_API.app.core.Local_LLM.Llamafile_Handler import LlamafileHandler
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamafileConfig
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ServerError, InferenceError
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ServerError, InferenceError, ModelDownloadError
 import httpx
 
 
@@ -291,6 +291,79 @@ async def test_llamafile_start_server_wildcard_host_uses_loopback(monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_llamafile_start_server_ignores_empty_args(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    model_dir = tmp_path / "models"
+    llama_dir.mkdir()
+    model_dir.mkdir()
+    exe = llama_dir / "llamafile"
+    exe.write_text("#!/bin/sh\n")
+    (model_dir / "toy.gguf").write_text("fake")
+
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=model_dir, default_port=8077)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    monkeypatch.setattr(
+        handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe)
+    )
+
+    async def _fake_cpe(*a, **k):
+        return DummyProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
+    from tldw_Server_API.app.core.Local_LLM import http_utils
+
+    monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
+
+    res = await handler.start_server("toy.gguf", server_args={"port": "", "threads": None})
+    assert res["status"] == "started"
+    assert res["port"] == 8077
+
+
+@pytest.mark.asyncio
+async def test_llamafile_start_server_starts_stream_drainers(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    model_dir = tmp_path / "models"
+    llama_dir.mkdir()
+    model_dir.mkdir()
+    exe = llama_dir / "llamafile"
+    exe.write_text("#!/bin/sh\n")
+    (model_dir / "toy.gguf").write_text("fake")
+
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=model_dir, default_port=8077)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    monkeypatch.setattr(
+        handler, "download_latest_llamafile_executable", lambda force_download=False: asyncio.sleep(0, result=exe)
+    )
+
+    class DummyStream:
+        async def read(self, n: int = -1):
+            return b""
+
+    class ProcWithStreams:
+        pid = 222
+        returncode = None
+        stdout = DummyStream()
+        stderr = DummyStream()
+
+        async def wait(self):
+            return 0
+
+    async def _fake_cpe(*a, **k):
+        return ProcWithStreams()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
+    from tldw_Server_API.app.core.Local_LLM import http_utils
+
+    monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
+
+    res = await handler.start_server("toy.gguf", server_args={"port": 8077})
+    assert res["status"] == "started"
+    assert handler._stream_tasks.get(8077)
+
+
+@pytest.mark.asyncio
 async def test_llamafile_inference_wildcard_host_uses_loopback(monkeypatch, tmp_path: Path):
     llama_dir = tmp_path / "llamafile"
     llama_dir.mkdir()
@@ -471,3 +544,62 @@ async def test_llamafile_download_extracts_zip_asset(monkeypatch, tmp_path: Path
     assert downloads == ["http://example.com/llamafile.zip"]
     assert exe_path == handler.llamafile_exe_path
     assert exe_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_llamafile_download_model_rejects_traversal(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    models_dir = tmp_path / "models"
+    llama_dir.mkdir()
+    models_dir.mkdir()
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=models_dir)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
+
+    async def fake_download(url, dest_path):
+        raise AssertionError("download should not be called for unsafe paths")
+
+    monkeypatch.setattr(http_utils, "async_stream_download", fake_download)
+
+    with pytest.raises(ModelDownloadError):
+        await handler.download_model_file(
+            model_name="bad",
+            model_url="http://example.com/bad.gguf",
+            model_filename="../evil.gguf",
+        )
+
+    outside = tmp_path / "outside" / "evil.gguf"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(ModelDownloadError):
+        await handler.download_model_file(
+            model_name="bad",
+            model_url="http://example.com/bad2.gguf",
+            model_filename=str(outside),
+        )
+
+
+@pytest.mark.asyncio
+async def test_llamafile_download_model_allows_subdir(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    models_dir = tmp_path / "models"
+    llama_dir.mkdir()
+    models_dir.mkdir()
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=models_dir)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
+
+    async def fake_download(url, dest_path):
+        Path(dest_path).write_text("model")
+
+    monkeypatch.setattr(http_utils, "async_stream_download", fake_download)
+
+    model_path = await handler.download_model_file(
+        model_name="ok",
+        model_url="http://example.com/ok.gguf",
+        model_filename="subdir/ok.gguf",
+    )
+
+    assert model_path.exists()
+    assert models_dir in model_path.parents

@@ -100,6 +100,7 @@ class RequestBatcher:
             'current_timeout': self.batch_timeout_ms,
             'throughput_history': deque(maxlen=10)
         }
+        self._shutdown_requested = False
 
         logger.info(
             f"Request batcher initialized: "
@@ -107,6 +108,30 @@ class RequestBatcher:
             f"max_batch_size={self.max_batch_size}, "
             f"timeout={self.batch_timeout_ms}ms"
         )
+
+    def _start_processing_task(self, queue_key: Tuple[str, str, str]) -> Optional[asyncio.Task]:
+        """Start a processing task for the queue if we're not shutting down."""
+        if self._shutdown_requested:
+            return None
+
+        new_task = asyncio.create_task(self._process_queue(queue_key))
+        self.processing_tasks[queue_key] = new_task
+        new_task.add_done_callback(
+            lambda completed, key=queue_key: self._handle_task_done(key, completed)
+        )
+        return new_task
+
+    def _handle_task_done(self, queue_key: Tuple[str, str, str], completed: asyncio.Task) -> None:
+        """Cleanup task tracking and restart processing if work arrived during idle exit."""
+        if self.processing_tasks.get(queue_key) is completed:
+            self.processing_tasks.pop(queue_key, None)
+
+        if self._shutdown_requested:
+            return
+
+        queue = self.queues.get(queue_key)
+        if queue:
+            self._start_processing_task(queue_key)
 
     async def submit_request(
         self,
@@ -195,15 +220,7 @@ class RequestBatcher:
                 except Exception:
                     reason = "finished"
                 logger.debug(f"Restarting processing task for queue {self._queue_label(queue_key)}: previous task {reason}.")
-
-            new_task = asyncio.create_task(self._process_queue(queue_key))
-            self.processing_tasks[queue_key] = new_task
-
-            def _remove_task(completed: asyncio.Task, key: str = queue_key) -> None:
-                if self.processing_tasks.get(key) is completed:
-                    self.processing_tasks.pop(key, None)
-
-            new_task.add_done_callback(_remove_task)
+            self._start_processing_task(queue_key)
 
         # Add to queue
         self.queues[queue_key].append(request)
@@ -791,6 +808,7 @@ class RequestBatcher:
 
     async def shutdown(self):
         """Gracefully shutdown the batcher"""
+        self._shutdown_requested = True
         # Process remaining requests
         await self.flush_all_queues()
 

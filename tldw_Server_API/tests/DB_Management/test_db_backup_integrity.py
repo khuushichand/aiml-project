@@ -71,6 +71,48 @@ def test_incremental_backup_creates_directory_when_missing(backup_env):
     assert len(backups) == 1
 
 
+def test_create_backup_accepts_sqlite_file_uri(backup_env):
+
+    db_path = backup_env / "uri_source.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE t (val TEXT)")
+        conn.execute("INSERT INTO t (val) VALUES ('hello')")
+        conn.commit()
+
+    db_uri = f"file:{db_path}?mode=rw"
+    backup_dir = backup_env / "uri_backups"
+    message = create_backup(db_uri, str(backup_dir), "uri")
+
+    assert message.lower().startswith("backup created")
+    backups = list(backup_dir.glob("uri_backup_*.db"))
+    assert len(backups) == 1
+
+    with sqlite3.connect(backups[0]) as conn:
+        rows = conn.execute("SELECT val FROM t").fetchall()
+    assert rows == [("hello",)]
+
+
+def test_incremental_backup_accepts_sqlite_file_uri(backup_env):
+
+    db_path = backup_env / "uri_incremental.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE t (val TEXT)")
+        conn.execute("INSERT INTO t (val) VALUES ('hello')")
+        conn.commit()
+
+    db_uri = f"file:{db_path}?mode=rw"
+    backup_dir = backup_env / "uri_incremental_backups"
+    message = create_incremental_backup(db_uri, str(backup_dir), "uri")
+
+    assert message.lower().startswith("incremental backup created")
+    backups = list(backup_dir.glob("uri_incremental_*.sqlib"))
+    assert len(backups) == 1
+
+    with sqlite3.connect(backups[0]) as conn:
+        rows = conn.execute("SELECT val FROM t").fetchall()
+    assert rows == [("hello",)]
+
+
 def test_rollback_to_backup_restores_wal_sidecars(backup_env):
 
     db_path = backup_env / "waltest.db"

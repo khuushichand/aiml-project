@@ -1517,14 +1517,3 @@ async def achat(
 #
 # End of chat_orchestrator.py
 ####################################################################################################
-    try:
-        # If this succeeds, we're on a thread with an active event loop.
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop on this thread: safe to proceed.
-        pass
-    else:
-        raise RuntimeError(
-            "chat() cannot be called from an active event loop. "
-            "Use await achat(...) or await asyncio.to_thread(chat, ...) instead."
-        )

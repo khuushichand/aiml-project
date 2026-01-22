@@ -292,6 +292,25 @@ def _looks_like_jwt(token: Optional[str]) -> bool:
     return token.count(".") == 2
 
 
+_SINGLE_USER_BEARER_PREFIX = "single-user-token-"
+
+
+def _parse_single_user_bearer_token(token: Optional[str]) -> Optional[int]:
+    """Extract the user id from a single-user bearer token."""
+    if not isinstance(token, str):
+        return None
+    raw = token.strip()
+    if not raw.startswith(_SINGLE_USER_BEARER_PREFIX):
+        return None
+    suffix = raw[len(_SINGLE_USER_BEARER_PREFIX) :]
+    if not suffix:
+        return None
+    try:
+        return int(suffix)
+    except (TypeError, ValueError):
+        return None
+
+
 def _raise_user_id_error(detail: str, *, status_code: int, raise_http: bool) -> None:
     if raise_http:
         raise HTTPException(status_code=status_code, detail=detail)
@@ -657,16 +676,92 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         membership_lookup_id = user.id_int
         if membership_lookup_id is None:
             raise ValueError("User ID is non-numeric; skipping membership lookup.")
-        if token_team_ids or token_org_ids:
-            team_ids = token_team_ids or []
-            org_ids = token_org_ids or []
-        memberships = []
-        if not team_ids or not org_ids:
-            memberships = await list_memberships_for_user(membership_lookup_id)
-        if not team_ids:
-            team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
-        if not org_ids:
-            org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+
+        memberships = await list_memberships_for_user(membership_lookup_id)
+        member_team_ids = _coerce_int_list(
+            [m.get("team_id") for m in memberships if m.get("team_id") is not None]
+        )
+        member_org_ids = sorted(
+            set(_coerce_int_list([m.get("org_id") for m in memberships if m.get("org_id") is not None]))
+        )
+        team_to_org: dict[int, int] = {}
+        for m in memberships:
+            if m.get("team_id") is None or m.get("org_id") is None:
+                continue
+            try:
+                team_to_org[int(m["team_id"])] = int(m["org_id"])
+            except (TypeError, ValueError):
+                continue
+
+        member_team_set = set(member_team_ids)
+        member_org_set = set(member_org_ids)
+
+        if token_team_ids:
+            missing_teams = [tid for tid in token_team_ids if tid not in member_team_set]
+            if missing_teams:
+                if pii_redact_logs:
+                    logger.warning("Token team memberships are no longer valid (details redacted)")
+                else:
+                    logger.warning(
+                        f"Token team IDs not permitted for user {subject_identifier}: {missing_teams}"
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Token membership is no longer valid",
+                )
+        if token_org_ids:
+            missing_orgs = [oid for oid in token_org_ids if oid not in member_org_set]
+            if missing_orgs:
+                if pii_redact_logs:
+                    logger.warning("Token org memberships are no longer valid (details redacted)")
+                else:
+                    logger.warning(
+                        f"Token org IDs not permitted for user {subject_identifier}: {missing_orgs}"
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Token membership is no longer valid",
+                )
+
+        if token_team_ids:
+            team_ids = list(token_team_ids)
+            if token_org_ids:
+                org_ids = list(token_org_ids)
+            else:
+                org_ids = sorted(
+                    {team_to_org.get(tid) for tid in team_ids if team_to_org.get(tid) is not None}
+                )
+        elif token_org_ids:
+            org_ids = list(token_org_ids)
+            token_org_set = set(org_ids)
+            team_ids = [tid for tid in member_team_ids if team_to_org.get(tid) in token_org_set]
+        else:
+            team_ids = list(member_team_ids)
+            org_ids = list(member_org_ids)
+
+        active_team_claim = None
+        if token_active_team_id is not None:
+            try:
+                active_team_claim = int(token_active_team_id)
+            except (TypeError, ValueError):
+                active_team_claim = None
+        if active_team_claim is not None and active_team_claim not in team_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Token active team is no longer valid",
+            )
+        active_org_claim = None
+        if token_active_org_id is not None:
+            try:
+                active_org_claim = int(token_active_org_id)
+            except (TypeError, ValueError):
+                active_org_claim = None
+        if active_org_claim is not None and active_org_claim not in org_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Token active organization is no longer valid",
+            )
+
         active_team_id = _normalize_active_id(token_active_team_id, team_ids)
         active_org_id = _normalize_active_id(token_active_org_id, org_ids)
         try:
@@ -678,6 +773,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
                 request.state.active_org_id = active_org_id
         except Exception:
             pass
+    except HTTPException:
+        raise
     except Exception:
         try:
             request.state.team_ids = []
@@ -1168,7 +1265,7 @@ async def get_request_user(
     request: Request,
     api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     token: Optional[str] = Depends(oauth2_scheme),  # Bearer from Authorization
-    legacy_token_header: Optional[str] = Header(None, alias="Token"),  # Back-compat for chat endpoint tests
+    legacy_token_header: Optional[str] = Header(None, alias="Token"),  # Deprecated legacy header (ignored)
 ) -> User:
     """
     Unified authentication dependency for endpoints that require a User.
@@ -1234,18 +1331,8 @@ async def get_request_user(
             f"get_request_user fast-path reuse failed; falling back to normal auth: {fastpath_exc}"
         )
 
-    # Backwards-compatibility: treat a legacy "Token: Bearer <API_KEY>" header as an
-    # API key when X-API-KEY is absent.
-    if api_key is None and legacy_token_header and isinstance(legacy_token_header, str):
-        extracted = None
-        try:
-            legacy_token_header = legacy_token_header.strip()
-            if legacy_token_header.lower().startswith("bearer "):
-                extracted = legacy_token_header[len("Bearer ") :].strip()
-        except Exception:
-            extracted = None
-        if extracted:
-            api_key = extracted
+    # Legacy Token header is intentionally ignored (no longer supported).
+    _ = legacy_token_header
 
     # Prefer Bearer JWT when present; in single-user mode treat Bearer as API key.
     if token:
@@ -1255,6 +1342,85 @@ async def get_request_user(
             settings = None
         token_is_jwt = _looks_like_jwt(token)
         if settings is not None and getattr(settings, "AUTH_MODE", None) == "single_user":
+            parsed_id = _parse_single_user_bearer_token(token)
+            if parsed_id is not None:
+                client_ip = None
+                try:
+                    client = getattr(request, "client", None)
+                    if client is not None:
+                        client_ip = getattr(client, "host", None)
+                except Exception:
+                    client_ip = None
+                if not is_single_user_ip_allowed(client_ip, settings):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or missing API Key",
+                    )
+                user = get_single_user_instance()
+                fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
+                if fixed_id is not None and parsed_id != int(fixed_id):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or missing API Key",
+                    )
+                if user.id_int is not None and parsed_id != user.id_int:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or missing API Key",
+                    )
+                try:
+                    request.state.user_id = user.id
+                    request.state.api_key_id = None
+                    request.state.team_ids = []
+                    request.state.org_ids = []
+                except Exception:
+                    pass
+                try:
+                    set_scope(
+                        user_id=user.id_int,
+                        org_ids=[],
+                        team_ids=[],
+                        is_admin=True,
+                    )
+                except Exception:
+                    pass
+                try:
+                    principal = AuthPrincipal(
+                        kind="user",
+                        user_id=user.id_int,
+                        api_key_id=None,
+                        username=getattr(user, "username", None),
+                        email=getattr(user, "email", None),
+                        subject="single_user",
+                        token_type="access",
+                        jti=None,
+                        roles=list(user.roles or []),
+                        permissions=list(user.permissions or []),
+                        is_admin=True,
+                        org_ids=[],
+                        team_ids=[],
+                    )
+                    ip = request.client.host if getattr(request, "client", None) else None
+                    user_agent = (
+                        request.headers.get("User-Agent")
+                        if getattr(request, "headers", None)
+                        else None
+                    )
+                    request_id = (
+                        request.headers.get("X-Request-ID")
+                        if getattr(request, "headers", None)
+                        else None
+                    ) or getattr(request.state, "request_id", None)
+                    request.state.auth = AuthContext(
+                        principal=principal,
+                        ip=ip,
+                        user_agent=user_agent,
+                        request_id=request_id,
+                    )
+                    request.state._auth_user = user
+                except Exception:
+                    logger.debug("Unable to populate AuthContext for single-user bearer token")
+                return user
             logger.debug("get_request_user: Treating Bearer token as API key in single-user mode.")
             return await authenticate_api_key_user(request, token)
         if not token_is_jwt:

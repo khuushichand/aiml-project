@@ -205,6 +205,7 @@ class CircuitBreaker:
             CircuitBreakerError: If circuit is open
             Exception: If function fails
         """
+        acquired_half_open_slot = False
         with self._lock:
             self._update_state()
 
@@ -221,6 +222,7 @@ class CircuitBreaker:
                         f"Circuit breaker '{self.name}' half-open call limit reached"
                     )
                 self._half_open_calls += 1
+                acquired_half_open_slot = True
 
         try:
             result = func(*args, **kwargs)
@@ -229,6 +231,11 @@ class CircuitBreaker:
         except self.expected_exception as e:
             self._on_failure(e)
             raise
+        finally:
+            if acquired_half_open_slot:
+                with self._lock:
+                    if self._state == CircuitState.HALF_OPEN and self._half_open_calls > 0:
+                        self._half_open_calls -= 1
 
     async def call_async(self, func: Callable[..., T], *args, **kwargs) -> T:
         """
@@ -246,6 +253,7 @@ class CircuitBreaker:
             CircuitBreakerError: If circuit is open
             Exception: If function fails
         """
+        acquired_half_open_slot = False
         with self._lock:
             self._update_state()
 
@@ -262,6 +270,7 @@ class CircuitBreaker:
                         f"Circuit breaker '{self.name}' half-open call limit reached"
                     )
                 self._half_open_calls += 1
+                acquired_half_open_slot = True
 
         try:
             result = await func(*args, **kwargs)
@@ -270,6 +279,11 @@ class CircuitBreaker:
         except self.expected_exception as e:
             self._on_failure(e)
             raise
+        finally:
+            if acquired_half_open_slot:
+                with self._lock:
+                    if self._state == CircuitState.HALF_OPEN and self._half_open_calls > 0:
+                        self._half_open_calls -= 1
 
     def _on_success(self):
         """Handle successful call"""

@@ -97,3 +97,18 @@ def test_transform_sqlite_query_for_postgres_converts_boolean_columns():
     assert "is_active = TRUE" in transformed
     # Non-boolean column should remain unchanged
     assert "priority = 0" in transformed
+
+
+def test_transform_sqlite_query_for_postgres_preserves_literals_and_comments():
+
+    source = (
+        "SELECT * FROM demo WHERE deleted = 0 "
+        "AND note LIKE '%deleted = 0%' -- deleted = 0\n"
+        "AND enabled = 1 /* deleted = 1 */"
+    )
+    transformed = transform_sqlite_query_for_postgres(source)
+    assert "deleted = FALSE" in transformed
+    assert "enabled = TRUE" in transformed
+    assert "LIKE '%deleted = 0%'" in transformed
+    assert "-- deleted = 0" in transformed
+    assert "/* deleted = 1 */" in transformed

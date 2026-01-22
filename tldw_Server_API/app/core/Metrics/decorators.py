@@ -106,12 +106,15 @@ def track_metrics(
                     labels=list((labels or {}).keys())
                 ))
             if track_duration and duration_metric_name not in registry.metrics:
+                duration_labels = list((labels or {}).keys())
+                if "status" not in duration_labels:
+                    duration_labels.append("status")
                 registry.register_metric(MetricDefinition(
                     name=duration_metric_name,
                     type=MetricType.HISTOGRAM,
                     description=f"Execution duration for {base_name}",
                     unit="s",
-                    labels=list((labels or {}).keys()),
+                    labels=duration_labels,
                     buckets=_DEFAULT_DURATION_BUCKETS
                 ))
             if track_errors and error_metric_name not in registry.metrics:
@@ -149,7 +152,9 @@ def track_metrics(
                     # Track duration
                     if track_duration:
                         duration = time.monotonic() - start_time
-                        observe_histogram(duration_metric_name, duration, labels=metric_labels)
+                        duration_labels = dict(metric_labels)
+                        duration_labels.setdefault("status", "success")
+                        observe_histogram(duration_metric_name, duration, labels=duration_labels)
 
                     return result
 
@@ -195,7 +200,9 @@ def track_metrics(
                     # Track duration
                     if track_duration:
                         duration = time.monotonic() - start_time
-                        observe_histogram(duration_metric_name, duration, labels=metric_labels)
+                        duration_labels = dict(metric_labels)
+                        duration_labels.setdefault("status", "success")
+                        observe_histogram(duration_metric_name, duration, labels=duration_labels)
 
                     return result
 

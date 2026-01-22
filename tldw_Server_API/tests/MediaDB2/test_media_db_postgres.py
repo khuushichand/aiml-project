@@ -22,6 +22,11 @@ from tldw_Server_API.app.core.DB_Management.scope_context import scoped_context
 TEST_RLS_ROLE = "tldw_rls_tester"
 
 
+@pytest.fixture(autouse=True)
+def _enable_pg_role_switch(monkeypatch):
+    monkeypatch.setenv("TLDW_CONTENT_PG_ROLE_SWITCH", "1")
+
+
 def _has_postgres_dependencies() -> bool:
 
 

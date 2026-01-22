@@ -189,6 +189,8 @@ async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path):
 
     # Stub out heavy AuthNZ budget helpers so the debug endpoint does not hit DBs.
     import tldw_Server_API.app.api.v1.endpoints.authnz_debug as authnz_debug_ep
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
     async def _fake_resolve_api_key(api_key: str):
         _ = api_key
@@ -220,12 +222,32 @@ async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path):
 
     _reset_rg_state(app)
 
-    with _with_rg_middleware(app):
-        with TestClient(app) as client:
-            r1 = client.get("/api/v1/authnz/debug/api-key-id")
-            assert r1.status_code != 429
+    async def _fake_get_auth_principal(_request):
+        return AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=[],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
 
-            r2 = client.get("/api/v1/authnz/debug/api-key-id")
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
+
+    try:
+        with _with_rg_middleware(app):
+            with TestClient(app) as client:
+                r1 = client.get("/api/v1/authnz/debug/api-key-id")
+                assert r1.status_code != 429
+
+                r2 = client.get("/api/v1/authnz/debug/api-key-id")
+    finally:
+        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
     assert r2.status_code in (429, 503)
     if r2.status_code == 429:

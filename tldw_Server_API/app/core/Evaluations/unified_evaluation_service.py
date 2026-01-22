@@ -46,6 +46,7 @@ from tldw_Server_API.app.core.Evaluations.audit_adapter import (
     log_dataset_deleted,
 )
 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
+from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_value
 
 
 class EvaluationType(str, Enum):
@@ -345,10 +346,10 @@ class UnifiedEvaluationService:
             logger.error(f"Failed to list evaluations: {e}")
             raise
 
-    async def get_evaluation(self, eval_id: str) -> Optional[Dict[str, Any]]:
+    async def get_evaluation(self, eval_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get evaluation by ID"""
         try:
-            return self.db.get_evaluation(eval_id)
+            return self.db.get_evaluation(eval_id, created_by=created_by)
         except Exception as e:
             logger.error(f"Failed to get evaluation {eval_id}: {e}")
             raise
@@ -357,7 +358,8 @@ class UnifiedEvaluationService:
         self,
         eval_id: str,
         updates: Dict[str, Any],
-        updated_by: str = "system"
+        updated_by: str = "system",
+        created_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Update evaluation definition and return the updated record.
 
@@ -366,7 +368,7 @@ class UnifiedEvaluationService:
         when the update succeeds, or None if not found/updated.
         """
         try:
-            success = self.db.update_evaluation(eval_id, updates)
+            success = self.db.update_evaluation(eval_id, updates, created_by=created_by)
 
             if not success:
                 return None
@@ -379,7 +381,7 @@ class UnifiedEvaluationService:
                 pass
 
             # Return the updated evaluation
-            updated = self.db.get_evaluation(eval_id)
+            updated = self.db.get_evaluation(eval_id, created_by=created_by)
             return updated
 
         except Exception as e:
@@ -389,11 +391,12 @@ class UnifiedEvaluationService:
     async def delete_evaluation(
         self,
         eval_id: str,
-        deleted_by: str = "system"
+        deleted_by: str = "system",
+        created_by: Optional[str] = None,
     ) -> bool:
         """Soft delete an evaluation"""
         try:
-            success = self.db.delete_evaluation(eval_id)
+            success = self.db.delete_evaluation(eval_id, created_by=created_by)
 
             if success:
                 log_evaluation_deleted(user_id=deleted_by, eval_id=eval_id)
@@ -413,7 +416,8 @@ class UnifiedEvaluationService:
         config: Optional[Dict] = None,
         dataset_override: Optional[Dict] = None,
         webhook_url: Optional[str] = None,
-        created_by: str = "system"
+        created_by: str = "system",
+        webhook_user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create and start an evaluation run.
@@ -431,7 +435,7 @@ class UnifiedEvaluationService:
         """
         try:
             # Get evaluation
-            evaluation = await self.get_evaluation(eval_id)
+            evaluation = await self.get_evaluation(eval_id, created_by=created_by)
             if not evaluation:
                 raise ValueError(f"Evaluation {eval_id} not found")
 
@@ -445,8 +449,9 @@ class UnifiedEvaluationService:
 
             # Send webhook for run started
             if webhook_url and self.enable_webhooks and self.webhook_manager:
+                effective_webhook_user = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(created_by) or created_by
                 await self.webhook_manager.send_webhook(
-                    user_id=created_by,
+                    user_id=effective_webhook_user,
                     event=WebhookEvent.EVALUATION_STARTED,
                     evaluation_id=run_id,
                     data={
@@ -472,7 +477,8 @@ class UnifiedEvaluationService:
                     run_id=run_id,
                     eval_id=eval_id,
                     eval_config=eval_config,
-                    created_by=created_by
+                    created_by=created_by,
+                    webhook_user_id=webhook_user_id,
                 )
             )
 
@@ -492,7 +498,8 @@ class UnifiedEvaluationService:
         run_id: str,
         eval_id: str,
         eval_config: Dict,
-        created_by: str
+        created_by: str,
+        webhook_user_id: Optional[str] = None,
     ):
         """Run evaluation asynchronously"""
         current_task = asyncio.current_task()
@@ -511,9 +518,10 @@ class UnifiedEvaluationService:
 
             # Send completion webhook
             if eval_config.get("webhook_url") and self.enable_webhooks and getattr(self, "webhook_manager", None):
+                effective_webhook_user = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(created_by) or created_by
                 run = self.db.get_run(run_id)
                 await self.webhook_manager.send_webhook(
-                    user_id=created_by,
+                    user_id=effective_webhook_user,
                     event=WebhookEvent.EVALUATION_COMPLETED,
                     evaluation_id=run_id,
                     data={
@@ -527,8 +535,9 @@ class UnifiedEvaluationService:
             # Cancellation path: persist cancelled status and notify listeners
             self.db.update_run_status(run_id, "cancelled")
             if eval_config.get("webhook_url") and self.enable_webhooks and getattr(self, "webhook_manager", None):
+                effective_webhook_user = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(created_by) or created_by
                 await self.webhook_manager.send_webhook(
-                    user_id=created_by,
+                    user_id=effective_webhook_user,
                     event=WebhookEvent.EVALUATION_CANCELLED,
                     evaluation_id=run_id,
                     data={"run_id": run_id}
@@ -543,8 +552,9 @@ class UnifiedEvaluationService:
 
             # Send failure webhook
             if eval_config.get("webhook_url") and self.enable_webhooks and getattr(self, "webhook_manager", None):
+                effective_webhook_user = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(created_by) or created_by
                 await self.webhook_manager.send_webhook(
-                    user_id=created_by,
+                    user_id=effective_webhook_user,
                     event=WebhookEvent.EVALUATION_FAILED,
                     evaluation_id=run_id,
                     data={"error": str(e)}
@@ -553,10 +563,10 @@ class UnifiedEvaluationService:
             # Ensure the task registry is cleaned up
             self.runner.running_tasks.pop(run_id, None)
 
-    async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+    async def get_run(self, run_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get run by ID"""
         try:
-            return self.db.get_run(run_id)
+            return self.db.get_run(run_id, created_by=created_by)
         except Exception as e:
             logger.error(f"Failed to get run {run_id}: {e}")
             raise
@@ -566,7 +576,8 @@ class UnifiedEvaluationService:
         eval_id: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 20,
-        after: Optional[str] = None
+        after: Optional[str] = None,
+        created_by: Optional[str] = None,
     ) -> Tuple[List[Dict], bool]:
         """List runs with filtering"""
         try:
@@ -576,15 +587,20 @@ class UnifiedEvaluationService:
                 limit=limit,
                 after=after,
                 return_has_more=True,
+                created_by=created_by,
             )
             return runs, has_more
         except Exception as e:
             logger.error(f"Failed to list runs: {e}")
             raise
 
-    async def cancel_run(self, run_id: str, cancelled_by: str = "system") -> bool:
+    async def cancel_run(self, run_id: str, cancelled_by: str = "system", *, created_by: Optional[str] = None) -> bool:
         """Cancel a running evaluation"""
         try:
+            if created_by:
+                run = self.db.get_run(run_id, created_by=created_by)
+                if not run:
+                    return False
             # Try to cancel via runner
             success = self.runner.cancel_run(run_id)
 
@@ -609,7 +625,8 @@ class UnifiedEvaluationService:
         metrics: Optional[List[str]] = None,
         api_name: str = "openai",
         api_key: Optional[str] = None,
-        user_id: str = "system"
+        user_id: str = "system",
+        webhook_user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run G-Eval summarization evaluation.
@@ -674,14 +691,13 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
-                    # Normalize single-user id to fixed numeric id when appropriate
-                    effective_user_id = user_id
-                    if user_id == "single_user":
+                    effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
+                    if effective_user_id == "single_user":
                         try:
                             from tldw_Server_API.app.core.config import settings as _app_settings
-                            effective_user_id = str(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                            effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
                         except Exception:
-                            effective_user_id = "1"
+                            effective_user_id = "user_1"
                     if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
                         await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
@@ -727,7 +743,8 @@ class UnifiedEvaluationService:
         metrics: Optional[List[str]] = None,
         api_name: str = "openai",
         api_key: Optional[str] = None,
-        user_id: str = "system"
+        user_id: str = "system",
+        webhook_user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run RAG system evaluation.
@@ -780,13 +797,13 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
-                    effective_user_id = user_id
-                    if user_id == "single_user":
+                    effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
+                    if effective_user_id == "single_user":
                         try:
                             from tldw_Server_API.app.core.config import settings as _app_settings
-                            effective_user_id = str(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                            effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
                         except Exception:
-                            effective_user_id = "1"
+                            effective_user_id = "user_1"
                     if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
                         await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
@@ -830,7 +847,8 @@ class UnifiedEvaluationService:
         custom_criteria: Optional[Dict] = None,
         api_name: str = "openai",
         api_key: Optional[str] = None,
-        user_id: str = "system"
+        user_id: str = "system",
+        webhook_user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Evaluate response quality.
@@ -881,13 +899,13 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
-                    effective_user_id = user_id
-                    if user_id == "single_user":
+                    effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
+                    if effective_user_id == "single_user":
                         try:
                             from tldw_Server_API.app.core.config import settings as _app_settings
-                            effective_user_id = str(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                            effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
                         except Exception:
-                            effective_user_id = "1"
+                            effective_user_id = "user_1"
                     if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
                         await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
@@ -1208,19 +1226,20 @@ class UnifiedEvaluationService:
         self,
         limit: int = 20,
         after: Optional[str] = None,
-        offset: int = 0
+        offset: int = 0,
+        created_by: Optional[str] = None,
     ) -> Tuple[List[Dict], bool]:
         """List datasets with pagination"""
         try:
-            return self.db.list_datasets(limit=limit, after=after, offset=offset)
+            return self.db.list_datasets(limit=limit, after=after, offset=offset, created_by=created_by)
         except Exception as e:
             logger.error(f"Failed to list datasets: {e}")
             raise
 
-    async def get_dataset(self, dataset_id: str) -> Optional[Dict[str, Any]]:
+    async def get_dataset(self, dataset_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get dataset by ID"""
         try:
-            return self.db.get_dataset(dataset_id)
+            return self.db.get_dataset(dataset_id, created_by=created_by)
         except Exception as e:
             logger.error(f"Failed to get dataset {dataset_id}: {e}")
             raise
@@ -1228,11 +1247,12 @@ class UnifiedEvaluationService:
     async def delete_dataset(
         self,
         dataset_id: str,
-        deleted_by: str = "system"
+        deleted_by: str = "system",
+        created_by: Optional[str] = None,
     ) -> bool:
         """Delete a dataset"""
         try:
-            success = self.db.delete_dataset(dataset_id)
+            success = self.db.delete_dataset(dataset_id, created_by=created_by)
 
             if success:
                 log_dataset_deleted(user_id=deleted_by, dataset_id=dataset_id)
@@ -1267,17 +1287,9 @@ class UnifiedEvaluationService:
             List of evaluation records
         """
         try:
-            # Build filter criteria
-            filters = {"user_id": user_id}
-
-            if evaluation_type:
-                filters["type"] = evaluation_type
-
-            if start_date:
-                filters["created_after"] = start_date.isoformat()
-
-            if end_date:
-                filters["created_before"] = end_date.isoformat()
+            user_variants = self._user_id_variants(user_id)
+            start_ts = int(start_date.timestamp()) if start_date else None
+            end_ts = int(end_date.timestamp()) if end_date else None
 
             # Query database - list_evaluations only accepts limit, after, and eval_type
             # We need to filter results manually since the DB method doesn't support all filters
@@ -1287,26 +1299,22 @@ class UnifiedEvaluationService:
                 created_by=user_id
             )
 
-            # Manual filtering for user_id and date ranges since DB method doesn't support these
+            # Manual filtering for user_id and date ranges since DB method doesn't support all filters
             filtered_evaluations = []
             for eval in evaluations:
                 # Filter by creator/user if present in the record
                 owner = eval.get("created_by") or eval.get("user_id")
-                if user_id and owner != user_id:
+                if user_variants and owner not in user_variants:
                     continue
 
                 # Filter by date range if specified
-                if start_date or end_date:
-                    created_at_str = eval.get("created_at")
-                    if created_at_str:
-                        try:
-                            created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
-                            if start_date and created_at < start_date:
-                                continue
-                            if end_date and created_at > end_date:
-                                continue
-                        except Exception as dt_err:
-                            logger.debug(f"Failed to parse evaluation created_at timestamp: value={created_at_str}, error={dt_err}")
+                if start_ts is not None or end_ts is not None:
+                    created_ts = self._extract_created_ts(eval)
+                    if created_ts is not None:
+                        if start_ts is not None and created_ts < start_ts:
+                            continue
+                        if end_ts is not None and created_ts > end_ts:
+                            continue
 
                 filtered_evaluations.append(eval)
 
@@ -1339,17 +1347,9 @@ class UnifiedEvaluationService:
             Total count of matching evaluations
         """
         try:
-            # Build filter criteria
-            filters = {"user_id": user_id}
-
-            if evaluation_type:
-                filters["type"] = evaluation_type
-
-            if start_date:
-                filters["created_after"] = start_date.isoformat()
-
-            if end_date:
-                filters["created_before"] = end_date.isoformat()
+            user_variants = self._user_id_variants(user_id)
+            start_ts = int(start_date.timestamp()) if start_date else None
+            end_ts = int(end_date.timestamp()) if end_date else None
 
             # Get count from database - since DB doesn't have count_evaluations, count manually
             # Get all evaluations and count them with filters
@@ -1364,21 +1364,17 @@ class UnifiedEvaluationService:
             for eval in evaluations:
                 # Filter by creator/user if present in the record
                 owner = eval.get("created_by") or eval.get("user_id")
-                if user_id and owner != user_id:
+                if user_variants and owner not in user_variants:
                     continue
 
                 # Filter by date range if specified
-                if start_date or end_date:
-                    created_at_str = eval.get("created_at")
-                    if created_at_str:
-                        try:
-                            created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
-                            if start_date and created_at < start_date:
-                                continue
-                            if end_date and created_at > end_date:
-                                continue
-                        except Exception as dt_err:
-                            logger.debug(f"Failed to parse evaluation created_at timestamp: value={created_at_str}, error={dt_err}")
+                if start_ts is not None or end_ts is not None:
+                    created_ts = self._extract_created_ts(eval)
+                    if created_ts is not None:
+                        if start_ts is not None and created_ts < start_ts:
+                            continue
+                        if end_ts is not None and created_ts > end_ts:
+                            continue
 
                 count += 1
 
@@ -1389,6 +1385,37 @@ class UnifiedEvaluationService:
             raise
 
     # ============= Helper Methods =============
+
+    @staticmethod
+    def _user_id_variants(user_id: Optional[str]) -> set[str]:
+        if not user_id:
+            return set()
+        raw = str(user_id).strip()
+        if not raw:
+            return set()
+        variants = {raw}
+        if raw.startswith("user_"):
+            core = raw[5:]
+            if core:
+                variants.add(core)
+        elif raw.isdigit():
+            variants.add(f"user_{raw}")
+        return variants
+
+    @staticmethod
+    def _extract_created_ts(record: Dict[str, Any]) -> Optional[int]:
+        value = record.get("created_at")
+        if value is None:
+            value = record.get("created")
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                ts = value.replace("Z", "+00:00")
+                return int(datetime.fromisoformat(ts).timestamp())
+            except Exception:
+                return None
+        return None
 
     async def _store_evaluation_result(
         self,
