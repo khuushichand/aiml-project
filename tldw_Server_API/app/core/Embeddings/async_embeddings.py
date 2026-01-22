@@ -84,9 +84,9 @@ class AsyncEmbeddingProvider:
 class AsyncOpenAIProvider(AsyncEmbeddingProvider):
     """Async OpenAI embeddings provider"""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         super().__init__("openai", api_key)
-        self.base_url = "https://api.openai.com/v1/embeddings"
+        self.base_url = base_url or "https://api.openai.com/v1/embeddings"
 
     def _resolve_url(self, base_url_override: Optional[str]) -> str:
         url = base_url_override or self.base_url
@@ -114,6 +114,7 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
+                cost=1,
                 tokens_units=tokens_units,
             )
             if not allowed:
@@ -170,9 +171,9 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
 class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
     """Async HuggingFace embeddings provider"""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         super().__init__("huggingface", api_key)
-        self.base_url = "https://api-inference.huggingface.co/models"
+        self.base_url = base_url or "https://api-inference.huggingface.co/models"
         self.executor = ThreadPoolExecutor(max_workers=4)
 
     async def create_embedding(
@@ -192,6 +193,7 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
+                cost=1,
                 tokens_units=tokens_units,
             )
             if not allowed:
@@ -259,6 +261,7 @@ class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
+                cost=1,
                 tokens_units=tokens_units,
             )
             if not allowed:
@@ -303,12 +306,17 @@ class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
 class AsyncLocalProvider(AsyncEmbeddingProvider):
     """Async local embeddings provider using sentence-transformers"""
 
-    def __init__(self):
+    def __init__(self, max_models_in_memory: int = 3, model_ttl_seconds: int = 3600):
         super().__init__("local", None)
-        self.models = {}
+        self.models: Dict[str, Any] = {}
+        self.model_last_used: Dict[str, float] = {}
+        self.model_in_use: Dict[str, int] = {}
+        self.max_models_in_memory = max(1, int(max_models_in_memory))
+        self.model_ttl_seconds = max(0, int(model_ttl_seconds)) if model_ttl_seconds is not None else 0
         self.executor = ThreadPoolExecutor(max_workers=2)
         self._model_locks: Dict[str, asyncio.Lock] = {}
         self._model_locks_guard = asyncio.Lock()
+        self._models_guard = asyncio.Lock()
 
     async def _get_model_lock(self, model_name: str) -> asyncio.Lock:
         """Return a per-model lock to prevent duplicate loads."""
@@ -319,6 +327,61 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
                 self._model_locks[model_name] = lock
             return lock
 
+    async def _mark_in_use(self, model_name: str) -> None:
+        async with self._models_guard:
+            self.model_in_use[model_name] = self.model_in_use.get(model_name, 0) + 1
+
+    async def _release_in_use(self, model_name: str) -> None:
+        async with self._models_guard:
+            current = self.model_in_use.get(model_name, 0)
+            if current <= 1:
+                self.model_in_use.pop(model_name, None)
+            else:
+                self.model_in_use[model_name] = current - 1
+
+    async def _touch_model(self, model_name: str) -> None:
+        async with self._models_guard:
+            self.model_last_used[model_name] = time.time()
+
+    async def _drop_model(self, model_name: str) -> None:
+        async with self._models_guard:
+            model = self.models.pop(model_name, None)
+            self.model_last_used.pop(model_name, None)
+            self.model_in_use.pop(model_name, None)
+        if model is not None:
+            try:
+                if hasattr(model, "cpu"):
+                    model.cpu()
+            except Exception:
+                pass
+
+    async def _evict_if_needed(self, keep: Optional[str] = None) -> None:
+        async with self._models_guard:
+            now = time.time()
+            if self.model_ttl_seconds > 0:
+                expired = [
+                    name for name, last_used in self.model_last_used.items()
+                    if name != keep and (now - last_used) > self.model_ttl_seconds
+                ]
+                for name in expired:
+                    if self.model_in_use.get(name, 0) > 0:
+                        continue
+                    self.models.pop(name, None)
+                    self.model_last_used.pop(name, None)
+                    self.model_in_use.pop(name, None)
+
+            while len(self.models) >= self.max_models_in_memory:
+                candidates = [
+                    (name, last_used) for name, last_used in self.model_last_used.items()
+                    if name != keep and self.model_in_use.get(name, 0) <= 0
+                ]
+                if not candidates:
+                    break
+                lru_name = min(candidates, key=lambda item: item[1])[0]
+                self.models.pop(lru_name, None)
+                self.model_last_used.pop(lru_name, None)
+                self.model_in_use.pop(lru_name, None)
+
     async def _load_model(self, model_name: str):
         """Load model if not already loaded"""
         if model_name not in self.models:
@@ -326,6 +389,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
             async with lock:
                 if model_name in self.models:
                     return
+                await self._evict_if_needed(keep=model_name)
                 # Run model loading in thread pool to avoid blocking
                 loop = asyncio.get_running_loop()
 
@@ -337,7 +401,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
                     self.executor,
                     load
                 )
-
+                await self._touch_model(model_name)
                 logger.info(f"Loaded local model: {model_name}")
 
     async def create_embedding(
@@ -353,10 +417,16 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
 
         # Run encoding in thread pool
         loop = asyncio.get_running_loop()
-        embedding = await loop.run_in_executor(
-            self.executor,
-            lambda: self.models[model].encode(text, convert_to_tensor=False)
-        )
+        await self._mark_in_use(model)
+        try:
+            await self._touch_model(model)
+            model_instance = self.models[model]
+            embedding = await loop.run_in_executor(
+                self.executor,
+                lambda: model_instance.encode(text, convert_to_tensor=False)
+            )
+        finally:
+            await self._release_in_use(model)
 
         return embedding.tolist()
 
@@ -394,11 +464,13 @@ class AsyncEmbeddingService:
             pool_key = provider_config.name
             if provider_config.name == "openai":
                 self.providers["openai"] = AsyncOpenAIProvider(
-                    api_key=provider_config.api_key
+                    api_key=provider_config.api_key,
+                    base_url=provider_config.api_url,
                 )
             elif provider_config.name == "huggingface":
                 self.providers["huggingface"] = AsyncHuggingFaceProvider(
-                    api_key=provider_config.api_key
+                    api_key=provider_config.api_key,
+                    base_url=provider_config.api_url,
                 )
             elif provider_config.name == "local":
                 if provider_config.api_url:
@@ -408,7 +480,10 @@ class AsyncEmbeddingService:
                     )
                     pool_key = "local_api"
                 else:
-                    self.providers["local"] = AsyncLocalProvider()
+                    self.providers["local"] = AsyncLocalProvider(
+                        max_models_in_memory=self.config.resources.max_models_in_memory,
+                        model_ttl_seconds=self.config.resources.model_ttl_seconds,
+                    )
             elif provider_config.name == "local_api":
                 if provider_config.api_url:
                     self.providers["local_api"] = AsyncLocalAPIProvider(
@@ -460,15 +535,18 @@ class AsyncEmbeddingService:
         actual_model = model
         provider_config = self.config.get_provider(provider)
         base_url_override: Optional[str] = None
-        if explicit_provider and provider_config and provider in {"openai", "huggingface"}:
+        if provider_config and provider in {"openai", "huggingface"}:
             if provider_config.api_url:
                 base_url_override = provider_config.api_url
                 # Ensure explicit provider overrides reach the async providers directly.
-                use_batching = False
+                if explicit_provider:
+                    use_batching = False
 
         # Create deterministic cache key across processes
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         cache_key = f"{provider}:{model}:{text_hash}"
+        if base_url_override:
+            cache_key = f"{cache_key}:{base_url_override}"
 
         # Check cache
         if use_cache:
@@ -506,6 +584,12 @@ class AsyncEmbeddingService:
         # Cache the result
         if use_cache:
             cache_key = f"{actual_provider}:{actual_model}:{text_hash}"
+            actual_provider_config = self.config.get_provider(actual_provider)
+            actual_base_url = None
+            if actual_provider_config and actual_provider in {"openai", "huggingface"}:
+                actual_base_url = actual_provider_config.api_url
+            if actual_base_url:
+                cache_key = f"{cache_key}:{actual_base_url}"
             await self.cache.set_async(cache_key, embedding)
 
         return embedding
@@ -599,6 +683,12 @@ class AsyncEmbeddingService:
                     call_kwargs = {"text": text, "user_id": user_id}
                     if fallback_model is not None:
                         call_kwargs["model"] = fallback_model
+                    if (
+                        fallback_config
+                        and fallback in {"openai", "huggingface"}
+                        and fallback_config.api_url
+                    ):
+                        call_kwargs["base_url_override"] = fallback_config.api_url
                     embedding = await provider_instance.create_embedding(**call_kwargs)
                     used_model = fallback_model or model
                     return embedding, fallback, used_model

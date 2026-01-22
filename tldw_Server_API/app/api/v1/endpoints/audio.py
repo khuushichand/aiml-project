@@ -2159,7 +2159,7 @@ async def _audio_ws_authenticate(
                 from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_api_key_quota
 
                 api_mgr = await get_api_key_manager()
-                client_ip = getattr(websocket.client, "host", None)
+                client_ip = resolve_client_ip(websocket, get_settings())
                 info = await api_mgr.validate_api_key(api_key=x_api_key, ip_address=client_ip)
                 if not info:
                     await _stream_error("Invalid API key", code=4401)
@@ -2265,7 +2265,8 @@ async def _audio_ws_authenticate(
             return False, None
 
     # Single-user mode
-    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 
     settings = get_settings()
     expected_key = settings.SINGLE_USER_API_KEY

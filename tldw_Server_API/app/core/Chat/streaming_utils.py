@@ -25,41 +25,65 @@ _chat_config = {}
 if _config and _config.has_section('Chat-Module'):
     _chat_config = dict(_config.items('Chat-Module'))
 
+
+def _parse_int(value: Any, default: int, *, min_value: Optional[int] = None) -> int:
+    try:
+        if value is None:
+            return default
+        parsed = int(str(value).strip())
+    except Exception:
+        return default
+    if min_value is not None and parsed < min_value:
+        return min_value
+    return parsed
+
 # Timeout for idle connections (seconds)
-STREAMING_IDLE_TIMEOUT = int(
+STREAMING_IDLE_TIMEOUT = _parse_int(
     os.getenv('STREAMING_IDLE_TIMEOUT_SECONDS') or
-    _chat_config.get('streaming_idle_timeout_seconds', 300)
+    _chat_config.get('streaming_idle_timeout_seconds', 300),
+    300,
+    min_value=1,
 )  # Default 5 minutes
 
 # Heartbeat interval for long-running streams (seconds)
-HEARTBEAT_INTERVAL = int(
+HEARTBEAT_INTERVAL = _parse_int(
     os.getenv('STREAMING_HEARTBEAT_INTERVAL_SECONDS') or
-    _chat_config.get('streaming_heartbeat_interval_seconds', 30)
+    _chat_config.get('streaming_heartbeat_interval_seconds', 30),
+    30,
+    min_value=0,
 )
 
 # Maximum response size in bytes (default 10MB) - configurable via env or config
-MAX_RESPONSE_SIZE_BYTES = int(
+MAX_RESPONSE_SIZE_BYTES = _parse_int(
     os.getenv('STREAMING_MAX_RESPONSE_SIZE_BYTES') or
-    _chat_config.get('streaming_max_response_size_bytes', 10 * 1024 * 1024)
+    _chat_config.get('streaming_max_response_size_bytes', 10 * 1024 * 1024),
+    10 * 1024 * 1024,
+    min_value=1,
 )
 
 # Tool call accumulator max index to prevent memory exhaustion - configurable
-MAX_TOOL_CALL_INDEX = int(
+MAX_TOOL_CALL_INDEX = _parse_int(
     os.getenv('STREAMING_MAX_TOOL_CALL_INDEX') or
-    _chat_config.get('streaming_max_tool_call_index', 1000)
+    _chat_config.get('streaming_max_tool_call_index', 1000),
+    1000,
+    min_value=0,
 )
 
 # Maximum length for accumulated tool call arguments (in characters)
 # This prevents OOM attacks from malicious streams with unbounded arguments
-MAX_TOOL_ARGUMENT_LENGTH = int(
+MAX_TOOL_ARGUMENT_LENGTH = _parse_int(
     os.getenv('STREAMING_MAX_TOOL_ARGUMENT_LENGTH') or
-    _chat_config.get('streaming_max_tool_argument_length', 50_000)
+    _chat_config.get('streaming_max_tool_argument_length', 50_000),
+    50_000,
+    min_value=0,
 )
 
 # Maximum number of items in the full_response list to prevent unbounded growth
-MAX_RESPONSE_LIST_LENGTH = int(
+MAX_RESPONSE_LIST_LENGTH = _parse_int(
     os.getenv('STREAMING_MAX_RESPONSE_LIST_LENGTH') or
-    _chat_config.get('streaming_max_response_list_length', 100_000)
+    _chat_config.get('streaming_max_response_list_length', 100_000),
+    100_000,
+    min_value=1,
 )
 
 # Offload sync iterators to a background thread to avoid blocking the event loop

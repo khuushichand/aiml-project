@@ -253,6 +253,19 @@ class BaseChunkingStrategy(ABC):
         for i, chunk in enumerate(chunks):
             # Find chunk position in original text
             chunk_start = text.find(chunk, current_pos)
+            used_backtrack = False
+            if chunk_start == -1:
+                # Backtrack up to one chunk length to handle non-char overlap units
+                try:
+                    if chunk:
+                        backtrack = min(current_pos, len(chunk))
+                    else:
+                        backtrack = 0
+                except Exception:
+                    backtrack = 0
+                if backtrack > 0:
+                    chunk_start = text.find(chunk, max(0, current_pos - backtrack))
+                    used_backtrack = chunk_start != -1
             if chunk_start == -1:
                 chunk_start = current_pos
             chunk_end = chunk_start + len(chunk)
@@ -273,7 +286,13 @@ class BaseChunkingStrategy(ABC):
             )
 
             results.append(ChunkResult(text=chunk, metadata=metadata))
-            current_pos = chunk_end - overlap if overlap > 0 else chunk_end
+            if overlap > 0 and not used_backtrack and chunk_start >= current_pos:
+                try:
+                    current_pos = max(chunk_start, chunk_end - min(overlap, len(chunk)))
+                except Exception:
+                    current_pos = chunk_end
+            else:
+                current_pos = chunk_end
 
         return results
 

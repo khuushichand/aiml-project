@@ -6,9 +6,9 @@ This strategy creates chunks by progressively summarizing content using an LLM,
 building a rolling context that maintains continuity across chunk boundaries.
 """
 
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from loguru import logger
-from ..base import BaseChunkingStrategy
+from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 
@@ -66,29 +66,10 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
         preserve_structure = options.get('preserve_structure', True)
         context_window = options.get('context_window', 2)
 
-        # Split text into sentences for initial segmentation
-        sentences = self._split_into_sentences(text)
-
-        if not sentences:
+        segments_with_spans = self._build_segments_with_spans(text, max_size, overlap)
+        if not segments_with_spans:
             return []
-
-        # Group sentences into segments
-        segments = []
-        current_segment = []
-
-        for sentence in sentences:
-            current_segment.append(sentence)
-            if len(current_segment) >= max_size:
-                segments.append(' '.join(current_segment))
-                # Keep overlap sentences for next segment
-                if overlap > 0:
-                    current_segment = current_segment[-overlap:]
-                else:
-                    current_segment = []
-
-        # Add remaining sentences as final segment
-        if current_segment:
-            segments.append(' '.join(current_segment))
+        segments = [segment for segment, _start, _end, _count in segments_with_spans]
 
         # If no LLM function provided, return segments as-is
         if not self.llm_call_func:
@@ -160,6 +141,53 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
 
         return sentences
 
+    def _split_into_sentences_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
+        """Split sentences and return spans via rolling forward search."""
+        sentences = self._split_into_sentences(text)
+        if not sentences:
+            return []
+        spans: List[Tuple[str, int, int]] = []
+        pos = 0
+        n = len(text)
+        for s in sentences:
+            idx = text.find(s, pos)
+            if idx == -1:
+                idx = pos
+            end = min(idx + len(s), n)
+            spans.append((s, idx, end))
+            pos = end
+        return spans
+
+    def _build_segments_with_spans(
+        self,
+        text: str,
+        max_size: int,
+        overlap: int,
+    ) -> List[Tuple[str, int, int, int]]:
+        """Group sentence spans into segments and carry their source spans."""
+        sentences_with_spans = self._split_into_sentences_with_spans(text)
+        if not sentences_with_spans:
+            return []
+        segments: List[Tuple[str, int, int, int]] = []
+        current: List[Tuple[str, int, int]] = []
+        for sent, start, end in sentences_with_spans:
+            current.append((sent, start, end))
+            if len(current) >= max_size:
+                seg_text = " ".join(s for s, _s0, _e0 in current)
+                seg_start = current[0][1]
+                seg_end = current[-1][2]
+                segments.append((seg_text, seg_start, seg_end, len(current)))
+                if overlap > 0:
+                    current = current[-overlap:]
+                else:
+                    current = []
+        if current:
+            seg_text = " ".join(s for s, _s0, _e0 in current)
+            seg_start = current[0][1]
+            seg_end = current[-1][2]
+            segments.append((seg_text, seg_start, seg_end, len(current)))
+        return segments
+
     def _create_summarization_prompt(self,
                                     segment: str,
                                     context: str,
@@ -218,7 +246,6 @@ Maintain continuity with the previous context."""
         """Call LLM for summarization."""
         if not self.llm_call_func:
             return None
-
         try:
             # Prepare config for LLM call
             config = self.llm_config.copy()
@@ -249,3 +276,73 @@ Maintain continuity with the previous context."""
         except Exception as e:
             logger.error(f"Error calling LLM: {e}")
             return None
+
+    def chunk_with_metadata(self,
+                            text: str,
+                            max_size: int,
+                            overlap: int = 0,
+                            **options) -> List[ChunkResult]:
+        """Chunk text and return metadata mapping summaries to source spans."""
+        if not self.validate_parameters(text, max_size, overlap):
+            return []
+
+        summarization_detail = options.get('summarization_detail', 0.5)
+        preserve_structure = options.get('preserve_structure', True)
+        context_window = options.get('context_window', 2)
+
+        segments_with_spans = self._build_segments_with_spans(text, max_size, overlap)
+        if not segments_with_spans:
+            return []
+
+        results: List[ChunkResult] = []
+        rolling_context: List[str] = []
+        total = len(segments_with_spans)
+
+        for i, (segment, seg_start, seg_end, sentence_count) in enumerate(segments_with_spans):
+            context = ""
+            if rolling_context:
+                context_items = rolling_context[-context_window:]
+                context = "Previous context:\n" + "\n".join(context_items) + "\n\n"
+
+            summary = segment
+            if self.llm_call_func:
+                prompt = self._create_summarization_prompt(
+                    segment,
+                    context,
+                    summarization_detail,
+                    preserve_structure,
+                    i == 0,
+                )
+                try:
+                    llm_summary = self._call_llm(prompt)
+                    if llm_summary:
+                        summary = llm_summary
+                        rolling_context.append(self._create_context_summary(llm_summary))
+                    else:
+                        rolling_context.append(segment[:200] + "...")
+                except Exception as e:
+                    logger.error(f"Error during summarization of segment {i}: {e}")
+                    rolling_context.append(segment[:200] + "...")
+            else:
+                rolling_context.append(segment[:200] + "...")
+
+            metadata = ChunkMetadata(
+                index=i,
+                start_char=int(seg_start),
+                end_char=int(seg_end),
+                word_count=len(summary.split()) if summary else 0,
+                sentence_count=sentence_count,
+                language=self.language,
+                overlap_with_previous=overlap if i > 0 else 0,
+                overlap_with_next=overlap if i < total - 1 else 0,
+                method='rolling_summarize',
+                options={
+                    'summarization_detail': summarization_detail,
+                    'preserve_structure': preserve_structure,
+                    'context_window': context_window,
+                    'source_span': (int(seg_start), int(seg_end)),
+                },
+            )
+            results.append(ChunkResult(text=summary, metadata=metadata))
+
+        return results

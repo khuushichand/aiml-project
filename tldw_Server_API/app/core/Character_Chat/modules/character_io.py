@@ -446,12 +446,19 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
             except Exception as e:
                 logger.warning(f"V3 parsing import failed or not available: {e}")
 
-        attempt_v2_processing = (parsed_card is None) and (is_explicit_v2_spec or is_explicit_v2_version or \
-                                (has_data_node_heuristic and not is_explicit_v2_spec and not is_explicit_v2_version))
+        attempt_v2_processing = (parsed_card is None) and (
+            is_explicit_v2_spec
+            or is_explicit_v2_version
+            or (has_data_node_heuristic and not is_explicit_v2_spec and not is_explicit_v2_version)
+        )
 
         if attempt_v2_processing:
             logger.debug("Attempting V2 validation based on card structure/spec.")
-            is_valid_v2_struct, v2_errors = _character_validation.validate_v2_card(card_data_dict)
+            strict_spec = bool(is_explicit_v2_spec or is_explicit_v2_version)
+            is_valid_v2_struct, v2_errors = _character_validation.validate_v2_card(
+                card_data_dict,
+                strict_spec=strict_spec,
+            )
 
             if not is_valid_v2_struct:
                 logger.error(f"V2 Card structural validation failed: {'; '.join(v2_errors)}.")

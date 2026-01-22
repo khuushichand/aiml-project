@@ -104,14 +104,22 @@ class ModerationService:
     def __init__(self) -> None:
         self._config = load_and_log_configs() or {}
         self._lock = threading.RLock()
+        def _read_int_env(name: str, default: int) -> int:
+            raw = os.getenv(name)
+            if raw is None:
+                return default
+            try:
+                return int(raw)
+            except Exception:
+                return default
         # Safety/performance limits (overridable via config or env)
         # NOTE: _max_scan_chars is used as the scan chunk size; the full text is scanned in chunks.
-        self._max_scan_chars = int(os.getenv("MODERATION_MAX_SCAN_CHARS", "200000"))
-        self._max_replacements_per_pattern = int(os.getenv("MODERATION_MAX_REPLACEMENTS_PER_PATTERN", "1000"))
+        self._max_scan_chars = _read_int_env("MODERATION_MAX_SCAN_CHARS", 200000)
+        self._max_replacements_per_pattern = _read_int_env("MODERATION_MAX_REPLACEMENTS_PER_PATTERN", 1000)
         # Window extension to detect matches spanning chunk boundaries
-        self._match_window_chars = int(os.getenv("MODERATION_MATCH_WINDOW_CHARS", "4096"))
+        self._match_window_chars = _read_int_env("MODERATION_MATCH_WINDOW_CHARS", 4096)
         # Optional debounce for blocklist writes (ms); default disabled
-        self._write_debounce_ms = int(os.getenv("MODERATION_BLOCKLIST_WRITE_DEBOUNCE_MS", "0") or 0)
+        self._write_debounce_ms = _read_int_env("MODERATION_BLOCKLIST_WRITE_DEBOUNCE_MS", 0)
         self._last_blocklist_write: float = 0.0
         self._runtime_override: Dict[str, object] = {}
         self._runtime_overrides_path: Optional[str] = None
@@ -466,11 +474,27 @@ class ModerationService:
     # --------------- Settings helpers (runtime) ---------------
     def get_settings(self) -> Dict[str, object]:
         pol = self._global_policy
+        pii_effective = False
+        try:
+            for rule in (pol.block_patterns or []):
+                if not isinstance(rule, PatternRule):
+                    continue
+                if not rule.categories or "pii" not in rule.categories:
+                    continue
+                if pol.categories_enabled:
+                    if rule.categories & pol.categories_enabled:
+                        pii_effective = True
+                        break
+                else:
+                    pii_effective = True
+                    break
+        except Exception:
+            pii_effective = False
         return {
             "pii_enabled": bool(self._runtime_override.get("pii_enabled", None)) if ("pii_enabled" in self._runtime_override) else None,
             "categories_enabled": list(self._runtime_override.get("categories_enabled") or []) if ("categories_enabled" in self._runtime_override) else None,
             "effective": {
-                "pii_enabled": any(isinstance(r, PatternRule) and r.categories and ("pii" in r.categories) for r in (pol.block_patterns or [])),
+                "pii_enabled": pii_effective,
                 "categories_enabled": sorted(pol.categories_enabled) if pol.categories_enabled else [],
             }
         }
@@ -786,8 +810,19 @@ class ModerationService:
                 best_match_span = match_span
                 best_pattern = pat.pattern
                 if isinstance(rule, PatternRule) and rule.categories:
-                    sub = sorted([c for c in rule.categories if c != "pii"]) or ["pii"]
-                    best_category = sub[0]
+                    try:
+                        if policy.categories_enabled:
+                            cats = set(rule.categories) & set(policy.categories_enabled)
+                        else:
+                            cats = set(rule.categories)
+                        if cats:
+                            if "pii" in cats and len(cats) > 1:
+                                cats = {c for c in cats if c != "pii"}
+                            best_category = sorted(cats)[0]
+                        else:
+                            best_category = None
+                    except Exception:
+                        best_category = None
                 else:
                     best_category = None
         if best_action == "pass":
@@ -976,7 +1011,7 @@ class ModerationService:
                     elapsed = now - (self._last_blocklist_write or 0.0)
                     if elapsed < min_interval:
                         time.sleep(max(0.0, min_interval - elapsed))
-                dirpath = os.path.dirname(path)
+                dirpath = os.path.dirname(os.path.abspath(path))
                 if dirpath:
                     os.makedirs(dirpath, exist_ok=True)
                 # Normalize line endings; ensure trailing newline for POSIX friendliness
@@ -1038,12 +1073,15 @@ class ModerationService:
         """Append a line with optimistic concurrency control. Returns (ok, state)."""
         if line is None:
             return False, {"error": "line required"}
+        line_text = str(line)
+        if "\n" in line_text or "\r" in line_text:
+            return False, {"error": "line must be single-line"}
         with self._lock:
             current = self.get_blocklist_lines()
             cur_version = self._compute_version(current)
             if expected_version and cur_version != expected_version:
                 return False, {"version": cur_version, "conflict": True}
-            new_lines = current + [str(line).rstrip("\n")]
+            new_lines = current + [line_text.rstrip("\n")]
             ok = self.set_blocklist_lines(new_lines)
             state = self.get_blocklist_state() if ok else {"error": "persist failed"}
             return ok, state

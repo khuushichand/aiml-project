@@ -185,6 +185,8 @@ def get_content_backend(config: ConfigParser):
         settings.database_config.pg_port,
         settings.database_config.pg_database,
         settings.database_config.pg_user,
+        settings.database_config.pg_password,
+        settings.database_config.pg_sslmode,
     )
 
     if _cache_lock is not None:

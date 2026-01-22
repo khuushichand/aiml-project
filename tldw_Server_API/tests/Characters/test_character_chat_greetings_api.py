@@ -47,8 +47,8 @@ def test_create_chat_with_default_greeting(authenticated_client, mock_chacha_db,
     assert isinstance(msgs, dict) and "total" in msgs
     first = msgs["messages"][0]
     assert first["sender"].lower() in {"assistant", "greeterapi"}
-    # Endpoint seeds raw template content
-    assert first["content"] == "Hello, {{user}}."
+    # Endpoint resolves placeholders for display
+    assert first["content"] == "Hello, User."
 
 
 def test_create_chat_with_alternate_index_greeting(authenticated_client, mock_chacha_db, setup_dependencies, auth_headers):
@@ -81,7 +81,7 @@ def test_create_chat_with_alternate_index_greeting(authenticated_client, mock_ch
     assert isinstance(msgs, dict) and "total" in msgs
     first = msgs["messages"][0]
     assert first["sender"].lower() in {"assistant", "greeterapi"}
-    assert first["content"] == "Welcome, {{user}}."
+    assert first["content"] == "Welcome, User."
 
 
 def test_create_chat_with_alternate_random_greeting(authenticated_client, mock_chacha_db, setup_dependencies, auth_headers):
@@ -117,7 +117,7 @@ def test_create_chat_with_alternate_random_greeting(authenticated_client, mock_c
     assert isinstance(msgs, dict) and "total" in msgs
     first = msgs["messages"][0]
     assert first["sender"].lower() in {"assistant", "greeterapi"}
-    assert first["content"] == "Hey there, {{user}}!"
+    assert first["content"] == "Hey there, User!"
 
 
 def test_create_chat_with_alternate_index_out_of_range_falls_back_default(
@@ -152,4 +152,44 @@ def test_create_chat_with_alternate_index_out_of_range_falls_back_default(
     assert isinstance(msgs, dict) and "total" in msgs and msgs["total"] >= 1
     first = msgs["messages"][0]
     assert first["sender"].lower() in {"assistant", "greeterapi"}
-    assert first["content"] == "Hello, {{user}}."
+    assert first["content"] == "Hello, User."
+
+
+def test_message_list_total_reflects_full_conversation_count(
+    authenticated_client, mock_chacha_db, setup_dependencies, auth_headers
+):
+    char_id = _create_character_with_alts(mock_chacha_db)
+
+    resp = authenticated_client.post(
+        "/api/v1/chats/",
+        json={"character_id": char_id},
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    chat_id = resp.json()["id"]
+
+    for idx in range(3):
+        msg_resp = authenticated_client.post(
+            f"/api/v1/chats/{chat_id}/messages",
+            json={"role": "user", "content": f"msg {idx}"},
+        )
+        assert msg_resp.status_code == status.HTTP_201_CREATED
+
+    resp = authenticated_client.get(
+        f"/api/v1/chats/{chat_id}/messages",
+        params={"limit": 1},
+        headers=auth_headers,
+    )
+    assert resp.status_code == status.HTTP_200_OK
+    payload = resp.json()
+    assert payload["total"] == 3
+    assert len(payload["messages"]) == 1
+
+    resp = authenticated_client.get(
+        f"/api/v1/chats/{chat_id}/messages",
+        params={"limit": 1, "format_for_completions": True},
+        headers=auth_headers,
+    )
+    assert resp.status_code == status.HTTP_200_OK
+    payload = resp.json()
+    assert payload["total"] == 3
+    assert len(payload["messages"]) == 1

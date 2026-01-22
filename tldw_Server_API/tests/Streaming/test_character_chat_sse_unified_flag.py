@@ -241,3 +241,118 @@ async def test_character_chat_streaming_unified_sse_provider_duplicate_done(monk
     finally:
         os.environ.pop("STREAMS_UNIFIED", None)
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _fake_provider_stream_many_chunks() -> Iterator[str]:
+    yield "data: {\"choices\":[{\"delta\":{\"content\":\"chunk-1\"}}]}\n\n"
+    yield "data: {\"choices\":[{\"delta\":{\"content\":\"chunk-2\"}}]}\n\n"
+    yield "data: {\"choices\":[{\"delta\":{\"content\":\"chunk-3\"}}]}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_character_chat_streaming_unified_sse_chunk_limit(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="unified_sse_char_chunklimit_")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    os.environ["STREAMS_UNIFIED"] = "1"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    try:
+        from tldw_Server_API.app.main import app
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+
+        import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as mod
+
+        def _stub_chat_api_call(*args, **kwargs):
+            return _fake_provider_stream_many_chunks()
+
+        mod.perform_chat_api_call = _stub_chat_api_call  # type: ignore
+        monkeypatch.setattr(mod, "MAX_STREAMING_CHUNKS", 2)
+        monkeypatch.setattr(mod, "MAX_STREAMING_BYTES", 10_000)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            payload = {"provider": "openai", "model": "gpt-x", "stream": True}
+
+            async with client.stream(
+                "POST",
+                f"/api/v1/chats/{chat_id}/complete-v2",
+                headers=headers,
+                json=payload,
+            ) as resp:
+                assert resp.status_code == 200
+                lines = []
+                async for ln in resp.aiter_lines():
+                    if not ln:
+                        continue
+                    lines.append(ln)
+
+        assert any("streaming limit exceeded" in ln.lower() for ln in lines)
+        assert lines[-1].strip().lower() == "data: [done]"
+    finally:
+        os.environ.pop("STREAMS_UNIFIED", None)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _fake_provider_stream_large_chunk() -> Iterator[str]:
+    payload = "x" * 200
+    yield f"data: {{\"choices\":[{{\"delta\":{{\"content\":\"{payload}\"}}}}]}}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_character_chat_streaming_unified_sse_byte_limit(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="unified_sse_char_bytelimit_")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    os.environ["STREAMS_UNIFIED"] = "1"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    try:
+        from tldw_Server_API.app.main import app
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+
+        import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as mod
+
+        def _stub_chat_api_call(*args, **kwargs):
+            return _fake_provider_stream_large_chunk()
+
+        mod.perform_chat_api_call = _stub_chat_api_call  # type: ignore
+        monkeypatch.setattr(mod, "MAX_STREAMING_CHUNKS", 100)
+        monkeypatch.setattr(mod, "MAX_STREAMING_BYTES", 50)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            payload = {"provider": "openai", "model": "gpt-x", "stream": True}
+
+            async with client.stream(
+                "POST",
+                f"/api/v1/chats/{chat_id}/complete-v2",
+                headers=headers,
+                json=payload,
+            ) as resp:
+                assert resp.status_code == 200
+                lines = []
+                async for ln in resp.aiter_lines():
+                    if not ln:
+                        continue
+                    lines.append(ln)
+
+        assert any("streaming size limit exceeded" in ln.lower() for ln in lines)
+        assert lines[-1].strip().lower() == "data: [done]"
+    finally:
+        os.environ.pop("STREAMS_UNIFIED", None)
+        shutil.rmtree(tmpdir, ignore_errors=True)

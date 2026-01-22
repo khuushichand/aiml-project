@@ -264,7 +264,7 @@ class AsyncChunker:
         def _should_withhold_last_chunk() -> bool:
             """Whether to carry the final chunk forward instead of emitting it immediately."""
             if overlap_size <= 0:
-                return True
+                return False
             return method_lower != 'words'
 
         withhold_last = _should_withhold_last_chunk()

@@ -46,6 +46,13 @@ class BlocklistManagedResponse(BaseModel):
 class BlocklistAppendRequest(BaseModel):
     line: str = Field(..., min_length=1)
 
+    @field_validator("line")
+    @classmethod
+    def _single_line(cls, v: str) -> str:
+        if "\n" in v or "\r" in v:
+            raise ValueError("line must be a single line")
+        return v
+
 
 class BlocklistAppendResponse(BaseModel):
     version: str

@@ -303,6 +303,11 @@ def test_map_sender_to_role_handles_tool_prefix():
     assert map_sender_to_role("assistant_tool:call", "Botty") == "tool"
 
 
+def test_map_sender_to_role_respects_default_role():
+    assert map_sender_to_role("mystery", "Botty", default_role="user") == "user"
+    assert map_sender_to_role("", "Botty", default_role="system") == "system"
+
+
 def test_process_db_messages_to_ui_history_handles_additional_alias():
     char_name = "RenamedBot"
     user_name = "Human"
@@ -797,6 +802,12 @@ def test_validate_v2_card_unit():
     assert not is_valid_ns and "Missing 'spec' field" in errors_ns[0]
 
 
+def test_validate_v2_card_allows_implicit_spec():
+    card_no_spec = {"data": MINIMAL_V2_DATA_NODE_UNIT.copy()}
+    is_valid, errors = validate_v2_card(card_no_spec, strict_spec=False)
+    assert is_valid and not errors
+
+
 def test_validate_v2_card_accepts_newer_minor_version():
     card = copy.deepcopy(MINIMAL_V2_CARD_UNIT)
     card["spec_version"] = "2.3"
@@ -828,6 +839,13 @@ def test_import_character_card_from_json_string_unit(mock_parse_v1, mock_parse_v
     mock_parse_v1.return_value = {"name": "ParsedV1"}
     v1_str = json.dumps(MINIMAL_V1_CARD_UNIT)
     assert import_character_card_from_json_string(v1_str)["name"] == "ParsedV1"
+
+
+def test_import_character_card_from_json_string_implicit_v2():
+    implicit_v2 = {"data": MINIMAL_V2_DATA_NODE_UNIT.copy()}
+    parsed = import_character_card_from_json_string(json.dumps(implicit_v2))
+    assert parsed is not None
+    assert parsed.get("name") == MINIMAL_V2_DATA_NODE_UNIT["name"]
 
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.import_character_card_from_json_string")
@@ -1755,7 +1773,7 @@ def test_retrieve_conversation_messages_for_ui_rich_output(db):
     assert turn["character"]["attachments"]
 
 
-def test_retrieve_conversation_messages_for_ui_rich_output_drops_trailing_user(db):
+def test_retrieve_conversation_messages_for_ui_rich_output_keeps_trailing_user(db):
     char_id = db.add_character_card({"name": "Chrony"})
     conv_id = db.add_conversation({"character_id": char_id, "title": "Chrony Chat"})
 
@@ -1771,15 +1789,11 @@ def test_retrieve_conversation_messages_for_ui_rich_output_drops_trailing_user(d
         rich_output=True,
     )
 
-    assert len(history) == 1
+    assert len(history) == 2
     assert history[0]["user"]["content"] == "Hello"
     assert history[0]["character"]["content"] == "Hi"
-    all_contents = []
-    for turn in history:
-        for role in ("user", "character", "non_character"):
-            if turn.get(role) and turn[role].get("content"):
-                all_contents.append(turn[role]["content"])
-    assert "Trailing" not in all_contents
+    assert history[1]["user"]["content"] == "Trailing"
+    assert history[1]["character"] is None
 
 
 def test_sender_override_is_treated_as_user(db):

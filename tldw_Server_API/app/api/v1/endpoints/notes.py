@@ -115,6 +115,11 @@ def _build_title_opts(note_in: Any) -> TitleGenOptions:
     except Exception:
         max_bound = 1000
     min_bound = 10
+    # Clamp to API schema max for titles (NoteBase.title max_length=255).
+    schema_max = 255
+    max_bound = min(max_bound, schema_max)
+    if max_bound < min_bound:
+        max_bound = min_bound
     if max_len_val < min_bound:
         max_len_val = min_bound
     if max_len_val > max_bound:
@@ -971,6 +976,16 @@ async def update_note(
     if not update_data and not keywords_supplied:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
+        current_note: Optional[Dict[str, Any]] = None
+
+        def _get_current_note() -> Dict[str, Any]:
+            nonlocal current_note
+            if current_note is None:
+                current_note = db.get_note_by_id(note_id=note_id)
+            if not current_note:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+            return current_note
+
         # Rate limit: notes.update
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.update")
@@ -981,9 +996,7 @@ async def update_note(
                                 detail="Rate limit exceeded for notes.update",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
         if not update_data and keywords_supplied:
-            current_note = db.get_note_by_id(note_id=note_id)
-            if not current_note:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+            current_note = _get_current_note()
             current_version = current_note.get("version")
             if current_version is not None and int(current_version) != int(expected_version):
                 raise ConflictError(
@@ -992,10 +1005,13 @@ async def update_note(
                     entity_id=note_id,
                 )
         if conversation_supplied or message_supplied:
+            current_note = _get_current_note()
+            effective_conversation_id = update_data.get("conversation_id") if conversation_supplied else current_note.get("conversation_id")
+            effective_message_id = update_data.get("message_id") if message_supplied else current_note.get("message_id")
             validated_conversation_id, validated_message_id = _validate_note_links(
                 db,
-                update_data.get("conversation_id"),
-                update_data.get("message_id"),
+                effective_conversation_id,
+                effective_message_id,
             )
             if conversation_supplied:
                 update_data["conversation_id"] = validated_conversation_id
@@ -1099,16 +1115,22 @@ async def patch_note(
     if not update_data and not keywords_supplied:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
+        current_note: Optional[Dict[str, Any]] = None
+
+        def _get_current_note() -> Dict[str, Any]:
+            nonlocal current_note
+            if current_note is None:
+                current_note = db.get_note_by_id(note_id=note_id)
+            if not current_note:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+            return current_note
+
         if expected_version is None:
             # Fallback to current version if not provided
-            current = db.get_note_by_id(note_id=note_id)
-            if not current:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+            current = _get_current_note()
             expected_version = int(current.get("version", 1))
         elif not update_data and keywords_supplied:
-            current = db.get_note_by_id(note_id=note_id)
-            if not current:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+            current = _get_current_note()
             current_version = current.get("version")
             if current_version is not None and int(current_version) != int(expected_version):
                 raise ConflictError(
@@ -1127,10 +1149,13 @@ async def patch_note(
                                 detail="Rate limit exceeded for notes.update",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
         if conversation_supplied or message_supplied:
+            current = _get_current_note()
+            effective_conversation_id = update_data.get("conversation_id") if conversation_supplied else current.get("conversation_id")
+            effective_message_id = update_data.get("message_id") if message_supplied else current.get("message_id")
             validated_conversation_id, validated_message_id = _validate_note_links(
                 db,
-                update_data.get("conversation_id"),
-                update_data.get("message_id"),
+                effective_conversation_id,
+                effective_message_id,
             )
             if conversation_supplied:
                 update_data["conversation_id"] = validated_conversation_id
@@ -1340,7 +1365,9 @@ async def bulk_create_notes(
                 logger.warning(f"[Bulk] Keyword processing issue for note {note_id}: {kw_outer_err}")
 
             nd = db.get_note_by_id(note_id=note_id)
-            nd = _attach_keywords_inline(db, nd) if nd else None
+            if not nd:
+                raise CharactersRAGDBError("Created note could not be retrieved.")
+            nd = _attach_keywords_inline(db, nd)
             results.append(NoteBulkCreateItemResult(success=True, note=nd))
             created += 1
         except Exception as e:

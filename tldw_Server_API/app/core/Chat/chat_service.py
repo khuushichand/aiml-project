@@ -318,8 +318,8 @@ def normalize_request_provider_and_model(
 
     # --- Alias resolution via configurable catalog (model_pricing.json) ---
     # Prefer provider-agnostic model keys and avoid hardcoded, versioned IDs.
-    # Use pricing catalog (and raw file when available) to pick a concrete model
-    # for aliases like "claude-sonnet". Preserve mapped casing from the source.
+    # Alias resolution is strict: only explicit overrides or exact model matches
+    # are applied. This avoids silently picking a default model.
     try:
         # Determine provider context for alias resolution.
         # If model includes an inline provider (e.g., "anthropic/claude-sonnet"),
@@ -341,26 +341,11 @@ def normalize_request_provider_and_model(
             if not models:
                 return None
             m_lower = m.lower()
-            # 1) Exact (case-insensitive) match
+            # Strict resolution: only exact (case-insensitive) matches.
             for cand in models:
                 if cand.lower() == m_lower:
                     return cand
-            # 2) Prefer anchored prefix (alias + '-') to choose family head, e.g., 'claude-sonnet' -> 'claude-sonnet-4.5'
-            anchored = [cand for cand in models if cand.lower().startswith(m_lower + "-")]
-            if anchored:
-                # Pick the longest name to bias towards more specific (likely newer) variants
-                return sorted(anchored, key=lambda s: (len(s), s))[-1]
-            # 3) Substring fallback
-            contains = [cand for cand in models if m_lower in cand.lower()]
-            if contains:
-                # Prefer shorter names to avoid overly specific accidental matches
-                return sorted(contains, key=lambda s: (len(s), s))[0]
-            # 4) Soft default: pick a small/mini/tiny if present; else first sorted
-            priority = ["mini", "small", "tiny", "haiku", "flash"]
-            prioritized = [cand for cand in models if any(p in cand.lower() for p in priority)]
-            if prioritized:
-                return sorted(prioritized)[0]
-            return sorted(models)[0]
+            return None
 
         # Optional alias overrides allow cross-provider or provider-agnostic mappings
         # without changing code. Sources (first match wins):
@@ -940,9 +925,82 @@ def _estimate_tokens_from_messages(messages: List[Dict[str, Any]]) -> int:
     """Estimate tokens from message payloads with base64 redaction."""
     try:
         sanitized = _sanitize_messages_for_token_estimate(messages)
-        return max(1, len(_json.dumps(sanitized)) // 4)
+        return max(1, len(_json.dumps(sanitized, default=str)) // 4)
     except Exception:
         return 1
+
+
+def _extract_text_from_content(content: Any) -> str:
+    """Extract text from a message content payload (string or list parts)."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for part in content:
+            if isinstance(part, str):
+                if part:
+                    parts.append(part)
+                continue
+            p_type = None
+            p_text = None
+            if isinstance(part, dict):
+                p_type = part.get("type")
+                p_text = part.get("text")
+            else:
+                try:
+                    p_type = getattr(part, "type", None)
+                    p_text = getattr(part, "text", None)
+                except Exception:
+                    p_type = None
+                    p_text = None
+            if p_type == "text" and isinstance(p_text, str):
+                if p_text:
+                    parts.append(p_text)
+        return "\n".join(parts)
+    try:
+        return str(content)
+    except Exception:
+        return ""
+
+
+def _apply_redaction_to_content(content: Any, moderation: Any, policy: Any) -> Any:
+    """Apply redaction to text parts while preserving non-text content when possible."""
+    if content is None:
+        return content
+    if isinstance(content, str):
+        return moderation.redact_text(content, policy)
+    if isinstance(content, list):
+        redacted_parts: List[Any] = []
+        for part in content:
+            if isinstance(part, str):
+                redacted_parts.append(moderation.redact_text(part, policy))
+                continue
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    new_part = dict(part)
+                    new_part["text"] = moderation.redact_text(part.get("text", ""), policy)
+                    redacted_parts.append(new_part)
+                else:
+                    redacted_parts.append(part)
+                continue
+            try:
+                p_type = getattr(part, "type", None)
+                if p_type == "text":
+                    text_val = getattr(part, "text", "")
+                    new_text = moderation.redact_text(text_val, policy)
+                    try:
+                        updated = part.model_copy(update={"text": new_text})
+                        redacted_parts.append(updated)
+                    except Exception:
+                        redacted_parts.append({"type": "text", "text": new_text})
+                else:
+                    redacted_parts.append(part)
+            except Exception:
+                redacted_parts.append(part)
+        return redacted_parts
+    return moderation.redact_text(str(content), policy)
 
 
 def _wrap_raw_string_response(content: str, model: Optional[str]) -> Dict[str, Any]:
@@ -1329,8 +1387,6 @@ async def build_context_and_messages(
         has_non_user_role = any(
             msg.get("role") in {"assistant", "tool"} for msg in request_messages
         )
-        if not has_non_user_role or len(request_messages) < 2:
-            has_non_user_role = False
         def _normalize_content(value: Any) -> Any:
             if isinstance(value, str):
                 return [{"type": "text", "text": value}]
@@ -1773,6 +1829,16 @@ async def execute_streaming_call(
                             "producer may have crashed without sending sentinel",
                             CHAT_IDLE_TIMEOUT
                         )
+                        try:
+                            error_payload = {
+                                "error": {
+                                    "message": "Stream channel timed out waiting for queued response.",
+                                    "type": "stream_timeout",
+                                }
+                            }
+                            yield f"data: {_json.dumps(error_payload)}\n\n"
+                        except Exception:
+                            yield "data: {\"error\":{\"message\":\"Stream channel timed out waiting for queued response.\",\"type\":\"stream_timeout\"}}\n\n"
                         break
                     if item is None:
                         break
@@ -2747,7 +2813,8 @@ async def execute_non_stream_call(
                     pt_est = _estimate_tokens_from_messages(templated_llm_payload)
                 except Exception:
                     pt_est = 0
-                ct_est = max(0, len((content_to_save or "")) // 4)
+                content_text_for_usage = _extract_text_from_content(content_to_save)
+                ct_est = max(0, len(content_text_for_usage) // 4)
                 user_id = None
                 api_key_id = None
                 try:
@@ -2778,9 +2845,12 @@ async def execute_non_stream_call(
     elif llm_response is None:
         raise ChatProviderError(provider=provider, message="Provider unavailable or returned no response", status_code=502)
 
+    # Cache content text for moderation/usage when content is non-string
+    content_text_for_usage = _extract_text_from_content(content_to_save)
+
     # Output moderation (non-streaming)
     try:
-        if content_to_save:
+        if content_text_for_usage:
             _get_mod = moderation_getter or get_moderation_service
             moderation = _get_mod()
             req_user_id = None
@@ -2799,7 +2869,7 @@ async def execute_non_stream_call(
                 match_span = None
                 if hasattr(moderation, "evaluate_action_with_match"):
                     try:
-                        eval_res = moderation.evaluate_action_with_match(content_to_save, eff_policy, "output")
+                        eval_res = moderation.evaluate_action_with_match(content_text_for_usage, eff_policy, "output")
                         if isinstance(eval_res, tuple) and len(eval_res) >= 3:
                             resolved_action, redacted_val, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
                             out_category2 = eval_res[3] if len(eval_res) >= 4 else None
@@ -2810,12 +2880,12 @@ async def execute_non_stream_call(
                         resolved_action = None
                     if match_span and hasattr(moderation, "build_sanitized_snippet"):
                         try:
-                            sample = moderation.build_sanitized_snippet(content_to_save, eff_policy, match_span, matched_pattern)
+                            sample = moderation.build_sanitized_snippet(content_text_for_usage, eff_policy, match_span, matched_pattern)
                         except Exception:
                             sample = None
                 elif hasattr(moderation, "evaluate_action"):
                     try:
-                        eval_res = moderation.evaluate_action(content_to_save, eff_policy, "output")
+                        eval_res = moderation.evaluate_action(content_text_for_usage, eff_policy, "output")
                         if isinstance(eval_res, tuple) and len(eval_res) >= 3:
                             resolved_action, redacted_val, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
                             out_category2 = eval_res[3] if len(eval_res) >= 4 else None
@@ -2825,14 +2895,14 @@ async def execute_non_stream_call(
                         resolved_action = None
                 if resolved_action and resolved_action != "pass" and sample is None:
                     try:
-                        _, sample = moderation.check_text(content_to_save, eff_policy, "output")
+                        _, sample = moderation.check_text(content_text_for_usage, eff_policy, "output")
                     except Exception:
                         sample = None
                 if not resolved_action:
-                    flagged, sample = moderation.check_text(content_to_save, eff_policy, "output")
+                    flagged, sample = moderation.check_text(content_text_for_usage, eff_policy, "output")
                     if flagged:
                         resolved_action = eff_policy.output_action
-                        redacted_val = moderation.redact_text(content_to_save, eff_policy) if resolved_action == "redact" else None
+                        redacted_val = moderation.redact_text(content_text_for_usage, eff_policy) if resolved_action == "redact" else None
                 # Topic monitoring (final output)
                 try:
                     mon3 = None
@@ -2848,10 +2918,10 @@ async def execute_non_stream_call(
                             org_ids = getattr(request.state, "org_ids", None)
                     except Exception:
                         pass
-                    if mon3 is not None and content_to_save:
+                    if mon3 is not None and content_text_for_usage:
                         mon3.schedule_evaluate_and_alert(
                             user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
-                            text=content_to_save,
+                            text=content_text_for_usage,
                             source="chat.output",
                             scope_type="user",
                             scope_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
@@ -2886,11 +2956,14 @@ async def execute_non_stream_call(
                             )
                     except Exception:
                         pass
-                    content_to_save = (
-                        redacted_val
-                        if isinstance(redacted_val, str)
-                        else moderation.redact_text(content_to_save, eff_policy)
-                    )
+                    if isinstance(content_to_save, str):
+                        content_to_save = (
+                            redacted_val
+                            if isinstance(redacted_val, str)
+                            else moderation.redact_text(content_text_for_usage, eff_policy)
+                        )
+                    else:
+                        content_to_save = _apply_redaction_to_content(content_to_save, moderation, eff_policy)
                     # Update llm_response dict if applicable
                     try:
                         if isinstance(llm_response, dict):

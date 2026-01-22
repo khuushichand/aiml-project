@@ -688,6 +688,12 @@ async def login(
             await update_user_password_hash(db, int(user['id']), new_hash)
             logger.info(f"Updated password hash for user {user['username']} with new parameters")
 
+        # Attach user_id for downstream middleware (e.g., CSRF binding) on successful auth.
+        try:
+            request.state.user_id = int(user["id"])
+        except Exception:
+            pass
+
         # Determine whether MFA is required (multi-user + PostgreSQL only).
         mfa_required = False
         if settings.AUTH_MODE == "multi_user":
@@ -1160,8 +1166,6 @@ async def refresh_token(
             )
             if single_user_key and request.refresh_token == single_user_key:
                 user_id = int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
-            elif request.refresh_token.startswith("single-user-refresh-"):
-                user_id = int(request.refresh_token.split("-")[-1])
             else:
                 if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                     try:
@@ -1237,6 +1241,12 @@ async def refresh_token(
             else:
                 columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role']
                 user = dict(zip(columns[:len(user)], user))
+
+        # Attach user_id for middleware that binds CSRF tokens on refresh responses.
+        try:
+            request.state.user_id = int(user.get("id")) if isinstance(user, dict) else None
+        except Exception:
+            pass
 
         # Generate new tokens based on auth mode and session linkage
         if settings.AUTH_MODE == "single_user":

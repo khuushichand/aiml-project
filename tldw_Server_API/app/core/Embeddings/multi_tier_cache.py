@@ -718,6 +718,7 @@ class MultiTierCache:
         self.l3_to_l2_threshold = config.get('l3_to_l2_threshold', 3)
 
         logger.info("Multi-tier cache initialized with L1, L2, and L3 tiers")
+        self._sync_loop_warned = False
 
     async def _call_in_executor(self, func: Callable[..., Any], *args, **kwargs):
         """Run a blocking cache operation in the default executor."""
@@ -765,6 +766,12 @@ class MultiTierCache:
             loop = None
 
         if loop and loop.is_running():
+            if not self._sync_loop_warned:
+                self._sync_loop_warned = True
+                logger.warning(
+                    "MultiTierCache.get called from a running event loop; "
+                    "returning L1-only. Use await get_async for L2/L3."
+                )
             return self._get_sync(key)
 
         return asyncio.run(self.get_async(key))
@@ -799,6 +806,12 @@ class MultiTierCache:
             loop = None
 
         if loop and loop.is_running():
+            if not self._sync_loop_warned:
+                self._sync_loop_warned = True
+                logger.warning(
+                    "MultiTierCache.set called from a running event loop; "
+                    "writing L1-only. Use await set_async for L2/L3."
+                )
             return self._set_sync(key, value, ttl)
 
         return asyncio.run(self.set_async(key, value, ttl))

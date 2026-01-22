@@ -18,6 +18,20 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 pytestmark = pytest.mark.integration
 
 
+class _BulkStubDB:
+    client_id = "bulk_stub"
+
+    def __init__(self):
+        self._count = 0
+
+    def add_note(self, title: str, content: str, note_id=None, conversation_id=None, message_id=None):
+        self._count += 1
+        return f"bulk-note-{self._count}"
+
+    def get_note_by_id(self, note_id: str):
+        return None
+
+
 @pytest.fixture()
 def client_with_notes_db(tmp_path, monkeypatch):
     db_path = tmp_path / "notes_integration.db"
@@ -34,6 +48,33 @@ def client_with_notes_db(tmp_path, monkeypatch):
         return db
 
     # Use full app profile so Notes routes are included
+    monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+
+    from tldw_Server_API.app import main as app_main
+
+    importlib.reload(app_main)
+    fastapi_app = app_main.app
+
+    fastapi_app.dependency_overrides[get_request_user] = override_user
+    fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_db_dep
+
+    with TestClient(fastapi_app) as client:
+        yield client
+
+    fastapi_app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def client_with_bulk_stub(monkeypatch):
+    async def override_user():
+        return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
+
+    from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+
+    def override_db_dep():
+        return _BulkStubDB()
+
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
 
@@ -216,6 +257,40 @@ def test_create_note_invalid_links_404(client_with_notes_db: TestClient):
         json={"title": "Bad Msg", "content": "Y", "message_id": "missing-msg"},
     )
     assert bad_msg.status_code == 404
+
+
+def test_keywords_only_update_keeps_version(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+
+    created = client.post("/api/v1/notes/", json={"title": "K", "content": "V"}).json()
+    note_id = created["id"]
+    original_version = created.get("version")
+
+    resp = client.patch(f"/api/v1/notes/{note_id}", json={"keywords": ["alpha", "beta"]})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("version") == original_version
+    kw_texts = {k.get("keyword") for k in payload.get("keywords", [])}
+    assert {"alpha", "beta"}.issubset(kw_texts)
+
+    reread = client.get(f"/api/v1/notes/{note_id}").json()
+    assert reread.get("version") == original_version
+
+
+def test_bulk_create_reports_missing_note_fetch(client_with_bulk_stub: TestClient):
+    client = client_with_bulk_stub
+
+    resp = client.post(
+        "/api/v1/notes/bulk",
+        json={"notes": [{"title": "Bulk", "content": "X"}]},
+    )
+    assert resp.status_code == 207
+    payload = resp.json()
+    assert payload.get("created_count") == 0
+    assert payload.get("failed_count") == 1
+    result = payload.get("results", [])[0]
+    assert result.get("success") is False
+    assert "could not be retrieved" in result.get("error", "").lower()
 
 def test_keywords_list_pagination_and_search_limit(client_with_notes_db: TestClient):
     client = client_with_notes_db

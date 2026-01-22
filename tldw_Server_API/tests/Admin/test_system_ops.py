@@ -9,16 +9,20 @@ from loguru import logger
 from tldw_Server_API.app.main import app
 
 
-def _setup_env():
-
-
-    os.environ["AUTH_MODE"] = "single_user"
-    os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key"
+def _setup_env(monkeypatch, *, user_db_base: str) -> None:
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "unit-test-api-key")
+    monkeypatch.setenv("USER_DB_BASE_DIR", user_db_base)
+    monkeypatch.setenv("TEST_MODE", "true")
 
 
 @pytest.mark.asyncio
-async def test_admin_system_ops_endpoints():
-    _setup_env()
+async def test_admin_system_ops_endpoints(monkeypatch, tmp_path):
+    _setup_env(monkeypatch, user_db_base=str(tmp_path / "user_dbs"))
+
+    from tldw_Server_API.app.core.config import settings
+    monkeypatch.setitem(settings, "AUDIT_BUFFER_SIZE", 1)
+    monkeypatch.setitem(settings, "AUDIT_FLUSH_INTERVAL", 0.1)
 
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
@@ -120,3 +124,18 @@ async def test_admin_system_ops_endpoints():
             "/api/v1/admin/maintenance",
             json={"enabled": False, "message": "", "allowlist_user_ids": [], "allowlist_emails": []},
         )
+
+    from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
+    await audit_deps.shutdown_all_audit_services()
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    import sqlite3
+
+    audit_db_path = DatabasePaths.get_audit_db_path(1)
+    with sqlite3.connect(audit_db_path) as conn:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM audit_events WHERE event_type = ?",
+            ("ops.incident",),
+        )
+        count = int(cur.fetchone()[0])
+    assert count >= 4

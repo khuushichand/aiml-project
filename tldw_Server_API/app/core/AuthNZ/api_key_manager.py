@@ -6,6 +6,9 @@ import hashlib
 import hmac
 import json
 import asyncio
+import ipaddress
+import threading
+from weakref import WeakKeyDictionary
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, Set, Union, TYPE_CHECKING
 from enum import Enum
@@ -589,7 +592,8 @@ class APIKeyManager:
         self,
         api_key: str,
         required_scope: Optional[str] = None,
-        ip_address: Optional[str] = None
+        ip_address: Optional[str] = None,
+        record_usage: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate an API key and return its information
@@ -598,6 +602,7 @@ class APIKeyManager:
             api_key: The API key to validate
             required_scope: Required permission scope
             ip_address: Client IP address for validation and logging
+            record_usage: Whether to record usage/audit side effects
 
         Returns:
             Key information if valid, None if invalid
@@ -649,7 +654,7 @@ class APIKeyManager:
                         raise TypeError("API key allowlist must be stored as JSON array")
                     if not isinstance(allowed_ips_raw, list):
                         raise TypeError("API key allowlist must be stored as JSON array")
-                    allowed_ips = {str(ip).strip() for ip in allowed_ips_raw if str(ip).strip()}
+                    allowed_ips = [str(ip).strip() for ip in allowed_ips_raw if str(ip).strip()]
                 except (TypeError, ValueError, json.JSONDecodeError) as decode_error:
                     if self.settings.PII_REDACT_LOGS:
                         logger.error("API key allowlist could not be decoded; denying access (details redacted)")
@@ -668,7 +673,38 @@ class APIKeyManager:
                                 f"API key {key_info.get('id')} requires client IP but none was supplied; denying access"
                             )
                         return None
-                    if normalized_ip not in allowed_ips:
+                    try:
+                        ip_obj = ipaddress.ip_address(normalized_ip)
+                    except ValueError:
+                        if self.settings.PII_REDACT_LOGS:
+                            logger.warning("API key client IP is invalid; denying access (details redacted)")
+                        else:
+                            logger.warning(
+                                f"API key {key_info.get('id')} client IP is invalid: {normalized_ip}"
+                            )
+                        return None
+                    matched = False
+                    for entry in allowed_ips:
+                        token = entry.strip()
+                        if not token:
+                            continue
+                        try:
+                            if "/" in token:
+                                if ip_obj in ipaddress.ip_network(token, strict=False):
+                                    matched = True
+                                    break
+                            else:
+                                if ip_obj == ipaddress.ip_address(token):
+                                    matched = True
+                                    break
+                        except ValueError as parse_exc:
+                            logger.debug(
+                                "API key allowlist entry invalid; ignoring (entry={}, error={})",
+                                token,
+                                parse_exc,
+                            )
+                            continue
+                    if not matched:
                         if self.settings.PII_REDACT_LOGS:
                             logger.warning("API key used from unauthorized IP; denying access (details redacted)")
                         else:
@@ -698,16 +734,17 @@ class APIKeyManager:
                 if not self._has_scope(key_scope, required_scope):
                     return None
 
-            # Update usage statistics
-            await self._update_usage(key_info['id'], ip_address)
+            if record_usage:
+                # Update usage statistics
+                await self._update_usage(key_info['id'], ip_address)
 
-            # Optional lightweight audit of usage
-            try:
-                if self.settings.API_KEY_AUDIT_LOG_USAGE:
-                    await self._log_action(key_info['id'], "used", key_info.get('user_id'))
-            except Exception as _e:
-                # Do not fail request on audit write
-                logger.debug(f"API key usage audit skipped/failed: {_e}")
+                # Optional lightweight audit of usage
+                try:
+                    if self.settings.API_KEY_AUDIT_LOG_USAGE:
+                        await self._log_action(key_info['id'], "used", key_info.get('user_id'))
+                except Exception as _e:
+                    # Do not fail request on audit write
+                    logger.debug(f"API key usage audit skipped/failed: {_e}")
 
             return key_info
 

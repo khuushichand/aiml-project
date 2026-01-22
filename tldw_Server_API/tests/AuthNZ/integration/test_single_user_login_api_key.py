@@ -85,3 +85,18 @@ def test_single_user_login_returns_api_key_and_authenticates(single_user_client)
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert sessions_resp.status_code == 200
+
+
+def test_single_user_refresh_requires_api_key(single_user_client):
+    client, password, api_key = single_user_client
+
+    # Refresh with the configured API key should succeed.
+    ok = client.post("/api/v1/auth/refresh", json={"refresh_token": api_key})
+    assert ok.status_code == 200
+    ok_json = ok.json()
+    assert ok_json["access_token"] == api_key
+    assert ok_json["refresh_token"] == api_key
+
+    # Legacy single-user refresh tokens are no longer accepted.
+    bad = client.post("/api/v1/auth/refresh", json={"refresh_token": "single-user-refresh-1"})
+    assert bad.status_code == 401

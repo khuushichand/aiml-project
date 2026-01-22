@@ -127,6 +127,9 @@ class ConflictError(DatabaseError):
         return f"{base} ({', '.join(details)})" if details else base
 
 
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 class _RowAdapter:
     """Row adapter that supports both key and index access.
 
@@ -8231,6 +8234,10 @@ class MediaDatabase:
             DatabaseError: If the database query fails.
         """
         try:
+            if not (_SAFE_IDENTIFIER_RE.fullmatch(table or "") and _SAFE_IDENTIFIER_RE.fullmatch(id_col or "")):
+                raise DatabaseError(
+                    f"Unsafe identifier in version lookup: table={table!r}, column={id_col!r}"
+                )
             cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))
             result = cursor.fetchone()
             if result:

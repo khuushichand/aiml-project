@@ -546,6 +546,9 @@ class Chunker:
 
         Returns a dict with a root node and nested children, each child holding "chunks"
         with exact offsets. Designed to be flattened downstream.
+
+        method_options supports a hierarchical-only flag:
+        - sanitize_output (bool, default True): emit sanitized text instead of raw slices.
         """
         if not isinstance(text, str):
             raise InvalidInputError(f"Expected string input, got {type(text).__name__}")
@@ -553,6 +556,14 @@ class Chunker:
             return {'type': 'hierarchical', 'schema_version': 1, 'root': {'kind': 'root', 'children': []}}
         self._enforce_text_size(text, source="chunk_text_hierarchical_tree")
         method_opts = dict(method_options or {})
+        # Hierarchical output text sanitization (default on; opt-out via method_options)
+        sanitize_output = True
+        if "sanitize_output" in method_opts:
+            try:
+                sanitize_output = bool(method_opts.get("sanitize_output"))
+            except Exception:
+                sanitize_output = True
+            method_opts.pop("sanitize_output", None)
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
@@ -569,6 +580,10 @@ class Chunker:
             'code_ast',
         }
 
+        # Sanitize once for stable offsets; output text can be sanitized or raw based on flag.
+        clean_text = self._sanitize_input(text, suppress_security_log=True)
+        output_text = clean_text if sanitize_output else text
+
         # Build blocks from spans
         spans = self._compute_paragraph_spans(text, template)
         root = {'kind': 'root', 'level': 0, 'title': None, 'start_offset': 0, 'end_offset': len(text), 'children': []}
@@ -581,19 +596,20 @@ class Chunker:
             if start >= end:
                 return
             segment_raw = text[start:end]
-            # Use sanitized copy for downstream offset mapping; output preserves raw text for fidelity.
-            segment_clean = self._sanitize_input(segment_raw, suppress_security_log=True)
-            # Compute chunks using selected method
-            chunks = self.chunk_text(
-                segment_raw,
-                method=method,
-                max_size=max_size,
-                overlap=overlap,
-                language=language,
-                **method_opts,
-            )
+            # Use sanitized copy for downstream offset mapping
+            segment_clean = clean_text[start:end]
+            chunks = None
             out_chunks: List[Dict[str, Any]] = []
             if method in rewrite_methods:
+                # Compute chunks using selected method (may rewrite text, offsets invalid)
+                chunks = self.chunk_text(
+                    segment_raw,
+                    method=method,
+                    max_size=max_size,
+                    overlap=overlap,
+                    language=language,
+                    **method_opts,
+                )
                 for ch in chunks:
                     ch_text = ch if isinstance(ch, str) else str(ch)
                     out_chunks.append({
@@ -619,29 +635,25 @@ class Chunker:
 
             # Method-aware offset mapping to avoid misplacing spans on repeated content
             try:
-                if method == 'words':
-                    # Use the word strategy's own record builder to keep offsets aligned
-                    from .strategies.words import WordChunkingStrategy  # local import to avoid cycle at module import
-                    ws = WordChunkingStrategy(language=language)
-                    records, _tokens, spans = ws._prepare_chunk_records(  # noqa: SLF001
-                        segment_clean,
-                        max_size,
-                        overlap,
-                        **method_opts,
-                    )
-                    if records:
-                        for record in records:
-                            token_indices = record.get('token_indices') or []
-                            if not token_indices:
+                if method in ('words', 'sentences'):
+                    # Use chunk_text_with_metadata to keep offsets aligned with overlap clamping
+                    try:
+                        meta_results = self.chunk_text_with_metadata(
+                            segment_raw,
+                            method=method,
+                            max_size=max_size,
+                            overlap=overlap,
+                            language=language,
+                            **method_opts,
+                        )
+                        for res in meta_results or []:
+                            local_start = getattr(res.metadata, 'start_char', None)
+                            local_end = getattr(res.metadata, 'end_char', None)
+                            if not isinstance(local_start, int) or not isinstance(local_end, int):
                                 continue
-                            start_idx = token_indices[0]
-                            end_idx = token_indices[-1]
-                            s0 = spans[start_idx][0] if spans and start_idx < len(spans) else 0
-                            e0 = spans[end_idx][1] if spans and end_idx < len(spans) else len(segment_clean)
-                            # Emit exact source slice matching computed offsets
-                            _gstart = start + s0
-                            _gend = start + e0
-                            exact_text = text[_gstart:_gend]
+                            _gstart = start + local_start
+                            _gend = start + local_end
+                            exact_text = output_text[_gstart:_gend]
                             out_chunks.append({
                                 'type': 'text',
                                 'text': exact_text,
@@ -653,10 +665,20 @@ class Chunker:
                                     'paragraph_kind': kind,
                                 }
                             })
-                    else:
+                    except Exception as e:
+                        logger.debug(f"{method} metadata mapping failed, using fallback: {e}")
                         # Fallback: bound search within the segment using a rolling cursor
+                        if chunks is None:
+                            chunks = self.chunk_text(
+                                segment_raw,
+                                method=method,
+                                max_size=max_size,
+                                overlap=overlap,
+                                language=language,
+                                **method_opts,
+                            )
                         cursor = 0
-                        for ch in chunks:
+                        for ch in chunks or []:
                             ch_text = ch if isinstance(ch, str) else str(ch)
                             idx = segment_clean.find(ch_text, cursor)
                             if idx == -1:
@@ -665,7 +687,7 @@ class Chunker:
                             _gend = min(start + idx + len(ch_text), end)
                             if _gend < _gstart:
                                 _gend = _gstart
-                            exact_text = text[_gstart:_gend]
+                            exact_text = output_text[_gstart:_gend]
                             out_chunks.append({
                                 'type': 'text',
                                 'text': exact_text,
@@ -678,35 +700,6 @@ class Chunker:
                                 }
                             })
                             cursor = idx + len(ch_text)
-                elif method == 'sentences':
-                    # Compute sentence spans and group by sentence count to mirror strategy behavior
-                    from .strategies.sentences import SentenceChunkingStrategy  # local import
-                    ss = SentenceChunkingStrategy(language=language)
-                    records, _combined = ss._prepare_chunk_records(  # noqa: SLF001
-                        segment_clean,
-                        max_size,
-                        overlap,
-                        **method_opts,
-                    )
-                    for record in records or []:
-                        s0 = record.get('start_char')
-                        e0 = record.get('end_char')
-                        if not isinstance(s0, int) or not isinstance(e0, int):
-                            continue
-                        _gstart = start + s0
-                        _gend = start + e0
-                        exact_text = text[_gstart:_gend]
-                        out_chunks.append({
-                            'type': 'text',
-                            'text': exact_text,
-                            'metadata': {
-                                'method': method,
-                                'start_offset': _gstart,
-                                'end_offset': _gend,
-                                'language': language,
-                                'paragraph_kind': kind,
-                            }
-                        })
                 elif method == 'tokens':
                     # Prefer precise offsets from token strategy metadata
                     try:
@@ -726,7 +719,7 @@ class Chunker:
                             global_start = start + local_start
                             global_end = start + local_end
                             # Emit exact source slice to guarantee fidelity
-                            exact_text = text[global_start:global_end]
+                            exact_text = output_text[global_start:global_end]
                             out_chunks.append({
                                 'type': 'text',
                                 'text': exact_text,
@@ -741,8 +734,17 @@ class Chunker:
                     except Exception as e:
                         logger.debug(f"Token metadata mapping failed, using fallback: {e}")
                         # Fallback to naive mapping below
+                        if chunks is None:
+                            chunks = self.chunk_text(
+                                segment_raw,
+                                method=method,
+                                max_size=max_size,
+                                overlap=overlap,
+                                language=language,
+                                **method_opts,
+                            )
                         cursor = 0
-                        for ch in chunks:
+                        for ch in chunks or []:
                             ch_text = ch if isinstance(ch, str) else str(ch)
                             idx = segment_clean.find(ch_text, cursor)
                             if idx == -1:
@@ -751,7 +753,7 @@ class Chunker:
                             _gend = min(start + idx + len(ch_text), end)
                             if _gend < _gstart:
                                 _gend = _gstart
-                            exact_text = text[_gstart:_gend]
+                            exact_text = output_text[_gstart:_gend]
                             out_chunks.append({
                                 'type': 'text',
                                 'text': exact_text,
@@ -766,7 +768,7 @@ class Chunker:
                             cursor = idx + len(ch_text)
                 elif method == 'structure_aware':
                     # Carry block span directly as a precise chunk for structure-aware mode
-                    exact_text = text[start:end]
+                    exact_text = output_text[start:end]
                     out_chunks.append({
                         'type': 'text',
                         'text': exact_text,
@@ -780,8 +782,17 @@ class Chunker:
                     })
                 else:
                     # Fallback: bound search within the segment using a rolling cursor
+                    if chunks is None:
+                        chunks = self.chunk_text(
+                            segment_raw,
+                            method=method,
+                            max_size=max_size,
+                            overlap=overlap,
+                            language=language,
+                            **method_opts,
+                        )
                     cursor = 0
-                    for ch in chunks:
+                    for ch in chunks or []:
                         ch_text = ch if isinstance(ch, str) else str(ch)
                         idx = segment_clean.find(ch_text, cursor)
                         if idx == -1:
@@ -791,7 +802,7 @@ class Chunker:
                         _gend = min(start + idx + len(ch_text), end)
                         if _gend < _gstart:
                             _gend = _gstart
-                        exact_text = text[_gstart:_gend]
+                        exact_text = output_text[_gstart:_gend]
                         out_chunks.append({
                             'type': 'text',
                             'text': exact_text,
@@ -807,15 +818,24 @@ class Chunker:
             except Exception as e:
                 # As a last resort, return chunks with naive offsets bounded to this block
                 logger.warning(f"Offset mapping failed for method={method}: {e}; using naive offsets")
+                if chunks is None:
+                    chunks = self.chunk_text(
+                        segment_raw,
+                        method=method,
+                        max_size=max_size,
+                        overlap=overlap,
+                        language=language,
+                        **method_opts,
+                    )
                 cursor = 0
-                for ch in chunks:
+                for ch in chunks or []:
                     ch_text = ch if isinstance(ch, str) else str(ch)
                     local_end = min(len(segment_clean), cursor + len(ch_text))
                     _gstart = min(start + cursor, end)
                     _gend = min(start + local_end, end)
                     if _gend < _gstart:
                         _gend = _gstart
-                    exact_text = text[_gstart:_gend]
+                    exact_text = output_text[_gstart:_gend]
                     out_chunks.append({
                         'type': 'text',
                         'text': exact_text,
@@ -1462,6 +1482,7 @@ class Chunker:
 
         # Use defaults if not specified
         options_raw: Dict[str, Any] = dict(options)
+        align_text_to_source = bool(options_raw.pop("align_text_to_source", False))
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
@@ -1632,7 +1653,9 @@ class Chunker:
             **options: Additional method-specific options
 
         Returns:
-            List of ChunkResult objects with text and metadata
+            List of ChunkResult objects with text and metadata.
+            Note: Text is strategy-produced by default; set `align_text_to_source=True`
+            in options to force text slices to match source offsets.
         """
         # Sanitize input
         text = self._sanitize_input(text)
@@ -1703,8 +1726,8 @@ class Chunker:
                 raise
             raise ChunkingError(f"Chunking failed: {str(e)}")
 
-        # Align emitted text with the original span to keep offsets trustworthy
-        if isinstance(results, list):
+        # Optionally align emitted text with the source span (opt-in)
+        if align_text_to_source and isinstance(results, list):
             text_len = len(text)
             for item in results:
                 try:
@@ -2404,6 +2427,7 @@ class Chunker:
             'base_overlap',
             'max_adaptive_overlap',
             'code_mode',
+            'align_text_to_source',
         }
         method_options = {
             k: v for k, v in opts.items() if k not in method_option_excludes
@@ -2487,12 +2511,14 @@ class Chunker:
                     if not segment:
                         continue
                     try:
+                        align_text_to_source = bool(opts.get('align_text_to_source', True))
                         base_results = self.chunk_text_with_metadata(
                             segment,
                             method=method,
                             max_size=max_size,
                             overlap=overlap,
                             language=language,
+                            align_text_to_source=align_text_to_source,
                             **method_options_for_chunk,
                         )
                         use_metadata = True
@@ -2814,7 +2840,7 @@ class Chunker:
         def _should_withhold_last_chunk() -> bool:
             """Whether to carry the final chunk forward instead of emitting it immediately."""
             if overlap <= 0:
-                return True
+                return False
             # For non-word methods, carry the full last chunk to preserve cross-buffer overlap.
             return method_lower != ChunkingMethod.WORDS.value
 

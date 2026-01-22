@@ -70,7 +70,7 @@ class _StubModerationService:
     def get_effective_policy(self, user_id: str):
         return self._policy
 
-    def check_text(self, text: str, policy: _StubPolicy):
+    def check_text(self, text: str, policy: _StubPolicy, phase: str | None = None):
         for pat in policy.block_patterns:
             if pat.search(text or ""):
                 return True, pat.pattern
@@ -111,7 +111,7 @@ class _EvalModerationService:
             red = pat.sub(policy.redact_replacement, red)
         return red
 
-    def check_text(self, text: str, policy: _StubPolicy):
+    def check_text(self, text: str, policy: _StubPolicy, phase: str | None = None):
         for pat in policy.block_patterns:
             if pat.search(text or ""):
                 return True, pat.pattern

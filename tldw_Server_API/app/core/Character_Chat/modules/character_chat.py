@@ -1317,7 +1317,7 @@ def retrieve_conversation_messages_for_ui(
             additional_char_sender_ids=additional_aliases,
             additional_user_sender_ids=extra_user_aliases,
             char_first_message=char_first_message_processed,
-            keep_trailing_user=not rich_output,
+            keep_trailing_user=True,
         )
 
         if order_upper == "DESC":

@@ -93,6 +93,7 @@ def _map_event_types(values: Optional[List[str]] | Optional[str]) -> Optional[Li
     else:
         raw_vals = [v for v in values if v]
     mapped: List[AuditEventType] = []
+    invalid: List[str] = []
     for v in raw_vals:
         if not v:
             continue
@@ -105,9 +106,13 @@ def _map_event_types(values: Optional[List[str]] | Optional[str]) -> Optional[Li
         try:
             mapped.append(AuditEventType(v))
         except Exception:
-            # Log warning for unknown types
-            logger.warning(f"Unknown audit event type filter ignored: {v!r}")
+            invalid.append(str(v))
             continue
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_type value(s): {', '.join(invalid)}",
+        )
     return mapped or None
 
 
@@ -119,6 +124,7 @@ def _map_categories(values: Optional[List[str]] | Optional[str]) -> Optional[Lis
     else:
         raw_vals = [v for v in values if v]
     mapped: List[AuditEventCategory] = []
+    invalid: List[str] = []
     for v in raw_vals:
         if not v:
             continue
@@ -130,9 +136,13 @@ def _map_categories(values: Optional[List[str]] | Optional[str]) -> Optional[Lis
         try:
             mapped.append(AuditEventCategory(v))
         except Exception:
-            # Log warning for unknown categories
-            logger.warning(f"Unknown audit category filter ignored: {v!r}")
+            invalid.append(str(v))
             continue
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category value(s): {', '.join(invalid)}",
+        )
     return mapped or None
 
 

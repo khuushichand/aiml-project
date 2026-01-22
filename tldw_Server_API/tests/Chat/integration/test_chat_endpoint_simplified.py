@@ -198,6 +198,37 @@ def test_chat_completion_revalidates_default_model(authenticated_client, mock_ch
         assert detail.get("error_code") == "model_not_allowed"
 
 
+def test_chat_completion_default_model_tracks_model(authenticated_client, mock_chacha_db, setup_dependencies):
+    """Ensure default model injection updates downstream model tracking."""
+
+    request_data = ChatCompletionRequest(
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+    )
+
+    captured = {}
+
+    async def fake_execute_non_stream_call(**kwargs):
+        captured["model"] = kwargs.get("model")
+        return {
+            "id": "chatcmpl-test",
+            "choices": [
+                {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+            ],
+        }
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.execute_non_stream_call", side_effect=fake_execute_non_stream_call),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.get_override_default_model", return_value="default-model"),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.validate_provider_override", return_value=None),
+    ):
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+        assert response.status_code == status.HTTP_200_OK
+        assert captured.get("model") == "default-model"
+
+
 def test_chat_completion_with_conversation_history(authenticated_client, mock_chacha_db, setup_dependencies):
     """Test chat with conversation history."""
 

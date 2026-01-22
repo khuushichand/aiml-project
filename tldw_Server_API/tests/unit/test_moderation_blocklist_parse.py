@@ -360,6 +360,25 @@ def test_set_blocklist_lines_empty_writes_empty_file():
 
 
 @pytest.mark.unit
+def test_append_blocklist_line_rejects_newlines():
+    svc = ModerationService()
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        svc._blocklist_path = tmp_path
+        expected_version = svc._compute_version([])
+        ok, state = svc.append_blocklist_line(expected_version, "secret\nanother")
+        assert ok is False
+        assert "single-line" in str(state.get("error", ""))
+        assert svc.get_blocklist_lines() == []
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
 def test_replacement_limit_zero_is_unlimited():
     svc = ModerationService()
     lines = [

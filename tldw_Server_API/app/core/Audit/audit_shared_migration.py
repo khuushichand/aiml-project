@@ -94,7 +94,10 @@ def _normalize_subpath(raw: Optional[str]) -> Optional[Path]:
     cleaned = value.lstrip("/\\")
     if not cleaned:
         return None
-    return Path(cleaned)
+    path = Path(cleaned)
+    if any(part in {"..", "."} for part in path.parts):
+        return None
+    return path
 
 
 def discover_audit_sources(

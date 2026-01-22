@@ -8,7 +8,8 @@ from tldw_Server_API.app.core.Chat.rate_limiter import (
 
 
 @pytest.mark.unit
-def test_idle_cleanup_removes_stale_entries():
+@pytest.mark.asyncio
+async def test_idle_cleanup_removes_stale_entries():
     cfg = RateLimitConfig(
         global_rpm=60,
         per_user_rpm=10,
@@ -43,7 +44,7 @@ def test_idle_cleanup_removes_stale_entries():
     limiter.usage_stats[uid].conversation_request_counts[cid_active] = 1
 
     # Cleanup entries idle more than 1 second
-    removed = limiter.cleanup_idle_buckets(max_idle_seconds=1)
+    removed = await limiter.cleanup_idle_buckets(max_idle_seconds=1)
     assert removed == 1  # stale conversation removed; user retained
 
     # User-specific structures retained (user is active)

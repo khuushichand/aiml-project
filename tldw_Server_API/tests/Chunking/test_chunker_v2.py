@@ -72,7 +72,13 @@ class TestV2Chunker:
         chunker = Chunker()
         text = "Hello  world\nThis   is   a test."
 
-        chunks = chunker.chunk_text_with_metadata(text, method="words", max_size=3, overlap=1)
+        chunks = chunker.chunk_text_with_metadata(
+            text,
+            method="words",
+            max_size=3,
+            overlap=1,
+            align_text_to_source=True,
+        )
         assert chunks  # sanity
 
         for chunk in chunks:
@@ -1111,6 +1117,59 @@ class TestRollingSummarizeStrategy:
         assert isinstance(chunks, list)
         assert len(chunks) > 0
 
+    def test_rolling_summarize_chunk_with_metadata_without_llm(self):
+        """chunk_with_metadata should return source-aligned spans when no LLM is used."""
+        from tldw_Server_API.app.core.Chunking.strategies.rolling_summarize import RollingSummarizeStrategy
+
+        text = "Sentence 1. Sentence 2. Sentence 3. Sentence 4."
+        strategy = RollingSummarizeStrategy()
+        results = strategy.chunk_with_metadata(text, max_size=2, overlap=1)
+
+        assert results
+        for res in results:
+            s = res.metadata.start_char
+            e = res.metadata.end_char
+            assert isinstance(s, int) and isinstance(e, int)
+            assert 0 <= s <= e <= len(text)
+            assert res.text == text[s:e]
+
+    @patch("tldw_Server_API.app.core.Chunking.strategies.rolling_summarize.RollingSummarizeStrategy._call_llm")
+    def test_rolling_summarize_chunk_with_metadata_with_llm(self, mock_llm):
+        """chunk_with_metadata should map summaries to source spans when LLM is used."""
+        from tldw_Server_API.app.core.Chunking.strategies.rolling_summarize import RollingSummarizeStrategy
+
+        mock_llm.return_value = "Summarized content"
+        strategy = RollingSummarizeStrategy(llm_call_func=Mock(return_value="Summary"))
+        text = "Sentence 1. Sentence 2. Sentence 3. Sentence 4."
+        segments = strategy._build_segments_with_spans(text, max_size=2, overlap=1)
+        results = strategy.chunk_with_metadata(text, max_size=2, overlap=1)
+
+        assert len(results) == len(segments)
+        for res, (_seg, seg_start, seg_end, _count) in zip(results, segments):
+            assert res.text == "Summarized content"
+            assert res.metadata.start_char == seg_start
+            assert res.metadata.end_char == seg_end
+            assert text[seg_start:seg_end] != ""
+
+
+def test_structure_aware_chunk_with_metadata_spans():
+    from tldw_Server_API.app.core.Chunking import Chunker
+
+    text = "# Title\n\nParagraph one.\n\n- item\n"
+    ck = Chunker()
+    results = ck.chunk_text_with_metadata(text, method="structure_aware", max_size=2, overlap=0, language="en")
+
+    assert results
+    prev_end = -1
+    for res in results:
+        s = res.metadata.start_char
+        e = res.metadata.end_char
+        assert isinstance(s, int) and isinstance(e, int)
+        assert 0 <= s <= e <= len(text)
+        assert e >= prev_end
+        prev_end = e
+        assert text[s:e].strip() != ""
+
 
 class TestBackwardCompatibility:
     """Test backward compatibility functions."""
@@ -1276,7 +1335,13 @@ def test_paragraph_chunk_with_metadata_offsets_match_source():
         "\n   \n\nSecond paragraph.\n\n\n"
         "  Third paragraph with trailing spaces.   \n   "
     )
-    results = chunker.chunk_text_with_metadata(text, method="paragraphs", max_size=2, overlap=1)
+    results = chunker.chunk_text_with_metadata(
+        text,
+        method="paragraphs",
+        max_size=2,
+        overlap=1,
+        align_text_to_source=True,
+    )
     assert results, "Expected paragraph chunks"
     for res in results:
         md = res.metadata
@@ -1316,7 +1381,13 @@ def test_paragraph_chunk_with_crlf_offsets_match_source():
     """Paragraphs with Windows CRLF line endings should produce accurate offsets."""
     chunker = Chunker()
     text = "\r\n\r\n  Para A line 1\r\nline 2  \r\n\r\n\r\n" "   Para B\r\n\r\n" "Para C with trailing spaces   \r\n"
-    results = chunker.chunk_text_with_metadata(text, method="paragraphs", max_size=2, overlap=1)
+    results = chunker.chunk_text_with_metadata(
+        text,
+        method="paragraphs",
+        max_size=2,
+        overlap=1,
+        align_text_to_source=True,
+    )
     assert results, "Expected paragraph chunks with CRLF input"
     for res in results:
         md = res.metadata
@@ -1329,7 +1400,14 @@ def test_words_chunk_with_metadata_preserves_offsets_japanese():
     """Japanese word chunking with metadata should slice exact source spans (no spaces inserted)."""
     chunker = Chunker()
     text = "猫は可愛いです。犬も可愛いです。ありがとうございます。"
-    chunks = chunker.chunk_text_with_metadata(text, method="words", max_size=6, overlap=2, language="ja")
+    chunks = chunker.chunk_text_with_metadata(
+        text,
+        method="words",
+        max_size=6,
+        overlap=2,
+        language="ja",
+        align_text_to_source=True,
+    )
     assert chunks, "Expected Japanese word chunks"
     for ch in chunks:
         s = ch.metadata.start_char
@@ -1342,7 +1420,14 @@ def test_sentences_chunk_with_metadata_no_space_thai():
     """Thai sentence chunking should not introduce spaces and should preserve offsets."""
     chunker = Chunker()
     text = "นี่คือการทดสอบ!ขอบคุณ?สวัสดี!"
-    chunks = chunker.chunk_text_with_metadata(text, method="sentences", max_size=1, overlap=0, language="th")
+    chunks = chunker.chunk_text_with_metadata(
+        text,
+        method="sentences",
+        max_size=1,
+        overlap=0,
+        language="th",
+        align_text_to_source=True,
+    )
     assert chunks, "Expected Thai sentence chunks"
     for ch in chunks:
         s = ch.metadata.start_char

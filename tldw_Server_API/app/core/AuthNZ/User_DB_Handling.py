@@ -14,7 +14,10 @@ from pydantic import BaseModel, ValidationError, Field
 # Local Imports
 # New unified settings
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
 # New JWT service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -290,25 +293,6 @@ def _looks_like_jwt(token: Optional[str]) -> bool:
     if not isinstance(token, str):
         return False
     return token.count(".") == 2
-
-
-_SINGLE_USER_BEARER_PREFIX = "single-user-token-"
-
-
-def _parse_single_user_bearer_token(token: Optional[str]) -> Optional[int]:
-    """Extract the user id from a single-user bearer token."""
-    if not isinstance(token, str):
-        return None
-    raw = token.strip()
-    if not raw.startswith(_SINGLE_USER_BEARER_PREFIX):
-        return None
-    suffix = raw[len(_SINGLE_USER_BEARER_PREFIX) :]
-    if not suffix:
-        return None
-    try:
-        return int(suffix)
-    except (TypeError, ValueError):
-        return None
 
 
 def _raise_user_id_error(detail: str, *, status_code: int, raise_http: bool) -> None:
@@ -865,13 +849,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             if test_key:
                 allowed_keys.add(test_key)
             if api_key in allowed_keys:
-                client_ip = None
-                try:
-                    client = getattr(request, "client", None)
-                    if client is not None:
-                        client_ip = getattr(client, "host", None)
-                except Exception:
-                    client_ip = None
+                client_ip = resolve_client_ip(request, settings)
                 if not is_single_user_ip_allowed(client_ip, settings):
                     if settings.PII_REDACT_LOGS:
                         logger.warning("Single-user API key rejected due to client IP allowlist (details redacted)")
@@ -963,13 +941,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
 
     try:
         api_mgr = await get_api_key_manager()
-        client_ip = None
-        try:
-            client = getattr(request, "client", None)
-            if client is not None:
-                client_ip = getattr(client, "host", None)
-        except Exception:
-            client_ip = None
+        client_ip = resolve_client_ip(request, settings)
 
         key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
         if not key_info:
@@ -1342,85 +1314,6 @@ async def get_request_user(
             settings = None
         token_is_jwt = _looks_like_jwt(token)
         if settings is not None and getattr(settings, "AUTH_MODE", None) == "single_user":
-            parsed_id = _parse_single_user_bearer_token(token)
-            if parsed_id is not None:
-                client_ip = None
-                try:
-                    client = getattr(request, "client", None)
-                    if client is not None:
-                        client_ip = getattr(client, "host", None)
-                except Exception:
-                    client_ip = None
-                if not is_single_user_ip_allowed(client_ip, settings):
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Invalid or missing API Key",
-                    )
-                user = get_single_user_instance()
-                fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
-                if fixed_id is not None and parsed_id != int(fixed_id):
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Invalid or missing API Key",
-                    )
-                if user.id_int is not None and parsed_id != user.id_int:
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Invalid or missing API Key",
-                    )
-                try:
-                    request.state.user_id = user.id
-                    request.state.api_key_id = None
-                    request.state.team_ids = []
-                    request.state.org_ids = []
-                except Exception:
-                    pass
-                try:
-                    set_scope(
-                        user_id=user.id_int,
-                        org_ids=[],
-                        team_ids=[],
-                        is_admin=True,
-                    )
-                except Exception:
-                    pass
-                try:
-                    principal = AuthPrincipal(
-                        kind="user",
-                        user_id=user.id_int,
-                        api_key_id=None,
-                        username=getattr(user, "username", None),
-                        email=getattr(user, "email", None),
-                        subject="single_user",
-                        token_type="access",
-                        jti=None,
-                        roles=list(user.roles or []),
-                        permissions=list(user.permissions or []),
-                        is_admin=True,
-                        org_ids=[],
-                        team_ids=[],
-                    )
-                    ip = request.client.host if getattr(request, "client", None) else None
-                    user_agent = (
-                        request.headers.get("User-Agent")
-                        if getattr(request, "headers", None)
-                        else None
-                    )
-                    request_id = (
-                        request.headers.get("X-Request-ID")
-                        if getattr(request, "headers", None)
-                        else None
-                    ) or getattr(request.state, "request_id", None)
-                    request.state.auth = AuthContext(
-                        principal=principal,
-                        ip=ip,
-                        user_agent=user_agent,
-                        request_id=request_id,
-                    )
-                    request.state._auth_user = user
-                except Exception:
-                    logger.debug("Unable to populate AuthContext for single-user bearer token")
-                return user
             logger.debug("get_request_user: Treating Bearer token as API key in single-user mode.")
             return await authenticate_api_key_user(request, token)
         if not token_is_jwt:

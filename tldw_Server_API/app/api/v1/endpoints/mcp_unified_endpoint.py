@@ -44,7 +44,10 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -162,9 +165,7 @@ def _get_client_ip(request: Optional[Request]) -> Optional[str]:
     if request is None:
         return None
     try:
-        client = getattr(request, "client", None)
-        if client is not None:
-            return getattr(client, "host", None)
+        return resolve_client_ip(request, get_settings())
     except Exception:
         logger.debug("Failed to extract client IP", exc_info=True)
     return None

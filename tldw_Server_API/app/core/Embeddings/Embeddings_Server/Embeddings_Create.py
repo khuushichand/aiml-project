@@ -15,7 +15,7 @@ import re
 import weakref
 from pathlib import Path
 from functools import wraps
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Annotated, Literal
 #
 # Third-party Libraries
 import numpy as np
@@ -398,31 +398,34 @@ class BaseModelCfg(BaseModel):
 
 
 class HFModelCfg(BaseModelCfg):
-    provider: str = "huggingface"
+    provider: Literal["huggingface"] = "huggingface"
     hf_cache_dir_subpath: str = "huggingface_cache"
 
 
 class ONNXModelCfg(BaseModelCfg):
-    provider: str = "onnx"
+    provider: Literal["onnx"] = "onnx"
     onnx_storage_dir_subpath: str = "onnx_models"
     onnx_providers: List[str] = Field(default_factory=lambda: ["CPUExecutionProvider"])
 
 
 class OpenAIModelCfg(BaseModelCfg):
-    provider: str = "openai"
+    provider: Literal["openai"] = "openai"
     api_key: Optional[str] = None
     dimensions: Optional[int] = None
 
 
 class LocalAPICfg(BaseModelCfg):
-    provider: str = "local_api"
+    provider: Literal["local_api"] = "local_api"
     api_url: str
     api_key: Optional[str] = None
     # Consider adding chunk_size for local_api batching
     # chunk_size: int = 100
 
 
-ModelCfg = HFModelCfg | ONNXModelCfg | OpenAIModelCfg | LocalAPICfg
+ModelCfg = Annotated[
+    HFModelCfg | ONNXModelCfg | OpenAIModelCfg | LocalAPICfg,
+    Field(discriminator="provider"),
+]
 
 
 class EmbeddingConfigSchema(BaseModel):
@@ -513,35 +516,40 @@ class TokenBucketLimiter:
                 time.sleep(wait_time)
             # Loop again to re-evaluate after waiting
 
+    def acquire(self) -> None:
+        """Acquire a token, honoring ResourceGovernor if enabled."""
+        # When ResourceGovernor is enabled, prefer ResourceGovernor as
+        # the primary enforcement path. The legacy in-process token bucket
+        # is retained as a fallback when RG is disabled.
+        if not _rg_embeddings_server_enabled():
+            self._acquire()
+            return
+
+        # RG enforcement with simple backoff based on retry_after.
+        while True:
+            decision = _maybe_enforce_with_rg_embeddings_server_sync()
+            if decision is None:
+                _log_rg_emb_server_fallback("rg_decision_unavailable")
+                raise RuntimeError(
+                    "Embeddings server ResourceGovernor unavailable while RG_ENABLED=1. "
+                    "Ensure RG policy loader and backend are configured."
+                )
+            if decision.get("allowed", False):
+                return
+            retry_after = decision.get("retry_after")
+            wait_s = 1.0
+            try:
+                if isinstance(retry_after, (int, float)) and retry_after > 0:
+                    wait_s = float(retry_after)
+            except Exception:
+                wait_s = 1.0
+            time.sleep(wait_s)
+
     def __call__(self, fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            # When ResourceGovernor is enabled, prefer ResourceGovernor as
-            # the primary enforcement path. The legacy in-process token bucket
-            # is retained as a fallback when RG is disabled.
-            if not _rg_embeddings_server_enabled():
-                self._acquire()
-                return fn(*args, **kwargs)
-
-            # RG enforcement with simple backoff based on retry_after.
-            while True:
-                decision = _maybe_enforce_with_rg_embeddings_server_sync()
-                if decision is None:
-                    _log_rg_emb_server_fallback("rg_decision_unavailable")
-                    raise RuntimeError(
-                        "Embeddings server ResourceGovernor unavailable while RG_ENABLED=1. "
-                        "Ensure RG policy loader and backend are configured."
-                    )
-                if decision.get("allowed", False):
-                    return fn(*args, **kwargs)
-                retry_after = decision.get("retry_after")
-                wait_s = 1.0
-                try:
-                    if isinstance(retry_after, (int, float)) and retry_after > 0:
-                        wait_s = float(retry_after)
-                except Exception:
-                    wait_s = 1.0
-                time.sleep(wait_s)
+            self.acquire()
+            return fn(*args, **kwargs)
 
         return wrapper
 
@@ -1586,16 +1594,25 @@ class ONNXEmbedder:
 
 
 
-# Global limiter instance. Parameters (20 calls per 60s) are fixed.
-# To make this dynamic per model_config, the limiter would need to be
-# managed differently, perhaps per-embedder or applied inside create_embeddings_batch.
-limiter = TokenBucketLimiter(capacity=20, period=60)
+_LIMITER_CACHE: Dict[tuple[int, int], TokenBucketLimiter] = {}
+_LIMITER_CACHE_LOCK = threading.Lock()
+
+
+def _get_token_bucket_limiter(capacity: int, period: int) -> TokenBucketLimiter:
+    cap = max(1, int(capacity))
+    per = max(1, int(period))
+    key = (cap, per)
+    with _LIMITER_CACHE_LOCK:
+        limiter = _LIMITER_CACHE.get(key)
+        if limiter is None:
+            limiter = TokenBucketLimiter(capacity=cap, period=per)
+            _LIMITER_CACHE[key] = limiter
+        return limiter
 
 
 # Exponential backoff decorator with fixed parameters.
 # To make this dynamic per model_config, apply similarly to limiter.
 @exponential_backoff(max_retries=3, base_delay=1)
-@limiter  # Applied to all calls to create_embeddings_batch
 def create_embeddings_batch(
         texts: List[str],
         user_app_config: Dict[str, Any],  # Renamed for clarity: this is the top-level app config
@@ -1614,6 +1631,16 @@ def create_embeddings_batch(
     if not texts:
         logger.warning("create_embeddings_batch called with empty list of texts.")
         return []
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        logger.warning(
+            "create_embeddings_batch called from a running event loop; "
+            "use create_embeddings_batch_async to avoid blocking."
+        )
 
     try:
         # Extract and validate the specific embedding configuration part
@@ -1671,6 +1698,18 @@ def create_embeddings_batch(
     model_id_to_use = resolved_key
 
     provider = model_spec.provider
+
+    # Apply per-config rate limiter (fallback to defaults if unset).
+    try:
+        limiter_cfg = embedding_service_config.rate_limiter
+        limiter = _get_token_bucket_limiter(
+            getattr(limiter_cfg, "max_calls", 20),
+            getattr(limiter_cfg, "period", 60),
+        )
+        limiter.acquire()
+    except Exception as e:
+        logger.debug(f"Rate limiter acquisition failed or skipped: {e}")
+
     # Ensure model_storage_base_dir exists and stays under the allowlist root
     base_dir = _normalize_model_storage_base_dir(embedding_service_config.model_storage_base_dir)
     os.makedirs(base_dir, exist_ok=True)
@@ -1858,7 +1897,7 @@ def create_embeddings_batch(
 
             payload = {"texts": texts, "model": model_spec.model_name_or_path}
 
-            # The outbound call is already wrapped by @exponential_backoff and @limiter
+            # The outbound call is already wrapped by exponential backoff and the per-config rate limiter
             from tldw_Server_API.app.core.http_client import fetch as _fetch
             resp = _fetch(method="POST", url=model_spec.api_url, headers=headers, json=payload, timeout=60)
             if resp.status_code >= 400:

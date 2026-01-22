@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import tempfile
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -895,6 +896,51 @@ class TestUnifiedAuditService:
         assert len(events) == 1
         assert events[0]["result"] == "failure"
         assert "Test error" in events[0]["error_message"]
+
+    @pytest.mark.asyncio
+    async def test_audit_context_manager_raises_when_success_log_fails(self, audit_service, monkeypatch):
+        """Audit logging is mandatory; success logging failures should propagate."""
+        context = AuditContext(user_id="log_fail_user")
+        original = audit_service.log_event
+
+        async def _fail_on_success(*args, **kwargs):
+            if kwargs.get("result") == "success":
+                raise RuntimeError("audit log failure")
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(audit_service, "log_event", _fail_on_success)
+
+        with pytest.raises(RuntimeError, match="audit log failure"):
+            async with audit_operation(
+                audit_service,
+                AuditEventType.DATA_READ,
+                context,
+                resource_type="document",
+                resource_id="doc-success",
+            ):
+                await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_audit_context_manager_preserves_original_error_when_failure_log_fails(self, audit_service, monkeypatch):
+        """Failure logging should not mask the original exception."""
+        context = AuditContext(user_id="log_fail_user")
+        original = audit_service.log_event
+
+        async def _fail_on_failure(*args, **kwargs):
+            if kwargs.get("result") == "failure":
+                raise RuntimeError("audit log failure")
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(audit_service, "log_event", _fail_on_failure)
+
+        with pytest.raises(ValueError, match="Test error"):
+            async with audit_operation(
+                audit_service,
+                AuditEventType.DATA_WRITE,
+                context,
+                resource_type="document",
+            ):
+                raise ValueError("Test error")
 
     @pytest.mark.asyncio
     @pytest.mark.xfail(reason="Global audit service deprecated; use dependency injection")
@@ -1825,3 +1871,129 @@ def test_stop_safe_when_owner_loop_closed(monkeypatch):
     assert service._db_pool is None
 
     Path(db_path).unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_migration_drops_legacy_views_and_triggers(tmp_path):
+    """Legacy audit views/triggers should be removed during unified migration."""
+    db_path = tmp_path / "legacy_audit.db"
+
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT UNIQUE NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                user_id TEXT,
+                session_id TEXT,
+                ip_address TEXT,
+                user_agent TEXT,
+                endpoint TEXT,
+                method TEXT,
+                resource_id TEXT,
+                resource_type TEXT,
+                action TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                details TEXT,
+                metadata TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE user_rate_limits (
+                user_id TEXT,
+                tier TEXT,
+                evaluations_per_day INTEGER
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE VIEW audit_statistics AS
+            SELECT
+                DATE(timestamp) as audit_date,
+                event_type,
+                severity,
+                outcome,
+                COUNT(*) as event_count,
+                COUNT(DISTINCT user_id) as unique_users,
+                COUNT(DISTINCT ip_address) as unique_ips
+            FROM audit_events
+            GROUP BY DATE(timestamp), event_type, severity, outcome
+            """
+        )
+        cur.execute(
+            """
+            CREATE VIEW security_alerts AS
+            SELECT
+                event_id,
+                timestamp,
+                event_type,
+                severity,
+                user_id,
+                ip_address,
+                action,
+                details,
+                CASE
+                    WHEN severity = 'critical' THEN 1
+                    WHEN severity = 'high' THEN 2
+                    WHEN severity = 'medium' THEN 3
+                    ELSE 4
+                END as priority
+            FROM audit_events
+            WHERE severity IN ('critical', 'high')
+            ORDER BY priority, timestamp DESC
+            """
+        )
+        cur.execute(
+            """
+            CREATE TRIGGER audit_rate_limit_changes
+            AFTER UPDATE ON user_rate_limits
+            BEGIN
+                INSERT INTO audit_events (
+                    event_id, timestamp, event_type, severity,
+                    user_id, action, outcome, resource_type, resource_id,
+                    details
+                ) VALUES (
+                    lower(hex(randomblob(16))),
+                    datetime('now'),
+                    'config.tier_upgrade',
+                    'medium',
+                    NEW.user_id,
+                    'User tier updated',
+                    'success',
+                    'user_tier',
+                    NEW.user_id,
+                    json_object('old_tier', OLD.tier, 'new_tier', NEW.tier)
+                );
+            END
+            """
+        )
+        conn.commit()
+
+    service = UnifiedAuditService(
+        db_path=str(db_path),
+        retention_days=7,
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=10,
+        flush_interval=1.0,
+    )
+    await service.initialize(start_background_tasks=False)
+    await service.stop()
+
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.cursor()
+        views = {row[0] for row in cur.execute("SELECT name FROM sqlite_master WHERE type='view'")}
+        triggers = {row[0] for row in cur.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        assert "audit_statistics" not in views
+        assert "security_alerts" not in views
+        assert "audit_rate_limit_changes" not in triggers
+        cols = [row[1] for row in cur.execute("PRAGMA table_info(audit_events)")]
+        assert "outcome" not in cols

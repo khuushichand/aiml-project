@@ -691,6 +691,33 @@ async def _process_content_for_db_sync(
         processed_content_iterable = [{"type": "text", "text": f"<unsupported content type: {type(content_iterable).__name__}>"}]
 
     for part in processed_content_iterable:
+        if isinstance(part, str):
+            text_parts_sync.append(part)
+            continue
+        if not isinstance(part, dict):
+            if hasattr(part, "model_dump"):
+                try:
+                    part = part.model_dump(exclude_none=True)
+                except Exception:
+                    part = {"type": "text", "text": str(part)}
+            else:
+                p_type_attr = getattr(part, "type", None)
+                if p_type_attr == "text":
+                    text_parts_sync.append(str(getattr(part, "text", "")))
+                    continue
+                if p_type_attr == "image_url":
+                    image_url_obj = getattr(part, "image_url", None)
+                    if hasattr(image_url_obj, "model_dump"):
+                        try:
+                            image_url_obj = image_url_obj.model_dump(exclude_none=True)
+                        except Exception:
+                            image_url_obj = None
+                    if not isinstance(image_url_obj, dict):
+                        image_url_obj = {"url": getattr(image_url_obj, "url", "") if image_url_obj is not None else ""}
+                    part = {"type": "image_url", "image_url": image_url_obj}
+                else:
+                    text_parts_sync.append(str(part))
+                    continue
         p_type = part.get("type")
         if p_type == "text":
             snippet = str(part.get("text", ""))[:MAX_TEXT_LENGTH + 1] # Ensure text is string
@@ -704,6 +731,14 @@ async def _process_content_for_db_sync(
             text_parts_sync.append(snippet)
         elif p_type == "image_url":
             url_dict = part.get("image_url", {})
+            if not isinstance(url_dict, dict):
+                if hasattr(url_dict, "model_dump"):
+                    try:
+                        url_dict = url_dict.model_dump(exclude_none=True)
+                    except Exception:
+                        url_dict = {}
+                if not isinstance(url_dict, dict):
+                    url_dict = {"url": getattr(url_dict, "url", "")}
             url_str = url_dict.get("url", "")
 
             if url_str.startswith("data:"):
@@ -2007,6 +2042,7 @@ async def create_chat_completion(
                     cleaned_args["model"] = default_model_for_provider
                     if not request_data.model:
                         request_data.model = default_model_for_provider
+                    model = default_model_for_provider
                 else:
                     # Fail fast with a clear client error instead of cascading into a 500
                     # when downstream provider adapters require an explicit model.

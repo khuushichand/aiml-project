@@ -776,8 +776,15 @@ class PostgreSQLBackend(DatabaseBackend):
                 result_rows = []
 
             managed_depth = self._tx_depth(conn)
-            if is_write and managed_depth == 0 and not external_conn:
-                conn.commit()
+            if managed_depth == 0 and not external_conn:
+                if is_write:
+                    conn.commit()
+                else:
+                    # Close implicit read-only transaction to avoid idle-in-transaction sessions.
+                    try:
+                        conn.rollback()
+                    except Exception as rollback_exc:  # noqa: BLE001
+                        logger.debug(f"Rollback after read-only execute() failed: {rollback_exc}")
 
             execution_time = time.time() - start_time
 
@@ -839,8 +846,15 @@ class PostgreSQLBackend(DatabaseBackend):
             is_write = self._is_write_command(command_tag, normalized_query)
 
             managed_depth = self._tx_depth(conn)
-            if is_write and managed_depth == 0 and not external_conn:
-                conn.commit()
+            if managed_depth == 0 and not external_conn:
+                if is_write:
+                    conn.commit()
+                else:
+                    # Close implicit read-only transaction to avoid idle-in-transaction sessions.
+                    try:
+                        conn.rollback()
+                    except Exception as rollback_exc:  # noqa: BLE001
+                        logger.debug(f"Rollback after read-only execute_many() failed: {rollback_exc}")
 
             execution_time = time.time() - start_time
 

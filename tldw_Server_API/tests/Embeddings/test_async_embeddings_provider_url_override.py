@@ -18,6 +18,20 @@ class DummyCache:
         return True
 
 
+class TrackingCache:
+    def __init__(self) -> None:
+        self.get_keys = []
+        self.set_keys = []
+
+    async def get_async(self, key):  # noqa: ANN001 - simple test stub
+        self.get_keys.append(key)
+        return None
+
+    async def set_async(self, key, value, ttl=None):  # noqa: ANN001 - simple test stub
+        self.set_keys.append(key)
+        return True
+
+
 @pytest.mark.asyncio
 async def test_openai_api_url_override_only_when_explicit_provider(monkeypatch):
     config = EmbeddingsConfig(
@@ -67,7 +81,7 @@ async def test_openai_api_url_override_only_when_explicit_provider(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_openai_api_url_not_used_for_default_provider(monkeypatch):
+async def test_openai_api_url_used_for_default_provider(monkeypatch):
     config = EmbeddingsConfig(
         providers=[
             ProviderConfig(
@@ -103,4 +117,49 @@ async def test_openai_api_url_not_used_for_default_provider(monkeypatch):
     )
 
     assert result == [0.1, 0.2]
-    assert urls[-1] == "https://api.openai.com/v1/embeddings"
+    assert urls[-1] == "https://example.test/v1/embeddings"
+
+
+@pytest.mark.asyncio
+async def test_cache_key_includes_openai_api_url_override(monkeypatch):
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="openai",
+                api_key="sk-test",
+                api_url="https://example.test/v1",
+            )
+        ],
+        batching=BatchingConfig(enabled=False),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="openai",
+        default_model="text-embedding-3-small",
+    )
+
+    service = AsyncEmbeddingService(config=config)
+    service.cache = TrackingCache()
+
+    pool = get_pool_manager().get_pool("openai")
+
+    async def _fake_request(*_args, **kwargs):  # noqa: ANN001 - test stub
+        return {"data": [{"embedding": [0.1, 0.2]}]}
+
+    monkeypatch.setattr(pool, "request", _fake_request)
+
+    text = "hello"
+    result = await service.create_embedding(
+        text=text,
+        model="text-embedding-3-small",
+        provider="openai",
+        use_cache=True,
+        use_batching=False,
+    )
+
+    assert result == [0.1, 0.2]
+
+    import hashlib
+
+    text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    expected_key = f"openai:text-embedding-3-small:{text_hash}:https://example.test/v1"
+    assert service.cache.get_keys[-1] == expected_key
+    assert service.cache.set_keys[-1] == expected_key

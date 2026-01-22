@@ -156,6 +156,7 @@ class RequestBatcher:
         metadata = metadata or {}
         user_id = metadata.get("user_id")
 
+        rate_limit_applied = False
         if (
             user_id
             and getattr(self.config.security, "enable_rate_limiting", False)
@@ -166,6 +167,7 @@ class RequestBatcher:
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
+                cost=1,
                 tokens_units=tokens_units,
             )
             if not allowed:
@@ -181,6 +183,7 @@ class RequestBatcher:
                 raise RuntimeError(
                     f"Rate limit exceeded for user '{user_id}'.{retry_after_msg}"
                 )
+            rate_limit_applied = True
 
         if not self.enabled:
             # Batching disabled, process immediately
@@ -190,6 +193,7 @@ class RequestBatcher:
                 self._resolve_provider_name(provider, model, config_override),
                 metadata,
                 config_override=config_override,
+                rate_limit_applied=rate_limit_applied,
             )
 
         provider = self._resolve_provider_name(provider, model, config_override)
@@ -419,6 +423,7 @@ class RequestBatcher:
         provider: str,
         metadata: Optional[Dict[str, Any]] = None,
         config_override: Optional[Dict[str, Any]] = None,
+        rate_limit_applied: bool = False,
     ) -> Any:
         """
         Process a single request without batching.
@@ -459,6 +464,7 @@ class RequestBatcher:
         from tldw_Server_API.app.core.Embeddings.async_embeddings import get_async_embedding_service
         service = get_async_embedding_service()
         user_id = metadata.get("user_id")
+        effective_user_id = None if rate_limit_applied else user_id
 
         provider_candidates = []
         normalized_provider = self._normalize_provider_name(provider)
@@ -477,7 +483,7 @@ class RequestBatcher:
                     text=text,
                     model=model,
                     provider=candidate,
-                    user_id=user_id,
+                    user_id=effective_user_id,
                     use_batching=False,
                 )
             except ValueError as exc:

@@ -550,7 +550,11 @@ def validate_character_book_entry(entry: Dict[str, Any], idx: int, entry_ids: Se
     return is_valid, validation_messages
 
 
-def validate_v2_card(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+def validate_v2_card(
+    card_data: Dict[str, Any],
+    *,
+    strict_spec: bool = True,
+) -> Tuple[bool, List[str]]:
     """Validates a V2 character card structure and content.
 
     Performs comprehensive validation of a V2 character card, checking for
@@ -570,21 +574,33 @@ def validate_v2_card(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """
     validation_messages = []
 
-    # Check top-level structure
-    if 'spec' not in card_data:
-        validation_messages.append("Missing 'spec' field.")
-    elif card_data['spec'] != 'chara_card_v2':
-        validation_messages.append(f"Invalid 'spec' value: '{card_data['spec']}'. Expected 'chara_card_v2'.")
+    # Check top-level structure (strict for explicit V2; relaxed for implicit V2)
+    if strict_spec:
+        if 'spec' not in card_data:
+            validation_messages.append("Missing 'spec' field.")
+        elif card_data['spec'] != 'chara_card_v2':
+            validation_messages.append(f"Invalid 'spec' value: '{card_data['spec']}'. Expected 'chara_card_v2'.")
 
-    spec_version_raw = card_data.get('spec_version')
-    if spec_version_raw is None:
-        validation_messages.append("Missing 'spec_version' field.")
-        spec_version_str = None
+        spec_version_raw = card_data.get('spec_version')
+        if spec_version_raw is None:
+            validation_messages.append("Missing 'spec_version' field.")
+        else:
+            spec_version_str = str(spec_version_raw)
+            if not spec_version_str.startswith("2."):
+                validation_messages.append(
+                    f"Invalid 'spec_version' value: '{spec_version_raw}'. Expected version starting with '2.'")
     else:
-        spec_version_str = str(spec_version_raw)
-        if not spec_version_str.startswith("2."):
-            validation_messages.append(
-                f"Invalid 'spec_version' value: '{spec_version_raw}'. Expected version starting with '2.'")
+        # Only validate spec/spec_version when they are explicitly provided.
+        spec_val = card_data.get('spec')
+        if spec_val is not None and spec_val != 'chara_card_v2':
+            validation_messages.append(f"Invalid 'spec' value: '{spec_val}'. Expected 'chara_card_v2'.")
+
+        spec_version_raw = card_data.get('spec_version')
+        if spec_version_raw is not None:
+            spec_version_str = str(spec_version_raw)
+            if not spec_version_str.startswith("2."):
+                validation_messages.append(
+                    f"Invalid 'spec_version' value: '{spec_version_raw}'. Expected version starting with '2.'")
 
     # Check for 'data' node
     if 'data' not in card_data:

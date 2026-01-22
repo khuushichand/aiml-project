@@ -79,6 +79,12 @@ try:
 except Exception:
     _HAS_FCNTL = False
 
+try:
+    import msvcrt  # type: ignore
+    _HAS_MSVCRT = True
+except Exception:
+    _HAS_MSVCRT = False
+
 _FALLBACK_LOCKS: Dict[str, threading.Lock] = {}
 _FALLBACK_LOCKS_LOCK = threading.Lock()
 
@@ -120,6 +126,32 @@ async def _fallback_queue_lock(path: Path) -> AsyncGenerator[None, None]:
         finally:
             try:
                 await asyncio.to_thread(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                await asyncio.to_thread(handle.close)
+            except Exception:
+                pass
+    elif _HAS_MSVCRT:
+        def _open_and_lock() -> Any:
+            fh = lock_path.open("a+b")
+            try:
+                fh.seek(0)
+            except Exception:
+                pass
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            return fh
+
+        handle = await asyncio.to_thread(_open_and_lock)
+        try:
+            yield
+        finally:
+            try:
+                await asyncio.to_thread(handle.seek, 0)
+            except Exception:
+                pass
+            try:
+                await asyncio.to_thread(msvcrt.locking, handle.fileno(), msvcrt.LK_UNLCK, 1)
             except Exception:
                 pass
             try:
@@ -357,6 +389,7 @@ class AuditEventType(Enum):
     SYSTEM_ERROR = "system.error"
     CONFIG_CHANGED = "config.changed"
     MIGRATION_RUN = "migration.run"
+    OPS_INCIDENT = "ops.incident"
 
 
 class AuditSeverity(Enum):
@@ -1363,6 +1396,19 @@ class UnifiedAuditService:
         """Migrate legacy audit_events tables to the unified schema."""
         logger.warning("Legacy audit_events schema detected; migrating to unified schema.")
 
+        async def _drop_legacy_audit_objects() -> None:
+            """Drop legacy audit views/triggers that reference old columns."""
+            legacy_objects = [
+                "DROP VIEW IF EXISTS security_alerts",
+                "DROP VIEW IF EXISTS audit_statistics",
+                "DROP TRIGGER IF EXISTS audit_rate_limit_changes",
+            ]
+            for sql in legacy_objects:
+                try:
+                    await db.execute(sql)
+                except Exception:
+                    pass
+
         await db.execute("ALTER TABLE audit_events RENAME TO audit_events_legacy")
         if self._shared_mode:
             await db.execute(
@@ -1554,6 +1600,7 @@ class UnifiedAuditService:
         try:
             await _copy_rows()
             await db.execute("DROP TABLE audit_events_legacy")
+            await _drop_legacy_audit_objects()
         except Exception as exc:
             logger.error(f"Failed to migrate legacy audit_events schema: {exc}")
             # Attempt to roll back to the legacy table if possible.
@@ -3422,7 +3469,7 @@ class UnifiedAuditService:
         hours: int = 24,
         *,
         user_id: Optional[str] = None,
-        allow_cross_tenant: bool = True,
+        allow_cross_tenant: bool = False,
     ) -> Dict[str, Any]:
         """Aggregate recent security-related audit stats for health checks.
 
@@ -3570,40 +3617,46 @@ async def audit_operation(
     start_time = time.perf_counter()
     event_id = None
 
+    # Log start event when specified explicitly (fail-fast if audit is mandatory).
+    if start_event_type is not None:
+        event_id = await service.log_event(
+            event_type=start_event_type,
+            context=context,
+            result="started",
+            **kwargs,
+        )
+
     try:
-        # Log start event when specified explicitly
-        if start_event_type is not None:
-            event_id = await service.log_event(
-                event_type=start_event_type,
+        yield event_id
+    except Exception as exc:
+        # Log failure without masking the original exception.
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        try:
+            await service.log_event(
+                event_type=(completed_event_type or event_type),
                 context=context,
-                result="started",
+                result="failure",
+                error_message=str(exc),
+                duration_ms=duration_ms,
                 **kwargs,
             )
-
-        yield event_id
-
-        # Log success
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        await service.log_event(
-            event_type=(completed_event_type or event_type),
-            context=context,
-            result="success",
-            duration_ms=duration_ms,
-            **kwargs
-        )
-
-    except Exception as e:
-        # Log failure
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        await service.log_event(
-            event_type=(completed_event_type or event_type),
-            context=context,
-            result="failure",
-            error_message=str(e),
-            duration_ms=duration_ms,
-            **kwargs
-        )
+        except Exception as log_exc:
+            logger.error(
+                "Audit failure logging failed for {}: {}",
+                event_type.value if isinstance(event_type, AuditEventType) else event_type,
+                log_exc,
+            )
         raise
+
+    # Log success (propagate logging failures since audit is mandatory).
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    await service.log_event(
+        event_type=(completed_event_type or event_type),
+        context=context,
+        result="success",
+        duration_ms=duration_ms,
+        **kwargs,
+    )
 
 
 # ============================================================================

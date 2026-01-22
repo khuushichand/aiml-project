@@ -21,9 +21,14 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthPrincipal,
     PrincipalKind,
 )
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    is_service_token_ip_allowed,
+    resolve_client_ip,
+)
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.exceptions import InactiveUserError
 
@@ -71,25 +76,6 @@ def _looks_like_jwt(token: Optional[str]) -> bool:
     if not isinstance(token, str):
         return False
     return token.count(".") == 2
-
-
-_SINGLE_USER_BEARER_PREFIX = "single-user-token-"
-
-
-def _parse_single_user_bearer_token(token: Optional[str]) -> Optional[int]:
-    """Extract the user id from a single-user bearer token."""
-    if not isinstance(token, str):
-        return None
-    raw = token.strip()
-    if not raw.startswith(_SINGLE_USER_BEARER_PREFIX):
-        return None
-    suffix = raw[len(_SINGLE_USER_BEARER_PREFIX) :]
-    if not suffix:
-        return None
-    try:
-        return int(suffix)
-    except (TypeError, ValueError):
-        return None
 
 
 def _peek_jwt_token_type(token: str) -> Optional[str]:
@@ -288,59 +274,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         except Exception:
             auth_mode = None
         if auth_mode == "single_user":
-            # Allow single-user bearer tokens returned by /auth/login.
-            parsed_id = _parse_single_user_bearer_token(token)
-            if parsed_id is not None:
-                client_ip = None
-                try:
-                    client = getattr(request, "client", None)
-                    if client is not None:
-                        client_ip = getattr(client, "host", None)
-                except Exception:
-                    client_ip = None
-                if not is_single_user_ip_allowed(client_ip, settings):
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Not authenticated (provide Bearer token or X-API-KEY)",
-                        headers={"WWW-Authenticate": "Bearer"},
-                    )
-                user = User_DB_Handling.get_single_user_instance()
-                fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
-                if fixed_id is not None and parsed_id != int(fixed_id):
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Not authenticated (provide Bearer token or X-API-KEY)",
-                        headers={"WWW-Authenticate": "Bearer"},
-                    )
-                if user.id_int is not None and parsed_id != user.id_int:
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Not authenticated (provide Bearer token or X-API-KEY)",
-                        headers={"WWW-Authenticate": "Bearer"},
-                    )
-                principal = _build_principal_from_user(
-                    user=user,
-                    kind="user",
-                    request=request,
-                    token_type="access",
-                    jti=None,
-                    subject="single_user",
-                    api_key_id=None,
-                )
-                ctx = _build_context(principal, request)
-                try:
-                    request.state.auth = ctx
-                    request.state._auth_user = user
-                    request.state.user_id = user.id_int
-                    request.state.api_key_id = None
-                    request.state.team_ids = []
-                    request.state.org_ids = []
-                except Exception as state_exc:
-                    logger.debug(
-                        "auth_principal_resolver: unable to attach single-user state context: {}",
-                        state_exc,
-                    )
-                return principal
+            # In single-user mode, treat Bearer tokens as API keys (no legacy bearer tokens).
             api_key = token
             token = None
         elif not token_is_jwt and not test_context:
@@ -377,6 +311,40 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                         detail="Could not validate credentials",
                         headers={"WWW-Authenticate": "Bearer"},
                     ) from exc
+
+                # Enforce token revocation/blacklist for service tokens.
+                try:
+                    session_manager = await get_session_manager()
+                    if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Could not validate credentials",
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
+                except HTTPException:
+                    raise
+                except Exception as exc:
+                    logger.debug("Service token blacklist check failed: {}", exc)
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Could not validate credentials",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    ) from exc
+
+                try:
+                    settings = get_settings()
+                except Exception:
+                    settings = None
+                client_ip = resolve_client_ip(request, settings)
+                if not is_service_token_ip_allowed(client_ip, settings):
+                    logger.warning(
+                        "Service token rejected due to non-local client_ip={}",
+                        client_ip or "<unknown>",
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Service tokens are restricted to local/internal requests",
+                    )
 
                 service_name, permissions = _resolve_service_identity(payload)
                 principal = AuthPrincipal(
@@ -478,13 +446,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 if test_key:
                     allowed_keys.add(test_key)
                 if api_key in allowed_keys:
-                    client_ip = None
-                    try:
-                        client = getattr(request, "client", None)
-                        if client is not None:
-                            client_ip = getattr(client, "host", None)
-                    except Exception:
-                        client_ip = None
+                    client_ip = resolve_client_ip(request, settings)
                     if not is_single_user_ip_allowed(client_ip, settings):
                         raise HTTPException(
                             status_code=status.HTTP_401_UNAUTHORIZED,

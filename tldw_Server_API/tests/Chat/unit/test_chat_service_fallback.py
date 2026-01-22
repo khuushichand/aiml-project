@@ -8,6 +8,7 @@ from starlette.responses import StreamingResponse
 
 from tldw_Server_API.app.core.Chat import chat_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+from tldw_Server_API.app.core.Chat.chat_metrics import ChatMetricsCollector
 from tldw_Server_API.app.core.Chat.chat_service import (
     execute_non_stream_call,
     execute_streaming_call,
@@ -19,6 +20,7 @@ class _DummyMetrics:
     def __init__(self):
         self.llm_calls = []
         self.fallback_successes = []
+        self._collector = ChatMetricsCollector()
 
     def track_llm_call(self, provider, model, latency, success, error_type=None):
 
@@ -31,6 +33,9 @@ class _DummyMetrics:
     def track_tokens(self, **_kwargs):
 
         return None
+
+    def track_streaming(self, conversation_id: str):
+        return self._collector.track_streaming(conversation_id)
 
 
 class _DummyProviderManager:

@@ -465,7 +465,15 @@ async def test_submit_request_respects_rate_limit_when_batching_disabled(monkeyp
         log_rate_limit_hit=Mock(),
     )
 
-    async def fake_process_single(self, text, model, provider, metadata=None, config_override=None):
+    async def fake_process_single(
+        self,
+        text,
+        model,
+        provider,
+        metadata=None,
+        config_override=None,
+        rate_limit_applied=False,
+    ):
         return [0.5]
 
     batcher._process_single = MethodType(fake_process_single, batcher)
@@ -488,6 +496,124 @@ async def test_submit_request_respects_rate_limit_when_batching_disabled(monkeyp
 
     assert calls == ["user-1", "user-1"]
     batcher.metrics.log_rate_limit_hit.assert_called_once_with("user-1", "free")
+
+    await batcher.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_process_single_skips_provider_rate_limit_after_submit(monkeypatch):
+    captured = {}
+
+    class StubLimiter:
+        async def check_rate_limit_async(self, user_id, cost=1, ip_address=None, tokens_units=0):
+            return True, None
+
+    class StubService:
+        async def create_embedding(self, text, model=None, provider=None, user_id=None, use_batching=False):
+            captured["user_id"] = user_id
+            return [0.11]
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.request_batching.get_async_rate_limiter",
+        lambda: StubLimiter(),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.async_embeddings.get_async_embedding_service",
+        lambda: StubService(),
+        raising=True,
+    )
+
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="openai",
+                api_key="sk-test",
+                models=["text-embedding-3-small"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=False,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=True),
+        default_provider="openai",
+        default_model="text-embedding-3-small",
+    )
+
+    batcher = RequestBatcher(config=config)
+    batcher.enabled = False
+
+    result = await batcher.submit_request(
+        text="hello",
+        model="text-embedding-3-small",
+        provider="openai",
+        metadata={"user_id": "user-1"},
+    )
+
+    assert result == [0.11]
+    assert captured["user_id"] is None
+
+    await batcher.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_process_single_preserves_user_id_without_rate_limit(monkeypatch):
+    captured = {}
+
+    class StubLimiter:
+        async def check_rate_limit_async(self, user_id, cost=1, ip_address=None, tokens_units=0):
+            return True, None
+
+    class StubService:
+        async def create_embedding(self, text, model=None, provider=None, user_id=None, use_batching=False):
+            captured["user_id"] = user_id
+            return [0.22]
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.request_batching.get_async_rate_limiter",
+        lambda: StubLimiter(),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.async_embeddings.get_async_embedding_service",
+        lambda: StubService(),
+        raising=True,
+    )
+
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="openai",
+                api_key="sk-test",
+                models=["text-embedding-3-small"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=False,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="openai",
+        default_model="text-embedding-3-small",
+    )
+
+    batcher = RequestBatcher(config=config)
+    batcher.enabled = False
+
+    result = await batcher.submit_request(
+        text="hello",
+        model="text-embedding-3-small",
+        provider="openai",
+        metadata={"user_id": "user-2"},
+    )
+
+    assert result == [0.22]
+    assert captured["user_id"] == "user-2"
 
     await batcher.shutdown()
 

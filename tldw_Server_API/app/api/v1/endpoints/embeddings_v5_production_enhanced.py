@@ -1211,10 +1211,11 @@ async def run_compactor_once(
 def tokens_to_texts(
     tokens_input: Union[List[int], List[List[int]]],
     model_name: str
-) -> Tuple[List[str], int]:
+) -> Tuple[List[str], int, List[int]]:
     """Convert token arrays to text using model tokenizer when possible.
 
-    Returns (texts, total_token_count). Uses tiktoken encoding_for_model or cl100k_base fallback.
+    Returns (texts, total_token_count, per_input_token_counts).
+    Uses tiktoken encoding_for_model or cl100k_base fallback.
     """
     try:
         enc = get_tokenizer(model_name)
@@ -1223,27 +1224,43 @@ def tokens_to_texts(
 
     texts: List[str] = []
     total_tokens = 0
+    token_counts: List[int] = []
     # Single token array
     if tokens_input and isinstance(tokens_input, list) and tokens_input and isinstance(tokens_input[0], int):
         arr = tokens_input  # type: ignore[assignment]
         total_tokens += len(arr)
+        token_counts.append(len(arr))
         try:
             texts.append(enc.decode(arr))
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed to decode token array for model '{}' (index 0, tokens={}): {}",
+                model_name,
+                len(arr),
+                exc,
+            )
             texts.append("")
-        return texts, total_tokens
+        return texts, total_tokens, token_counts
 
     # Batch of token arrays
     if tokens_input and isinstance(tokens_input, list):
-        for arr in tokens_input:  # type: ignore[assignment]
+        for idx, arr in enumerate(tokens_input):  # type: ignore[assignment]
             if not isinstance(arr, list) or not all(isinstance(x, int) for x in arr):
                 raise ValueError("Invalid token array format")
             total_tokens += len(arr)
+            token_counts.append(len(arr))
             try:
                 texts.append(enc.decode(arr))
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Failed to decode token array for model '{}' (index {}, tokens={}): {}",
+                    model_name,
+                    idx,
+                    len(arr),
+                    exc,
+                )
                 texts.append("")
-        return texts, total_tokens
+        return texts, total_tokens, token_counts
 
     raise ValueError("Invalid token array input")
 
@@ -1256,6 +1273,12 @@ def _dimension_policy() -> str:
     except Exception:
         pass
     return "reduce"
+
+
+def _supports_openai_dimensions(model: str) -> bool:
+    """Return True when OpenAI model supports dimensions parameter."""
+    model_key = (model or "").split(":", 1)[-1]
+    return model_key.startswith("text-embedding-3")
 
 def adjust_dimensions(
     vectors: List[List[float]],
@@ -2038,6 +2061,7 @@ async def create_embedding_endpoint(
         texts_to_embed: List[str] = []
         provided_token_arrays = False
         provided_token_count = 0
+        token_lengths: Optional[List[int]] = None
 
         if isinstance(embedding_request.input, str):
             if not embedding_request.input.strip():
@@ -2051,11 +2075,16 @@ async def create_embedding_endpoint(
 
             # Support list[str], list[int], or list[list[int]]
             if all(isinstance(item, str) for item in embedding_request.input):
+                if any(not (item or "").strip() for item in embedding_request.input):  # type: ignore[union-attr]
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Input list cannot contain empty strings",
+                    )
                 texts_to_embed = embedding_request.input  # type: ignore[assignment]
             elif all(isinstance(item, int) for item in embedding_request.input):
                 # Single token array
                 try:
-                    texts_to_embed, provided_token_count = tokens_to_texts(embedding_request.input, model)
+                    texts_to_embed, provided_token_count, token_lengths = tokens_to_texts(embedding_request.input, model)
                     provided_token_arrays = True
                     embedding_token_inputs_total.labels(mode="single").inc()
                 except Exception:
@@ -2063,7 +2092,7 @@ async def create_embedding_endpoint(
             elif all(isinstance(item, list) for item in embedding_request.input):
                 # Batch of token arrays
                 try:
-                    texts_to_embed, provided_token_count = tokens_to_texts(embedding_request.input, model)
+                    texts_to_embed, provided_token_count, token_lengths = tokens_to_texts(embedding_request.input, model)
                     provided_token_arrays = True
                     embedding_token_inputs_total.labels(mode="batch").inc()
                 except Exception:
@@ -2077,14 +2106,17 @@ async def create_embedding_endpoint(
         max_tokens = _get_model_max_tokens(provider, model)
         too_long: List[Tuple[int, int]] = []  # (index, token_count)
         token_total = 0
-        for idx, t in enumerate(texts_to_embed):
-            tok = count_tokens(t, model)
-            if not provided_token_arrays:
-                token_total += int(tok or 0)
-            if tok > max_tokens:
-                too_long.append((idx, tok))
-        if provided_token_arrays:
+        if provided_token_arrays and token_lengths is not None:
+            for idx, tok in enumerate(token_lengths):
+                if tok > max_tokens:
+                    too_long.append((idx, tok))
             token_total = int(provided_token_count or 0)
+        else:
+            for idx, t in enumerate(texts_to_embed):
+                tok = count_tokens(t, model)
+                token_total += int(tok or 0)
+                if tok > max_tokens:
+                    too_long.append((idx, tok))
         if too_long:
             # Return top-level JSON error object to match tests (not nested under "detail")
             return JSONResponse(
@@ -2577,6 +2609,18 @@ async def create_embeddings_batch_endpoint(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="texts cannot contain empty strings")
 
     model, provider = _resolve_model_and_provider(payload.model, payload.provider)
+
+    if payload.dimensions is not None:
+        if provider.lower() != "openai":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="dimensions is only supported for OpenAI text-embedding-3 models",
+            )
+        if not _supports_openai_dimensions(model):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="dimensions is only supported for OpenAI text-embedding-3 models",
+            )
 
     enforce_policy = _should_enforce_policy(current_user)
     allowed_providers = _get_allowed_providers()

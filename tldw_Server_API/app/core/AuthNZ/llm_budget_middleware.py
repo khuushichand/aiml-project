@@ -15,6 +15,7 @@ from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_ha
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 
 
 class LLMBudgetMiddleware(BaseHTTPMiddleware):
@@ -190,7 +191,10 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 try:
                     from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
                     mgr = await get_api_key_manager()
-                    info = await mgr.validate_api_key(api_key=api_key, ip_address=(request.client.host if request.client else None))
+                    info = await mgr.validate_api_key(
+                        api_key=api_key,
+                        ip_address=resolve_client_ip(request, self._get_settings_cached()),
+                    )
                     if info:
                         key_id = info.get('id')
                         _resp = self._set_key_state(request, key_id, info.get('user_id'))

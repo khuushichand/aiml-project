@@ -76,3 +76,48 @@ def test_csrf_single_user_bearer_skips_protection(monkeypatch):
     for key in ("AUTH_MODE", "SINGLE_USER_API_KEY", "DATABASE_URL"):
         monkeypatch.delenv(key, raising=False)
     reset_settings()
+
+
+def test_csrf_middleware_rotates_unbound_cookie(monkeypatch):
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+    from tldw_Server_API.app.core.AuthNZ.csrf_protection import CSRFProtectionMiddleware
+    from tldw_Server_API.app.core.config import settings as global_settings
+
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("CSRF_BIND_TO_USER", "true")
+    reset_settings()
+
+    original_csrf_setting = global_settings.get("CSRF_ENABLED")
+    global_settings["CSRF_ENABLED"] = True
+
+    app = FastAPI()
+    app.add_middleware(CSRFProtectionMiddleware, enabled=True)
+
+    @app.get("/public")
+    async def public():
+        return {"ok": True}
+
+    @app.get("/login")
+    async def login(request: Request):
+        request.state.user_id = 42
+        return {"ok": True}
+
+    try:
+        with TestClient(app) as client:
+            resp1 = client.get("/public")
+            token1 = resp1.cookies.get("csrf_token")
+            assert token1 and token1.endswith(".unbound")
+
+            resp2 = client.get("/login")
+            token2 = resp2.cookies.get("csrf_token")
+            assert token2 and token2 != token1
+            assert not token2.endswith(".unbound")
+    finally:
+        if original_csrf_setting is None:
+            global_settings.pop("CSRF_ENABLED", None)
+        else:
+            global_settings["CSRF_ENABLED"] = original_csrf_setting
+        for key in ("AUTH_MODE", "CSRF_BIND_TO_USER"):
+            monkeypatch.delenv(key, raising=False)
+        reset_settings()
