@@ -4,7 +4,6 @@ API endpoints for message management within character chat sessions.
 Provides CRUD operations for messages in conversations.
 """
 
-import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import (
@@ -40,10 +39,12 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
 # Character chat helpers
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     retrieve_message_details,
+    post_message_to_conversation,
     edit_message_content,
     remove_message_from_conversation,
     find_messages_in_conversation,
     map_sender_to_role,
+    replace_placeholders,
 )
 
 # Rate limiting
@@ -232,32 +233,39 @@ async def send_message(
                     detail="Parent message must be from the same conversation"
                 )
 
-        # Create message
-        message_id = str(uuid.uuid4())
-
         # Map role to sender format used in database
         sender_map = {
             "user": "user",
             "assistant": "assistant",
             "system": "system"
         }
-        sender = sender_map.get(message_data.role, "user")
+        sender_override = sender_map.get(message_data.role, "user")
+        is_user_message = message_data.role == "user"
 
-        msg_data = {
-            'id': message_id,
-            'conversation_id': chat_id,
-            'parent_message_id': message_data.parent_message_id,
-            'sender': sender,
-            'content': message_data.content,
-            'client_id': str(current_user.id),
-            'version': 1
-        }
+        # Resolve character/user names for placeholder handling and message sender defaults
+        character_id = conversation.get('character_id')
+        character = db.get_character_card_by_id(character_id) if character_id else None
+        character_name = character.get('name', 'Assistant') if character else 'Assistant'
+        user_name = conversation.get('user_name', 'User')
 
         # Handle image if provided
+        image_data = None
+        image_mime_type = None
         if message_data.image_base64:
             try:
                 import base64
-                img_data = base64.b64decode(message_data.image_base64)
+                raw_b64 = message_data.image_base64
+                if isinstance(raw_b64, str) and raw_b64.startswith("data:") and "base64," in raw_b64:
+                    raw_b64 = raw_b64.split("base64,", 1)[1]
+                if isinstance(raw_b64, str):
+                    raw_b64 = "".join(raw_b64.split())
+                    if not raw_b64:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Invalid image data. Empty base64 payload."
+                        )
+                    raw_b64 = raw_b64 + ("=" * (-len(raw_b64) % 4))
+                img_data = base64.b64decode(raw_b64, validate=True)
                 # Preflight size check before DB layer
                 try:
                     _max_img_bytes = int(settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
@@ -277,8 +285,8 @@ async def send_message(
                         detail="Invalid image data. Supported formats: PNG, JPEG, GIF, WebP, BMP, ICO."
                     )
 
-                msg_data['image_data'] = img_data
-                msg_data['image_mime_type'] = detected_mime
+                image_data = img_data
+                image_mime_type = detected_mime
             except HTTPException:
                 raise
             except Exception as e:
@@ -288,28 +296,24 @@ async def send_message(
                     detail="Failed to decode image data. Please provide valid base64-encoded image."
                 ) from e
 
-        # Add to database
-        created_id = db.add_message(msg_data)
+        # Add to database via Character_Chat guardrails
+        created_id = post_message_to_conversation(
+            db=db,
+            conversation_id=chat_id,
+            character_name=character_name,
+            message_content=message_data.content,
+            is_user_message=is_user_message,
+            parent_message_id=message_data.parent_message_id,
+            image_data=image_data,
+            image_mime_type=image_mime_type,
+            sender_override=sender_override,
+        )
 
         if not created_id:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create message"
             )
-
-        # Update conversation metadata (last_modified/version) via DB abstraction
-        conv_for_update = db.get_conversation_by_id(chat_id)
-        if conv_for_update:
-            try:
-                db.update_conversation(chat_id, {}, conv_for_update.get('version', 1))
-            except (ConflictError, CharactersRAGDBError):
-                logger.debug(f"Non-fatal: failed to bump conversation metadata for {chat_id}")
-
-        # Get character details for placeholders
-        character_id = conversation.get('character_id')
-        character = db.get_character_card_by_id(character_id) if character_id else None
-        character_name = character.get('name', 'Assistant') if character else 'Assistant'
-        user_name = conversation.get('user_name', 'User')
 
         # Retrieve created message with placeholder parameters
         created_msg = retrieve_message_details(db, created_id, character_name, user_name)
@@ -392,11 +396,30 @@ async def get_chat_messages(
             messages = []
         paginated = messages
 
+        # Compute total message count for pagination metadata
+        try:
+            total_count = db.count_messages_for_conversation(chat_id, include_deleted=include_deleted)
+        except Exception:
+            total_count = len(messages)
+
         # If character context or completions format requested
         if include_character_context or format_for_completions:
             # Get character info
             character_id = conversation.get('character_id')
             character = db.get_character_card_by_id(character_id) if character_id else None
+            character_name = character.get('name', 'Assistant') if character else 'Assistant'
+            user_name = conversation.get('user_name', 'User')
+
+            def _replace_text(value: Any) -> str:
+                if value is None:
+                    return ""
+                text = value if isinstance(value, str) else str(value)
+                if not text:
+                    return ""
+                try:
+                    return replace_placeholders(text, character_name, user_name)
+                except Exception:
+                    return text
 
             if format_for_completions:
                 # Return format ready for chat completions endpoint
@@ -411,11 +434,11 @@ async def get_chat_messages(
                     )
                     if not has_system_in_db:
                         system_prompt_parts = [
-                            f"You are {character.get('name', 'Assistant')}.",
-                            character.get('description', ''),
-                            character.get('personality', ''),
-                            character.get('scenario', ''),
-                            character.get('system_prompt', '')
+                            f"You are {character_name}.",
+                            _replace_text(character.get('description', '')),
+                            _replace_text(character.get('personality', '')),
+                            _replace_text(character.get('scenario', '')),
+                            _replace_text(character.get('system_prompt', '')),
                         ]
                         system_prompt = '\n'.join(part for part in system_prompt_parts if part)
                         formatted_messages.append({
@@ -427,8 +450,12 @@ async def get_chat_messages(
                 import re as _re
                 _suffix_re = _re.compile(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", _re.DOTALL)
                 for msg in paginated:
-                    role = map_sender_to_role(msg.get('sender'), character.get('name') if character else None)
-                    content = msg.get('content') or ''
+                    role = map_sender_to_role(
+                        msg.get('sender'),
+                        character_name if character else None,
+                        default_role="user",
+                    )
+                    content = _replace_text(msg.get('content'))
                     msg_id = msg.get('id')
 
                     base_message: Dict[str, Any] = {"role": role, "content": content}
@@ -522,7 +549,7 @@ async def get_chat_messages(
                     "character_id": character_id,
                     "chat_id": chat_id,
                     "messages": formatted_messages,
-                    "total": len(messages),
+                    "total": total_count,
                     "usage_instructions": "Use these messages with POST /api/v1/chat/completions"
                 }
                 if include_metadata and metadata_extra_map:
@@ -534,7 +561,9 @@ async def get_chat_messages(
             # Build standard response messages, optionally including tool_calls
             built_messages = []
             for m in paginated:
-                resp = _convert_db_message_to_response(m)
+                msg_copy = dict(m)
+                msg_copy["content"] = _replace_text(msg_copy.get("content"))
+                resp = _convert_db_message_to_response(msg_copy)
                 # Fetch metadata once if either flag is set (avoid duplicate queries)
                 if include_tool_calls or include_metadata:
                     try:
@@ -552,7 +581,7 @@ async def get_chat_messages(
                 built_messages.append(resp)
             response = MessageListResponse(
                 messages=built_messages,
-                total=len(messages),
+                total=total_count,
                 limit=limit,
                 offset=offset
             )
@@ -561,10 +590,10 @@ async def get_chat_messages(
             if character:
                 response_dict = response.model_dump()
                 response_dict['character_context'] = {
-                    "name": character.get('name'),
-                    "description": character.get('description'),
-                    "personality": character.get('personality'),
-                    "system_prompt": character.get('system_prompt')
+                    "name": character_name,
+                    "description": _replace_text(character.get('description')),
+                    "personality": _replace_text(character.get('personality')),
+                    "system_prompt": _replace_text(character.get('system_prompt')),
                 }
                 return response_dict
 
@@ -572,8 +601,26 @@ async def get_chat_messages(
 
         # Standard response (no character context)
         built_messages = []
+        character_id = conversation.get('character_id')
+        character = db.get_character_card_by_id(character_id) if character_id else None
+        character_name = character.get('name', 'Assistant') if character else 'Assistant'
+        user_name = conversation.get('user_name', 'User')
+
+        def _replace_text_std(value: Any) -> str:
+            if value is None:
+                return ""
+            text = value if isinstance(value, str) else str(value)
+            if not text:
+                return ""
+            try:
+                return replace_placeholders(text, character_name, user_name)
+            except Exception:
+                return text
+
         for m in paginated:
-            resp = _convert_db_message_to_response(m)
+            msg_copy = dict(m)
+            msg_copy["content"] = _replace_text_std(msg_copy.get("content"))
+            resp = _convert_db_message_to_response(msg_copy)
             # Fetch metadata once if either flag is set (avoid duplicate queries)
             if include_tool_calls or include_metadata:
                 try:
@@ -591,7 +638,7 @@ async def get_chat_messages(
             built_messages.append(resp)
         return MessageListResponse(
             messages=built_messages,
-            total=len(messages),
+            total=total_count,
             limit=limit,
             offset=offset
         )

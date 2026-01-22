@@ -264,8 +264,41 @@ def parse_v1_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def parse_pygmalion_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Parse Pygmalion format character card."""
     try:
-        # Pygmalion cards have a similar structure to V1 cards
-        return parse_v1_card(card_data_json)
+        # Create a copy to avoid mutating the input
+        card_data = dict(card_data_json)
+
+        # Pygmalion cards typically use char_* fields
+        if 'char_name' in card_data and 'name' not in card_data:
+            card_data['name'] = card_data['char_name']
+
+        if 'name' not in card_data:
+            seed = f"{card_data.get('char_persona', '')}|{card_data.get('char_greeting', '')}"
+            digest = hashlib.sha256(seed.encode('utf-8')).hexdigest()[:8]
+            card_data['name'] = f"Pygmalion-{digest}"
+
+        if 'char_persona' in card_data:
+            card_data.setdefault('description', card_data['char_persona'])
+            card_data.setdefault('personality', card_data['char_persona'])
+
+        if 'world_scenario' in card_data and 'scenario' not in card_data:
+            card_data['scenario'] = card_data['world_scenario']
+        if 'scenario' not in card_data and 'char_persona' in card_data:
+            card_data['scenario'] = card_data['char_persona']
+
+        if 'char_greeting' in card_data and 'first_mes' not in card_data:
+            card_data['first_mes'] = card_data['char_greeting']
+
+        if 'example_dialogue' in card_data and 'mes_example' not in card_data:
+            card_data['mes_example'] = card_data['example_dialogue']
+
+        # Ensure required V1 fields exist (empty strings are acceptable)
+        card_data.setdefault('description', "")
+        card_data.setdefault('personality', "")
+        card_data.setdefault('scenario', "")
+        card_data.setdefault('first_mes', "")
+        card_data.setdefault('mes_example', "")
+
+        return parse_v1_card(card_data)
     except Exception as e:
         logger.error(f"Error parsing Pygmalion card: {e}", exc_info=True)
         return None
@@ -517,7 +550,11 @@ def validate_character_book_entry(entry: Dict[str, Any], idx: int, entry_ids: Se
     return is_valid, validation_messages
 
 
-def validate_v2_card(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+def validate_v2_card(
+    card_data: Dict[str, Any],
+    *,
+    strict_spec: bool = True,
+) -> Tuple[bool, List[str]]:
     """Validates a V2 character card structure and content.
 
     Performs comprehensive validation of a V2 character card, checking for
@@ -537,21 +574,33 @@ def validate_v2_card(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """
     validation_messages = []
 
-    # Check top-level structure
-    if 'spec' not in card_data:
-        validation_messages.append("Missing 'spec' field.")
-    elif card_data['spec'] != 'chara_card_v2':
-        validation_messages.append(f"Invalid 'spec' value: '{card_data['spec']}'. Expected 'chara_card_v2'.")
+    # Check top-level structure (strict for explicit V2; relaxed for implicit V2)
+    if strict_spec:
+        if 'spec' not in card_data:
+            validation_messages.append("Missing 'spec' field.")
+        elif card_data['spec'] != 'chara_card_v2':
+            validation_messages.append(f"Invalid 'spec' value: '{card_data['spec']}'. Expected 'chara_card_v2'.")
 
-    spec_version_raw = card_data.get('spec_version')
-    if spec_version_raw is None:
-        validation_messages.append("Missing 'spec_version' field.")
-        spec_version_str = None
+        spec_version_raw = card_data.get('spec_version')
+        if spec_version_raw is None:
+            validation_messages.append("Missing 'spec_version' field.")
+        else:
+            spec_version_str = str(spec_version_raw)
+            if not spec_version_str.startswith("2."):
+                validation_messages.append(
+                    f"Invalid 'spec_version' value: '{spec_version_raw}'. Expected version starting with '2.'")
     else:
-        spec_version_str = str(spec_version_raw)
-        if not spec_version_str.startswith("2."):
-            validation_messages.append(
-                f"Invalid 'spec_version' value: '{spec_version_raw}'. Expected version starting with '2.'")
+        # Only validate spec/spec_version when they are explicitly provided.
+        spec_val = card_data.get('spec')
+        if spec_val is not None and spec_val != 'chara_card_v2':
+            validation_messages.append(f"Invalid 'spec' value: '{spec_val}'. Expected 'chara_card_v2'.")
+
+        spec_version_raw = card_data.get('spec_version')
+        if spec_version_raw is not None:
+            spec_version_str = str(spec_version_raw)
+            if not spec_version_str.startswith("2."):
+                validation_messages.append(
+                    f"Invalid 'spec_version' value: '{spec_version_raw}'. Expected version starting with '2.'")
 
     # Check for 'data' node
     if 'data' not in card_data:

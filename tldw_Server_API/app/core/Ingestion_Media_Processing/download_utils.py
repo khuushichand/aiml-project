@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     DEFAULT_MEDIA_TYPE_CONFIG,
     EXT_TO_MEDIA_TYPE_KEY,
+    _extension_candidates,
 )
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.http_client import (
@@ -53,6 +54,38 @@ def _resolve_media_type_from_content_type(content_type: str) -> Optional[str]:
         "text/x-markdown": "document",
     }
     return content_map.get(content_type)
+
+def _extension_candidates_from_name(name: str) -> list[str]:
+    try:
+        return _extension_candidates(name)
+    except Exception:
+        suffixes = [s.lower() for s in Path(name).suffixes if s]
+        candidates: list[str] = []
+        for idx in range(len(suffixes)):
+            candidate = "".join(suffixes[idx:])
+            if candidate:
+                candidates.append(candidate)
+        return candidates
+
+
+def _strip_all_suffixes(name: str) -> str:
+    base = Path(name).name
+    candidates = _extension_candidates_from_name(base)
+    if candidates:
+        full_suffix = candidates[0]
+        if base.lower().endswith(full_suffix):
+            base = base[: -len(full_suffix)] or base
+    return base
+
+
+def _pick_allowed_candidate(
+    candidates: list[str],
+    allowed_extensions: Set[str],
+) -> Optional[str]:
+    for candidate in candidates:
+        if candidate in allowed_extensions:
+            return candidate
+    return None
 
 
 def _max_bytes_for_media_type(media_type_key: Optional[str]) -> Optional[int]:
@@ -242,18 +275,23 @@ async def download_url_async(
                 # Basic sanitization
                 safe_name = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in filename) or seed_segment
                 # Determine effective suffix, checking allowed_extensions when requested.
-                effective_suffix = Path(safe_name).suffix.lower()
+                candidates = _extension_candidates_from_name(safe_name)
+                effective_suffix = candidates[0] if candidates else Path(safe_name).suffix.lower()
                 if check_extension and allowed_extensions:
-                    if not effective_suffix or effective_suffix not in allowed_extensions:
+                    allowed_candidate = _pick_allowed_candidate(candidates, allowed_extensions)
+                    if allowed_candidate:
+                        effective_suffix = allowed_candidate
+                    else:
                         alt_suffix = ""
                         try:
                             alt_seg = resp.url.path.split("/")[-1]
-                            alt_suffix = Path(alt_seg).suffix.lower()
+                            alt_candidates = _extension_candidates_from_name(alt_seg)
+                            alt_suffix = _pick_allowed_candidate(alt_candidates, allowed_extensions) or ""
                         except Exception:
                             alt_suffix = ""
-                        if alt_suffix and alt_suffix in allowed_extensions:
+                        if alt_suffix:
                             effective_suffix = alt_suffix
-                            base = Path(safe_name).stem
+                            base = _strip_all_suffixes(safe_name)
                             safe_name = f"{base}{effective_suffix}"
                         else:
                             content_type_map = {
@@ -274,7 +312,7 @@ async def download_url_async(
                             mapped_ext = content_type_map.get(content_type)
                             if mapped_ext and mapped_ext in allowed_extensions:
                                 effective_suffix = mapped_ext
-                                base = Path(safe_name).stem
+                                base = _strip_all_suffixes(safe_name)
                                 safe_name = f"{base}{effective_suffix}"
                             else:
                                 allowed_list = ", ".join(sorted(allowed_extensions))
@@ -363,18 +401,23 @@ async def download_url_async(
         ) or seed_segment
 
         # Determine effective suffix, checking allowed_extensions when requested.
-        effective_suffix = Path(safe_name).suffix.lower()
+        candidates = _extension_candidates_from_name(safe_name)
+        effective_suffix = candidates[0] if candidates else Path(safe_name).suffix.lower()
         if check_extension and allowed_extensions:
-            if not effective_suffix or effective_suffix not in allowed_extensions:
+            allowed_candidate = _pick_allowed_candidate(candidates, allowed_extensions)
+            if allowed_candidate:
+                effective_suffix = allowed_candidate
+            else:
                 # Try inferring from final response URL path.
                 try:
                     alt_seg = resp.url.path.split("/")[-1]
-                    alt_suffix = Path(alt_seg).suffix.lower()
+                    alt_candidates = _extension_candidates_from_name(alt_seg)
+                    alt_suffix = _pick_allowed_candidate(alt_candidates, allowed_extensions) or ""
                 except Exception:
                     alt_suffix = ""
-                if alt_suffix and alt_suffix in allowed_extensions:
+                if alt_suffix:
                     effective_suffix = alt_suffix
-                    base = Path(safe_name).stem
+                    base = _strip_all_suffixes(safe_name)
                     safe_name = f"{base}{effective_suffix}"
                 else:
                     # Fallback to content-type mapping (re-use normalized content_type).
@@ -396,7 +439,7 @@ async def download_url_async(
                     mapped_ext = content_type_map.get(content_type)
                     if mapped_ext and mapped_ext in allowed_extensions:
                         effective_suffix = mapped_ext
-                        base = Path(safe_name).stem
+                        base = _strip_all_suffixes(safe_name)
                         safe_name = f"{base}{effective_suffix}"
                     else:
                         allowed_list = ", ".join(sorted(allowed_extensions))

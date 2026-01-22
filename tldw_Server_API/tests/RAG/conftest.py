@@ -36,6 +36,15 @@ _POSTGRES_ENV_VARS = (
 
 _HAS_POSTGRES = (_PG_DRIVER is not None)
 
+def _postgres_required() -> bool:
+    return os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _skip_or_fail_postgres(reason: str) -> None:
+    if _postgres_required():
+        pytest.fail(reason)
+    pytest.skip(reason)
+
 
 @dataclass
 class DualBackendEnv:
@@ -146,6 +155,8 @@ def dual_backend_env(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator
     else:  # postgres
         # Build base config from env or fall back to compose defaults, then create a temp DB
         from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+        if _PG_DRIVER is None:
+            _skip_or_fail_postgres("psycopg not installed; skipping Postgres-backed tests")
         _pg = get_pg_env()
         base_config = DatabaseConfig(
             backend_type=BackendType.POSTGRESQL,
@@ -155,7 +166,10 @@ def dual_backend_env(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator
             pg_user=_pg.user,
             pg_password=_pg.password,
         )
-        config = _create_temp_postgres_database(base_config)
+        try:
+            config = _create_temp_postgres_database(base_config)
+        except Exception as exc:
+            _skip_or_fail_postgres(f"Postgres unavailable for tests: {exc}")
 
         media_backend = DatabaseBackendFactory.create_backend(config)
         chacha_backend = DatabaseBackendFactory.create_backend(config)

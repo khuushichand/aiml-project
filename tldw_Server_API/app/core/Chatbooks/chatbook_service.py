@@ -900,10 +900,15 @@ class ChatbookService:
                     # Get all conversation IDs when none specified
                     conv_ids = []
                     try:
-                        conversations = self.db.execute_query(
+                        cursor = self.db.execute_query(
                             "SELECT id FROM conversations WHERE deleted = 0"
                         )
-                        conv_ids = [c['id'] for c in conversations] if conversations else []
+                        rows = self._fetch_results(cursor)
+                        conv_ids = [
+                            (row.get("id") if isinstance(row, dict) else row[0])
+                            for row in (rows or [])
+                            if row is not None
+                        ]
                     except Exception as e:
                         logger.warning(f"Error getting conversations for export: {e}")
                     content_selections[ContentType.CONVERSATION] = conv_ids
@@ -911,10 +916,15 @@ class ChatbookService:
                     # Get all character IDs when none specified
                     char_ids = []
                     try:
-                        characters = self.db.execute_query(
+                        cursor = self.db.execute_query(
                             "SELECT id FROM character_cards WHERE deleted = 0"
                         )
-                        char_ids = [str(c['id']) for c in characters] if characters else []
+                        rows = self._fetch_results(cursor)
+                        char_ids = [
+                            str(row.get("id") if isinstance(row, dict) else row[0])
+                            for row in (rows or [])
+                            if row is not None
+                        ]
                     except Exception as e:
                         logger.warning(f"Error getting characters for export: {e}")
                     content_selections[ContentType.CHARACTER] = char_ids
@@ -922,10 +932,15 @@ class ChatbookService:
                     # Get all note IDs when none specified
                     note_ids = []
                     try:
-                        notes = self.db.execute_query(
+                        cursor = self.db.execute_query(
                             "SELECT id FROM notes WHERE deleted = 0"
                         )
-                        note_ids = [n['id'] for n in notes] if notes else []
+                        rows = self._fetch_results(cursor)
+                        note_ids = [
+                            (row.get("id") if isinstance(row, dict) else row[0])
+                            for row in (rows or [])
+                            if row is not None
+                        ]
                     except Exception as e:
                         logger.warning(f"Error getting notes for export: {e}")
                     content_selections[ContentType.NOTE] = note_ids
@@ -1083,6 +1098,8 @@ class ChatbookService:
             # Start async processing depending on backend
             if self._jobs_backend == "core":
                 # Enqueue into core Jobs and start worker if needed
+                job_created = None
+                enqueue_error: Optional[str] = None
                 try:
                     from tldw_Server_API.app.core.Jobs.manager import JobManager
                     if not hasattr(self, "_core_jobs"):
@@ -1101,7 +1118,7 @@ class ChatbookService:
                         "tags": tags or [],
                         "categories": categories or [],
                     }
-                    self._core_jobs.create_job(
+                    job_created = self._core_jobs.create_job(
                         domain="chatbooks",
                         queue="default",
                         job_type="export",
@@ -1112,7 +1129,18 @@ class ChatbookService:
                         request_id=request_id,
                     )
                 except Exception as e:
+                    enqueue_error = str(e)
                     logger.warning(f"Failed to enqueue export job into core Jobs: {e}")
+                if not job_created:
+                    err_msg = enqueue_error or "Failed to enqueue export job"
+                    job.status = ExportStatus.FAILED
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.error_message = err_msg
+                    try:
+                        self._save_export_job(job)
+                    except Exception as save_err:
+                        logger.warning(f"Failed to persist failed export job state: {save_err}")
+                    return False, f"Export job failed to enqueue: {err_msg}", job_id
             elif self._jobs_backend == "prompt_studio":
                 # Do not start local processing when using Prompt Studio backend.
                 # PS worker (external) is responsible for running the job.
@@ -1545,6 +1573,8 @@ class ChatbookService:
 
             # Start async task
             if self._jobs_backend == "core":
+                job_created = None
+                enqueue_error: Optional[str] = None
                 try:
                     from tldw_Server_API.app.core.Jobs.manager import JobManager
                     if not hasattr(self, "_core_jobs"):
@@ -1559,7 +1589,7 @@ class ChatbookService:
                         "import_media": bool(import_media),
                         "import_embeddings": bool(import_embeddings),
                     }
-                    self._core_jobs.create_job(
+                    job_created = self._core_jobs.create_job(
                         domain="chatbooks",
                         queue="default",
                         job_type="import",
@@ -1570,7 +1600,18 @@ class ChatbookService:
                         request_id=request_id,
                     )
                 except Exception as e:
+                    enqueue_error = str(e)
                     logger.warning(f"Failed to enqueue import job into core Jobs: {e}")
+                if not job_created:
+                    err_msg = enqueue_error or "Failed to enqueue import job"
+                    job.status = ImportStatus.FAILED
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.error_message = err_msg
+                    try:
+                        self._save_import_job(job)
+                    except Exception as save_err:
+                        logger.warning(f"Failed to persist failed import job state: {save_err}")
+                    return False, f"Import job failed to enqueue: {err_msg}", job_id
             else:
                 task = asyncio.create_task(self._import_chatbook_async(
                     job_id, str(resolved_path), content_selections,
@@ -1635,10 +1676,12 @@ class ChatbookService:
 
             # Extract archive with size limits
             with zipfile.ZipFile(file_path, 'r') as zf:
-                # Check total uncompressed size
+                # Check total uncompressed size (honor validator's configured limit)
                 total_size = sum(zinfo.file_size for zinfo in zf.filelist)
-                if total_size > 500 * 1024 * 1024:  # 500MB limit
-                    return False, "Archive too large (>500MB uncompressed)", None
+                max_uncompressed = getattr(ChatbookValidator, "MAX_UNCOMPRESSED_SIZE", 500 * 1024 * 1024)
+                if total_size > max_uncompressed:
+                    max_mb = max_uncompressed / (1024 * 1024)
+                    return False, f"Archive too large (> {max_mb:.0f}MB uncompressed)", None
 
                 # Extract with path validation
                 # Resolve extract_dir once (it exists at this point)
@@ -2241,12 +2284,13 @@ class ChatbookService:
                 pass
         return job
 
-    def list_export_jobs(self, status: Optional[str] = None, limit: int = 100) -> List[ExportJob]:
+    def list_export_jobs(self, status: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[ExportJob]:
         """List all export jobs for this user.
 
         Args:
             status: Optional status filter (pending, in_progress, completed, failed, cancelled, expired)
             limit: Maximum number of jobs to return
+            offset: Offset for pagination
         """
         # Sanity check: ensure user_id is set to prevent listing all jobs
         if not self.user_id:
@@ -2254,6 +2298,20 @@ class ChatbookService:
             return []
 
         try:
+            # Normalize pagination inputs
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError):
+                limit = 100
+            try:
+                offset = int(offset)
+            except (TypeError, ValueError):
+                offset = 0
+            if limit <= 0:
+                limit = 100
+            if offset < 0:
+                offset = 0
+
             # Build query with optional status filter
             query = "SELECT * FROM export_jobs WHERE user_id = ?"
             params: list = [self.user_id]
@@ -2265,8 +2323,8 @@ class ChatbookService:
                     query += " AND status = ?"
                     params.append(status.lower())
 
-            query += " ORDER BY created_at DESC LIMIT ?"
-            params.append(limit)
+            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
 
             cursor = self.db.execute_query(query, tuple(params))
 
@@ -2358,12 +2416,14 @@ class ChatbookService:
         except Exception as e:
             logger.error(f"Error listing export jobs: {e}")
             return []
-    def list_import_jobs(self, status: Optional[str] = None, limit: int = 100) -> List[ImportJob]:
+
+    def list_import_jobs(self, status: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[ImportJob]:
         """List all import jobs for this user.
 
         Args:
             status: Optional status filter (pending, validating, in_progress, completed, failed, cancelled)
             limit: Maximum number of jobs to return
+            offset: Offset for pagination
         """
         # Sanity check: ensure user_id is set to prevent listing all jobs
         if not self.user_id:
@@ -2371,6 +2431,20 @@ class ChatbookService:
             return []
 
         try:
+            # Normalize pagination inputs
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError):
+                limit = 100
+            try:
+                offset = int(offset)
+            except (TypeError, ValueError):
+                offset = 0
+            if limit <= 0:
+                limit = 100
+            if offset < 0:
+                offset = 0
+
             # Build query with optional status filter
             query = "SELECT * FROM import_jobs WHERE user_id = ?"
             params: list = [self.user_id]
@@ -2382,8 +2456,8 @@ class ChatbookService:
                     query += " AND status = ?"
                     params.append(status.lower())
 
-            query += " ORDER BY created_at DESC LIMIT ?"
-            params.append(limit)
+            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
 
             cursor = self.db.execute_query(query, tuple(params))
 
@@ -2475,6 +2549,56 @@ class ChatbookService:
         except Exception as e:
             logger.error(f"Error listing import jobs: {e}")
             return []
+
+    def count_export_jobs(self, status: Optional[str] = None) -> int:
+        """Count export jobs for this user."""
+        if not self.user_id:
+            logger.warning("count_export_jobs called with empty user_id")
+            return 0
+        try:
+            query = "SELECT COUNT(*) AS c FROM export_jobs WHERE user_id = ?"
+            params: list = [self.user_id]
+            if status:
+                valid_statuses = {'pending', 'in_progress', 'completed', 'failed', 'cancelled', 'expired'}
+                if status.lower() in valid_statuses:
+                    query += " AND status = ?"
+                    params.append(status.lower())
+            cursor = self.db.execute_query(query, tuple(params))
+            results = self._fetch_results(cursor)
+            if not results:
+                return 0
+            row = results[0]
+            if isinstance(row, dict):
+                return int(row.get("c") or 0)
+            return int(row[0]) if row else 0
+        except Exception as e:
+            logger.error(f"Error counting export jobs: {e}")
+            return 0
+
+    def count_import_jobs(self, status: Optional[str] = None) -> int:
+        """Count import jobs for this user."""
+        if not self.user_id:
+            logger.warning("count_import_jobs called with empty user_id")
+            return 0
+        try:
+            query = "SELECT COUNT(*) AS c FROM import_jobs WHERE user_id = ?"
+            params: list = [self.user_id]
+            if status:
+                valid_statuses = {'pending', 'validating', 'in_progress', 'completed', 'failed', 'cancelled'}
+                if status.lower() in valid_statuses:
+                    query += " AND status = ?"
+                    params.append(status.lower())
+            cursor = self.db.execute_query(query, tuple(params))
+            results = self._fetch_results(cursor)
+            if not results:
+                return 0
+            row = results[0]
+            if isinstance(row, dict):
+                return int(row.get("c") or 0)
+            return int(row[0]) if row else 0
+        except Exception as e:
+            logger.error(f"Error counting import jobs: {e}")
+            return 0
 
     def cleanup_expired_exports(self, batch_size: int = 100) -> int:
         """Clean up expired export files. Returns number of files deleted.
@@ -2884,6 +3008,20 @@ class ChatbookService:
         """Collect notes for export."""
         notes_dir = work_dir / "content" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
+        def _yaml_scalar(value: Any) -> str:
+            """Render a safe YAML scalar for frontmatter."""
+            text = "" if value is None else str(value)
+            needs_quote = False
+            if text.strip() != text:
+                needs_quote = True
+            if any(ch in text for ch in ['\n', '\r', ':', '#', '{', '}', '[', ']', ',', '&', '*', '!', '|', '>', '%', '@', '`']):
+                needs_quote = True
+            if text.startswith(("-", "?", " ")):
+                needs_quote = True
+            if needs_quote:
+                escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+                return f"\"{escaped}\""
+            return text
 
         for note_id in note_ids:
             try:
@@ -2906,7 +3044,7 @@ class ChatbookService:
                     # Write frontmatter
                     f.write("---\n")
                     f.write(f"id: {note['id']}\n")
-                    f.write(f"title: {note['title']}\n")
+                    f.write(f"title: {_yaml_scalar(note['title'])}\n")
                     f.write(f"created_at: {note_data['created_at']}\n")
                     f.write("---\n\n")
                     f.write(note['content'])
@@ -4165,12 +4303,13 @@ class ChatbookService:
         """
         try:
             deleted_count = 0
-            cutoff_date = datetime.now() - timedelta(days=days_old)
+            cutoff_date = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days_old)
+            cutoff_str = cutoff_date.strftime('%Y-%m-%d %H:%M:%S.%f')
 
             # Query database for old exports
             cursor = self.db.execute_query(
                 "SELECT job_id, output_path FROM export_jobs WHERE user_id = ? AND created_at < ?",
-                (self.user_id, cutoff_date.isoformat())
+                (self.user_id, cutoff_str)
             )
 
             # Fetch results from cursor
@@ -4198,7 +4337,8 @@ class ChatbookService:
                     try:
                         self.db.execute_query(
                             "DELETE FROM export_jobs WHERE job_id = ?",
-                            (job_id,)
+                            (job_id,),
+                            commit=True
                         )
                     except Exception as e:
                         logger.error(f"Failed to delete job record {job_id}: {e}")
@@ -4500,7 +4640,10 @@ class ChatbookService:
                             raise ExportError(f"Archive size exceeds {max_mb:.0f}MB limit")
 
                         arcname = file_path.relative_to(work_dir)
-                        zf.write(file_path, arcname)
+                        if arcname.as_posix() == "manifest.json":
+                            zf.write(file_path, arcname, compress_type=zipfile.ZIP_STORED)
+                        else:
+                            zf.write(file_path, arcname)
 
         # Run in thread pool to avoid blocking
         await asyncio.to_thread(_create_archive)

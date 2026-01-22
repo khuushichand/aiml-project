@@ -70,7 +70,7 @@ class _StubModerationService:
     def get_effective_policy(self, user_id: str):
         return self._policy
 
-    def check_text(self, text: str, policy: _StubPolicy):
+    def check_text(self, text: str, policy: _StubPolicy, phase: str | None = None):
         for pat in policy.block_patterns:
             if pat.search(text or ""):
                 return True, pat.pattern
@@ -111,7 +111,7 @@ class _EvalModerationService:
             red = pat.sub(policy.redact_replacement, red)
         return red
 
-    def check_text(self, text: str, policy: _StubPolicy):
+    def check_text(self, text: str, policy: _StubPolicy, phase: str | None = None):
         for pat in policy.block_patterns:
             if pat.search(text or ""):
                 return True, pat.pattern
@@ -261,11 +261,17 @@ def test_streaming_cross_chunk_redaction_output(monkeypatch):
     try:
         monkeypatch.setenv("STREAMS_UNIFIED", "0")
         app.dependency_overrides[get_chacha_db_for_user] = lambda: db
-        policy = _StubPolicy(enabled=True, input_action='warn', output_action='redact', redact='[REDACTED]')
+        policy = _StubPolicy(
+            enabled=True,
+            input_action='warn',
+            output_action='redact',
+            redact='[REDACTED]',
+            patterns=[re.compile(r"XQZP1234", re.IGNORECASE)],
+        )
 
         def upstream_stream():
-            chunk1 = {"choices": [{"delta": {"content": "sec"}}]}
-            chunk2 = {"choices": [{"delta": {"content": "ret data"}}]}
+            chunk1 = {"choices": [{"delta": {"content": "XQZP"}}]}
+            chunk2 = {"choices": [{"delta": {"content": "1234 data"}}]}
             yield f"data: {json.dumps(chunk1)}\n\n"
             yield f"data: {json.dumps(chunk2)}\n\n"
             yield "data: [DONE]\n\n"
@@ -305,7 +311,8 @@ def test_streaming_cross_chunk_redaction_output(monkeypatch):
                         if text:
                             chunks.append(text)
                 full = "".join(chunks)
-                assert "secret" not in full.lower()
+                assert "xqzp1234" not in full.lower()
+                assert "xqzp" not in full.lower()
                 assert "[REDACTED]" in full
     finally:
         try:
@@ -367,12 +374,18 @@ def test_streaming_cross_chunk_redaction_persisted(monkeypatch):
     try:
         monkeypatch.setenv("STREAMS_UNIFIED", "0")
         app.dependency_overrides[get_chacha_db_for_user] = lambda: db
-        policy = _StubPolicy(enabled=True, input_action='warn', output_action='redact', redact='[REDACTED]')
+        policy = _StubPolicy(
+            enabled=True,
+            input_action='warn',
+            output_action='redact',
+            redact='[REDACTED]',
+            patterns=[re.compile(r"XQZP1234", re.IGNORECASE)],
+        )
 
         def upstream_stream():
 
-            chunk1 = {"choices": [{"delta": {"content": "sec"}}]}
-            chunk2 = {"choices": [{"delta": {"content": "ret data"}}]}
+            chunk1 = {"choices": [{"delta": {"content": "XQZP"}}]}
+            chunk2 = {"choices": [{"delta": {"content": "1234 data"}}]}
             yield f"data: {json.dumps(chunk1)}\n\n"
             yield f"data: {json.dumps(chunk2)}\n\n"
             yield "data: [DONE]\n\n"
@@ -403,7 +416,7 @@ def test_streaming_cross_chunk_redaction_persisted(monkeypatch):
         assert msgs, "Expected persisted messages"
         saved = msgs[-1].get("content", "")
         assert "[REDACTED]" in saved
-        assert "secret" not in saved.lower()
+        assert "xqzp1234" not in saved.lower()
     finally:
         try:
             os.unlink(db_path)

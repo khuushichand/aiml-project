@@ -277,3 +277,25 @@ class TestPostgreSQLBackend:
             assert result.rows[0]["total"] == 1
         finally:
             backend.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_postgresql_fts_search_uses_source_table_mapping(self, pg_config):
+        """FTS search should work when table_name differs from source_table."""
+        from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
+
+        backend = PostgreSQLBackend(pg_config)
+        source_table = "fts_mapping_docs"
+        fts_table = "docs_fts"
+
+        backend.execute(f"DROP TABLE IF EXISTS {source_table}")
+        backend.execute(f"CREATE TABLE {source_table} (id SERIAL PRIMARY KEY, title TEXT, body TEXT)")
+        backend.execute(
+            f"INSERT INTO {source_table} (title, body) VALUES (%s, %s)",
+            ("hello", "world"),
+        )
+
+        try:
+            backend.create_fts_table(fts_table, source_table, ["title", "body"])
+            res = backend.fts_search(FTSQuery(query="hello", table=fts_table))
+            assert res.rows
+        finally:
+            backend.execute(f"DROP TABLE IF EXISTS {source_table}")

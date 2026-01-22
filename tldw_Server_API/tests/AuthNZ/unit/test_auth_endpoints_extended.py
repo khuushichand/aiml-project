@@ -173,9 +173,10 @@ async def test_logout_uses_utc_expiry(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
-    reset_settings()
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("MFA_LOGIN_TTL_SECONDS", "300")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    reset_settings()
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
@@ -203,6 +204,7 @@ async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
     class _StubSessionManager:
         def __init__(self):
             self.cached = {}
+            self.redis_client = object()
 
         async def create_session(self, **kwargs):
             return {"session_id": 777}
@@ -267,8 +269,9 @@ async def test_login_returns_mfa_challenge_when_enabled(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mfa_login_completes_tokens(monkeypatch):
-    reset_settings()
     monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    reset_settings()
 
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
@@ -302,6 +305,7 @@ async def test_mfa_login_completes_tokens(monkeypatch):
             self.ephemeral = {}
             self.updated = {}
             self.deleted = []
+            self.redis_client = object()
 
         async def get_ephemeral_value(self, key: str):
             return self.ephemeral.get(key)

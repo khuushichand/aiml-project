@@ -40,6 +40,24 @@ class TestConfig:
         os.environ["SINGLE_USER_TEST_API_KEY"] = cls.TEST_API_KEY
         # Bypass global rate limiting during test runs
         os.environ["TEST_MODE"] = "true"
+        # Ensure evaluations routes are available for tests that import the full app
+        os.environ.setdefault("MINIMAL_TEST_APP", "1")
+        os.environ.setdefault("ULTRA_MINIMAL_APP", "0")
+        try:
+            existing_enable = os.getenv("ROUTES_ENABLE", "")
+            enable_parts = [p for p in existing_enable.replace(" ", ",").split(",") if p]
+            if "evaluations" not in [p.lower() for p in enable_parts]:
+                enable_parts.append("evaluations")
+            os.environ["ROUTES_ENABLE"] = ",".join(dict.fromkeys(enable_parts))
+        except Exception:
+            pass
+        try:
+            existing_disable = os.getenv("ROUTES_DISABLE", "")
+            disable_parts = [p for p in existing_disable.replace(" ", ",").split(",") if p]
+            disable_parts = [p for p in disable_parts if p.lower() != "evaluations"]
+            os.environ["ROUTES_DISABLE"] = ",".join(dict.fromkeys(disable_parts))
+        except Exception:
+            pass
 
         # Disable CSRF for testing
         try:

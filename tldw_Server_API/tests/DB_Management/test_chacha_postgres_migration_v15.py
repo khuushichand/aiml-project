@@ -24,4 +24,4 @@ def test_postgres_statement_conversion_includes_writing_playground_tables(tmp_pa
     assert "idx_writing_sessions_last_modified" in full
     assert "idx_writing_templates_last_modified" in full
     assert "idx_writing_themes_order" in full
-    assert re.search(r"SET\\s+version\\s*=\\s*15", full, flags=re.IGNORECASE)
+    assert re.search(r"SET\s+version\s*=\s*15", full, flags=re.IGNORECASE)

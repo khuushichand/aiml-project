@@ -29,7 +29,10 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     resolve_user_id_for_request,
 )
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
 from tldw_Server_API.app.core.AuthNZ.jwt_service import verify_token as _verify_jwt_token
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -660,13 +663,7 @@ async def _resolve_watchlists_ws_user_id(
 
     if api_key:
         settings = get_settings()
-        client_ip = None
-        try:
-            client = getattr(websocket, "client", None)
-            if client is not None:
-                client_ip = getattr(client, "host", None)
-        except Exception:
-            client_ip = None
+        client_ip = resolve_client_ip(websocket, settings)
         if getattr(settings, "AUTH_MODE", None) == "single_user":
             allowed_keys: set[str] = set()
             primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)

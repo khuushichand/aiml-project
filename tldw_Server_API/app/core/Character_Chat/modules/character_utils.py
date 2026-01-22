@@ -160,29 +160,47 @@ SYSTEM_ALIASES = {"system", "narrator", "commentary", "metadata"}
 TOOL_ALIASES = {"tool", "assistant_tool", "function"}
 NON_CHARACTER_SENDER_ALIASES = set().union(SYSTEM_ALIASES, TOOL_ALIASES)
 
-def map_sender_to_role(sender: Optional[str], character_name: Optional[str]) -> str:
+def map_sender_to_role(
+    sender: Optional[str],
+    character_name: Optional[str],
+    default_role: str = "assistant",
+) -> str:
     """Map stored DB sender strings to OpenAI-compatible roles.
 
     Args:
         sender: Raw sender as stored in DB (may be character name or alias)
         character_name: Character name for this conversation (used as assistant alias)
+        default_role: Role to return when sender is unknown (defaults to "assistant")
 
     Returns:
         One of: "user", "assistant", "system", "tool"
     """
+    allowed_defaults = {"user", "assistant", "system", "tool"}
+    if default_role not in allowed_defaults:
+        default_role = "assistant"
     s = (sender or "").strip().lower()
     char_lower = (character_name or "").strip().lower()
+    sanitized_char_lower = ""
+    if character_name:
+        try:
+            sanitized_char_lower = sanitize_sender_name(character_name).strip().lower()
+        except Exception:
+            sanitized_char_lower = ""
     if not s:
-        return "assistant"
+        return default_role
     if s in USER_SENDER_ALIASES:
         return "user"
     if s in TOOL_ALIASES or any(s.startswith(f"{p}:") for p in TOOL_ALIASES):
         return "tool"
     if s in SYSTEM_ALIASES or any(s.startswith(f"{p}:") for p in SYSTEM_ALIASES):
         return "system"
-    if s in CHAR_SENDER_ALIASES or (char_lower and s == char_lower):
+    if (
+        s in CHAR_SENDER_ALIASES
+        or (char_lower and s == char_lower)
+        or (sanitized_char_lower and s == sanitized_char_lower)
+    ):
         return "assistant"
-    return "assistant"
+    return default_role
 
 # Optional explicit exports for constants
 __all__ = [

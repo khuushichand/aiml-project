@@ -46,6 +46,7 @@ from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager,
 # Import additional services
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
+from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_user
 from tldw_Server_API.app.core.Evaluations.audit_adapter import (
     log_evaluation_deleted,
     log_evaluation_exported,
@@ -387,7 +388,7 @@ async def stream_embeddings_abtest_events(
     async def _produce() -> None:
         last_payload = None
         while True:
-            row = svc.db.get_abtest(test_id)
+            row = svc.db.get_abtest(test_id, created_by=user_ctx)
             if not row:
                 await stream.error("not_found", "A/B test not found")
                 return
@@ -450,6 +451,8 @@ async def delete_embeddings_abtest(
 ):
     """Cancel/cleanup an embeddings A/B test."""
     svc = get_unified_evaluation_service_for_user(current_user.id)
+    if not svc.db.get_abtest(test_id, created_by=user_ctx):
+        raise HTTPException(status_code=404, detail="A/B test not found")
     # Idempotency: if prior mapping exists, return canonical response without side effects
     try:
         if idempotency_key:
@@ -468,6 +471,7 @@ async def delete_embeddings_abtest(
             test_id,
             delete_db=True,
             delete_idempotency=True,
+            created_by=user_ctx,
         )
         logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
     except Exception as exc:
@@ -501,7 +505,9 @@ async def export_embeddings_abtest(
     """Export AB test results (JSON or CSV). Admin-only."""
     enforce_heavy_evaluations_admin(principal)
     svc = get_unified_evaluation_service_for_user(current_user.id)
-    rows, total = svc.db.list_abtest_results(test_id, limit=100000, offset=0)
+    if not svc.db.get_abtest(test_id, created_by=user_ctx):
+        raise HTTPException(status_code=404, detail="A/B test not found")
+    rows, total = svc.db.list_abtest_results(test_id, limit=100000, offset=0, created_by=user_ctx)
     def _parse_json(value, default):
         if value is None:
             return default
@@ -744,17 +750,8 @@ async def evaluate_geval(
                 detail=meta.get("error", "Rate limit exceeded"),
                 headers={"Retry-After": str(retry_after)}
             )
-        # Normalize user id for single-user mode to match webhook registrations
-        try:
-            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
-            _settings = _get_settings()
-            # In single-user mode, always use the fixed ID so webhook registrations align
-            if getattr(_settings, "AUTH_MODE", "single_user") == "single_user":
-                effective_user_id = str(_settings.SINGLE_USER_FIXED_ID)
-            else:
-                effective_user_id = user_id
-        except Exception:
-            effective_user_id = user_id
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        webhook_user_id = webhook_user_id_from_user(current_user)
 
         provider_name, provider_api_key, explicit_key, byok_resolution = await _resolve_and_validate_eval_provider(
             request,
@@ -768,10 +765,10 @@ async def evaluate_geval(
         import asyncio as _asyncio
         import time as _time
         wm = _get_webhook_manager_for_user(current_user.id)
-        start_event_id = f"geval_{int(_time.time())}_{effective_user_id[:8]}"
+        start_event_id = f"geval_{int(_time.time())}_{webhook_user_id[:8]}"
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
             await wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
                 data={
@@ -781,7 +778,7 @@ async def evaluate_geval(
             )
         else:
             _asyncio.create_task(wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
                 data={
@@ -796,7 +793,8 @@ async def evaluate_geval(
             metrics=request.metrics,
             api_name=provider_name,
             api_key=provider_api_key,
-            user_id=effective_user_id
+            user_id=stable_user_id,
+            webhook_user_id=webhook_user_id,
         )
         if byok_resolution and byok_resolution.uses_byok and not explicit_key:
             await byok_resolution.touch_last_used()
@@ -862,7 +860,7 @@ async def evaluate_geval(
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
             await wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
                 data={
@@ -873,7 +871,7 @@ async def evaluate_geval(
             )
         else:
             _asyncio.create_task(wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
                 data={
@@ -956,16 +954,8 @@ async def evaluate_rag(
                 detail=meta.get("error", "Rate limit exceeded"),
                 headers={"Retry-After": str(retry_after)}
             )
-        # Normalize user id for single-user mode to match webhook registrations
-        try:
-            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
-            _settings = _get_settings()
-            if getattr(_settings, "AUTH_MODE", "single_user") == "single_user":
-                effective_user_id = str(_settings.SINGLE_USER_FIXED_ID)
-            else:
-                effective_user_id = user_id
-        except Exception:
-            effective_user_id = user_id
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        webhook_user_id = webhook_user_id_from_user(current_user)
 
         provider_name, provider_api_key, explicit_key, byok_resolution = await _resolve_and_validate_eval_provider(
             request,
@@ -979,10 +969,10 @@ async def evaluate_rag(
         import asyncio as _asyncio
         wm = _get_webhook_manager_for_user(current_user.id)
         import time as _time
-        start_event_id = f"rag_{int(_time.time())}_{effective_user_id[:8]}"
+        start_event_id = f"rag_{int(_time.time())}_{webhook_user_id[:8]}"
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
             await wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
                 data={
@@ -992,7 +982,7 @@ async def evaluate_rag(
             )
         else:
             _asyncio.create_task(wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
                 data={
@@ -1009,7 +999,8 @@ async def evaluate_rag(
             metrics=request.metrics,
             api_name=provider_name,
             api_key=provider_api_key,
-            user_id=effective_user_id
+            user_id=stable_user_id,
+            webhook_user_id=webhook_user_id,
         )
         if byok_resolution and byok_resolution.uses_byok and not explicit_key:
             await byok_resolution.touch_last_used()
@@ -1034,7 +1025,7 @@ async def evaluate_rag(
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
             await wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
                 data={
@@ -1045,7 +1036,7 @@ async def evaluate_rag(
             )
         else:
             _asyncio.create_task(wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
                 data={
@@ -1111,16 +1102,8 @@ async def evaluate_response_quality(
                 detail=meta.get("error", "Rate limit exceeded"),
                 headers={"Retry-After": str(retry_after)}
             )
-        # Normalize user id for single-user mode to match webhook registrations
-        try:
-            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
-            _settings = _get_settings()
-            if getattr(_settings, "AUTH_MODE", "single_user") == "single_user":
-                effective_user_id = str(_settings.SINGLE_USER_FIXED_ID)
-            else:
-                effective_user_id = user_id
-        except Exception:
-            effective_user_id = user_id
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        webhook_user_id = webhook_user_id_from_user(current_user)
 
         provider_name, provider_api_key, explicit_key, byok_resolution = await _resolve_and_validate_eval_provider(
             request,
@@ -1134,10 +1117,10 @@ async def evaluate_response_quality(
         import asyncio as _asyncio
         wm = _get_webhook_manager_for_user(current_user.id)
         import time as _time
-        start_event_id = f"response_quality_{int(_time.time())}_{effective_user_id[:8]}"
+        start_event_id = f"response_quality_{int(_time.time())}_{webhook_user_id[:8]}"
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
             await wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
                 data={
@@ -1147,7 +1130,7 @@ async def evaluate_response_quality(
             )
         else:
             _asyncio.create_task(wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_STARTED,
                 evaluation_id=start_event_id,
                 data={
@@ -1164,7 +1147,8 @@ async def evaluate_response_quality(
             custom_criteria=request.evaluation_criteria,
             api_name=provider_name,
             api_key=provider_api_key,
-            user_id=effective_user_id
+            user_id=stable_user_id,
+            webhook_user_id=webhook_user_id,
         )
         if byok_resolution and byok_resolution.uses_byok and not explicit_key:
             await byok_resolution.touch_last_used()
@@ -1208,7 +1192,7 @@ async def evaluate_response_quality(
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
             await wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
                 data={
@@ -1219,7 +1203,7 @@ async def evaluate_response_quality(
             )
         else:
             _asyncio.create_task(wm.send_webhook(
-                user_id=effective_user_id,
+                user_id=webhook_user_id,
                 event=WebhookEvent.EVALUATION_COMPLETED,
                 evaluation_id=result["evaluation_id"],
                 data={
@@ -1539,8 +1523,17 @@ async def batch_evaluate(
 
             # Wait for all tasks
             if tasks_with_meta:
+                semaphore = asyncio.Semaphore(request.parallel_workers)
+
+                async def _run_bounded(coro):
+                    async with semaphore:
+                        return await coro
+
                 task_results = await asyncio.gather(
-                    *(task for task, _, _ in tasks_with_meta),
+                    *(
+                        _run_bounded(task)
+                        for task, _, _ in tasks_with_meta
+                    ),
                     return_exceptions=True,
                 )
 
@@ -1868,6 +1861,7 @@ async def evaluate_ocr_pdf_endpoint(
 @router.post("/history", response_model=EvaluationHistoryResponse)
 async def get_evaluation_history(
     request: EvaluationHistoryRequest,
+    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
@@ -1879,7 +1873,33 @@ async def get_evaluation_history(
     try:
         service = get_unified_evaluation_service_for_user(current_user.id)
         stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
-        target_user_id = request.user_id or stable_user_id
+
+        def _user_id_variants(raw: Optional[str]) -> set[str]:
+            if not raw:
+                return set()
+            val = str(raw).strip()
+            if not val:
+                return set()
+            variants = {val}
+            if val.startswith("user_"):
+                core = val[5:]
+                if core:
+                    variants.add(core)
+            elif val.isdigit():
+                variants.add(f"user_{val}")
+            return variants
+
+        requested_user_id = request.user_id
+        target_user_id = requested_user_id or stable_user_id
+        if requested_user_id:
+            allowed = _user_id_variants(stable_user_id)
+            if requested_user_id not in allowed:
+                is_admin = bool(principal and (principal.is_admin or ("admin" in (principal.roles or []))))
+                if not is_admin:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Admin privileges required to request other users' evaluation history",
+                    )
 
         # Get evaluations from database
         evaluations = await service.get_evaluation_history(

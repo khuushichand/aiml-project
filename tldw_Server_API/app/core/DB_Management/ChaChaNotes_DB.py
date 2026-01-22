@@ -83,6 +83,16 @@ from tldw_Server_API.app.core.config import load_comprehensive_config, settings
 #
 # Functions:
 
+# --- Order-by validation helpers (defense in depth) ---
+_ORDER_BY_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
+_ORDER_BY_EXPR_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?"
+    r"(?:\s+COLLATE\s+NOCASE)?"
+    r"(?:\s+(?:ASC|DESC))?$",
+    re.IGNORECASE,
+)
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 # --- Custom Exceptions ---
 class CharactersRAGDBError(Exception):
     """Base exception for CharactersRAGDB related errors."""
@@ -2269,29 +2279,93 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             pool = self.backend.get_pool()
             conn = pool.get_connection()
             # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.current_user_id'))
-            try:
-                if self.backend_type == BackendType.POSTGRESQL and self.client_id:
-                    cur = conn.cursor()
-                    # Use SESSION scope so it persists for pooled connection lifecycle
-                    user_value = str(self.client_id)
-                    if psycopg_sql is not None:  # type: ignore[name-defined]
-                        statement = psycopg_sql.SQL("SET SESSION app.current_user_id = {}").format(
-                            psycopg_sql.Literal(user_value)
-                        )
-                        cur.execute(statement)
-                    else:
-                        safe_value = user_value.replace("'", "''")
-                        cur.execute(f"SET SESSION app.current_user_id = '{safe_value}'")
-                    try:
-                        conn.commit()
-                    except Exception:
-                        pass
-            except Exception:
-                # Best-effort; if setting fails, continue without crashing
-                pass
+            if self.backend_type == BackendType.POSTGRESQL and self.client_id:
+                conn = self._apply_postgres_client_scope(conn, pool)
             return conn
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to acquire database connection: {exc}") from exc
+
+    def _apply_postgres_client_scope(self, conn, pool):
+        """Best-effort helper to set session-scoped client_id in PostgreSQL.
+
+        Ensures failed SET/COMMIT attempts do not leave pooled connections in a
+        broken transaction state by rolling back (or replacing) the connection.
+        """
+        user_value = str(self.client_id)
+
+        def _set_session(target) -> None:
+            cur = target.cursor()
+            if psycopg_sql is not None:  # type: ignore[name-defined]
+                statement = psycopg_sql.SQL(
+                    "SELECT set_config('app.current_user_id', {}, false)"
+                ).format(psycopg_sql.Literal(user_value))
+                cur.execute(statement)
+            else:
+                cur.execute(
+                    "SELECT set_config('app.current_user_id', %s, false)",
+                    (user_value,),
+                )
+
+        def _replace_connection(bad_conn) -> Any:
+            try:
+                bad_conn.close()
+            except Exception:
+                pass
+            try:
+                pool.return_connection(bad_conn)
+            except Exception:
+                pass
+            return pool.get_connection()
+
+        def _safe_rollback(target, context: str) -> bool:
+            try:
+                target.rollback()
+                return True
+            except Exception as rollback_exc:  # noqa: BLE001
+                logger.warning(
+                    "Rollback failed after %s while setting PostgreSQL session scope: %s",
+                    context,
+                    rollback_exc,
+                )
+                return False
+
+        try:
+            _set_session(conn)
+            try:
+                conn.commit()
+            except Exception as commit_exc:  # noqa: BLE001
+                logger.warning(
+                    "Commit failed after setting PostgreSQL session scope; attempting rollback: %s",
+                    commit_exc,
+                )
+                if not _safe_rollback(conn, "commit failure"):
+                    conn = _replace_connection(conn)
+                    try:
+                        _set_session(conn)
+                        conn.commit()
+                    except Exception as retry_exc:  # noqa: BLE001
+                        logger.warning(
+                            "Retrying PostgreSQL session scope setup failed: %s",
+                            retry_exc,
+                        )
+                        _safe_rollback(conn, "retry failure")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to set PostgreSQL session scope; attempting rollback: %s",
+                exc,
+            )
+            if not _safe_rollback(conn, "SET failure"):
+                conn = _replace_connection(conn)
+                try:
+                    _set_session(conn)
+                    conn.commit()
+                except Exception as retry_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Retrying PostgreSQL session scope setup failed: %s",
+                        retry_exc,
+                    )
+                    _safe_rollback(conn, "retry failure")
+        return conn
 
     def _release_connection(self, connection) -> None:
         try:
@@ -3574,8 +3648,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 try:
                     if self.backend.table_exists('keywords', connection=conn) and not self.backend.table_exists('chacha_keywords', connection=conn):
                         self.backend.execute("ALTER TABLE keywords RENAME TO chacha_keywords", connection=conn)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to rename legacy keywords table: %s", exc)
 
                 self._ensure_postgres_fts(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
@@ -3648,8 +3722,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         "CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)",
                         connection=conn,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to ensure ChaChaNotes PostgreSQL indexes: %s", exc)
             except BackendDatabaseError as exc:
                 raise SchemaError(f"Failed to ensure PostgreSQL FTS structures: {exc}") from exc
 
@@ -4451,6 +4525,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             ConflictError: If the record is not found (with `entity` and `entity_id` attributes
                            set in the exception) or if the record is found but is soft-deleted.
         """
+        if not (_SAFE_IDENTIFIER_RE.fullmatch(table_name or "") and _SAFE_IDENTIFIER_RE.fullmatch(pk_col_name or "")):
+            raise CharactersRAGDBError(
+                f"Unsafe identifier in version lookup: table={table_name!r}, column={pk_col_name!r}"
+            )
         cursor = conn.execute(f"SELECT version, deleted FROM {table_name} WHERE {pk_col_name} = ?", (pk_value,))
         row = cursor.fetchone()
 
@@ -5465,12 +5543,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error listing conversations for client_id {client_id}: {e}")
             raise
 
-    def count_messages_for_conversation(self, conversation_id: str) -> int:
+    def count_messages_for_conversation(self, conversation_id: str, include_deleted: bool = False) -> int:
         """
-        Count non-deleted messages for a conversation, ensuring the parent conversation is active.
+        Count messages for a conversation, ensuring the parent conversation is active.
 
         Args:
             conversation_id: Conversation UUID
+            include_deleted: If True, include soft-deleted messages
 
         Returns:
             Integer count of messages.
@@ -5478,13 +5557,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError on database failure.
         """
-        query = (
+        base_query = (
             "SELECT COUNT(1) FROM messages m "
             "JOIN conversations c ON m.conversation_id = c.id "
-            "WHERE m.conversation_id = ? AND m.deleted = 0 AND c.deleted = 0"
+            "WHERE m.conversation_id = ? AND c.deleted = 0"
         )
+        params = [conversation_id]
+        if not include_deleted:
+            base_query += " AND m.deleted = 0"
         try:
-            cursor = self.execute_query(query, (conversation_id,))
+            cursor = self.execute_query(base_query, tuple(params))
             row = cursor.fetchone()
             # row may be tuple or dict depending on connection row factory
             if row is None:
@@ -6126,6 +6208,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         filters: List[str] = []
         params: List[Any] = []
+        keyword_table = self._map_table_for_backend("keywords")
 
         if self.backend_type == BackendType.POSTGRESQL:
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
@@ -6169,7 +6252,6 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 filters.append(f"{date_expr} <= ?")
                 params.append(end_date)
             if keywords:
-                keyword_table = self._map_table_for_backend("keywords")
                 for kw in keywords:
                     filters.append(
                         f"EXISTS (SELECT 1 FROM conversation_keywords ck "
@@ -6232,7 +6314,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             for kw in keywords:
                 filters.append(
                     "EXISTS (SELECT 1 FROM conversation_keywords ck "
-                    "JOIN keywords k ON k.id = ck.keyword_id "
+                    f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
                     "WHERE ck.conversation_id = c.id AND k.deleted = 0 AND LOWER(k.keyword) = ?)"
                 )
                 params.append(kw.lower())
@@ -7031,11 +7113,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     def _case_insensitive_order_expression(self, column: str, direction: Optional[str] = None) -> str:
+        column_clean = (column or '').strip()
+        if not _ORDER_BY_COLUMN_RE.match(column_clean):
+            raise InputError(f"Invalid order-by column: {column!r}")
         direction_clean = (direction or '').strip()
         direction_clause = f" {direction_clean}" if direction_clean else ""
         if self.backend_type == BackendType.POSTGRESQL:
-            return f"LOWER({column}){direction_clause}"
-        return f"{column} COLLATE NOCASE{direction_clause}"
+            return f"LOWER({column_clean}){direction_clause}"
+        return f"{column_clean} COLLATE NOCASE{direction_clause}"
 
     def _case_insensitive_order_clause(self, column: str, direction: Optional[str] = None) -> str:
         return f"ORDER BY {self._case_insensitive_order_expression(column, direction)}"
@@ -7056,9 +7141,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError: For database errors.
         """
-        order_expression = order_by_col
-        if 'COLLATE NOCASE' in order_by_col.upper():
-            base, _, direction = order_by_col.partition('COLLATE NOCASE')
+        order_by_clean = (order_by_col or "").strip()
+        if not _ORDER_BY_EXPR_RE.match(order_by_clean):
+            raise InputError(f"Invalid order-by expression: {order_by_col!r}")
+        order_expression = order_by_clean
+        collate_match = re.search(r"\s+COLLATE\s+NOCASE", order_by_clean, flags=re.IGNORECASE)
+        if collate_match:
+            base = order_by_clean[:collate_match.start()]
+            direction = order_by_clean[collate_match.end():]
             order_expression = self._case_insensitive_order_expression(base.strip(), direction.strip() or None)
 
         table_name = self._map_table_for_backend(table_name)
@@ -7220,6 +7310,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                            or if a concurrent modification prevents the update.
             CharactersRAGDBError: For other database errors.
         """
+        logical_table_name = table_name
+        table_name = self._map_table_for_backend(table_name)
         now = self._get_current_utc_timestamp_iso()
         next_version_val = expected_version + 1
 
@@ -7240,14 +7332,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                     if record_status and record_status['deleted']:
                         logger.info(
-                            f"{table_name} ID {item_id} already soft-deleted. Operation considered successful (idempotent).")
+                            f"{logical_table_name} ID {item_id} already soft-deleted. Operation considered successful (idempotent).")
                         return True
                     raise e # Re-raise if not found or other conflict
 
                 if current_db_version != expected_version:
                     raise ConflictError(
-                        f"Soft delete failed for {table_name} ID {item_id}: version mismatch (db has {current_db_version}, client expected {expected_version}).",
-                        entity=table_name, entity_id=item_id
+                        f"Soft delete failed for {logical_table_name} ID {item_id}: version mismatch (db has {current_db_version}, client expected {expected_version}).",
+                        entity=logical_table_name, entity_id=item_id
                     )
 
                 cursor = conn.execute(query, params)
@@ -7258,40 +7350,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     check_again_cursor = conn.execute(
                         f"SELECT deleted, version FROM {table_name} WHERE {pk_col_name} = ?", (item_id,))
                     changed_record = check_again_cursor.fetchone()
-                    msg = f"Soft delete for {table_name} ID {item_id} (expected version {expected_version}) affected 0 rows."
+                    msg = f"Soft delete for {logical_table_name} ID {item_id} (expected version {expected_version}) affected 0 rows."
                     if not changed_record:
                         raise ConflictError(
-                            f"{table_name} ID {item_id} disappeared before soft-delete completion (expected version {expected_version}).",
-                            entity=table_name, entity_id=item_id)
+                            f"{logical_table_name} ID {item_id} disappeared before soft-delete completion (expected version {expected_version}).",
+                            entity=logical_table_name, entity_id=item_id)
 
                     if changed_record['deleted']:
                         # If it got deleted by another process, and the new version matches what we intended, it's fine.
                         if changed_record['version'] == next_version_val:
                             logger.info(
-                                f"{table_name} ID {item_id} was soft-deleted concurrently to version {next_version_val}. Operation successful.")
+                                f"{logical_table_name} ID {item_id} was soft-deleted concurrently to version {next_version_val}. Operation successful.")
                             return True
                         else:
                             raise ConflictError(
-                                f"{table_name} ID {item_id} was soft-deleted concurrently to an unexpected version {changed_record['version']} (expected to set to {next_version_val}).",
-                                entity=table_name, entity_id=item_id)
+                                f"{logical_table_name} ID {item_id} was soft-deleted concurrently to an unexpected version {changed_record['version']} (expected to set to {next_version_val}).",
+                                entity=logical_table_name, entity_id=item_id)
 
                     if changed_record['version'] != expected_version:  # Still active, but version changed
                         raise ConflictError(
-                            f"Soft delete failed for {table_name} ID {item_id}: version changed to {changed_record['version']} concurrently (expected {expected_version}).",
-                            entity=table_name, entity_id=item_id)
+                            f"Soft delete failed for {logical_table_name} ID {item_id}: version changed to {changed_record['version']} concurrently (expected {expected_version}).",
+                            entity=logical_table_name, entity_id=item_id)
 
                     raise ConflictError(
-                        f"Soft delete for {table_name} ID {item_id} (expected version {expected_version}) affected 0 rows for an unknown reason after passing initial checks.",
-                        entity=table_name, entity_id=item_id)
+                        f"Soft delete for {logical_table_name} ID {item_id} (expected version {expected_version}) affected 0 rows for an unknown reason after passing initial checks.",
+                        entity=logical_table_name, entity_id=item_id)
 
                 logger.info(
-                    f"Soft-deleted {table_name} ID {item_id} (was version {expected_version}), new version {next_version_val}.")
+                    f"Soft-deleted {logical_table_name} ID {item_id} (was version {expected_version}), new version {next_version_val}.")
                 return True
         except ConflictError:
             raise
         except CharactersRAGDBError as e:  # Catches sqlite3.Error from conn.execute
             logger.error(
-                f"Database error soft-deleting {table_name} ID {item_id} (expected version {expected_version}): {e}",
+                f"Database error soft-deleting {logical_table_name} ID {item_id} (expected version {expected_version}): {e}",
                 exc_info=True)
             raise
         # No implicit return None.
@@ -7434,7 +7526,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def count_keywords(self) -> int:
         """Return count of active (non-deleted) keywords."""
-        query = "SELECT COUNT(*) AS cnt FROM keywords WHERE deleted = 0"
+        keyword_table = self._map_table_for_backend("keywords")
+        query = f"SELECT COUNT(*) AS cnt FROM {keyword_table} WHERE deleted = 0"
         try:
             cursor = self.execute_query(query)
             row = cursor.fetchone()
@@ -7488,42 +7581,71 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         search_term = search_term.strip()
         if not search_term:
             raise InputError("Search term cannot be empty.")
-        if not re.fullmatch(r"[\w\s-]+", search_term):
+        is_simple_token = re.fullmatch(r"[\w-]+", search_term) is not None
+        if not is_simple_token:
+            # Keywords search only supports simple tokens to avoid FTS/LIKE injection edge cases.
             raise InputError("Search term contains unsupported characters.")
         if self.backend_type == BackendType.POSTGRESQL:
-            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
-            if not tsquery:
+            tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql') if is_simple_token else None
+            if tsquery:
+                source_table = self._map_table_for_backend("keywords")
+                fts_column = "keywords_fts_tsv"
+                query = f"""
+                    SELECT k.*, ts_rank(k.{fts_column}, to_tsquery('english', ?)) AS rank
+                    FROM {source_table} k
+                    WHERE k.deleted = FALSE
+                      AND k.{fts_column} @@ to_tsquery('english', ?)
+                    ORDER BY rank DESC, k.last_modified DESC
+                    LIMIT ?
+                """
+                try:
+                    cursor = self.execute_query(query, (tsquery, tsquery, limit))
+                    return [dict(row) for row in cursor.fetchall()]
+                except CharactersRAGDBError as exc:
+                    logger.error("PostgreSQL FTS search failed for keywords term '%s': %s", search_term, exc)
+                    raise
+            if not tsquery and is_simple_token:
                 logger.debug("Keyword search term normalized to empty tsquery for input '%s'", search_term)
                 return []
 
             source_table = self._map_table_for_backend("keywords")
-            fts_column = "keywords_fts_tsv"
+            escaped = search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             query = f"""
-                SELECT k.*, ts_rank(k.{fts_column}, to_tsquery('english', ?)) AS rank
+                SELECT k.*
                 FROM {source_table} k
                 WHERE k.deleted = FALSE
-                  AND k.{fts_column} @@ to_tsquery('english', ?)
-                ORDER BY rank DESC, k.last_modified DESC
+                  AND k.keyword ILIKE ? ESCAPE '\\'
+                ORDER BY k.last_modified DESC
                 LIMIT ?
             """
+            cursor = self.execute_query(query, (f"%{escaped}%", limit))
+            return [dict(row) for row in cursor.fetchall()]
+
+        # SQLite: use FTS prefix for simple tokens.
+        if is_simple_token:
+            # Support prefix/substring search expectations in tests by using prefix match
+            # e.g., 'fru' should match 'fruit'. FTS5 uses '*' for prefix queries.
+            fts_query = f"{search_term}*"
             try:
-                cursor = self.execute_query(query, (tsquery, tsquery, limit))
-                return [dict(row) for row in cursor.fetchall()]
+                return self._search_generic_items_fts("keywords_fts", "keywords", "keyword", fts_query, limit)
             except CharactersRAGDBError as exc:
-                logger.error("PostgreSQL FTS search failed for keywords term '%s': %s", search_term, exc)
+                msg = str(exc).lower()
+                if "fts" in msg or "match" in msg or "syntax" in msg:
+                    raise InputError("Search term contains unsupported characters.") from exc
                 raise
 
-        # Support prefix/substring search expectations in tests by using prefix match
-        # e.g., 'fru' should match 'fruit'. FTS5 uses '*' for prefix queries.
-        # Avoid quoting here to preserve wildcard behavior.
-        fts_query = f"{search_term}*"
-        try:
-            return self._search_generic_items_fts("keywords_fts", "keywords", "keyword", fts_query, limit)
-        except CharactersRAGDBError as exc:
-            msg = str(exc).lower()
-            if "fts" in msg or "match" in msg or "syntax" in msg:
-                raise InputError("Search term contains unsupported characters.") from exc
-            raise
+        keyword_table = self._map_table_for_backend("keywords")
+        escaped = search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = f"""
+            SELECT k.*
+            FROM {keyword_table} k
+            WHERE k.deleted = 0
+              AND k.keyword LIKE ? ESCAPE '\\'
+            ORDER BY k.last_modified DESC
+            LIMIT ?
+        """
+        cursor = self.execute_query(query, (f"%{escaped}%", limit))
+        return [dict(row) for row in cursor.fetchall()]
 
     # Keyword Collections
     def add_keyword_collection(self, name: str, parent_id: Optional[int] = None) -> Optional[int]:
@@ -7968,7 +8090,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     FROM notes_fts
                     JOIN notes AS n ON notes_fts.rowid = n.rowid
                     JOIN note_keywords nk ON n.id = nk.note_id
-                    JOIN keywords k ON k.id = nk.keyword_id
+                    JOIN {keyword_table} k ON k.id = nk.keyword_id
                     WHERE notes_fts MATCH ?
                       AND n.deleted = 0
                       AND k.deleted = 0
@@ -7982,7 +8104,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     SELECT DISTINCT n.*
                     FROM notes n
                     JOIN note_keywords nk ON n.id = nk.note_id
-                    JOIN keywords k ON k.id = nk.keyword_id
+                    JOIN {keyword_table} k ON k.id = nk.keyword_id
                     WHERE n.deleted = 0
                       AND k.deleted = 0
                       AND ({like_clause})
@@ -8136,10 +8258,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                  "unlink")
 
     def get_keywords_for_conversation(self, conversation_id: str) -> List[Dict[str, Any]]:
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN conversation_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.conversation_id = ? \
                   AND k.deleted = 0 \
@@ -8171,10 +8294,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                  "unlink")
 
     def get_keywords_for_collection(self, collection_id: int) -> List[Dict[str, Any]]:
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN collection_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.collection_id = ? \
                   AND k.deleted = 0 \
@@ -8205,10 +8329,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return self._manage_link("note_keywords", "note_id", note_id, "keyword_id", keyword_id, "unlink")
 
     def get_keywords_for_note(self, note_id: str) -> List[Dict[str, Any]]: # note_id is str
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
                 SELECT k.* \
-                FROM keywords k \
+                FROM {keyword_table} k \
                          JOIN note_keywords nk ON k.id = nk.keyword_id
                 WHERE nk.note_id = ? \
                   AND k.deleted = 0 \
@@ -8221,25 +8346,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Return keywords for multiple notes as a map of note_id -> keywords list."""
         if not note_ids:
             return {}
-        placeholders = ",".join(["?"] * len(note_ids))
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
-        query = f"""
-                SELECT nk.note_id AS note_id, k.* \
-                FROM keywords k \
-                         JOIN note_keywords nk ON k.id = nk.keyword_id
-                WHERE nk.note_id IN ({placeholders}) \
-                  AND k.deleted = 0 \
-                {order_clause}
-                """
-        cursor = self.execute_query(query, tuple(note_ids))
-        rows = cursor.fetchall()
         out: Dict[str, List[Dict[str, Any]]] = {nid: [] for nid in note_ids}
-        for row in rows:
-            record = dict(row)
-            note_id = record.pop("note_id", None)
-            if not note_id:
-                continue
-            out.setdefault(note_id, []).append(record)
+        # SQLite has a default variable cap of 999; keep a buffer to be safe.
+        max_vars = 900
+        for start in range(0, len(note_ids), max_vars):
+            batch = note_ids[start:start + max_vars]
+            placeholders = ",".join(["?"] * len(batch))
+            query = f"""
+                    SELECT nk.note_id AS note_id, k.* \
+                    FROM {keyword_table} k \
+                             JOIN note_keywords nk ON k.id = nk.keyword_id
+                    WHERE nk.note_id IN ({placeholders}) \
+                      AND k.deleted = 0 \
+                    {order_clause}
+                    """
+            cursor = self.execute_query(query, tuple(batch))
+            rows = cursor.fetchall()
+            for row in rows:
+                record = dict(row)
+                note_id = record.pop("note_id", None)
+                if not note_id:
+                    continue
+                out.setdefault(note_id, []).append(record)
         return out
 
     def get_notes_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
@@ -8531,6 +8661,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """List flashcards with filters. due_status in {'new','learning','due','all'}."""
         where_clauses = ["1=1"]
         params: List[Any] = []
+        keyword_table = self._map_table_for_backend("keywords")
         if not include_deleted:
             if self.backend_type == BackendType.POSTGRESQL:
                 where_clauses.append("f.deleted = FALSE")
@@ -8552,7 +8683,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # tag filter (single tag)
         join_tag = ""
         if tag:
-            join_tag = "JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN keywords kw ON kw.id = fk.keyword_id"
+            join_tag = f"JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN {keyword_table} kw ON kw.id = fk.keyword_id"
             where_clauses.append("kw.keyword = ?")
             params.append(tag)
 
@@ -8603,6 +8734,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Count flashcards matching filters. Mirrors list_flashcards filters."""
         where_clauses = ["1=1"]
         params: List[Any] = []
+        keyword_table = self._map_table_for_backend("keywords")
         if not include_deleted:
             if self.backend_type == BackendType.POSTGRESQL:
                 where_clauses.append("f.deleted = FALSE")
@@ -8623,7 +8755,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         join_tag = ""
         if tag:
-            join_tag = "JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN keywords kw ON kw.id = fk.keyword_id"
+            join_tag = f"JOIN flashcard_keywords fk ON fk.card_id = f.id JOIN {keyword_table} kw ON kw.id = fk.keyword_id"
             where_clauses.append("kw.keyword = ?")
             params.append(tag)
 
@@ -8953,12 +9085,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def get_keywords_for_flashcard(self, card_uuid: str) -> List[Dict[str, Any]]:
         """Return keywords linked to a flashcard."""
+        keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("kw.keyword")
         query = f"""
             SELECT kw.*
               FROM flashcards f
               JOIN flashcard_keywords fk ON fk.card_id = f.id
-              JOIN keywords kw ON kw.id = fk.keyword_id
+              JOIN {keyword_table} kw ON kw.id = fk.keyword_id
              WHERE f.uuid = ? AND f.deleted = 0 AND kw.deleted = 0
              {order_clause}
         """

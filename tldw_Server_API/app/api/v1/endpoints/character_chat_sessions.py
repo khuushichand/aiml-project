@@ -62,9 +62,7 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     map_sender_to_role,
     replace_placeholders,
 )
-from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
-    sanitize_sender_name,
-)
+
 
 # Chat helpers and utilities
 from tldw_Server_API.app.core.Chat.chat_helpers import (
@@ -336,6 +334,17 @@ async def create_chat_session(
                 detail=f"Character with ID {session_data.character_id} not found"
             )
 
+        # Validate parent conversation (if any) for ownership and root lineage
+        parent_conversation = None
+        validated_parent_id: Optional[str] = None
+        parent_root_id: Optional[str] = None
+        if session_data.parent_conversation_id:
+            parent_conversation = db.get_conversation_by_id(session_data.parent_conversation_id)
+            _verify_chat_ownership(parent_conversation, current_user.id, session_data.parent_conversation_id)
+            if parent_conversation:
+                validated_parent_id = parent_conversation.get("id") or session_data.parent_conversation_id
+                parent_root_id = parent_conversation.get("root_id") or parent_conversation.get("id")
+
         # Generate chat ID and title
         chat_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -346,8 +355,8 @@ async def create_chat_session(
             'id': chat_id,
             'character_id': session_data.character_id,
             'title': title,
-            'root_id': chat_id,  # Root for new conversations
-            'parent_conversation_id': session_data.parent_conversation_id,
+            'root_id': parent_root_id or chat_id,  # Inherit root for forks
+            'parent_conversation_id': validated_parent_id,
             'client_id': str(current_user.id),
             'version': 1,
             'state': session_data.state,
@@ -377,7 +386,6 @@ async def create_chat_session(
         if seed_first_message:
             try:
                 raw_name = character.get('name') or 'Assistant'
-                sender_name = sanitize_sender_name(raw_name)
                 choice_text: Optional[str] = None
                 if greeting_strategy in {"alternate_random", "alternate_index"}:
                     ag = character.get('alternate_greetings')
@@ -392,17 +400,15 @@ async def create_chat_session(
                         choice_text = fm
                 if isinstance(choice_text, str) and choice_text.strip():
                     content = choice_text
-                    db.add_message({
-                        'conversation_id': created_id,
-                        'sender': sender_name,
-                        'content': content,
-                        'client_id': str(current_user.id),
-                        'version': 1
-                    })
-                    # Bump conversation metadata (best-effort)
+                    post_message_to_conversation(
+                        db=db,
+                        conversation_id=created_id,
+                        character_name=raw_name,
+                        message_content=content,
+                        is_user_message=False,
+                    )
+                    # Update in-memory message count (best-effort)
                     try:
-                        refreshed = db.get_conversation_by_id(created_id) or {}
-                        db.update_conversation(created_id, {}, refreshed.get('version', 1))
                         created_conv['message_count'] = (created_conv.get('message_count') or 0) + 1
                     except Exception:
                         pass
@@ -484,6 +490,7 @@ async def get_chat_context(
 
         character = db.get_character_card_by_id(conversation['character_id']) or {}
         char_name = character.get('name', 'Unknown')
+        user_name = conversation.get('user_name', 'User')
 
         messages = db.get_messages_for_conversation(chat_id, limit=1000) or []
         # Map DB messages to chat-completions messages with normalized roles
@@ -491,14 +498,18 @@ async def get_chat_context(
         for m in messages:
             if m.get('deleted'):
                 continue
-            role = map_sender_to_role(m.get('sender'), character.get('name'))
-            content = m.get('content') or ''
+            role = map_sender_to_role(
+                m.get('sender'),
+                character.get('name'),
+                default_role="user",
+            )
+            content = replace_placeholders(m.get('content') or '', char_name, user_name)
             formatted.append({"role": role, "content": content})
 
         # If no messages, include first_message as an initial assistant message (with placeholders resolved)
         if not formatted and character.get('first_message'):
             try:
-                fm = replace_placeholders(character['first_message'], char_name, 'User')
+                fm = replace_placeholders(character['first_message'], char_name, user_name)
             except Exception:
                 fm = character['first_message']
             formatted.append({"role": "assistant", "content": fm})
@@ -626,6 +637,7 @@ async def prepare_chat_completion(
         # Build messages
         character = db.get_character_card_by_id(conversation['character_id']) or {}
         character_name = character.get('name')
+        user_name = conversation.get('user_name', 'User')
         include_ctx = bool(body.include_character_context)
         # Fields are validated by Pydantic; avoid redundant int() casting
         limit = body.limit
@@ -637,13 +649,24 @@ async def prepare_chat_completion(
         paginated = messages
 
         formatted: List[Dict[str, Any]] = []
+        def _replace_text(value: Any) -> str:
+            if value is None:
+                return ""
+            text = value if isinstance(value, str) else str(value)
+            if not text:
+                return ""
+            try:
+                return replace_placeholders(text, character_name or "Assistant", user_name)
+            except Exception:
+                return text
+
         if include_ctx and character and offset == 0:
             parts = [
                 f"You are {character.get('name', 'Assistant')}.",
-                character.get('description', ''),
-                character.get('personality', ''),
-                character.get('scenario', ''),
-                character.get('system_prompt', ''),
+                _replace_text(character.get('description', '')),
+                _replace_text(character.get('personality', '')),
+                _replace_text(character.get('scenario', '')),
+                _replace_text(character.get('system_prompt', '')),
             ]
             sys_text = '\n'.join([p for p in parts if p])
             if sys_text.strip():
@@ -651,8 +674,12 @@ async def prepare_chat_completion(
 
         for msg in paginated:
             formatted.append({
-                "role": map_sender_to_role(msg.get('sender'), character.get('name')),
-                "content": msg.get('content') or ''
+                "role": map_sender_to_role(
+                    msg.get('sender'),
+                    character.get('name'),
+                    default_role="user",
+                ),
+                "content": _replace_text(msg.get('content'))
             })
 
         if body.append_user_message:
@@ -716,6 +743,7 @@ async def character_chat_completion(
 
         # Gather character and context
         character = db.get_character_card_by_id(conversation['character_id']) or {}
+        user_name = conversation.get('user_name', 'User')
         include_ctx = bool(body.include_character_context)
         limit = body.limit
         offset = body.offset
@@ -734,14 +762,25 @@ async def character_chat_completion(
         messages = [m for m in messages if not m.get('deleted')]
         paginated = messages
 
+        def _replace_text(value: Any) -> str:
+            if value is None:
+                return ""
+            text = value if isinstance(value, str) else str(value)
+            if not text:
+                return ""
+            try:
+                return replace_placeholders(text, character.get('name', 'Assistant'), user_name)
+            except Exception:
+                return text
+
         formatted: List[Dict[str, Any]] = []
         if include_ctx and character and offset == 0:
             parts = [
                 f"You are {character.get('name', 'Assistant')}.",
-                character.get('description', ''),
-                character.get('personality', ''),
-                character.get('scenario', ''),
-                character.get('system_prompt', ''),
+                _replace_text(character.get('description', '')),
+                _replace_text(character.get('personality', '')),
+                _replace_text(character.get('scenario', '')),
+                _replace_text(character.get('system_prompt', '')),
             ]
             sys_text = '\n'.join([p for p in parts if p])
             if sys_text.strip():
@@ -749,8 +788,12 @@ async def character_chat_completion(
 
         for msg in paginated:
             formatted.append({
-                "role": map_sender_to_role(msg.get('sender'), character.get('name')),
-                "content": msg.get('content') or ''
+                "role": map_sender_to_role(
+                    msg.get('sender'),
+                    character.get('name'),
+                    default_role="user",
+                ),
+                "content": _replace_text(msg.get('content'))
             })
 
         # Optional appended user message
@@ -987,6 +1030,13 @@ async def character_chat_completion(
             try:
                 # Feature flag: use unified SSEStream when enabled
                 if streams_unified:
+                    # Unified path expects an iterator; fall back to text streaming for non-iterables.
+                    if not hasattr(llm_resp, "__aiter__") and not (
+                        hasattr(llm_resp, "__iter__") and not isinstance(llm_resp, (str, bytes, dict, list))
+                    ):
+                        assistant_text_fallback = _extract_text(llm_resp).strip()
+                        return _stream_text_as_sse(assistant_text_fallback)
+
                     stream = SSEStream(
                         labels={"component": "chat", "endpoint": "character_chat_stream"}
                     )
@@ -997,26 +1047,51 @@ async def character_chat_completion(
                     except Exception:
                         pass
 
+                    chunk_count = 0
+                    total_bytes = 0
+
+                    async def _emit_stream_limit_error(message: str) -> None:
+                        payload = {"error": message}
+                        await stream.send_raw_sse_line(f"data: {json.dumps(payload)}")
+                        await stream.done()
+
+                    async def _handle_chunk(chunk: Any) -> bool:
+                        nonlocal chunk_count, total_bytes
+                        chunk_count += 1
+                        if chunk_count > MAX_STREAMING_CHUNKS:
+                            logger.warning(f"Streaming chunk limit exceeded ({MAX_STREAMING_CHUNKS})")
+                            await _emit_stream_limit_error("Streaming limit exceeded.")
+                            return False
+
+                        line = _coerce_sse_line(chunk)
+                        if not line:
+                            return True
+
+                        total_bytes += len(line.encode("utf-8"))
+                        if total_bytes > MAX_STREAMING_BYTES:
+                            logger.warning(f"Streaming byte limit exceeded ({MAX_STREAMING_BYTES})")
+                            await _emit_stream_limit_error("Streaming size limit exceeded.")
+                            return False
+
+                        if line.strip().lower() == "data: [done]":
+                            await stream.done()
+                            return False
+
+                        await stream.send_raw_sse_line(line)
+                        return True
+
                     async def _produce_async():
                         try:
                             if hasattr(llm_resp, "__aiter__"):
                                 async for chunk in llm_resp:  # type: ignore
-                                    line = _coerce_sse_line(chunk)
-                                    if not line:
-                                        continue
-                                    if line.strip().lower() == "data: [done]":
-                                        await stream.done()
-                                        break
-                                    await stream.send_raw_sse_line(line)
+                                    keep_going = await _handle_chunk(chunk)
+                                    if not keep_going:
+                                        return
                             elif hasattr(llm_resp, "__iter__") and not isinstance(llm_resp, (str, bytes, dict, list)):
                                 for chunk in llm_resp:  # type: ignore
-                                    line = _coerce_sse_line(chunk)
-                                    if not line:
-                                        continue
-                                    if line.strip().lower() == "data: [done]":
-                                        await stream.done()
-                                        break
-                                    await stream.send_raw_sse_line(line)
+                                    keep_going = await _handle_chunk(chunk)
+                                    if not keep_going:
+                                        return
                             # Ensure DONE if provider didn't send one
                             await stream.done()
                         except Exception as e:
@@ -1153,60 +1228,44 @@ async def character_chat_completion(
         if will_persist:
             # Persist appended user message first, if any
             if body.append_user_message:
-                try:
-                    appended_user_id = str(uuid.uuid4())
-                    db.add_message({
-                        'id': appended_user_id,
-                        'conversation_id': chat_id,
-                        'parent_message_id': None,
-                        'sender': 'user',
-                        'content': body.append_user_message,
-                        'client_id': str(current_user.id),
-                        'version': 1
-                    })
-                except Exception as e:
-                    logger.warning(f"Failed to persist appended user message: {e}")
+                appended_user_id = post_message_to_conversation(
+                    db=db,
+                    conversation_id=chat_id,
+                    character_name=character.get('name', 'Assistant'),
+                    message_content=body.append_user_message,
+                    is_user_message=True,
+                    sender_override="user",
+                )
+                if not appended_user_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to persist appended user message"
+                    )
 
-            # Persist assistant response
-            try:
-                assistant_msg_id = str(uuid.uuid4())
-                content_to_store = assistant_text
-                if assistant_tool_calls:
+            # Persist assistant response (tool_calls stored in metadata only)
+            assistant_content_for_storage = assistant_text if assistant_text else " "
+            assistant_msg_id = post_message_to_conversation(
+                db=db,
+                conversation_id=chat_id,
+                character_name=character.get('name', 'Assistant'),
+                message_content=assistant_content_for_storage,
+                is_user_message=False,
+                parent_message_id=appended_user_id,
+            )
+            if not assistant_msg_id:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to persist assistant message"
+                )
+            # Persist tool_calls into schema-level metadata for richer retrieval
+            if assistant_tool_calls:
+                validated_tool_calls = _validate_and_truncate_tool_calls(assistant_tool_calls)
+                if validated_tool_calls:
                     try:
-                        content_to_store = f"{assistant_text}\n\n[tool_calls]: {json.dumps(assistant_tool_calls)}"
-                    except Exception:
-                        pass
-                # Use character name as the assistant sender (sanitized) for DB storage
-                char_card = db.get_character_card_by_id(conversation.get('character_id')) or {}
-                raw_name = (char_card.get('name') or 'Assistant') if isinstance(char_card, dict) else 'Assistant'
-                assistant_sender = sanitize_sender_name(raw_name)
-                db.add_message({
-                    'id': assistant_msg_id,
-                    'conversation_id': chat_id,
-                    'parent_message_id': appended_user_id,
-                    'sender': assistant_sender,
-                    'content': content_to_store,
-                    'client_id': str(current_user.id),
-                    'version': 1
-                })
-                # Persist tool_calls into schema-level metadata for richer retrieval
-                if assistant_tool_calls:
-                    validated_tool_calls = _validate_and_truncate_tool_calls(assistant_tool_calls)
-                    if validated_tool_calls:
-                        try:
-                            db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls)
-                        except Exception as exc:
-                            logger.debug(f"Non-fatal: failed to persist tool_calls metadata: {exc}")
-                # Bump conversation metadata
-                conv_for_update = db.get_conversation_by_id(chat_id)
-                if conv_for_update:
-                    try:
-                        db.update_conversation(chat_id, {}, conv_for_update.get('version', 1))
-                    except Exception:
-                        pass
-                saved = True
-            except Exception as e:
-                logger.warning(f"Failed to persist assistant message: {e}")
+                        db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls)
+                    except Exception as exc:
+                        logger.debug(f"Non-fatal: failed to persist tool_calls metadata: {exc}")
+            saved = True
 
         return CharacterChatCompletionV2Response(
             chat_id=chat_id,
@@ -1221,6 +1280,19 @@ async def character_chat_completion(
 
     except HTTPException:
         raise
+    except InputError as e:
+        msg = str(e)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if "exceeds maximum" in msg.lower():
+            status_code = status.HTTP_413_CONTENT_TOO_LARGE
+        logger.warning(f"Input error in character chat completion for {chat_id}: {e}")
+        raise HTTPException(status_code=status_code, detail=msg)
+    except ConflictError as e:
+        logger.warning(f"Conflict in character chat completion for {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error in character chat completion for {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
         logger.error(f"Error in character chat completion for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during character chat completion")
@@ -1723,21 +1795,37 @@ async def persist_streamed_assistant_message(
         except Exception:
             logger.debug("Non-fatal: message cap check skipped in persist endpoint")
 
-        assistant_msg_id = str(uuid.uuid4())
-        # Resolve assistant sender as sanitized character name
+        # Validate optional parent message belongs to this conversation
+        if getattr(body, "user_message_id", None):
+            parent_msg = db.get_message_by_id(body.user_message_id)
+            if not parent_msg:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Parent message not found"
+                )
+            if parent_msg.get("conversation_id") != chat_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Parent message must belong to the same conversation"
+                )
+
+        # Persist assistant response via Character_Chat guardrails
         char_card = db.get_character_card_by_id(conversation.get('character_id')) or {}
         raw_name = (char_card.get('name') or 'Assistant') if isinstance(char_card, dict) else 'Assistant'
-        assistant_sender = sanitize_sender_name(raw_name)
-        db.add_message({
-            'id': assistant_msg_id,
-            'conversation_id': chat_id,
-            'parent_message_id': body.user_message_id,
-            'sender': assistant_sender,
-            'content': body.assistant_content,
-            'ranking': body.ranking if getattr(body, 'ranking', None) is not None else None,
-            'client_id': str(current_user.id),
-            'version': 1,
-        })
+        assistant_msg_id = post_message_to_conversation(
+            db=db,
+            conversation_id=chat_id,
+            character_name=raw_name,
+            message_content=body.assistant_content,
+            is_user_message=False,
+            parent_message_id=body.user_message_id,
+            ranking=body.ranking if getattr(body, "ranking", None) is not None else None,
+        )
+        if not assistant_msg_id:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to persist assistant message"
+            )
         # Persist metadata: tool_calls and usage
         try:
             extra = None
@@ -1749,21 +1837,35 @@ async def persist_streamed_assistant_message(
         except Exception:
             pass
 
-        # Touch conversation metadata
-        try:
-            conv_for_update = db.get_conversation_by_id(chat_id)
-            if conv_for_update:
-                # Optionally update chat rating alongside metadata bump
-                update_fields = {}
-                if getattr(body, 'chat_rating', None) is not None:
-                    update_fields['rating'] = body.chat_rating
-                db.update_conversation(chat_id, update_fields, conv_for_update.get('version', 1))
-        except Exception:
-            pass
+        # Optionally update chat rating
+        if getattr(body, 'chat_rating', None) is not None:
+            try:
+                conv_for_update = db.get_conversation_by_id(chat_id)
+                if conv_for_update:
+                    db.update_conversation(
+                        chat_id,
+                        {"rating": body.chat_rating},
+                        conv_for_update.get('version', 1),
+                    )
+            except Exception:
+                pass
 
         return CharacterChatStreamPersistResponse(chat_id=chat_id, assistant_message_id=assistant_msg_id, saved=True)
     except HTTPException:
         raise
+    except InputError as e:
+        msg = str(e)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if "exceeds maximum" in msg.lower():
+            status_code = status.HTTP_413_CONTENT_TOO_LARGE
+        logger.warning(f"Input error persisting streamed assistant message for {chat_id}: {e}")
+        raise HTTPException(status_code=status_code, detail=msg)
+    except ConflictError as e:
+        logger.warning(f"Conflict persisting streamed assistant message for {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"DB error persisting streamed assistant message for {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
         logger.error(f"Error persisting streamed assistant message for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist assistant message")

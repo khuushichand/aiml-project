@@ -74,7 +74,7 @@ class TestAuthenticationNegative:
 
         for invalid_key in invalid_keys:
             api_client.client.headers["X-API-KEY"] = invalid_key
-            api_client.client.headers["Token"] = invalid_key
+            api_client.client.headers["Authorization"] = invalid_key
 
             try:
                 # Use a protected endpoint instead of health check

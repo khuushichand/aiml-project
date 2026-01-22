@@ -74,3 +74,60 @@ def test_hierarchical_sentences_respects_combine_short():
         },
     )
     assert [item["text"] for item in hier] == base
+
+
+def test_words_min_chunk_size_overlap_no_duplicates():
+
+    strategy = WordChunkingStrategy(language="en")
+    text = "one two three four five six seven"
+    chunks = strategy.chunk(text, max_size=5, overlap=2, min_chunk_size=5)
+    assert chunks == [text]
+
+
+def test_hierarchical_words_min_chunk_size_overlap_matches_flat():
+
+    ck = Chunker()
+    text = "one two three four five six seven"
+    base = ck.chunk_text(text, method="words", max_size=5, overlap=2, min_chunk_size=5)
+    hier = ck.chunk_text_hierarchical_flat(
+        text,
+        method="words",
+        max_size=5,
+        overlap=2,
+        method_options={"min_chunk_size": 5},
+    )
+    assert [item["text"] for item in hier] == base
+
+
+def test_hierarchical_code_fence_long_marker_closes():
+
+    ck = Chunker()
+    text = "Intro\n\n````python\nprint('hi')\n````\n\nAfter."
+    chunks = ck.chunk_text_hierarchical_flat(text, method="words", max_size=50, overlap=0)
+    assert any(c.get("metadata", {}).get("paragraph_kind") == "code_fence" for c in chunks)
+    assert any(
+        c.get("metadata", {}).get("paragraph_kind") == "paragraph" and "After." in c.get("text", "")
+        for c in chunks
+    )
+
+
+def test_token_chunk_decode_failure_falls_back():
+
+    from tldw_Server_API.app.core.Chunking.strategies.tokens import TokenChunkingStrategy
+
+    class BadTokenizer:
+        def encode(self, text):
+            return list(range(len(text.split())))
+
+        def decode(self, token_ids, skip_special_tokens=True):
+            raise RuntimeError("decode failed")
+
+    strategy = TokenChunkingStrategy()
+    strategy._tokenizer = BadTokenizer()
+    strategy._tokenizer_init_attempted = True
+
+    text = "one two three four five six"
+    chunks = strategy.chunk(text, max_size=4, overlap=0)
+    assert chunks
+    reconstructed = " ".join(chunks).split()
+    assert reconstructed == text.split()

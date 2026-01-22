@@ -832,6 +832,8 @@ class TestChatbookService:
     @pytest.mark.asyncio
     async def test_import_chatbook_conflict_strategy_alias(self, service):
         """conflict_strategy alias should map to the same enum handling."""
+        sample_path = service.import_dir / "sample.chatbook"
+        sample_path.write_text("dummy")
         with patch(
             "tldw_Server_API.app.core.Chatbooks.chatbook_service.asyncio.to_thread",
             new_callable=AsyncMock,
@@ -839,7 +841,7 @@ class TestChatbookService:
             mock_to_thread.return_value = (True, "alias ok", None)
 
             await service.import_chatbook(
-                file_path="sample.chatbook",
+                file_path=str(sample_path),
                 conflict_strategy="rename",
             )
 
@@ -849,6 +851,8 @@ class TestChatbookService:
     @pytest.mark.asyncio
     async def test_import_chatbook_invalid_conflict_resolution_defaults_to_skip(self, service):
         """Invalid conflict resolution values should fall back to SKIP."""
+        sample_path = service.import_dir / "sample.chatbook"
+        sample_path.write_text("dummy")
         with patch(
             "tldw_Server_API.app.core.Chatbooks.chatbook_service.asyncio.to_thread",
             new_callable=AsyncMock,
@@ -856,7 +860,7 @@ class TestChatbookService:
             mock_to_thread.return_value = (True, "defaulted", None)
 
             await service.import_chatbook(
-                file_path="sample.chatbook",
+                file_path=str(sample_path),
                 conflict_resolution="replace",
             )
 

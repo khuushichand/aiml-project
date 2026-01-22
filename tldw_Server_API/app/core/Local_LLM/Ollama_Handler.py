@@ -58,6 +58,45 @@ class OllamaHandler(BaseLLMHandler):
     def __init__(self, config: OllamaConfig, global_app_config: Dict[str, Any]):
         super().__init__(config, global_app_config)
         self.config: OllamaConfig  # For type hinting
+        self._serve_process: Optional[asyncio.subprocess.Process] = None
+        self._serve_stream_tasks: list[asyncio.Task] = []
+
+    async def _drain_stream(self, stream, label: str) -> None:
+        if stream is None:
+            return
+        try:
+            while True:
+                chunk = await stream.read(1024)
+                if not chunk:
+                    break
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            # Best-effort drain; ignore errors
+            return
+
+    def _start_stream_drainers(self, process: asyncio.subprocess.Process) -> None:
+        tasks: list[asyncio.Task] = []
+        if getattr(process, "stdout", None) is not None:
+            tasks.append(asyncio.create_task(self._drain_stream(process.stdout, "stdout")))
+        if getattr(process, "stderr", None) is not None:
+            tasks.append(asyncio.create_task(self._drain_stream(process.stderr, "stderr")))
+        if tasks:
+            self._serve_stream_tasks = tasks
+
+    def _stop_stream_drainers(self) -> None:
+        for task in self._serve_stream_tasks:
+            if not task.done():
+                task.cancel()
+        self._serve_stream_tasks = []
+
+    def _clear_serve_process(self, pid: Optional[int] = None) -> None:
+        if self._serve_process and (pid is None or self._serve_process.pid == pid):
+            self._stop_stream_drainers()
+            self._serve_process = None
+    def __init__(self, config: OllamaConfig, global_app_config: Dict[str, Any]):
+        super().__init__(config, global_app_config)
+        self.config: OllamaConfig  # For type hinting
 
     async def is_ollama_installed(self) -> bool:
         """Checks if the 'ollama' executable is available."""
@@ -232,6 +271,8 @@ class OllamaHandler(BaseLLMHandler):
             # Best if `ollama serve` had a `--no-daemon` and `--pidfile` option.
             pid = process.pid
             self.logger.info(f"Ollama server process started with PID {pid} on {host}:{port}. May run in background.")
+            self._serve_process = process
+            self._start_stream_drainers(process)
             return {"status": "started", "pid": pid, "host": host, "port": port}
 
         except FileNotFoundError:
@@ -257,6 +298,7 @@ class OllamaHandler(BaseLLMHandler):
             self.logger.info(f"Attempting to stop Ollama server with PID {pid}")
             try:
                 await asyncio.to_thread(self._terminate_process, pid)
+                self._clear_serve_process(pid)
                 return f"Attempted to stop Ollama server with PID {pid}"
             except ProcessLookupError:
                 self.logger.warning(f"No process found with PID {pid}")
@@ -279,6 +321,7 @@ class OllamaHandler(BaseLLMHandler):
                                 break
                 if found_pid:
                     await asyncio.to_thread(self._terminate_process, found_pid)
+                    self._clear_serve_process(found_pid)
                     return f"Attempted to stop Ollama server (PID {found_pid}) on port {port}"
                 else:
                     return f"No Ollama server found listening on port {port}"
@@ -362,7 +405,12 @@ class OllamaHandler(BaseLLMHandler):
         if options:
             payload["options"] = options
 
-        self.logger.debug(f"Sending inference request to {api_url} with payload: {payload}")
+        prompt_len = len(prompt) if isinstance(prompt, str) else 0
+        options_keys = list(options.keys()) if isinstance(options, dict) else []
+        self.logger.debug(
+            f"Sending Ollama inference request to {api_url} (model={model_name}, prompt_len={prompt_len}, "
+            f"system={'yes' if system_message else 'no'}, options_keys={options_keys})"
+        )
         async with create_async_client() as client:
             try:
                 result = await request_json(client, "POST", api_url, json=payload)

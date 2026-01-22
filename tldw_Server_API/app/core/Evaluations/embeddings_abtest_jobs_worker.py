@@ -113,8 +113,8 @@ def _load_config_from_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any
     return None
 
 
-def _load_config_from_db(db, test_id: str) -> Dict[str, Any]:
-    row = db.get_abtest(test_id)
+def _load_config_from_db(db, test_id: str, *, created_by: Optional[str] = None) -> Dict[str, Any]:
+    row = db.get_abtest(test_id, created_by=created_by)
     if not row:
         raise EmbeddingsABTestJobError(f"A/B test not found: {test_id}", retryable=False)
     raw = row.get("config_json")
@@ -186,13 +186,14 @@ async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
             str(test_id),
             delete_db=True,
             delete_idempotency=True,
+            created_by=user_id_str,
         )
         job_logger.info("Embeddings A/B cleanup job completed")
         return {"test_id": str(test_id), "cleanup": True}
 
     config_payload = _load_config_from_payload(payload)
     if config_payload is None:
-        config_payload = _load_config_from_db(svc.db, str(test_id))
+        config_payload = _load_config_from_db(svc.db, str(test_id), created_by=user_id_str)
     config = _normalize_config(config_payload)
 
     media_db = _build_media_db(user_id_str)

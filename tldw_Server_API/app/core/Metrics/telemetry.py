@@ -624,6 +624,34 @@ def get_telemetry_manager() -> TelemetryManager:
     return _telemetry_manager
 
 
+def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManager] = None) -> bool:
+    """Instrument a FastAPI app with OpenTelemetry if available."""
+    if not OTEL_AVAILABLE or not FastAPIInstrumentor or app is None:
+        return False
+    try:
+        for attr in (
+            "_is_instrumented_by_opentelemetry",
+            "_instrumented_by_opentelemetry",
+            "_tldw_otel_fastapi_instrumented",
+        ):
+            if getattr(app, attr, False):
+                return True
+        tm = telemetry_manager or get_telemetry_manager()
+        FastAPIInstrumentor.instrument_app(
+            app,
+            tracer_provider=tm.tracer_provider,
+            meter_provider=tm.meter_provider,
+        )
+        try:
+            setattr(app, "_tldw_otel_fastapi_instrumented", True)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        logger.debug(f"Could not instrument FastAPI app: {e}")
+        return False
+
+
 def initialize_telemetry(config: Optional[TelemetryConfig] = None) -> TelemetryManager:
     """
     Initialize telemetry with optional configuration.

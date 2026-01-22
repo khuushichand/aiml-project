@@ -752,6 +752,13 @@ class TestNotes:
         assert set(k["keyword"] for k in kw_map[note1]) == {"alpha", "beta"}
         assert set(k["keyword"] for k in kw_map[note2]) == {"beta"}
 
+    def test_get_keywords_for_notes_large_batch(self, db_instance: CharactersRAGDB):
+        note_ids = [str(uuid.uuid4()) for _ in range(1100)]
+        kw_map = db_instance.get_keywords_for_notes(note_ids)
+        assert isinstance(kw_map, dict)
+        assert len(kw_map) == len(note_ids)
+        assert all(kw_map[nid] == [] for nid in note_ids)
+
     def test_search_notes(self, db_instance: CharactersRAGDB):
         db_instance.add_note("Alpha Note", "Contains a keyword ZYX")
         db_instance.add_note("Beta Note", "Another one with ZYX in title")
@@ -810,6 +817,44 @@ class TestKeywordsAndCollections:
         # 2 (soft_delete_keyword with expected_version=1)
         # 3 (add_keyword causing undelete, which itself bumps version)
         assert retrieved["version"] == 3
+
+    def test_search_keywords_allows_punctuation(self, db_instance: CharactersRAGDB):
+        keyword_id = db_instance.add_keyword("C++")
+        results = db_instance.search_keywords("C++")
+        assert any(row.get("id") == keyword_id for row in results)
+
+    def test_soft_delete_keyword_uses_mapped_table(self, db_instance: CharactersRAGDB, monkeypatch):
+        conn = db_instance.get_connection()
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mapped_keywords(
+              id            INTEGER PRIMARY KEY AUTOINCREMENT,
+              keyword       TEXT NOT NULL,
+              created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted       BOOLEAN  NOT NULL DEFAULT 0,
+              client_id     TEXT     NOT NULL DEFAULT 'unknown',
+              version       INTEGER  NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO mapped_keywords (id, keyword, created_at, last_modified, deleted, client_id, version) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, ?, 1)",
+            (1, "mapped", db_instance.client_id),
+        )
+        conn.commit()
+
+        def _map_table(name: str) -> str:
+            return "mapped_keywords" if name == "keywords" else name
+
+        monkeypatch.setattr(db_instance, "_map_table_for_backend", _map_table)
+        assert db_instance.soft_delete_keyword(1, expected_version=1) is True
+        row = conn.execute("SELECT deleted, version FROM mapped_keywords WHERE id = 1").fetchone()
+        deleted_val = row["deleted"] if isinstance(row, dict) else row[0]
+        version_val = row["version"] if isinstance(row, dict) else row[1]
+        assert int(deleted_val) == 1
+        assert int(version_val) == 2
 
     def test_add_keyword_collection(self, db_instance: CharactersRAGDB):
         coll_id = db_instance.add_keyword_collection("My Collection")

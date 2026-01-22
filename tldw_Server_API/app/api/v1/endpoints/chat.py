@@ -80,6 +80,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
+    ChatCompletionSystemMessageParam,
     DEFAULT_LLM_PROVIDER,
     API_KEYS as SCHEMAS_API_KEYS,
     get_api_keys,
@@ -690,6 +691,33 @@ async def _process_content_for_db_sync(
         processed_content_iterable = [{"type": "text", "text": f"<unsupported content type: {type(content_iterable).__name__}>"}]
 
     for part in processed_content_iterable:
+        if isinstance(part, str):
+            text_parts_sync.append(part)
+            continue
+        if not isinstance(part, dict):
+            if hasattr(part, "model_dump"):
+                try:
+                    part = part.model_dump(exclude_none=True)
+                except Exception:
+                    part = {"type": "text", "text": str(part)}
+            else:
+                p_type_attr = getattr(part, "type", None)
+                if p_type_attr == "text":
+                    text_parts_sync.append(str(getattr(part, "text", "")))
+                    continue
+                if p_type_attr == "image_url":
+                    image_url_obj = getattr(part, "image_url", None)
+                    if hasattr(image_url_obj, "model_dump"):
+                        try:
+                            image_url_obj = image_url_obj.model_dump(exclude_none=True)
+                        except Exception:
+                            image_url_obj = None
+                    if not isinstance(image_url_obj, dict):
+                        image_url_obj = {"url": getattr(image_url_obj, "url", "") if image_url_obj is not None else ""}
+                    part = {"type": "image_url", "image_url": image_url_obj}
+                else:
+                    text_parts_sync.append(str(part))
+                    continue
         p_type = part.get("type")
         if p_type == "text":
             snippet = str(part.get("text", ""))[:MAX_TEXT_LENGTH + 1] # Ensure text is string
@@ -703,6 +731,14 @@ async def _process_content_for_db_sync(
             text_parts_sync.append(snippet)
         elif p_type == "image_url":
             url_dict = part.get("image_url", {})
+            if not isinstance(url_dict, dict):
+                if hasattr(url_dict, "model_dump"):
+                    try:
+                        url_dict = url_dict.model_dump(exclude_none=True)
+                    except Exception:
+                        url_dict = {}
+                if not isinstance(url_dict, dict):
+                    url_dict = {"url": getattr(url_dict, "url", "")}
             url_str = url_dict.get("url", "")
 
             if url_str.startswith("data:"):
@@ -901,6 +937,13 @@ async def _save_message_turn_to_db(
             if serialized_extra is None:
                 serialized_extra = {}
             serialized_extra["tool_name"] = _jsonify_metadata_payload(tool_name)
+    # Preserve sender role/name separately to avoid role misclassification when sender is custom.
+    sender_meta: Dict[str, Any] = {}
+    if role in ("user", "assistant", "system", "tool"):
+        sender_meta["sender_role"] = _jsonify_metadata_payload(role)
+    sender_name_raw = message_obj.get("name")
+    if role in ("user", "assistant", "system") and sender_name_raw:
+        sender_meta["sender_name"] = _jsonify_metadata_payload(sender_name_raw)
     placeholder_reason: Optional[str] = None
 
     if not text_parts and not images:
@@ -928,6 +971,11 @@ async def _save_message_turn_to_db(
             serialized_extra = {}
         serialized_extra["content_placeholder_reason"] = placeholder_reason
 
+    if sender_meta:
+        if serialized_extra is None:
+            serialized_extra = {}
+        serialized_extra.update(sender_meta)
+
     if serialized_extra is not None and not serialized_extra:
         serialized_extra = None
 
@@ -947,7 +995,8 @@ async def _save_message_turn_to_db(
     if not text_parts and normalized_images:
         text_parts = [f"<Image attachment x{len(normalized_images)}>"]
 
-    sender = message_obj.get("name") or role
+    # Store sender role in DB; preserve display name in metadata.
+    sender = role or "assistant"
     if role == "tool":
         sender = "tool"
     db_payload = {
@@ -1447,16 +1496,28 @@ async def create_chat_completion(
                                             part.text = (cmd_args or '').strip()
                                             break
                                 try:
-                                    from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionSystemMessageParam
-                                    sys_msg = ChatCompletionSystemMessageParam(role='system', content=moderated_content_text, name='system-command')
+                                    try:
+                                        sys_msg = ChatCompletionSystemMessageParam(
+                                            role="system",
+                                            content=moderated_content_text,
+                                            name="system-command",
+                                        )
+                                    except Exception:
+                                        # Use model_construct to avoid validation errors in the injection path;
+                                        # payload-level validation runs after injection.
+                                        sys_msg = ChatCompletionSystemMessageParam.model_construct(
+                                            role="system",
+                                            content=moderated_content_text,
+                                            name="system-command",
+                                        )
                                     # Attach metadata if possible
                                     try:
-                                        setattr(sys_msg, 'metadata', {'tldw_injection': inj_meta, 'moderation': inj_mod})
+                                        setattr(sys_msg, "metadata", {"tldw_injection": inj_meta, "moderation": inj_mod})
                                     except Exception:
                                         pass
                                     request_data.messages.append(sys_msg)
-                                except Exception:
-                                    request_data.messages.append({'role': 'system', 'content': moderated_content_text, 'name': 'system-command', 'metadata': {'tldw_injection': inj_meta, 'moderation': inj_mod}})
+                                except Exception as inj_err:
+                                    logger.debug(f"Failed to append system injection message: {inj_err}")
         except Exception as _cmd_err:
             logger.debug(f"Slash command handling skipped due to error: {_cmd_err}")
 
@@ -1981,6 +2042,7 @@ async def create_chat_completion(
                     cleaned_args["model"] = default_model_for_provider
                     if not request_data.model:
                         request_data.model = default_model_for_provider
+                    model = default_model_for_provider
                 else:
                     # Fail fast with a clear client error instead of cascading into a 500
                     # when downstream provider adapters require an explicit model.
@@ -1991,6 +2053,11 @@ async def create_chat_completion(
                             f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
                         ),
                     )
+
+            # Re-validate provider override after applying a default model.
+            override_error = validate_provider_override(provider, cleaned_args.get("model") or request_data.model)
+            if override_error:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
             async def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
                 refreshed_resolution = await _resolve_byok(target_provider)
@@ -2021,11 +2088,17 @@ async def create_chat_completion(
                 use_default_model = False
                 if not refreshed_model:
                     use_default_model = True
-                elif target_provider != initial_provider and raw_model_input:
-                    if "/" in raw_model_input:
-                        prefix = raw_model_input.split("/", 1)[0].strip().lower()
-                        if prefix and prefix != target_provider.lower():
-                            use_default_model = True
+                elif target_provider != initial_provider:
+                    raw_model_str = (raw_model_input or "").strip()
+                    raw_prefix = None
+                    if raw_model_str and "/" in raw_model_str:
+                        raw_prefix = raw_model_str.split("/", 1)[0].strip().lower()
+                    # If the original model was unprefixed (or missing), prefer the
+                    # fallback provider's default model to avoid cross-provider mismatches.
+                    if not raw_model_str or raw_prefix is None:
+                        use_default_model = True
+                    elif raw_prefix != target_provider.lower():
+                        use_default_model = True
                 if use_default_model:
                     default_model = _get_default_model_for_provider_name(target_provider)
                     if default_model:

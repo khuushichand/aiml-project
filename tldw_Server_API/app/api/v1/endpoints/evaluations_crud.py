@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
+from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_user
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     CreateEvaluationRequest, UpdateEvaluationRequest, EvaluationResponse,
@@ -74,7 +75,7 @@ async def create_evaluation(
             try:
                 existing_id = svc.db.lookup_idempotency("evaluation", idempotency_key, stable_user_id)
                 if existing_id:
-                    existing = await svc.get_evaluation(existing_id)
+                    existing = await svc.get_evaluation(existing_id, created_by=stable_user_id)
                     if existing:
                         try:
                             if response is not None:
@@ -163,7 +164,8 @@ async def get_evaluation(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        evaluation = await svc.get_evaluation(eval_id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        evaluation = await svc.get_evaluation(eval_id, created_by=stable_user_id)
         if not evaluation:
             raise create_error_response(
                 message="Evaluation not found",
@@ -194,9 +196,10 @@ async def update_evaluation(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
         # Only include explicitly provided fields; avoid overwriting with None
         updates = model_dump_compat(update_request, exclude_none=True, exclude_unset=True)
-        evaluation = await svc.update_evaluation(eval_id, updates)
+        evaluation = await svc.update_evaluation(eval_id, updates, updated_by=stable_user_id, created_by=stable_user_id)
         if not evaluation:
             raise create_error_response(
                 message="Evaluation not found",
@@ -227,7 +230,8 @@ async def delete_evaluation(
 ) -> Response:
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        success = await svc.delete_evaluation(eval_id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        success = await svc.delete_evaluation(eval_id, deleted_by=stable_user_id, created_by=stable_user_id)
         if not success:
             raise create_error_response(
                 message="Evaluation not found",
@@ -278,7 +282,7 @@ async def create_run(
             try:
                 existing_id = svc.db.lookup_idempotency("run", idempotency_key, stable_user_id)
                 if existing_id:
-                    existing = await svc.get_run(existing_id)
+                    existing = await svc.get_run(existing_id, created_by=stable_user_id)
                     if existing:
                         try:
                             if response is not None:
@@ -303,6 +307,7 @@ async def create_run(
             dataset_override=dataset_override,
             webhook_url=webhook_url,
             created_by=stable_user_id,
+            webhook_user_id=webhook_user_id_from_user(current_user),
         )
         try:
             if idempotency_key and run.get("id"):
@@ -335,7 +340,8 @@ async def list_runs(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        runs, has_more = await svc.list_runs(eval_id=eval_id, status=status, limit=limit, after=after)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        runs, has_more = await svc.list_runs(eval_id=eval_id, status=status, limit=limit, after=after, created_by=stable_user_id)
         first_id = runs[0]["id"] if runs else None
         last_id = runs[-1]["id"] if runs else None
         return RunListResponse(object="list", data=[RunResponse(**run) for run in runs], has_more=has_more, first_id=first_id, last_id=last_id)
@@ -359,7 +365,8 @@ async def get_run(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        run = await svc.get_run(run_id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        run = await svc.get_run(run_id, created_by=stable_user_id)
         if not run:
             raise create_error_response(
                 message="Run not found",
@@ -388,7 +395,14 @@ async def cancel_run(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        await svc.cancel_run(run_id, cancelled_by=current_user.id_str)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        ok = await svc.cancel_run(run_id, cancelled_by=stable_user_id, created_by=stable_user_id)
+        if not ok:
+            raise create_error_response(
+                message="Run not found",
+                error_type="not_found_error",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
         return {"status": "cancelled", "run_id": run_id}
     except HTTPException:
         raise

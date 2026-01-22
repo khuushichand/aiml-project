@@ -79,6 +79,7 @@ def test_token_fallback_offsets_repeated_substrings(max_size, overlap):
         method="tokens",
         max_size=max_size,
         overlap=overlap,
+        align_text_to_source=True,
     )
 
     assert len(results) > 0
@@ -104,6 +105,7 @@ def test_token_fallback_offsets_repeated_substrings_property(max_size, overlap):
         method="tokens",
         max_size=max_size,
         overlap=overlap,
+        align_text_to_source=True,
     )
     assert len(results) > 0
     _assert_monotonic_spans(results, len(text))
@@ -136,6 +138,7 @@ def test_token_fallback_offsets_unicode_cf_differences(max_size, overlap):
         method="tokens",
         max_size=max_size,
         overlap=overlap,
+        align_text_to_source=True,
     )
 
     assert len(results) > 0
@@ -160,6 +163,7 @@ def test_token_fallback_offsets_unicode_cf_differences_property(max_size, overla
         method="tokens",
         max_size=max_size,
         overlap=overlap,
+        align_text_to_source=True,
     )
     assert len(results) > 0
     _assert_monotonic_spans(results, len(text))
@@ -192,6 +196,7 @@ def test_token_fallback_offsets_zwj_sequences(max_size, overlap):
         method="tokens",
         max_size=max_size,
         overlap=overlap,
+        align_text_to_source=True,
     )
 
     assert len(results) > 0
@@ -216,6 +221,7 @@ def test_token_fallback_offsets_zwj_sequences_property(max_size, overlap):
         method="tokens",
         max_size=max_size,
         overlap=overlap,
+        align_text_to_source=True,
     )
     assert len(results) > 0
     _assert_monotonic_spans(results, len(text))

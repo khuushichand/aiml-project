@@ -10,8 +10,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple
 from uuid import uuid4
@@ -19,7 +20,10 @@ from uuid import uuid4
 import aiosqlite
 from loguru import logger
 
-from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    UnifiedAuditService,
+    HIGH_RISK_SCORE,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
@@ -90,7 +94,10 @@ def _normalize_subpath(raw: Optional[str]) -> Optional[Path]:
     cleaned = value.lstrip("/\\")
     if not cleaned:
         return None
-    return Path(cleaned)
+    path = Path(cleaned)
+    if any(part in {"..", "."} for part in path.parts):
+        return None
+    return path
 
 
 def discover_audit_sources(
@@ -133,11 +140,7 @@ def discover_audit_sources(
     if subpath is not None:
         _scan_base(base_dir / subpath)
 
-    if default_db_path is None:
-        project_root = Path(get_project_root())
-        default_db_path = project_root / "Databases" / "unified_audit.db"
-
-    if default_db_path.exists():
+    if default_db_path is not None and default_db_path.exists():
         _add_source(default_db_path, None, "default")
 
     return sources
@@ -150,23 +153,47 @@ async def _ensure_checkpoint_table(db: aiosqlite.Connection) -> None:
             source_path TEXT PRIMARY KEY,
             last_rowid INTEGER,
             last_event_id TEXT,
+            last_timestamp TEXT,
             updated_at TEXT
         )
         """
     )
+    # Back-compat: add last_timestamp if it doesn't exist yet.
+    try:
+        await db.execute(
+            "ALTER TABLE audit_migration_checkpoints ADD COLUMN last_timestamp TEXT"
+        )
+    except Exception:
+        pass
 
 
-async def _load_checkpoint(db: aiosqlite.Connection, source_path: Path) -> Tuple[int, Optional[str]]:
-    async with db.execute(
-        "SELECT last_rowid, last_event_id FROM audit_migration_checkpoints WHERE source_path = ?",
-        (str(source_path),),
-    ) as cur:
-        row = await cur.fetchone()
+async def _load_checkpoint(
+    db: aiosqlite.Connection, source_path: Path
+) -> Tuple[int, Optional[str], Optional[str]]:
+    try:
+        async with db.execute(
+            "SELECT last_rowid, last_event_id, last_timestamp FROM audit_migration_checkpoints WHERE source_path = ?",
+            (str(source_path),),
+        ) as cur:
+            row = await cur.fetchone()
+    except Exception:
+        # Older schema without last_timestamp
+        async with db.execute(
+            "SELECT last_rowid, last_event_id FROM audit_migration_checkpoints WHERE source_path = ?",
+            (str(source_path),),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return 0, None, None
+        last_rowid = int(row[0]) if row[0] is not None else 0
+        last_event_id = str(row[1]) if row[1] else None
+        return last_rowid, last_event_id, None
     if not row:
-        return 0, None
+        return 0, None, None
     last_rowid = int(row[0]) if row[0] is not None else 0
     last_event_id = str(row[1]) if row[1] else None
-    return last_rowid, last_event_id
+    last_timestamp = str(row[2]) if row[2] else None
+    return last_rowid, last_event_id, last_timestamp
 
 
 async def _save_checkpoint(
@@ -174,20 +201,23 @@ async def _save_checkpoint(
     source_path: Path,
     last_rowid: int,
     last_event_id: Optional[str],
+    last_timestamp: Optional[str],
 ) -> None:
     await db.execute(
         """
-        INSERT INTO audit_migration_checkpoints (source_path, last_rowid, last_event_id, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO audit_migration_checkpoints (source_path, last_rowid, last_event_id, last_timestamp, updated_at)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(source_path) DO UPDATE SET
             last_rowid=excluded.last_rowid,
             last_event_id=excluded.last_event_id,
+            last_timestamp=excluded.last_timestamp,
             updated_at=excluded.updated_at
         """,
         (
             str(source_path),
             last_rowid,
             last_event_id,
+            last_timestamp,
             datetime.now(timezone.utc).isoformat(),
         ),
     )
@@ -245,20 +275,15 @@ def _resolve_tenant_id(
 
     lowered = normalized.lower()
     if lowered == system_tenant_id:
-        logger.warning(
-            "Audit migration: non-system event with system tenant id mapped to {}",
-            unidentified_tenant_id,
-        )
-        return unidentified_tenant_id
+        return system_tenant_id
     if lowered == unidentified_tenant_id:
         return unidentified_tenant_id
     if not normalized.isdigit():
         logger.warning(
-            "Audit migration: non-numeric tenant id {} mapped to {}",
+            "Audit migration: non-numeric tenant id {} preserved as-is",
             normalized,
-            unidentified_tenant_id,
         )
-        return unidentified_tenant_id
+        return normalized
     return normalized
 
 
@@ -281,6 +306,26 @@ def _coerce_timestamp(value: Any) -> str:
         return dt_val.astimezone(timezone.utc).isoformat()
     except Exception:
         return str(value)
+
+
+def _parse_timestamp_to_date(value: Any) -> Optional[date]:
+    try:
+        if isinstance(value, datetime):
+            dt_val = value
+        elif value is None:
+            return None
+        else:
+            s = str(value).strip()
+            if not s:
+                return None
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt_val = datetime.fromisoformat(s)
+        if dt_val.tzinfo is None:
+            dt_val = dt_val.replace(tzinfo=timezone.utc)
+        return dt_val.astimezone(timezone.utc).date()
+    except Exception:
+        return None
 
 
 def _infer_category(event_type: Optional[str]) -> str:
@@ -426,18 +471,114 @@ async def _table_exists(db: aiosqlite.Connection, name: str) -> bool:
         return await cur.fetchone() is not None
 
 
-async def _stats_row_exists(
-    db: aiosqlite.Connection, tenant_id: str, date_val: Any, category: Any
-) -> bool:
-    async with db.execute(
-        """
-        SELECT 1 FROM audit_daily_stats
-        WHERE tenant_user_id = ? AND date = ? AND category = ?
-        LIMIT 1
-        """,
-        (tenant_id, date_val, category),
-    ) as cur:
-        return await cur.fetchone() is not None
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or isinstance(value, bool):
+            return default
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or isinstance(value, bool):
+            return default
+        return float(str(value).strip())
+    except Exception:
+        return default
+
+
+def _normalize_result(value: Any) -> str:
+    try:
+        if value is None:
+            return ""
+        return str(value).strip().lower()
+    except Exception:
+        return ""
+
+
+async def _update_shared_daily_stats_from_records(
+    db: aiosqlite.Connection,
+    records: List[dict[str, Any]],
+    *,
+    unidentified_tenant_id: str,
+) -> int:
+    if not records:
+        return 0
+    stats = defaultdict(lambda: {
+        "total": 0,
+        "high_risk": 0,
+        "failed": 0,
+        "cost": 0.0,
+        "tokens": 0,
+        "durations": [],
+    })
+
+    for record in records:
+        tenant_id = record.get("tenant_user_id") or unidentified_tenant_id
+        date_val = _parse_timestamp_to_date(record.get("timestamp"))
+        if date_val is None:
+            continue
+        category = str(record.get("category") or "system")
+        key = (tenant_id, date_val, category)
+        stats[key]["total"] += 1
+        if _safe_int(record.get("risk_score"), 0) >= HIGH_RISK_SCORE:
+            stats[key]["high_risk"] += 1
+        if _normalize_result(record.get("result")) in {"failure", "error"}:
+            stats[key]["failed"] += 1
+        stats[key]["cost"] += _safe_float(record.get("estimated_cost"), 0.0)
+        stats[key]["tokens"] += _safe_int(record.get("tokens_used"), 0)
+        if record.get("duration_ms") is not None:
+            stats[key]["durations"].append(_safe_float(record.get("duration_ms"), 0.0))
+
+    updated_rows = 0
+    for key, data in stats.items():
+        tenant_id, date_val, category = key
+        duration_count = len(data["durations"])
+        avg_duration = (
+            sum(data["durations"]) / duration_count
+            if duration_count > 0 else None
+        )
+        await db.execute(
+            """
+            INSERT INTO audit_daily_stats (
+                tenant_user_id, date, category, total_events, high_risk_events,
+                failed_events, total_cost, total_tokens, avg_duration_ms,
+                duration_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant_user_id, date, category) DO UPDATE SET
+                total_events = total_events + excluded.total_events,
+                high_risk_events = high_risk_events + excluded.high_risk_events,
+                failed_events = failed_events + excluded.failed_events,
+                total_cost = total_cost + excluded.total_cost,
+                total_tokens = total_tokens + excluded.total_tokens,
+                duration_count = COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0),
+                avg_duration_ms = CASE
+                    WHEN COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0) = 0 THEN NULL
+                    WHEN COALESCE(duration_count, 0) = 0 THEN excluded.avg_duration_ms
+                    WHEN COALESCE(excluded.duration_count, 0) = 0 THEN avg_duration_ms
+                    ELSE (
+                        COALESCE(avg_duration_ms, 0) * COALESCE(duration_count, 0) +
+                        COALESCE(excluded.avg_duration_ms, 0) * COALESCE(excluded.duration_count, 0)
+                    ) / (COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0))
+                END
+            """,
+            (
+                tenant_id,
+                date_val,
+                category,
+                data["total"],
+                data["high_risk"],
+                data["failed"],
+                data["cost"],
+                data["tokens"],
+                avg_duration,
+                duration_count,
+            ),
+        )
+        updated_rows += 1
+    return updated_rows
 
 
 async def _migrate_source(
@@ -460,11 +601,42 @@ async def _migrate_source(
             if not await _table_exists(source_db, "audit_events"):
                 return counts
 
-            last_rowid, last_event_id = await _load_checkpoint(shared_db, source_key)
-            async with source_db.execute(
-                "SELECT rowid, * FROM audit_events WHERE rowid > ? ORDER BY rowid",
-                (last_rowid,),
-            ) as cur:
+            last_rowid, last_event_id, last_timestamp = await _load_checkpoint(shared_db, source_key)
+            if last_timestamp is None and last_rowid > 0:
+                # Attempt to upgrade legacy rowid checkpoint to timestamp+event_id.
+                async with source_db.execute(
+                    "SELECT timestamp, event_id FROM audit_events WHERE rowid = ?",
+                    (last_rowid,),
+                ) as cur:
+                    row = await cur.fetchone()
+                if row:
+                    try:
+                        last_timestamp = str(row["timestamp"]) if row["timestamp"] else None
+                    except Exception:
+                        last_timestamp = None
+                    if last_event_id is None:
+                        try:
+                            last_event_id = str(row["event_id"]) if row["event_id"] else None
+                        except Exception:
+                            last_event_id = None
+                else:
+                    # If the rowid no longer exists, reset to full scan; dedupe by event_id protects us.
+                    last_rowid = 0
+                    last_event_id = None
+                    last_timestamp = None
+
+            if last_timestamp:
+                query = (
+                    "SELECT rowid, * FROM audit_events "
+                    "WHERE (timestamp > ? OR (timestamp = ? AND event_id > ?)) "
+                    "ORDER BY timestamp, event_id"
+                )
+                params = (last_timestamp, last_timestamp, last_event_id or "")
+            else:
+                query = "SELECT rowid, * FROM audit_events ORDER BY timestamp, event_id"
+                params = ()
+
+            async with source_db.execute(query, params) as cur:
                 while True:
                     rows = await cur.fetchmany(chunk_size)
                     if not rows:
@@ -518,6 +690,12 @@ async def _migrate_source(
 
                     if filtered:
                         await shared_db.executemany(insert_sql, filtered)
+                        stats_updated = await _update_shared_daily_stats_from_records(
+                            shared_db,
+                            filtered,
+                            unidentified_tenant_id=unidentified_tenant_id,
+                        )
+                        counts.stats_inserted += stats_updated
 
                     last_row = rows[-1]
                     try:
@@ -530,51 +708,12 @@ async def _migrate_source(
                         last_event = None
                     if last_event:
                         last_event_id = str(last_event)
-                    await _save_checkpoint(shared_db, source_key, last_rowid, last_event_id)
+                    try:
+                        last_timestamp = _coerce_timestamp(last_row["timestamp"])
+                    except Exception:
+                        last_timestamp = last_timestamp
+                    await _save_checkpoint(shared_db, source_key, last_rowid, last_event_id, last_timestamp)
                     await shared_db.commit()
-
-            if await _table_exists(source_db, "audit_daily_stats"):
-                async with source_db.execute("SELECT * FROM audit_daily_stats") as cur:
-                    rows = await cur.fetchall()
-                for row in rows:
-                    data = dict(row)
-                    tenant_id = _resolve_tenant_id(
-                        tenant_override=source.tenant_id,
-                        raw_tenant=data.get("tenant_user_id"),
-                        context_user_id=None,
-                        event_type=None,
-                        category=data.get("category"),
-                        system_tenant_id=system_tenant_id,
-                        unidentified_tenant_id=unidentified_tenant_id,
-                    )
-                    counts.stats_read += 1
-                    exists = await _stats_row_exists(
-                        shared_db, tenant_id, data.get("date"), data.get("category")
-                    )
-                    if exists:
-                        counts.stats_skipped += 1
-                        continue
-                    await shared_db.execute(
-                        """
-                        INSERT OR IGNORE INTO audit_daily_stats (
-                            tenant_user_id, date, category, total_events, high_risk_events,
-                            failed_events, total_cost, total_tokens, avg_duration_ms, duration_count
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            tenant_id,
-                            data.get("date"),
-                            data.get("category"),
-                            data.get("total_events", 0),
-                            data.get("high_risk_events", 0),
-                            data.get("failed_events", 0),
-                            data.get("total_cost", 0.0),
-                            data.get("total_tokens", 0),
-                            data.get("avg_duration_ms"),
-                            data.get("duration_count", 0),
-                        ),
-                    )
-                    counts.stats_inserted += 1
     except Exception as exc:
         counts.failed = True
         counts.error = f"{type(exc).__name__}: {exc}"
@@ -717,7 +856,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     args = _parse_args(argv)
     shared_db = Path(args.shared_db).expanduser() if args.shared_db else None
     user_db_base = Path(args.user_db_base).expanduser() if args.user_db_base else None
-    default_db = Path(args.default_db).expanduser() if args.default_db else None
+    if args.default_db:
+        default_db = Path(args.default_db).expanduser()
+    else:
+        project_root = Path(get_project_root())
+        candidate = project_root / "Databases" / "unified_audit.db"
+        default_db = candidate if candidate.exists() else None
 
     asyncio.run(
         migrate_to_shared_audit_db(

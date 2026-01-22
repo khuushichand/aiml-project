@@ -70,6 +70,18 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
 
     # Add CSRF token to headers (preserving any existing headers)
     headers = dict(headers)  # Make a copy to avoid modifying the original
+    # In single-user mode, ensure X-API-KEY is present so AuthNZ deps pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+        settings = get_settings()
+        if settings.AUTH_MODE == "single_user" and "X-API-KEY" not in headers:
+            api_key = settings.SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+            if api_key:
+                headers["X-API-KEY"] = api_key
+    except Exception:
+        pass
+
     headers["X-CSRF-Token"] = getattr(client, "csrf_token", "")
 
     print(f"DEBUG make_request_with_csrf: Final headers being sent: {headers}")
@@ -88,8 +100,12 @@ def get_auth_headers(auth_token):
     if settings.AUTH_MODE == "multi_user":
         return {"Authorization": auth_token}
     else:
-        # For single-user mode, use Token header (expected by the endpoint)
-        return {"Token": auth_token}
+        # For single-user mode, include X-API-KEY so AuthNZ deps pass
+        api_key = settings.SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+        headers = {"Authorization": auth_token}
+        if api_key:
+            headers["X-API-KEY"] = api_key
+        return headers
 
 
 # Fixture for TestClient with proper CSRF token handling
@@ -343,7 +359,7 @@ def test_create_chat_completion_success_streaming(  # Added default_chat_request
 
         streaming_request_data = default_chat_request_data.model_copy(update={"stream": True})
         response = client.post_with_csrf(
-            "/api/v1/chat/completions", json=streaming_request_data.model_dump(), headers={"token": valid_auth_token}
+            "/api/v1/chat/completions", json=streaming_request_data.model_dump(), headers={"Authorization": valid_auth_token}
         )
 
         assert response.status_code == status.HTTP_200_OK
@@ -401,7 +417,7 @@ def test_system_message_extraction(
     request_data_obj = ChatCompletionRequest(model="test-model", messages=messages_with_system)
 
     client.post_with_csrf(
-        "/api/v1/chat/completions", json=request_data_obj.model_dump(), headers={"Token": valid_auth_token}
+        "/api/v1/chat/completions", json=request_data_obj.model_dump(), headers={"Authorization": valid_auth_token}
     )
 
     mock_chat_api_call.assert_called_once()
@@ -449,7 +465,7 @@ def test_no_system_message_in_payload(
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chat_db
 
     client.post_with_csrf(
-        "/api/v1/chat/completions", json=default_chat_request_data.model_dump(), headers={"Token": valid_auth_token}
+        "/api/v1/chat/completions", json=default_chat_request_data.model_dump(), headers={"Authorization": valid_auth_token}
     )
 
     mock_chat_api_call.assert_called_once()
@@ -518,7 +534,7 @@ def test_api_key_used_from_config(
         # Test 1: Default provider (should pick up "openai" key from patched dict)
         # default_chat_request_data has api_provider=None, so it will use DEFAULT_LLM_PROVIDER ("openai")
         client.post_with_csrf(
-            "/api/v1/chat/completions", json=default_chat_request_data.model_dump(), headers={"Token": valid_auth_token}
+            "/api/v1/chat/completions", json=default_chat_request_data.model_dump(), headers={"Authorization": valid_auth_token}
         )
         mock_chat_api_call.assert_called_once()
         assert mock_chat_api_call.call_args.kwargs["api_key"] == "key_from_config"
@@ -538,7 +554,7 @@ def test_api_key_used_from_config(
             }
         )
         response_alternative = client.post(
-            "/api/v1/chat/completions", json=request_data_alternative.model_dump(), headers={"Token": valid_auth_token}
+            "/api/v1/chat/completions", json=request_data_alternative.model_dump(), headers={"Authorization": valid_auth_token}
         )
 
         # This assertion should now pass if VALID_ALTERNATIVE_PROVIDER_FOR_TEST is correctly handled
@@ -557,7 +573,7 @@ def test_api_key_used_from_config(
             update={"api_provider": "cohere", "model": "command-r"}  # Assuming 'cohere' is in SUPPORTED_API_ENDPOINTS
         )
         response_cohere = client.post(
-            "/api/v1/chat/completions", json=request_data_cohere.model_dump(), headers={"Token": valid_auth_token}
+            "/api/v1/chat/completions", json=request_data_cohere.model_dump(), headers={"Authorization": valid_auth_token}
         )
         assert response_cohere.status_code == status.HTTP_200_OK, f"Cohere provider failed: {response_cohere.text}"
         mock_chat_api_call.assert_called_once()
@@ -616,7 +632,7 @@ def test_missing_api_key_for_required_provider(
 
     with _patch("tldw_Server_API.app.api.v1.endpoints.chat.get_api_keys", return_value={}):
         response = client.post_with_csrf(
-            "/api/v1/chat/completions", json=request_data_openai.model_dump(), headers={"token": valid_auth_token}
+            "/api/v1/chat/completions", json=request_data_openai.model_dump(), headers={"Authorization": valid_auth_token}
         )
 
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
@@ -658,7 +674,7 @@ def test_keyless_provider_proceeds_without_key(  # Added default_chat_request_da
         request_data_ollama = default_chat_request_data.model_copy(update={"api_provider": "ollama"})
 
         response = client.post_with_csrf(
-            "/api/v1/chat/completions", json=request_data_ollama.model_dump(), headers={"token": valid_auth_token}
+            "/api/v1/chat/completions", json=request_data_ollama.model_dump(), headers={"Authorization": valid_auth_token}
         )
         assert response.status_code == status.HTTP_200_OK
         mock_chat_api_call.assert_called_once()
@@ -761,7 +777,7 @@ def test_chat_api_call_exception_handling_unit(
     response = client.post_with_csrf(
         "/api/v1/chat/completions",
         json=default_chat_request_data.model_dump(),
-        headers={"Token": valid_auth_token},  # Ensure correct header name
+        headers={"Authorization": valid_auth_token},  # Ensure correct header name
     )
 
     assert response.status_code == expected_status
@@ -830,7 +846,7 @@ def test_non_iterable_stream_generator_from_shim(
 
     streaming_request_data = default_chat_request_data.model_copy(update={"stream": True})
     response = client.post_with_csrf(
-        "/api/v1/chat/completions", json=streaming_request_data.model_dump(), headers={"token": valid_auth_token}
+        "/api/v1/chat/completions", json=streaming_request_data.model_dump(), headers={"Authorization": valid_auth_token}
     )
 
     assert response.status_code == status.HTTP_502_BAD_GATEWAY
@@ -881,7 +897,7 @@ def test_error_within_stream_generator(
     request_data_dict = default_chat_request_data_error_stream.model_dump()
 
     response = client.post_with_csrf(
-        "/api/v1/chat/completions", json=request_data_dict, headers={"Token": valid_auth_token}  # Corrected header name
+        "/api/v1/chat/completions", json=request_data_dict, headers={"Authorization": valid_auth_token}  # Corrected header name
     )
     assert response.status_code == status.HTTP_200_OK  # Stream should still start with 200
 
@@ -1006,7 +1022,7 @@ def test_create_chat_completion_with_optional_params(
     request_data_dict = request_with_optionals.model_dump(exclude_none=True)
 
     response = client.post_with_csrf(
-        "/api/v1/chat/completions", json=request_data_dict, headers={"Token": valid_auth_token}
+        "/api/v1/chat/completions", json=request_data_dict, headers={"Authorization": valid_auth_token}
     )
 
     assert response.status_code == status.HTTP_200_OK
@@ -1078,7 +1094,7 @@ def test_create_chat_completion_with_tools_unit(
     request_data_dict = request_with_tools.model_dump(exclude_none=True)
 
     response = client.post_with_csrf(
-        "/api/v1/chat/completions", json=request_data_dict, headers={"Token": valid_auth_token}
+        "/api/v1/chat/completions", json=request_data_dict, headers={"Authorization": valid_auth_token}
     )
     if response.status_code != status.HTTP_200_OK:
         print(f"Response status: {response.status_code}")
@@ -1119,7 +1135,7 @@ def test_save_to_db_not_passed_to_chat_api_call(
 
     # Include save_to_db in request to ensure it's not forwarded to chat_api_call
     body = default_chat_request_data.model_copy(update={"save_to_db": True}).model_dump()
-    response = client.post_with_csrf("/api/v1/chat/completions", json=body, headers={"Token": valid_auth_token})
+    response = client.post_with_csrf("/api/v1/chat/completions", json=body, headers={"Authorization": valid_auth_token})
     assert response.status_code == status.HTTP_200_OK
 
     mock_chat_api_call.assert_called_once()
@@ -1162,7 +1178,7 @@ def test_create_chat_completion_character_not_found_uses_defaults(
     # And char_name is not found, it will use the default "Character" from template_data initialization.
 
     client.post_with_csrf(
-        "/api/v1/chat/completions", json=request_with_char.model_dump(), headers={"Token": valid_auth_token}
+        "/api/v1/chat/completions", json=request_with_char.model_dump(), headers={"Authorization": valid_auth_token}
     )
 
     mock_chat_api_call_shim.assert_called_once()
@@ -1209,7 +1225,7 @@ def test_create_chat_completion_template_file_not_found(
     request_data = default_chat_request_data.model_copy(update={"prompt_template_name": "definitely_missing_template"})
 
     response = client.post_with_csrf(
-        "/api/v1/chat/completions", json=request_data.model_dump(), headers={"Token": valid_auth_token}
+        "/api/v1/chat/completions", json=request_data.model_dump(), headers={"Authorization": valid_auth_token}
     )
     assert response.status_code == status.HTTP_200_OK  # Should fall back to default template
     mock_load_template.assert_called_once_with("definitely_missing_template")

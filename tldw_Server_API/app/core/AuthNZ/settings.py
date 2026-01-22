@@ -598,11 +598,31 @@ class Settings(BaseSettings):
         description="Optional list of allowed client IPs/CIDRs for SINGLE_USER_API_KEY"
     )
 
+    # Trust proxy headers for resolving client IPs (used by API key allowlists).
+    AUTH_TRUST_X_FORWARDED_FOR: bool = Field(
+        default=False,
+        description=(
+            "If true, honor X-Forwarded-For/X-Real-IP when the peer is a trusted proxy "
+            "(see AUTH_TRUSTED_PROXY_IPS)."
+        ),
+    )
+    AUTH_TRUSTED_PROXY_IPS: list[str] = Field(
+        default_factory=list,
+        description="Optional list of trusted proxy IPs/CIDRs for X-Forwarded-For resolution."
+    )
+
     # ===== Service Account Settings =====
     SERVICE_ACCOUNT_RATE_LIMIT: int = Field(
         default=1000,
         ge=100,
         description="Rate limit for service accounts per minute"
+    )
+    SERVICE_TOKEN_ALLOWED_IPS: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of allowed client IPs/CIDRs for service tokens. "
+            "When empty, service tokens are restricted to loopback requests."
+        ),
     )
 
     def __init__(self, **kwargs):
@@ -774,6 +794,36 @@ class Settings(BaseSettings):
     @field_validator("SINGLE_USER_ALLOWED_IPS", mode="before")
     @classmethod
     def parse_single_user_allowed_ips(cls, v):
+        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
+        if not v:
+            return []
+        if isinstance(v, str):
+            try:
+                return [s.strip() for s in v.split(',') if s.strip()]
+            except Exception:
+                return []
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
+
+    @field_validator("SERVICE_TOKEN_ALLOWED_IPS", mode="before")
+    @classmethod
+    def parse_service_token_allowed_ips(cls, v):
+        """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
+        if not v:
+            return []
+        if isinstance(v, str):
+            try:
+                return [s.strip() for s in v.split(',') if s.strip()]
+            except Exception:
+                return []
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
+
+    @field_validator("AUTH_TRUSTED_PROXY_IPS", mode="before")
+    @classmethod
+    def parse_auth_trusted_proxy_ips(cls, v):
         """Allow env string like '127.0.0.1,10.0.0.0/8' to map to list[str]."""
         if not v:
             return []
@@ -978,6 +1028,8 @@ def _load_overrides_from_config() -> dict:
         maybe_set("SECURITY_ALERT_WEBHOOK_MIN_SEVERITY", "security_alert_webhook_min_severity", lambda v: v.strip())
         maybe_set("SECURITY_ALERT_EMAIL_MIN_SEVERITY", "security_alert_email_min_severity", lambda v: v.strip())
         maybe_set("SECURITY_ALERT_BACKOFF_SECONDS", "security_alert_backoff_seconds", lambda v: int(v))
+        maybe_set("AUTH_TRUST_X_FORWARDED_FOR", "auth_trust_x_forwarded_for", _bool_from_str)
+        maybe_set("AUTH_TRUSTED_PROXY_IPS", "auth_trusted_proxy_ips", _split_csv)
 
         # If DATABASE_URL is not provided via env or explicit key, synthesize from db_type fields
         if os.getenv("DATABASE_URL") is None and "DATABASE_URL" not in overrides:

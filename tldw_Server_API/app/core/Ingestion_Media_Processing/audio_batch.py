@@ -303,10 +303,10 @@ async def run_audio_batch(
     final_processed_count = sum(
         1
         for r in batch_result["results"]
-        if r.get("status") in {"Success", "Warning"}
+        if str(r.get("status", "")).lower() in {"success", "warning"}
     )
     final_error_count = sum(
-        1 for r in batch_result["results"] if r.get("status") == "Error"
+        1 for r in batch_result["results"] if str(r.get("status", "")).lower() == "error"
     )
     batch_result["processed_count"] = final_processed_count
     batch_result["errors_count"] = final_error_count

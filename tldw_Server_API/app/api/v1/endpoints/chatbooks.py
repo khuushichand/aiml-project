@@ -284,11 +284,24 @@ async def create_chatbook(
                     download_url=download_url,
                     expires_at=expires_at,
                 )
+                save_ok = True
                 try:
                     # Save job using the service helper
                     service._save_export_job(job)  # noqa: SLF001 (internal helper is appropriate here)
                 except Exception as _e:
+                    save_ok = False
                     logger.warning(f"Failed to persist completed export job for sync path: {_e}")
+                if not save_ok:
+                    # Best-effort cleanup to avoid orphaned exports
+                    try:
+                        if file_path and file_path.exists():
+                            file_path.unlink()
+                    except Exception as cleanup_err:
+                        logger.warning(f"Failed to remove export archive after job persistence failure: {cleanup_err}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Export completed but failed to persist job metadata",
+                    )
 
                 # Audit completed export in sync path
                 try:
@@ -316,6 +329,13 @@ async def create_chatbook(
                     download_url=download_url
                 )
         else:
+            # For async jobs, return a failure response with job_id so clients can inspect status.
+            if request_data.async_mode and result:
+                return CreateChatbookResponse(
+                    success=False,
+                    message=message,
+                    job_id=result
+                )
             raise HTTPException(status_code=400, detail=message)
 
     except HTTPException:
@@ -511,6 +531,24 @@ async def import_chatbook(
                     warnings=warnings_out
                 )
         else:
+            # For async jobs, return a failure response with job_id so clients can inspect status.
+            if import_request.async_mode and result:
+                # Enqueue failed; cleanup temp file since no worker will consume it.
+                if temp_file is not None and temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except Exception as e:
+                        logger.warning(f"Cleanup of temp import file failed after enqueue failure: path={temp_file}, user={user.id}, error={e}")
+                        _safe_increment_metric(
+                            "app_warning_events_total",
+                            labels={"component": "chatbooks", "event": "import_cleanup_failed"},
+                            error_context="chatbooks import_cleanup_failed",
+                        )
+                return ImportChatbookResponse(
+                    success=False,
+                    message=message,
+                    job_id=result
+                )
             raise HTTPException(status_code=400, detail=message)
 
     except HTTPException:
@@ -559,6 +597,7 @@ async def preview_chatbook(
     Returns:
         PreviewChatbookResponse with manifest information
     """
+    temp_file: Optional[Path] = None
     try:
         # Validate file
         if not file.filename:
@@ -693,6 +732,18 @@ async def preview_chatbook(
             traceparent=ensure_traceparent(request),
         ).exception(f"Error previewing chatbook for user {user.id}")
         raise HTTPException(status_code=500, detail="An error occurred while previewing the chatbook")
+    finally:
+        # Ensure preview upload cleanup on all paths
+        if temp_file is not None and temp_file.exists():
+            try:
+                temp_file.unlink()
+            except Exception as e:
+                logger.warning(f"Cleanup of preview temp file failed: path={temp_file}, user={user.id}, error={e}")
+                _safe_increment_metric(
+                    "app_warning_events_total",
+                    labels={"component": "chatbooks", "event": "preview_cleanup_failed"},
+                    error_context="chatbooks preview_cleanup_failed",
+                )
 
 
 @router.get("/export/jobs", response_model=ListExportJobsResponse)
@@ -716,11 +767,8 @@ async def list_export_jobs(
         ListExportJobsResponse with list of export jobs
     """
     try:
-        jobs = service.list_export_jobs()
-
-        # Apply pagination
-        total = len(jobs)
-        jobs = jobs[offset:offset + limit]
+        total = service.count_export_jobs()
+        jobs = service.list_export_jobs(limit=limit, offset=offset)
 
         # Convert to response models
         job_responses = []
@@ -841,11 +889,8 @@ async def list_import_jobs(
         ListImportJobsResponse with list of import jobs
     """
     try:
-        jobs = service.list_import_jobs()
-
-        # Apply pagination
-        total = len(jobs)
-        jobs = jobs[offset:offset + limit]
+        total = service.count_import_jobs()
+        jobs = service.list_import_jobs(limit=limit, offset=offset)
 
         # Convert to response models
         job_responses = []

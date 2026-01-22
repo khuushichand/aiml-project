@@ -333,7 +333,6 @@ class APIClient:
         else:
             # Use API key headers for single-user and virtual-key flows.
             self.client.headers["X-API-KEY"] = token
-            self.client.headers["Token"] = token  # Some endpoints expect this (capital T)
             self.client.headers.pop("Authorization", None)
 
     def clear_auth(self):
@@ -900,7 +899,7 @@ class APIClient:
         if "X-API-KEY" in self.client.headers:
             headers["X-API-KEY"] = self.client.headers["X-API-KEY"]
         if "Token" in self.client.headers:
-            headers["Token"] = self.client.headers["Token"]
+            headers["Authorization"] = self.client.headers["Authorization"]
         if "Authorization" in self.client.headers:
             headers["Authorization"] = self.client.headers["Authorization"]
         return headers

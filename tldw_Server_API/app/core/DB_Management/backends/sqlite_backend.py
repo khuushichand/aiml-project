@@ -116,6 +116,8 @@ class SQLiteConnectionPool(ConnectionPool):
 
     def get_connection(self) -> sqlite3.Connection:
         """Get a thread-local connection."""
+        if self._closed:
+            raise DatabaseError("Connection pool is closed")
         thread_id = threading.get_ident()
         self._prune_dead_threads()
 
@@ -186,6 +188,12 @@ class SQLiteConnectionPool(ConnectionPool):
         thread_id = threading.get_ident()
         with self._lock:
             try:
+                conn = self._connections.get(thread_id)
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
                 self._connections[thread_id] = None
             except Exception:
                 pass

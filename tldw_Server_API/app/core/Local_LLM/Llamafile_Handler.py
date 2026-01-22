@@ -65,6 +65,7 @@ class LlamafileHandler(BaseLLMHandler):
 
         # Corrected type hint for asyncio.subprocess.Process
         self._active_servers: Dict[int, asyncio.subprocess.Process] = {}
+        self._stream_tasks: Dict[int, list[asyncio.Task]] = {}
 
         # Apply environment overrides
         handler_utils.apply_env_overrides(self.config)
@@ -111,6 +112,35 @@ class LlamafileHandler(BaseLLMHandler):
                 await process.wait()
             except Exception:
                 pass
+
+    async def _drain_stream(self, stream, label: str) -> None:
+        if stream is None:
+            return
+        try:
+            while True:
+                chunk = await stream.read(1024)
+                if not chunk:
+                    break
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            # Best-effort drain; ignore errors
+            return
+
+    def _start_stream_drainers(self, port: int, process: asyncio.subprocess.Process) -> None:
+        tasks: list[asyncio.Task] = []
+        if getattr(process, "stdout", None) is not None:
+            tasks.append(asyncio.create_task(self._drain_stream(process.stdout, "stdout")))
+        if getattr(process, "stderr", None) is not None:
+            tasks.append(asyncio.create_task(self._drain_stream(process.stderr, "stderr")))
+        if tasks:
+            self._stream_tasks[port] = tasks
+
+    def _stop_stream_drainers(self, port: int) -> None:
+        tasks = self._stream_tasks.pop(port, [])
+        for task in tasks:
+            if not task.done():
+                task.cancel()
 
     def _extract_llamafile_from_zip(self, zip_path: Path, output_path: Path) -> None:
         def _is_safe_member(member_name: str) -> bool:
@@ -323,7 +353,14 @@ class LlamafileHandler(BaseLLMHandler):
                                   expected_hash: Optional[str] = None, force_download: bool = False) -> Path:
         """Downloads the specified LLM model file (.llamafile or .gguf)."""
         filename = model_filename or model_url.split('/')[-1].split('?')[0]
-        model_path = self.models_dir / filename
+        if not filename or Path(str(filename)).name in {"", ".", ".."}:
+            raise ModelDownloadError("Invalid model filename.")
+
+        candidate = Path(filename)
+        model_path = candidate if candidate.is_absolute() else (self.models_dir / candidate)
+        if not self._is_path_allowed(model_path):
+            raise ModelDownloadError("Model filename must resolve under allowed directories.")
+        model_path.parent.mkdir(parents=True, exist_ok=True)
 
         self.logger.info(f"Checking availability of model: {model_name} at {model_path}")
         if model_path.exists() and not force_download:
@@ -385,7 +422,7 @@ class LlamafileHandler(BaseLLMHandler):
         if not model_path.exists():
             raise ModelNotFoundError(f"Model file {model_filename} not found in {self.models_dir}.")
 
-        args = server_args or {}
+        args = {k: v for k, v in (server_args or {}).items() if v is not None and v != ""}
         host = args.get("host", self.config.default_host)
         if not host:
             host = self.config.default_host or "127.0.0.1"
@@ -505,7 +542,12 @@ class LlamafileHandler(BaseLLMHandler):
             # Poll HTTP readiness instead of fixed sleep
             base_url = handler_utils.build_base_url(client_host, port)
             readiness_timeout = getattr(self.config, "readiness_timeout", 30.0) or 30.0
-            is_ready = await wait_for_http_ready(base_url, timeout_total=readiness_timeout, interval=0.5)
+            is_ready = await wait_for_http_ready(
+                base_url,
+                timeout_total=readiness_timeout,
+                interval=0.5,
+                accept_any_non_5xx=True,
+            )
 
             if process.returncode is not None or not is_ready:
                 stderr_output = ""
@@ -538,6 +580,7 @@ class LlamafileHandler(BaseLLMHandler):
             self.metrics["starts"] += 1
             self.metrics["readiness_time_sum"] += max(0.0, t1 - t0)
             self.metrics["readiness_count"] += 1
+            self._start_stream_drainers(port, process)
             self.logger.info(f"Llamafile server started for {model_filename} on port {port} with PID {process.pid}.")
             return {"status": "started", "pid": process.pid, "port": port, "host": host, "model": model_filename,
                     "command": ' '.join(redacted_cmd)}  # Return redacted command
@@ -652,11 +695,13 @@ class LlamafileHandler(BaseLLMHandler):
                     f"Llamafile server PID {current_pid} was already stopped (return code: {process_to_stop.returncode}).")
 
             if port_to_clear and port_to_clear in self._active_servers:
+                self._stop_stream_drainers(port_to_clear)
                 del self._active_servers[port_to_clear]
             return f"Llamafile server PID {current_pid} stopped."
         except Exception as e:
             self.logger.error(f"Error stopping llamafile server PID {current_pid}: {e}", exc_info=True)
             if port_to_clear and port_to_clear in self._active_servers:
+                self._stop_stream_drainers(port_to_clear)
                 del self._active_servers[port_to_clear]
             raise ServerError(f"Error stopping llamafile server: {e}")
 
@@ -718,7 +763,10 @@ class LlamafileHandler(BaseLLMHandler):
         payload["stream"] = False
         payload = {k: v for k, v in payload.items() if v is not None}
 
-        self.logger.debug(f"Sending llamafile inference request to {api_url} with payload: {payload}")
+        msg_count = len(messages)
+        self.logger.debug(
+            f"Sending llamafile inference request to {api_url} (messages={msg_count}, n_predict={payload.get('n_predict')})"
+        )
         http_timeout = timeout if timeout is not None else getattr(self.config, "http_timeout", 120.0)
         async with create_async_client(timeout=http_timeout) as client:
             try:
@@ -806,6 +854,7 @@ class LlamafileHandler(BaseLLMHandler):
                                     except Exception:
                                         pass
             if port in self._active_servers:
+                self._stop_stream_drainers(port)
                 del self._active_servers[port]
         self._safe_log("info", "Managed llamafile server synchronous cleanup complete.")
 

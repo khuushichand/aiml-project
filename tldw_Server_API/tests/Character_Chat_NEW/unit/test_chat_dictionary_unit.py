@@ -283,6 +283,45 @@ class TestTextProcessing:
         assert "F" not in processed.replace("Fahrenheit", "")
 
     @pytest.mark.unit
+    def test_regex_case_sensitive_ignores_entry_flag(self, chat_dictionary_service):
+        """Regex case sensitivity should be controlled by /i flag, not entry flag."""
+        service = chat_dictionary_service
+
+        dict_id = service.create_dictionary(name="Regex Case Flag")
+        service.add_entry(
+            dictionary_id=dict_id,
+            pattern=r"hello",
+            replacement="hi",
+            type="regex",
+            case_sensitive=False,
+        )
+
+        text = "Hello there"
+        processed = service.process_text(text, dict_id)
+
+        # Without /i, regex stays case-sensitive even if case_sensitive=False
+        assert processed == text
+
+    @pytest.mark.unit
+    def test_regex_case_insensitive_requires_flag(self, chat_dictionary_service):
+        """Regex /i flag should make matches case-insensitive regardless of entry flag."""
+        service = chat_dictionary_service
+
+        dict_id = service.create_dictionary(name="Regex Case Flag i")
+        service.add_entry(
+            dictionary_id=dict_id,
+            pattern=r"/hello/i",
+            replacement="hi",
+            type="regex",
+            case_sensitive=True,
+        )
+
+        text = "Hello there"
+        processed = service.process_text(text, dict_id)
+
+        assert "hi" in processed
+
+    @pytest.mark.unit
     def test_process_text_rejects_oversized_input(self, chat_dictionary_service, monkeypatch):
         """Ensure oversized input is rejected before regex processing."""
         from tldw_Server_API.app.core.Character_Chat import chat_dictionary as cd

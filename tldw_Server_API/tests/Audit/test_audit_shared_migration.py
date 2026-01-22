@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import aiosqlite
 import pytest
 
@@ -8,6 +10,8 @@ from tldw_Server_API.app.core.Audit.audit_shared_migration import (
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     UnifiedAuditService,
     AuditContext,
+    AuditEvent,
+    AuditEventCategory,
     AuditEventType,
 )
 
@@ -195,3 +199,193 @@ async def test_migration_skips_corrupt_source(tmp_path):
     source_counts = next(c for c in report.sources if c.source.label == f"user:{user_id}")
     assert source_counts.failed is True
     assert report.total_failures == 1
+
+
+@pytest.mark.asyncio
+async def test_migration_preserves_non_numeric_tenant_id(tmp_path):
+    user_base = tmp_path / "user_dbs"
+    user_id = "550e8400-e29b-41d4-a716-446655440000"
+    user_db_path = user_base / user_id / "audit" / "unified_audit.db"
+    shared_db_path = tmp_path / "Databases" / "audit_shared.db"
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    svc_user = UnifiedAuditService(
+        db_path=str(user_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await svc_user.initialize(start_background_tasks=False)
+    await svc_user.log_event(
+        event_type=AuditEventType.DATA_READ,
+        context=AuditContext(user_id=user_id),
+        resource_type="doc",
+        resource_id="uuid-doc",
+    )
+    await svc_user.flush()
+    await svc_user.stop()
+
+    await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=None,
+        system_tenant_id="system",
+        chunk_size=100,
+    )
+
+    async with aiosqlite.connect(shared_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT DISTINCT tenant_user_id FROM audit_events"
+        ) as cur:
+            rows = await cur.fetchall()
+    tenants = {row["tenant_user_id"] for row in rows}
+    assert user_id in tenants
+
+
+@pytest.mark.asyncio
+async def test_migration_keyset_checkpoint_handles_rowid_reuse(tmp_path):
+    user_base = tmp_path / "user_dbs"
+    user_id = "707"
+    user_db_path = user_base / user_id / "audit" / "unified_audit.db"
+    shared_db_path = tmp_path / "Databases" / "audit_shared.db"
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    svc_user = UnifiedAuditService(
+        db_path=str(user_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await svc_user.initialize(start_background_tasks=False)
+    await svc_user.stop()
+
+    ts1 = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+    ts2 = datetime(2025, 1, 1, 0, 1, 0, tzinfo=timezone.utc).isoformat()
+    async with aiosqlite.connect(user_db_path) as db:
+        await db.execute(
+            "INSERT INTO audit_events (rowid, event_id, timestamp, category, event_type, severity) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (1, "evt-1", ts1, "api_call", "api.request", "info"),
+        )
+        await db.commit()
+
+    report1 = await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=None,
+        system_tenant_id="system",
+        chunk_size=10,
+    )
+    assert report1.total_events_inserted == 1
+
+    async with aiosqlite.connect(user_db_path) as db:
+        await db.execute("DELETE FROM audit_events")
+        await db.execute(
+            "INSERT INTO audit_events (rowid, event_id, timestamp, category, event_type, severity) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (1, "evt-2", ts2, "api_call", "api.request", "info"),
+        )
+        await db.commit()
+        async with db.execute("SELECT rowid FROM audit_events WHERE event_id = ?", ("evt-2",)) as cur:
+            row = await cur.fetchone()
+        assert row[0] == 1
+
+    report2 = await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=None,
+        system_tenant_id="system",
+        chunk_size=10,
+    )
+    assert report2.total_events_inserted == 1
+
+    async with aiosqlite.connect(shared_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT event_id FROM audit_events") as cur:
+            rows = await cur.fetchall()
+    event_ids = {row["event_id"] for row in rows}
+    assert {"evt-1", "evt-2"} <= event_ids
+
+
+@pytest.mark.asyncio
+async def test_migration_updates_stats_incrementally(tmp_path):
+    user_base = tmp_path / "user_dbs"
+    user_id = "808"
+    user_db_path = user_base / user_id / "audit" / "unified_audit.db"
+    shared_db_path = tmp_path / "Databases" / "audit_shared.db"
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    svc_user = UnifiedAuditService(
+        db_path=str(user_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=10,
+        flush_interval=0.1,
+    )
+    await svc_user.initialize(start_background_tasks=False)
+    t1 = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    ev1 = AuditEvent(
+        event_id="inc-1",
+        timestamp=t1,
+        category=AuditEventCategory.API_CALL,
+        event_type=AuditEventType.API_REQUEST,
+        context=AuditContext(user_id=user_id),
+    )
+    async with svc_user.buffer_lock:
+        svc_user.event_buffer.append(ev1)
+    await svc_user.flush()
+    await svc_user.stop()
+
+    await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=None,
+        system_tenant_id="system",
+        chunk_size=10,
+    )
+
+    svc_user = UnifiedAuditService(
+        db_path=str(user_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=10,
+        flush_interval=0.1,
+    )
+    await svc_user.initialize(start_background_tasks=False)
+    t2 = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ev2 = AuditEvent(
+        event_id="inc-2",
+        timestamp=t2,
+        category=AuditEventCategory.API_CALL,
+        event_type=AuditEventType.API_REQUEST,
+        context=AuditContext(user_id=user_id),
+    )
+    async with svc_user.buffer_lock:
+        svc_user.event_buffer.append(ev2)
+    await svc_user.flush()
+    await svc_user.stop()
+
+    await migrate_to_shared_audit_db(
+        shared_db_path=shared_db_path,
+        user_db_base_dir=user_base,
+        default_db_path=None,
+        system_tenant_id="system",
+        chunk_size=10,
+    )
+
+    async with aiosqlite.connect(shared_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT total_events FROM audit_daily_stats WHERE tenant_user_id = ? AND date = ? AND category = ?",
+            (user_id, t1.date().isoformat(), AuditEventCategory.API_CALL.value),
+        ) as cur:
+            row = await cur.fetchone()
+    assert row is not None
+    assert row["total_events"] == 2

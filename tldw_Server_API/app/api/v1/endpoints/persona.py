@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.feature_flags import is_persona_enabled
 from tldw_Server_API.app.core.MCP_unified import get_mcp_server, MCPRequest
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 
@@ -103,8 +104,7 @@ async def persona_stream(
         if api_key:
             try:
                 api_mgr = await get_api_key_manager()
-                client = getattr(ws, "client", None)
-                client_ip = getattr(client, "host", None) if client is not None else None
+                client_ip = resolve_client_ip(ws, None)
                 info = await api_mgr.validate_api_key(api_key, ip_address=client_ip)
                 if info and info.get("user_id") is not None:
                     user_id = str(info["user_id"])

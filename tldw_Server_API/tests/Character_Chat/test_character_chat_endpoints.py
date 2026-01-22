@@ -137,6 +137,82 @@ async def test_character_chat_flow_sessions_messages_worldbooks():
             pass
 
 
+@pytest.mark.asyncio
+async def test_message_placeholders_and_length_guard(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_placeholders_")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    try:
+        from tldw_Server_API.app.core.Character_Chat.modules import character_chat as cc
+        monkeypatch.setattr(cc, "settings", {"MAX_PERSIST_CONTENT_LENGTH": 20})
+
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # Create a character with placeholders in fields
+            char_name = f"PlaceholderBot-{_uuid.uuid4()}"
+            char_payload = {
+                "name": char_name,
+                "description": "I am {{char}} for {{user}}.",
+                "personality": "Helpful to {{user}}.",
+                "scenario": "Meeting {{user}}.",
+                "system_prompt": "System for {{char}} and {{user}}.",
+            }
+            r = await client.post("/api/v1/characters/", headers=headers, json=char_payload)
+            assert r.status_code == 201
+            character_id = r.json().get("id") or r.json().get("character_id")
+
+            # Create chat session
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            # Send assistant message with placeholders (within limit)
+            msg_content = "Hi {{user}}, I'm {{char}}."
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/messages",
+                headers=headers,
+                json={"role": "assistant", "content": msg_content},
+            )
+            assert r.status_code == 201
+
+            # Standard message listing should replace placeholders
+            r = await client.get(f"/api/v1/chats/{chat_id}/messages", headers=headers)
+            assert r.status_code == 200
+            msgs = r.json().get("messages", [])
+            assistant_msg = next(m for m in msgs if m.get("sender") == "assistant")
+            assert assistant_msg["content"] == f"Hi User, I'm {char_name}."
+
+            # Completions-formatted messages should replace placeholders in system context
+            r = await client.get(
+                f"/api/v1/chats/{chat_id}/messages",
+                headers=headers,
+                params={"format_for_completions": True, "include_character_context": True},
+            )
+            assert r.status_code == 200
+            data = r.json()
+            sys_msg = next(m for m in data["messages"] if m.get("role") == "system")
+            assert "{{" not in sys_msg["content"]
+            assert char_name in sys_msg["content"]
+            assert "User" in sys_msg["content"]
+
+            # Oversized content should be rejected by guardrails
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/messages",
+                headers=headers,
+                json={"role": "user", "content": "x" * 25},
+            )
+            assert r.status_code == 400
+    finally:
+        try:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 # --- Unit Tests for Helper Functions (Regression Tests) ---
 
 

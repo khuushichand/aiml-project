@@ -233,6 +233,8 @@ class PostgreSQLBackend(DatabaseBackend):
     def __init__(self, config: DatabaseConfig):
         super().__init__(config)
         self._managed_tx_depths: Dict[int, int] = {}
+        # Track FTS table names to source tables/columns for Postgres.
+        self._fts_table_map: Dict[str, Dict[str, str]] = {}
 
     @property
     def backend_type(self) -> BackendType:
@@ -301,10 +303,10 @@ class PostgreSQLBackend(DatabaseBackend):
 
         # Gate role switching behind explicit configuration and whitelist.
         # Default: disabled; rely on set_config GUCs and row-level security predicates.
-        # Default to allowing role switch when a session_role is provided, unless explicitly disabled via env.
+        # Role switching must be explicitly enabled via env.
         _role_env = os.getenv("TLDW_CONTENT_PG_ROLE_SWITCH", "").strip().lower()
         if _role_env == "":
-            allow_role_switch = True
+            allow_role_switch = False
         else:
             allow_role_switch = _role_env in {"1", "true", "yes", "on"}
         allowed_roles_env = os.getenv("TLDW_CONTENT_PG_ROLE_WHITELIST", "").strip()
@@ -774,8 +776,15 @@ class PostgreSQLBackend(DatabaseBackend):
                 result_rows = []
 
             managed_depth = self._tx_depth(conn)
-            if is_write and managed_depth == 0 and not external_conn:
-                conn.commit()
+            if managed_depth == 0 and not external_conn:
+                if is_write:
+                    conn.commit()
+                else:
+                    # Close implicit read-only transaction to avoid idle-in-transaction sessions.
+                    try:
+                        conn.rollback()
+                    except Exception as rollback_exc:  # noqa: BLE001
+                        logger.debug(f"Rollback after read-only execute() failed: {rollback_exc}")
 
             execution_time = time.time() - start_time
 
@@ -837,8 +846,15 @@ class PostgreSQLBackend(DatabaseBackend):
             is_write = self._is_write_command(command_tag, normalized_query)
 
             managed_depth = self._tx_depth(conn)
-            if is_write and managed_depth == 0 and not external_conn:
-                conn.commit()
+            if managed_depth == 0 and not external_conn:
+                if is_write:
+                    conn.commit()
+                else:
+                    # Close implicit read-only transaction to avoid idle-in-transaction sessions.
+                    try:
+                        conn.rollback()
+                    except Exception as rollback_exc:  # noqa: BLE001
+                        logger.debug(f"Rollback after read-only execute_many() failed: {rollback_exc}")
 
             execution_time = time.time() - start_time
 
@@ -1005,6 +1021,15 @@ class PostgreSQLBackend(DatabaseBackend):
                 FOR EACH ROW EXECUTE FUNCTION {self.escape_identifier(function_name)}()
             """)
 
+            # Record the mapping for fts_search when table_name != source_table.
+            try:
+                self._fts_table_map[table_name] = {
+                    "source_table": source_table,
+                    "fts_column": fts_column,
+                }
+            except Exception:
+                pass
+
             if not external_conn:
                 conn.commit()
 
@@ -1029,11 +1054,17 @@ class PostgreSQLBackend(DatabaseBackend):
             raise DatabaseError("Table name required for FTS")
 
         # Build the FTS query
-        fts_column = f"{fts_query.table}_tsv"
+        fts_table = fts_query.table
+        fts_column = f"{fts_table}_tsv"
+        source_table = fts_table
+        mapping = self._fts_table_map.get(fts_table)
+        if mapping:
+            source_table = mapping.get("source_table", source_table)
+            fts_column = mapping.get("fts_column", fts_column)
 
         query_parts = [
             f"SELECT *, ts_rank({self.escape_identifier(fts_column)}, query) AS rank",
-            f"FROM {self.escape_identifier(fts_query.table)},",
+            f"FROM {self.escape_identifier(source_table)},",
             f"to_tsquery('english', %s) query",
             f"WHERE {self.escape_identifier(fts_column)} @@ query"
         ]

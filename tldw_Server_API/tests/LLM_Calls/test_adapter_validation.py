@@ -205,3 +205,70 @@ def test_google_adapter_rejects_tools_without_mapping(monkeypatch):
             }
         )
     assert "Gemini tools" in str(exc.value)
+
+
+def test_google_adapter_tools_beta_false_rejects_openai_tools(monkeypatch):
+    def _fail_factory(*_args, **_kwargs):
+        raise AssertionError("http_client_factory should not be called on validation errors")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
+        _fail_factory,
+    )
+    monkeypatch.setenv("LLM_ADAPTERS_GEMINI_TOOLS_BETA", "0")
+
+    adapter = GoogleAdapter()
+    tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]
+    with pytest.raises(ChatBadRequestError) as exc:
+        adapter.chat(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "model": "gemini-test",
+                "api_key": "test-key",
+                "tools": tools,
+            }
+        )
+    assert "Gemini tools" in str(exc.value)
+
+
+def test_openai_adapter_validates_config_defaults(monkeypatch):
+    def _fail_factory(*_args, **_kwargs):
+        raise AssertionError("http_client_factory should not be called on validation errors")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        _fail_factory,
+    )
+
+    adapter = OpenAIAdapter()
+    with pytest.raises(ChatBadRequestError) as exc:
+        adapter.chat(
+            {
+                "messages": [],
+                "model": "gpt-3.5-turbo",
+                "app_config": {"openai_api": {"response_format": "json_object"}},
+            }
+        )
+    assert "response_format" in str(exc.value)
+
+
+def test_google_adapter_validates_config_defaults(monkeypatch):
+    def _fail_factory(*_args, **_kwargs):
+        raise AssertionError("http_client_factory should not be called on validation errors")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
+        _fail_factory,
+    )
+
+    adapter = GoogleAdapter()
+    with pytest.raises(ChatBadRequestError) as exc:
+        adapter.chat(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "model": "gemini-test",
+                "api_key": "test-key",
+                "app_config": {"google_api": {"response_format": "json_object"}},
+            }
+        )
+    assert "response_format" in str(exc.value)

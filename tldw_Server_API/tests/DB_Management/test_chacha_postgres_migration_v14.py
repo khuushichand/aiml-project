@@ -18,12 +18,32 @@ def test_postgres_statement_conversion_includes_chat_topic_metadata_and_flashcar
     assert isinstance(stmts, list) and len(stmts) > 0
 
     full = "\n".join(stmts)
-    assert "ALTER TABLE conversations ADD COLUMN topic_label_source" in full
-    assert "ALTER TABLE conversations ADD COLUMN topic_last_tagged_at" in full
-    assert "ALTER TABLE conversations ADD COLUMN topic_last_tagged_message_id" in full
+    assert re.search(
+        r"ALTER TABLE conversations ADD COLUMN(?: IF NOT EXISTS)? topic_label_source",
+        full,
+        flags=re.IGNORECASE,
+    )
+    assert re.search(
+        r"ALTER TABLE conversations ADD COLUMN(?: IF NOT EXISTS)? topic_last_tagged_at",
+        full,
+        flags=re.IGNORECASE,
+    )
+    assert re.search(
+        r"ALTER TABLE conversations ADD COLUMN(?: IF NOT EXISTS)? topic_last_tagged_message_id",
+        full,
+        flags=re.IGNORECASE,
+    )
     assert "CREATE TABLE IF NOT EXISTS conversation_clusters" in full
-    assert "ALTER TABLE flashcards ADD COLUMN conversation_id" in full
-    assert "ALTER TABLE flashcards ADD COLUMN message_id" in full
+    assert re.search(
+        r"ALTER TABLE flashcards ADD COLUMN(?: IF NOT EXISTS)? conversation_id",
+        full,
+        flags=re.IGNORECASE,
+    )
+    assert re.search(
+        r"ALTER TABLE flashcards ADD COLUMN(?: IF NOT EXISTS)? message_id",
+        full,
+        flags=re.IGNORECASE,
+    )
     assert "idx_conversations_source_external_ref" in full
     assert "idx_flashcards_conversation" in full
     assert "idx_flashcards_message" in full

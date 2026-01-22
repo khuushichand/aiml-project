@@ -1183,6 +1183,9 @@ class MCPProtocol:
                 content = [{"type": "text", "text": result}]
             elif isinstance(result, list):
                 content = result
+            elif isinstance(result, dict):
+                # Preserve structured tool results as JSON content instead of stringifying.
+                content = [{"type": "json", "json": result}]
             else:
                 content = [{"type": "text", "text": str(result)}]
 

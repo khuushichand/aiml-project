@@ -40,6 +40,35 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Utils.Utils import logging
 
 
+def _summarize_response_for_logging(response: Any) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    if not isinstance(response, dict):
+        return {"type": type(response).__name__}
+    summary["keys"] = list(response.keys())
+    if "finish_reason" in response:
+        summary["finish_reason"] = response.get("finish_reason")
+    text = response.get("text")
+    if isinstance(text, str):
+        summary["text_chars"] = len(text)
+    tool_calls = response.get("tool_calls")
+    if isinstance(tool_calls, list):
+        summary["tool_calls_count"] = len(tool_calls)
+    elif tool_calls is not None:
+        summary["tool_calls_present"] = True
+    meta = response.get("meta")
+    if isinstance(meta, dict):
+        billed = meta.get("billed_units")
+        if isinstance(billed, dict):
+            billed_summary = {
+                k: billed.get(k)
+                for k in ("input_tokens", "output_tokens")
+                if billed.get(k) is not None
+            }
+            if billed_summary:
+                summary["billed_units"] = billed_summary
+    return summary
+
+
 def _cohere_request(
     input_data: List[Dict[str, Any]],
     model: Optional[str] = None,
@@ -116,7 +145,9 @@ def _cohere_request(
 
     if not preamble_str and temp_messages and temp_messages[0]["role"] == "system":
         preamble_str = temp_messages.pop(0)["content"]
-        logging.debug(f"Cohere: Using system message from input_data as preamble: '{preamble_str[:100]}...'")
+        logging.debug(
+            f"Cohere: Using system message from input_data as preamble (chars={len(str(preamble_str))})."
+        )
 
     if not temp_messages:
         if custom_prompt_arg:
@@ -140,7 +171,8 @@ def _cohere_request(
         current_user_message_str = custom_prompt_arg or "Please respond."
         chat_history_for_cohere = temp_messages
         logging.warning(
-            f"Cohere: Last message in payload was not 'user'. Using fallback user message: '{current_user_message_str}'."
+            "Cohere: Last message in payload was not 'user'. Using fallback user message (chars=%d).",
+            len(current_user_message_str),
         )
 
     if custom_prompt_arg and current_user_message_str != custom_prompt_arg:
@@ -291,7 +323,10 @@ def _cohere_request(
         response = session.post(COHERE_CHAT_URL, headers=headers, json=payload, stream=False, timeout=timeout_seconds)
         response.raise_for_status()
         response_data = response.json()
-        logging.debug(f"Cohere non-streaming response data: {json.dumps(response_data, indent=2)}")
+        logging.debug(
+            "Cohere non-streaming response metadata: %s",
+            _summarize_response_for_logging(response_data),
+        )
 
         chat_id = response_data.get("generation_id", f"chatcmpl-cohere-{time.time_ns()}")
         created_timestamp = int(time.time())

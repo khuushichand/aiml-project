@@ -7,6 +7,12 @@ from .base import ChatProvider
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_done,
+)
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
@@ -89,15 +95,20 @@ class GroqAdapter(ChatProvider):
         payload = {
             "model": request.get("model"),
             "messages": payload_messages,
-            "temperature": request.get("temperature"),
-            "top_p": request.get("top_p"),
-            "max_tokens": request.get("max_tokens"),
-            "n": request.get("n"),
-            "presence_penalty": request.get("presence_penalty"),
-            "frequency_penalty": request.get("frequency_penalty"),
-            "logit_bias": request.get("logit_bias"),
-            "user": request.get("user"),
         }
+        for key in (
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "n",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+        ):
+            value = request.get(key)
+            if value is not None:
+                payload[key] = value
         # Tools and tool_choice gating (consistent with OpenAI-compatible behavior)
         tools = request.get("tools")
         if tools is not None:
@@ -152,10 +163,24 @@ class GroqAdapter(ChatProvider):
                 with http_client_factory(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
-                        for line in resp.iter_lines():
-                            if not line:
+                        seen_done = False
+                        for raw in resp.iter_lines():
+                            if not raw:
                                 continue
-                            yield line
+                            try:
+                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                            except Exception:
+                                line = str(raw)
+                            if is_done_line(line):
+                                if not seen_done:
+                                    seen_done = True
+                                    yield sse_done()
+                                continue
+                            normalized = normalize_provider_line(line)
+                            if normalized is not None:
+                                yield normalized
+                        for tail in finalize_stream(response=resp, done_already=seen_done):
+                            yield tail
                 return
             except Exception as e:
                 raise self.normalize_error(e)

@@ -119,6 +119,9 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, t
 
     # Prepare stub MFA and Email services
     class _StubMFA:
+        def __init__(self) -> None:
+            self.last_backup_codes: list[str] | None = None
+
         def generate_secret(self) -> str:
             return "STUBSECRET"
 
@@ -139,6 +142,7 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, t
             return {"enabled": False}
 
         async def enable_mfa(self, user_id: int, secret: str, backup_codes: list[str]) -> bool:
+            self.last_backup_codes = list(backup_codes)
             return True
 
         async def disable_mfa(self, user_id: int) -> bool:
@@ -156,6 +160,31 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, t
     monkeypatch.setattr(auth, "_get_mfa_service", lambda: stub_mfa_instance)
     monkeypatch.setattr(auth, "_get_email_service", lambda: _StubEmail())
 
+    # Ensure MFA requires Redis-backed ephemeral storage by supplying a stub
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_session_manager_dep
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    reset_settings()
+
+    class _StubSessionManager:
+        def __init__(self) -> None:
+            self.redis_client = object()
+            self._values: dict[str, str] = {}
+
+        async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int) -> None:
+            self._values[key] = value
+
+        async def get_ephemeral_value(self, key: str):
+            return self._values.get(key)
+
+        async def delete_ephemeral_value(self, key: str) -> None:
+            self._values.pop(key, None)
+
+    stub_session_manager = _StubSessionManager()
+    app = client.app
+    app.dependency_overrides[get_session_manager_dep] = lambda: stub_session_manager
+
     # Override get_current_active_user to bypass authentication
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
@@ -169,7 +198,6 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, t
             is_verified=True,
         )
 
-    app = client.app
     previous_override_main = app.dependency_overrides.get(get_current_active_user)
     app.dependency_overrides[get_current_active_user] = _active_user
     # Ensure override binds to the exact reference used in the router
@@ -183,6 +211,7 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, t
         assert data["secret"] == "STUBSECRET"
         assert data["qr_code"].startswith("data:image/png;base64,")
         assert len(data["backup_codes"]) >= 2
+        setup_codes = data["backup_codes"]
 
         # Verify using header-secret and token
         secret = data["secret"]
@@ -194,7 +223,8 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, t
         assert r2.status_code == 200, r2.text
         out = r2.json()
         assert "enabled" in out.get("message", "").lower()
-        assert len(out.get("backup_codes", [])) >= 2
+        assert out.get("backup_codes") == setup_codes
+        assert stub_mfa_instance.last_backup_codes == setup_codes
 
         # Disable
         r3 = client.post(
@@ -209,3 +239,50 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, t
         else:
             app.dependency_overrides.pop(get_current_active_user, None)
         app.dependency_overrides.pop(auth.get_current_active_user, None)  # type: ignore[attr-defined]
+        app.dependency_overrides.pop(get_session_manager_dep, None)
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_throttled(isolated_test_environment, test_user, monkeypatch):
+    """Resend verification should be throttled without sending email."""
+    client, _db_name = isolated_test_environment
+
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    pool = await get_db_pool()
+    async with pool.transaction() as conn:
+        await conn.execute(
+            "UPDATE users SET is_verified = $1 WHERE id = $2",
+            False,
+            int(test_user["id"]),
+        )
+
+    class _StubEmail:
+        def __init__(self) -> None:
+            self.sent = False
+
+        async def send_verification_email(self, to_email: str, username: str, verification_token: str):
+            self.sent = True
+            return True
+
+    class _StubLimiter:
+        async def check_rate_limit(self, *args, **kwargs):
+            return False, {}
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+    stub_email = _StubEmail()
+    monkeypatch.setattr(auth, "_get_email_service", lambda: stub_email)
+
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
+    app = client.app
+    app.dependency_overrides[get_rate_limiter_dep] = lambda: _StubLimiter()
+
+    try:
+        r = client.post(
+            "/api/v1/auth/resend-verification",
+            json={"email": test_user["email"]},
+        )
+        assert r.status_code == 200
+        assert "email" in r.json().get("message", "").lower()
+        assert stub_email.sent is False
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter_dep, None)

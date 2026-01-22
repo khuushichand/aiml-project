@@ -179,6 +179,11 @@ def _ensure_frontend_running(repo_root: Path, base_url: str, server_url: str, ap
     frontend_dir = repo_root / "tldw-frontend"
     if not frontend_dir.exists():
         pytest.skip("tldw-frontend directory not found; cannot auto-start frontend.")
+    if not (frontend_dir / "package.json").exists():
+        pytest.skip(
+            "tldw-frontend/package.json not found; cannot auto-start frontend. "
+            "Set TLDW_FRONTEND_URL to a running instance or restore the frontend package.json."
+        )
 
     parsed = urlparse(base_url)
     port = parsed.port or 8080
@@ -313,6 +318,12 @@ def browser():
     headless = headless_env not in {"0", "false", "no"}
 
     with sync_playwright() as playwright:
+        exec_path = Path(playwright.chromium.executable_path)
+        if exec_path and not exec_path.exists():
+            pytest.skip(
+                "Playwright Chromium binaries are not installed. "
+                "Run `python -m playwright install chromium`."
+            )
         browser = playwright.chromium.launch(headless=headless)
         try:
             yield browser

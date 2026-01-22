@@ -32,6 +32,32 @@ async def test_async_rate_limiter_falls_back_when_rg_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_async_rate_limiter_uses_token_cost_when_rg_disabled(monkeypatch):
+    limiter = rate_limiter.UserRateLimiter(
+        default_limit=3,
+        window_seconds=60,
+        premium_limit=3,
+        burst_allowance=1.0,
+    )
+    async_limiter = rate_limiter.AsyncRateLimiter(rate_limiter=limiter)
+
+    monkeypatch.setattr(rate_limiter, "_rg_embeddings_enabled", lambda: False)
+
+    allowed, retry_after = await async_limiter.check_rate_limit_async(
+        "user-1",
+        tokens_units=2,
+    )
+    assert allowed is True
+    assert retry_after is None
+
+    allowed, retry_after = await async_limiter.check_rate_limit_async(
+        "user-1",
+        tokens_units=2,
+    )
+    assert allowed is False
+    assert retry_after is not None
+
+@pytest.mark.asyncio
 async def test_async_rate_limiter_uses_rg_when_enabled(monkeypatch):
     limiter = rate_limiter.UserRateLimiter(
         default_limit=1,

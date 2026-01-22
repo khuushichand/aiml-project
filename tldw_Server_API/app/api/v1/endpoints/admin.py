@@ -461,7 +461,7 @@ async def _emit_admin_audit_event(
             metadata=metadata,
         )
     except Exception as exc:
-        logger.debug("Admin audit emission skipped: {}", exc)
+        logger.warning("Admin audit emission failed: {}", exc, exc_info=True)
 
 
 def _role_rank(role: Optional[str]) -> int:

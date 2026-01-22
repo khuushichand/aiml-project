@@ -49,7 +49,8 @@ async def test_windows_creationflags(monkeypatch, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_denylist_hf_token_rejected(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize("key", ["hf_token", "hf-token", "hfToken"])
+async def test_denylist_hf_token_rejected(monkeypatch, tmp_path: Path, key: str):
     exe = tmp_path / "llama_server"
     exe.write_text("#!/bin/sh\n")
     model_dir = tmp_path / "models"
@@ -58,7 +59,7 @@ async def test_denylist_hf_token_rejected(monkeypatch, tmp_path: Path):
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, allow_unvalidated_args=True)
     handler = LlamaCppHandler(cfg, global_app_config={})
     with pytest.raises(ServerError):
-        await handler.start_server("m.gguf", server_args={"hf_token": "ABC"})
+        await handler.start_server("m.gguf", server_args={key: "ABC"})
 
 
 @pytest.mark.asyncio
@@ -80,6 +81,20 @@ async def test_allow_cli_secrets_allows_hf_token(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(llama_mod, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
     res = await handler.start_server("m.gguf", server_args={"hf_token": "ABC"})
     assert res["status"] == "started"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["api_key", "api-key", "apiKey"])
+async def test_denylist_api_key_rejected(tmp_path: Path, key: str):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, allow_unvalidated_args=True)
+    handler = LlamaCppHandler(cfg, global_app_config={})
+    with pytest.raises(ServerError):
+        await handler.start_server("m.gguf", server_args={key: "ABC"})
 
 
 @pytest.mark.asyncio

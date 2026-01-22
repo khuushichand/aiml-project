@@ -43,6 +43,22 @@ class JWTService:
         "service",
     })
 
+    @staticmethod
+    def _filter_additional_claims(
+        additional_claims: Optional[Dict[str, Any]],
+        *,
+        reserved: set[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Strip reserved claim keys from additional_claims to prevent overrides."""
+        if not additional_claims:
+            return None
+        filtered = {
+            key: value
+            for key, value in additional_claims.items()
+            if key not in reserved
+        }
+        return filtered or None
+
     def __init__(self, settings: Optional[Settings] = None):
         """Initialize JWT service"""
         self.settings = settings or get_settings()
@@ -138,9 +154,13 @@ class JWTService:
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
 
-        # Add any additional claims
-        if additional_claims:
-            payload.update(additional_claims)
+        # Add any additional claims (excluding reserved JWT fields)
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
 
         # Encode the token
         try:
@@ -189,9 +209,13 @@ class JWTService:
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
 
-        # Add any additional claims
-        if additional_claims:
-            payload.update(additional_claims)
+        # Add any additional claims (excluding reserved JWT fields)
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
 
         # Encode the token
         try:
@@ -499,8 +523,12 @@ class JWTService:
             payload["iss"] = self.settings.JWT_ISSUER
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
-        if additional_claims:
-            payload.update(additional_claims)
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             logger.debug(
@@ -763,39 +791,26 @@ class JWTService:
         # Verify the refresh token (stateless by default; see note above)
         payload = self.verify_token(refresh_token, token_type="refresh")
 
-        # Optional guard: best-effort blacklist enforcement for the presented refresh token
-        # SECURITY: Always check blacklist regardless of async context
+        # Optional guard: enforce blacklist check for the presented refresh token.
+        # Fail closed if this sync helper is invoked inside a running event loop.
         try:
+            import asyncio as _asyncio
+
+            try:
+                _asyncio.get_running_loop()
+                # If we're already in an event loop, we cannot safely run the async blacklist check.
+                raise InvalidTokenError(
+                    "refresh_access_token cannot run inside an event loop; "
+                    "use refresh_access_token_async or /auth/refresh instead"
+                )
+            except RuntimeError:
+                pass
+
             jti = payload.get("jti")
             if jti:
-                import asyncio as _asyncio
                 from tldw_Server_API.app.core.AuthNZ.token_blacklist import is_token_blacklisted as _is_bl
-                # Check if we're in an event loop
-                try:
-                    loop = _asyncio.get_running_loop()
-                    in_loop = True
-                except RuntimeError:
-                    loop = None
-                    in_loop = False
-
-                if not in_loop:
-                    # Not in event loop - run synchronously
-                    if _asyncio.run(_is_bl(jti)):
-                        raise InvalidTokenError("Token has been revoked")
-                else:
-                    # In event loop - we need to check synchronously using the blacklist cache
-                    # The blacklist has an in-memory hint cache that can be checked without async
-                    from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
-                    bl = _get_bl()
-                    # Check in-memory cache first (synchronous)
-                    if hasattr(bl, '_hint_cache') and jti in getattr(bl, '_hint_cache', {}):
-                        raise InvalidTokenError("Token has been revoked")
-                    # Log warning that full async check cannot be performed in sync context
-                    # Callers in async context should use the async-aware /auth/refresh endpoint
-                    logger.warning(
-                        "refresh_access_token called in sync context within event loop; "
-                        "full blacklist check deferred. Prefer /auth/refresh endpoint for complete revocation enforcement."
-                    )
+                if _asyncio.run(_is_bl(jti)):
+                    raise InvalidTokenError("Token has been revoked")
         except InvalidTokenError:
             raise
         except Exception as _guard_e:
@@ -894,6 +909,86 @@ class JWTService:
                     logger.debug(f"Refresh rotation: best-effort blacklist failed: {_e}")
         except Exception as _rot_err:
             logger.debug(f"Refresh rotation not applied: {_rot_err}")
+
+        if self.settings.PII_REDACT_LOGS:
+            logger.info("Refreshed access token for authenticated user (details redacted)")
+        else:
+            logger.info(f"Refreshed access token for user {username}")
+        return new_access_token, refresh_out
+
+    async def refresh_access_token_async(self, refresh_token: str) -> tuple[str, str]:
+        """
+        Async-safe refresh helper with blacklist enforcement.
+
+        This method performs cryptographic validation, blacklist checks, and
+        token rotation in an async context. Prefer this helper (or the
+        /auth/refresh endpoint) when running inside an event loop.
+        """
+        # Verify the refresh token and enforce blacklist via async path
+        payload = await self.verify_token_async(refresh_token, token_type="refresh")
+
+        # Extract user information
+        user_id = int(payload["sub"])
+        username = payload.get("username", "")
+
+        # Fetch role from the configured user database for correctness
+        role = payload.get("role", "user")
+        try:
+            from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+            user_db = get_configured_user_database(client_id="jwt_service")
+            roles = []
+            try:
+                roles = user_db.get_user_roles(user_id)
+            except Exception:
+                user = user_db.get_user(user_id=user_id)
+                roles = (user or {}).get("roles", []) if isinstance(user, dict) else []
+            if roles:
+                role = "admin" if "admin" in roles else roles[0]
+        except Exception as e:
+            logger.debug(f"JWTService: failed to fetch user role on refresh (async); using fallback: {e}")
+
+        # Create new access token
+        new_access_token = self.create_access_token(
+            user_id=user_id,
+            username=username,
+            role=role
+        )
+
+        # Handle optional refresh rotation based on settings
+        refresh_out = refresh_token
+        try:
+            if getattr(self.settings, "ROTATE_REFRESH_TOKENS", False):
+                refresh_out = self.create_refresh_token(
+                    user_id=user_id,
+                    username=username,
+                    additional_claims={k: v for k, v in (payload.items()) if k in {"session_id"}}
+                )
+                # Best-effort: attempt to blacklist old refresh JTI
+                try:
+                    old_jti = payload.get("jti")
+                    old_exp = payload.get("exp")
+                    if old_jti and isinstance(old_exp, (int, float)):
+                        from datetime import datetime as _dt, timezone as _tz
+                        exp_dt = _dt.fromtimestamp(old_exp, tz=_tz.utc)
+                        from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
+                        bl = _get_bl()
+                        try:
+                            bl.hint_blacklisted(old_jti, exp_dt)
+                        except Exception as _hint_e:
+                            logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
+                        await bl.revoke_token(
+                            jti=old_jti,
+                            expires_at=exp_dt,
+                            user_id=user_id,
+                            token_type="refresh",
+                            reason="refresh-rotated",
+                            revoked_by=None,
+                            ip_address=None,
+                        )
+                except Exception as _e:
+                    logger.debug(f"Refresh rotation: best-effort blacklist failed (async): {_e}")
+        except Exception as _rot_err:
+            logger.debug(f"Refresh rotation not applied (async): {_rot_err}")
 
         if self.settings.PII_REDACT_LOGS:
             logger.info("Refreshed access token for authenticated user (details redacted)")

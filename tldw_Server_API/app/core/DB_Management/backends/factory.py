@@ -242,8 +242,9 @@ def get_backend(
         return None
 
     if config is None:
-        # Try to create from environment
-        backend = DatabaseBackendFactory.create_from_env()
+        # Build config from environment variables
+        config = DatabaseConfig.from_env()
+        backend = DatabaseBackendFactory.create_backend(config)
     else:
         backend = DatabaseBackendFactory.create_backend(config)
 

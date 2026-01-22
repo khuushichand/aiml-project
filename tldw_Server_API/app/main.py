@@ -1272,6 +1272,13 @@ async def lifespan(app: FastAPI):
             logger.info(f"App Startup: OpenTelemetry initialized for service: {telemetry_manager.config.service_name}")
         else:
             logger.warning("App Startup: OpenTelemetry not available, using fallback metrics")
+        try:
+            from tldw_Server_API.app.core.Metrics.telemetry import instrument_fastapi_app
+
+            if instrument_fastapi_app(app, telemetry_manager):
+                logger.info("App Startup: FastAPI instrumentation enabled")
+        except Exception as _otel_app_err:
+            logger.debug(f"App Startup: FastAPI instrumentation skipped: {_otel_app_err}")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize telemetry: {e}")
 

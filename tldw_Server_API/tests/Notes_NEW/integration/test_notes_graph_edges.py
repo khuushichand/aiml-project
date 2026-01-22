@@ -96,6 +96,47 @@ def test_create_and_delete_manual_link(client_with_graph_db: TestClient):
     assert del_resp.json().get("deleted") is True
 
 
+def test_delete_manual_link_with_typed_edge_id(client_with_graph_db: TestClient):
+    client = client_with_graph_db
+    token = _make_token(scope="notes")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    n1 = client.post("/api/v1/notes/", json={"title": "T1", "content": "A"}, headers=headers).json()["id"]
+    n2 = client.post("/api/v1/notes/", json={"title": "T2", "content": "B"}, headers=headers).json()["id"]
+
+    resp = client.post(f"/api/v1/notes/{n1}/links", json={"to_note_id": n2, "directed": False}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    edge = resp.json().get("edge") or {}
+    edge_id = edge.get("edge_id") or edge.get("id")
+    assert edge_id
+
+    del_resp = client.delete(f"/api/v1/notes/links/e:{edge_id}", headers=headers)
+    assert del_resp.status_code == 200
+    assert del_resp.json().get("deleted") is True
+
+
+def test_create_link_with_typed_note_ids(client_with_graph_db: TestClient):
+    client = client_with_graph_db
+    token = _make_token(scope="notes")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    n1 = client.post("/api/v1/notes/", json={"title": "Typed A", "content": "A"}, headers=headers).json()
+    n2 = client.post("/api/v1/notes/", json={"title": "Typed B", "content": "B"}, headers=headers).json()
+    typed_from = f"note:{n1['id']}"
+    typed_to = f"note:{n2['id']}"
+
+    resp = client.post(
+        f"/api/v1/notes/{typed_from}/links",
+        json={"to_note_id": typed_to, "directed": False},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    edge = resp.json().get("edge") or {}
+    # Typed IDs should be normalized to raw UUIDs; undirected edges are canonicalized.
+    assert {edge.get("from_note_id"), edge.get("to_note_id")} == {n1["id"], n2["id"]}
+    assert edge.get("from_note_id") <= edge.get("to_note_id")
+
+
 def test_duplicate_undirected_conflict(client_with_graph_db: TestClient):
     client = client_with_graph_db
     token = _make_token(scope="notes")

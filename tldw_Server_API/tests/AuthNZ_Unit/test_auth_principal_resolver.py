@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.types import Scope
 
+from tldw_Server_API.app.core.AuthNZ import auth_principal_resolver as resolver
 from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
@@ -146,6 +147,62 @@ async def test_get_auth_principal_api_key_path(monkeypatch):
     assert principal.api_key_id == 100
     assert principal.org_ids == [1, 2]
     assert principal.team_ids == [3]
+
+
+@pytest.mark.asyncio
+async def test_get_auth_principal_falls_back_to_api_key_when_jwt_fails(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    reset_settings()
+
+    async def _fake_verify_jwt_and_fetch_user(request, _token: str = "") -> User:
+        raise HTTPException(
+            status_code=401,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    async def _fake_authenticate_api_key_user(request, _api_key: str) -> User:
+        request.state.user_id = 7
+        request.state.api_key_id = 100
+        request.state.org_ids = [1]
+        request.state.team_ids = [2]
+        return User(
+            id=7,
+            username="api-user",
+            is_active=True,
+            roles=["user"],
+            permissions=["media.read"],
+            is_admin=False,
+        )
+
+    monkeypatch.setattr(
+        resolver.User_DB_Handling,
+        "verify_jwt_and_fetch_user",
+        _fake_verify_jwt_and_fetch_user,
+    )
+    monkeypatch.setattr(
+        resolver.User_DB_Handling,
+        "authenticate_api_key_user",
+        _fake_authenticate_api_key_user,
+    )
+
+    req = _make_request(
+        headers={
+            "Authorization": "Bearer aaa.bbb.ccc",
+            "X-API-KEY": "vk-key",
+        }
+    )
+
+    try:
+        principal = await get_auth_principal(req)
+        assert principal.kind == "api_key"
+        assert principal.user_id == 7
+        assert principal.api_key_id == 100
+        assert principal.org_ids == [1]
+        assert principal.team_ids == [2]
+    finally:
+        monkeypatch.delenv("AUTH_MODE", raising=False)
+        reset_settings()
 
 
 @pytest.mark.asyncio

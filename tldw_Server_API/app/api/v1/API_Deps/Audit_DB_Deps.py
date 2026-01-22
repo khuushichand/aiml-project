@@ -3,6 +3,7 @@ Manages user-specific audit service instances for dependency injection.
 """
 
 import asyncio
+import os
 import threading
 import weakref
 import time
@@ -25,6 +26,7 @@ except ImportError:
 
 # Local Imports
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
@@ -122,7 +124,21 @@ def _shared_audit_db_path() -> str:
     return str(DatabasePaths.get_shared_audit_db_path())
 
 
-def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService, reason: str) -> None:
+def _is_test_context() -> bool:
+    try:
+        return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
+    except Exception:
+        return False
+
+
+def _mark_service_used(service: UnifiedAuditService) -> None:
+    try:
+        service._last_used_ts = time.monotonic()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
+def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedAuditService, reason: str) -> None:
     """Schedule graceful shutdown of an audit service instance."""
     if service is None:
         return
@@ -131,6 +147,11 @@ def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService,
         return
 
     service._tldw_stop_scheduled = True  # type: ignore[attr-defined]
+    evicted_at = time.monotonic()
+    try:
+        service._tldw_evicted_at = evicted_at  # type: ignore[attr-defined]
+    except Exception:
+        pass
     service_key = id(service)
 
     with _services_stopping_lock:
@@ -142,9 +163,36 @@ def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService,
         """Clear the stopping flag after service is stopped."""
         with _services_stopping_lock:
             _services_stopping.discard(service_key)
+        try:
+            service._tldw_stop_scheduled = False  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
     async def _stop():
         try:
+            while True:
+                if EVICTION_GRACE_SECONDS > 0:
+                    await asyncio.sleep(EVICTION_GRACE_SECONDS)
+                else:
+                    # Yield control to avoid a tight loop if grace is disabled.
+                    await asyncio.sleep(0)
+                last_used = getattr(service, "_last_used_ts", None)
+                evicted_ts = getattr(service, "_tldw_evicted_at", None)
+                if (
+                    last_used is not None
+                    and evicted_ts is not None
+                    and last_used > evicted_ts
+                ):
+                    try:
+                        service._tldw_evicted_at = last_used  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    logger.debug(
+                        "Audit service for user {} reused after eviction; delaying stop.",
+                        user_id,
+                    )
+                    continue
+                break
             await service.stop()
             logger.info(f"Audit service for user {user_id} stopped ({reason}).")
         except Exception as exc:
@@ -156,8 +204,17 @@ def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService,
             _clear_stopping_flag()
 
     owner_loop = getattr(service, "owner_loop", None)
-    if owner_loop and owner_loop.is_closed():
-        owner_loop = None
+    if owner_loop:
+        try:
+            if owner_loop.is_closed():
+                owner_loop = None
+            elif not owner_loop.is_running():
+                logger.warning(
+                    "Audit service owner loop not running; shutting down on current loop."
+                )
+                owner_loop = None
+        except Exception:
+            owner_loop = None
 
     try:
         current_loop = asyncio.get_running_loop()
@@ -197,7 +254,7 @@ _services_stopping: Set[int] = set()
 _services_stopping_lock = threading.Lock()  # Protects _services_stopping service-id set
 
 
-def _handle_cache_eviction(user_id: Optional[int], service: UnifiedAuditService, reason: str) -> None:
+def _handle_cache_eviction(user_id: Optional[Union[int, str]], service: UnifiedAuditService, reason: str) -> None:
     """Handle cache eviction/removal by scheduling a stop unless manually managed."""
     if service is None:
         return
@@ -211,19 +268,19 @@ class _SmallLRUCache:
     def __init__(
         self,
         maxsize: int,
-        on_evict: Callable[[Optional[int], UnifiedAuditService, str], None],
+        on_evict: Callable[[Optional[Union[int, str]], UnifiedAuditService, str], None],
     ):
         self.maxsize = maxsize
         self._on_evict = on_evict
-        self._data: OrderedDict[Optional[int], UnifiedAuditService] = OrderedDict()
+        self._data: OrderedDict[Optional[Union[int, str]], UnifiedAuditService] = OrderedDict()
 
-    def get(self, key: Optional[int]) -> Optional[UnifiedAuditService]:
+    def get(self, key: Optional[Union[int, str]]) -> Optional[UnifiedAuditService]:
         if key in self._data:
             self._data.move_to_end(key)
             return self._data[key]
         return None
 
-    def __setitem__(self, key: Optional[int], value: UnifiedAuditService) -> None:
+    def __setitem__(self, key: Optional[Union[int, str]], value: UnifiedAuditService) -> None:
         self._data[key] = value
         self._data.move_to_end(key)
         while len(self._data) > self.maxsize:
@@ -232,7 +289,7 @@ class _SmallLRUCache:
 
     def pop(
         self,
-        key: Optional[int],
+        key: Optional[Union[int, str]],
         default: Optional[UnifiedAuditService] = None,
     ) -> Optional[UnifiedAuditService]:
         if key in self._data:
@@ -243,7 +300,7 @@ class _SmallLRUCache:
 
     def pop_no_callback(
         self,
-        key: Optional[int],
+        key: Optional[Union[int, str]],
         default: Optional[UnifiedAuditService] = None,
     ) -> Optional[UnifiedAuditService]:
         """Pop without triggering eviction callback (for manual shutdown)."""
@@ -263,7 +320,7 @@ if _HAS_CACHETOOLS:
         def __init__(
             self,
             maxsize: int,
-            on_evict: Callable[[Optional[int], UnifiedAuditService, str], None],
+            on_evict: Callable[[Optional[Union[int, str]], UnifiedAuditService, str], None],
         ):
             super().__init__(maxsize=maxsize)
             self._on_evict = on_evict
@@ -296,6 +353,12 @@ if _HAS_CACHETOOLS:
 
 # --- Configuration ---
 MAX_CACHED_AUDIT_INSTANCES = _settings_int("MAX_CACHED_AUDIT_INSTANCES", 20, min_value=1, max_value=1000)
+EVICTION_GRACE_SECONDS = _settings_float(
+    "AUDIT_EVICTION_GRACE_SECONDS",
+    2.0,
+    min_value=0.0,
+    max_value=300.0,
+)
 
 _CACHE_IMPL = "cachetools.LRUCache" if _HAS_CACHETOOLS else "_SmallLRUCache"
 logger.info(
@@ -322,8 +385,8 @@ class _LoopState:
     cache: Any
     cache_lock: threading.Lock = field(default_factory=threading.Lock)
     init_lock: threading.Lock = field(default_factory=threading.Lock)
-    initializing_users: Set[Optional[int]] = field(default_factory=set)
-    initializing_events: Dict[Optional[int], asyncio.Event] = field(default_factory=dict)
+    initializing_users: Set[Optional[Union[int, str]]] = field(default_factory=set)
+    initializing_events: Dict[Optional[Union[int, str]], asyncio.Event] = field(default_factory=dict)
 
 
 _STATE_LOCK = threading.Lock()
@@ -350,7 +413,7 @@ def _all_loop_states() -> list[_LoopState]:
 
 # --- Helper Functions ---
 
-async def _create_audit_service_for_user(user_id: int) -> UnifiedAuditService:
+async def _create_audit_service_for_user(user_id: Union[int, str]) -> UnifiedAuditService:
     """
     Create a new audit service instance for a specific user.
 
@@ -410,7 +473,7 @@ async def _create_default_audit_service() -> UnifiedAuditService:
     return service
 
 
-async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> UnifiedAuditService:
+async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]]) -> UnifiedAuditService:
     """Internal helper to get or create a cached audit service for a cache key."""
     storage_mode = _resolve_audit_storage_mode()
     cache_key = None if storage_mode == "shared" else user_id
@@ -422,6 +485,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
         service_instance = state.cache.get(cache_key)
 
     if service_instance:
+        _mark_service_used(service_instance)
         logger.debug(f"Using cached audit service instance for user_id: {user_id}")
         return service_instance
 
@@ -475,6 +539,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
         with state.cache_lock:
             service_instance = state.cache.get(cache_key)
             if service_instance:
+                _mark_service_used(service_instance)
                 return service_instance
 
     if should_initialize:
@@ -483,6 +548,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
             with state.cache_lock:
                 service_instance = state.cache.get(cache_key)
                 if service_instance:
+                    _mark_service_used(service_instance)
                     logger.debug(f"Audit service for user {user_id} created concurrently.")
                     return service_instance
 
@@ -497,6 +563,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
             with state.cache_lock:
                 state.cache[cache_key] = service_instance
 
+            _mark_service_used(service_instance)
             logger.info(f"Audit service created and cached successfully for user {user_id}")
 
         except Exception as e:
@@ -541,11 +608,17 @@ async def get_or_create_audit_service_for_user_id_optional(
     if user_id is None:
         return await get_or_create_default_audit_service()
     try:
+        if isinstance(user_id, bool):
+            raise TypeError("bool is not a valid user id")
         uid_int = int(user_id)
+        return await get_or_create_audit_service_for_user_id(uid_int)
     except Exception:
-        logger.debug(f"Invalid user_id {user_id!r}; using default audit service")
-        return await get_or_create_default_audit_service()
-    return await get_or_create_audit_service_for_user_id(uid_int)
+        if _is_test_context():
+            # In tests we allow non-numeric ids to map to per-user storage paths.
+            return await _get_or_create_audit_service_for_key(str(user_id))
+        msg = f"Invalid non-numeric user_id {user_id!r} for audit service"
+        logger.error(msg)
+        raise ServiceInitializationError(msg)
 
 # --- Main Dependency Function ---
 
@@ -567,20 +640,26 @@ async def get_audit_service_for_user(
     Raises:
         HTTPException: If the service cannot be initialized.
     """
-    if not current_user or not isinstance(current_user.id, int):
-        logger.error("get_audit_service_for_user called without a valid User object/ID.")
+    if not current_user:
+        logger.error("get_audit_service_for_user called without a valid User object.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="User identification failed for audit service."
+            detail="User identification failed for audit service.",
         )
 
-    user_id = current_user.id
     try:
-        return await get_or_create_audit_service_for_user_id(user_id)
+        raw_id: Optional[Union[int, str]] = None
+        try:
+            raw_id = current_user.id_int  # type: ignore[attr-defined]
+        except Exception:
+            raw_id = None
+        if raw_id is None:
+            raw_id = getattr(current_user, "id", None)
+        return await get_or_create_audit_service_for_user_id_optional(raw_id)
     except Exception as e:
         logger.error(
             "Failed to initialize audit service for user {}: {}",
-            user_id,
+            getattr(current_user, "id", None),
             e,
             exc_info=True,
         )

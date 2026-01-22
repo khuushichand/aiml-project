@@ -1055,6 +1055,55 @@ class TestSSENormalization:
         assert json.loads(tool_call["function"]["arguments"]) == {"query": "mars"}
         assert chunks[-1].strip() == "data: [DONE]"
 
+    def test_google_gemini_stream_tool_call_indices_are_monotonic(self, monkeypatch):
+
+        tool_chunk_1 = (
+            b'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{"query":"mars"}}}]}}]}'
+        )
+        tool_chunk_2 = (
+            b'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup2","args":{"query":"moon"}}}]}}]}'
+        )
+
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, method, url, *, headers=None, json=None):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([tool_chunk_1, tool_chunk_2])
+                    def close(self):
+                        return None
+                return _Resp()
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
+
+        gen = chat_with_google(
+            input_data=[{"role": "user", "content": "Hi"}],
+            api_key="test",
+            model="gemini-1.5-flash",
+            streaming=True,
+        )
+        chunks = list(gen)
+        assert len(chunks) == 3  # two tool-call chunks + DONE
+        first_payload = json.loads(chunks[0].split("data: ", 1)[1])
+        second_payload = json.loads(chunks[1].split("data: ", 1)[1])
+        first_idx = first_payload["choices"][0]["delta"]["tool_calls"][0]["index"]
+        second_idx = second_payload["choices"][0]["delta"]["tool_calls"][0]["index"]
+        assert first_idx == 0
+        assert second_idx == 1
+
     def test_bedrock_stream_normalized(self, monkeypatch):
 
         class _Client:

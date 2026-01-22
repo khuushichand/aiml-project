@@ -14,7 +14,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
-from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import normalize_payload, validate_payload
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
 from tldw_Server_API.app.core.http_client import (
@@ -246,8 +246,9 @@ class OpenAIAdapter(ChatProvider):
         return headers
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        request = validate_payload(self.name, request or {})
+        request = normalize_payload(self.name, request or {})
         request = self._apply_config_defaults(request)
+        request = validate_payload(self.name, request)
         if self._use_native_http():
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)
@@ -268,8 +269,9 @@ class OpenAIAdapter(ChatProvider):
         raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
-        request = validate_payload(self.name, request or {})
+        request = normalize_payload(self.name, request or {})
         request = self._apply_config_defaults(request)
+        request = validate_payload(self.name, request)
         if self._use_native_http():
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)

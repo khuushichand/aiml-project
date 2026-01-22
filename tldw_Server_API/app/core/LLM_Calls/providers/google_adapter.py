@@ -19,7 +19,8 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     openai_delta_chunk,
     sse_data,
 )
-from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import normalize_payload, validate_payload
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import split_system_message
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 
@@ -35,6 +36,19 @@ def _stream_debug_enabled(provider: str) -> bool:
         return True
     providers = {p.strip() for p in value.split(",") if p.strip()}
     return provider.lower() in providers
+
+
+def _env_flag(name: str) -> bool:
+    """Parse boolean-like env flags with explicit false handling."""
+    value = os.getenv(name)
+    if value is None:
+        return False
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off", ""}:
+        return False
+    return True
 
 
 class GoogleAdapter(ChatProvider):
@@ -108,14 +122,32 @@ class GoogleAdapter(ChatProvider):
             h["x-goog-api-key"] = api_key
         return h
 
+    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+        try:
+            cfg = (request.get("app_config") or {}).get("google_api", {})
+            t = cfg.get("api_timeout")
+            if t is not None:
+                try:
+                    return float(t)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if fallback is not None:
+            return float(fallback)
+        return float(self.capabilities().get("default_timeout_seconds", 90))
+
     @staticmethod
     def _to_gemini_contents(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         contents: List[Dict[str, Any]] = []
-        allow_image_urls = os.getenv("LLM_ADAPTERS_GEMINI_IMAGE_URLS_BETA")
-        allow_audio_urls = os.getenv("LLM_ADAPTERS_GEMINI_AUDIO_URLS_BETA")
-        allow_video_urls = os.getenv("LLM_ADAPTERS_GEMINI_VIDEO_URLS_BETA")
+        allow_image_urls = _env_flag("LLM_ADAPTERS_GEMINI_IMAGE_URLS_BETA")
+        allow_audio_urls = _env_flag("LLM_ADAPTERS_GEMINI_AUDIO_URLS_BETA")
+        allow_video_urls = _env_flag("LLM_ADAPTERS_GEMINI_VIDEO_URLS_BETA")
         for m in messages:
             role = m.get("role") or "user"
+            # Gemini handles system via systemInstruction; skip system messages here.
+            if role == "system":
+                continue
             # Gemini uses "model" instead of "assistant"
             if role == "assistant":
                 role = "model"
@@ -194,6 +226,8 @@ class GoogleAdapter(ChatProvider):
     def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
         messages: List[Dict[str, Any]] = request.get("messages") or []
         system_message = request.get("system_message")
+        if not system_message:
+            system_message, messages = split_system_message(messages)
         payload: Dict[str, Any] = {
             "contents": self._to_gemini_contents(messages),
             "generationConfig": {}
@@ -224,7 +258,7 @@ class GoogleAdapter(ChatProvider):
         if system_message:
             payload["systemInstruction"] = {"parts": [{"text": system_message}]}
         tools = request.get("tools")
-        tools_enabled = bool(os.getenv("LLM_ADAPTERS_GEMINI_TOOLS_BETA"))
+        tools_enabled = _env_flag("LLM_ADAPTERS_GEMINI_TOOLS_BETA")
 
         def _is_openai_tools(value: Any) -> bool:
             if not isinstance(value, list):
@@ -336,15 +370,15 @@ class GoogleAdapter(ChatProvider):
             return data
 
     @staticmethod
-    def _stream_event_deltas(event: Any) -> Iterable[str]:
+    def _stream_event_deltas(event: Any, state: Dict[str, int]) -> Iterable[str]:
         if isinstance(event, list):
             for item in event:
-                yield from GoogleAdapter._stream_event_deltas(item)
+                yield from GoogleAdapter._stream_event_deltas(item, state)
             return
         if not isinstance(event, dict):
             return
         cands = event.get("candidates") or []
-        tool_index = 0
+        tool_index = int(state.get("tool_index", 0))
         for idx, cand in enumerate(cands):
             emitted = False
             content = (cand or {}).get("content") or {}
@@ -396,6 +430,7 @@ class GoogleAdapter(ChatProvider):
                     }],
                     "provider_response": event,
                 })
+        state["tool_index"] = tool_index
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
@@ -441,8 +476,9 @@ class GoogleAdapter(ChatProvider):
         return super().normalize_error(exc)
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        request = validate_payload(self.name, request or {})
+        request = normalize_payload(self.name, request or {})
         request = self._apply_config_defaults(request)
+        request = validate_payload(self.name, request)
         api_key = request.get("api_key")
         model = request.get("model")
         if not api_key:
@@ -454,7 +490,8 @@ class GoogleAdapter(ChatProvider):
         payload = merge_extra_body(payload, request)
         headers = merge_extra_headers(headers, request)
         try:
-            with http_client_factory(timeout=timeout or 60.0) as client:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            with http_client_factory(timeout=resolved_timeout) as client:
                 resp = client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
@@ -463,8 +500,9 @@ class GoogleAdapter(ChatProvider):
             raise self.normalize_error(e)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
-        request = validate_payload(self.name, request or {})
+        request = normalize_payload(self.name, request or {})
         request = self._apply_config_defaults(request)
+        request = validate_payload(self.name, request)
         api_key = request.get("api_key")
         model = request.get("model")
         if not api_key:
@@ -476,12 +514,14 @@ class GoogleAdapter(ChatProvider):
         payload = merge_extra_body(payload, request)
         headers = merge_extra_headers(headers, request)
         try:
-            with http_client_factory(timeout=timeout or 60.0) as client:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            with http_client_factory(timeout=resolved_timeout) as client:
                 with client.stream("POST", url, headers=headers, json=payload) as resp:
                     resp.raise_for_status()
                     debug_stream = _stream_debug_enabled(self.name)
                     seen_done = False
                     buffer = ""
+                    tool_state = {"tool_index": 0}
                     for raw in resp.iter_lines():
                         if not raw:
                             continue
@@ -511,7 +551,7 @@ class GoogleAdapter(ChatProvider):
                                 if normalized is not None:
                                     yield normalized
                                 continue
-                            for delta in self._stream_event_deltas(event):
+                            for delta in self._stream_event_deltas(event, tool_state):
                                 yield delta
                             continue
                         if stripped and (stripped.startswith("{") or stripped.startswith("[")):
@@ -522,7 +562,7 @@ class GoogleAdapter(ChatProvider):
                                 continue
                             buffer = ""
                             yielded = False
-                            for delta in self._stream_event_deltas(event):
+                            for delta in self._stream_event_deltas(event, tool_state):
                                 yielded = True
                                 yield delta
                             if yielded:

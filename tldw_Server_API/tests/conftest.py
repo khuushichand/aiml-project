@@ -163,6 +163,13 @@ _AUTH_ENV_BASELINE_KEYS = (
 
 _AUTH_ENV_BASELINE = {k: os.environ.get(k) for k in _AUTH_ENV_BASELINE_KEYS}
 
+_USER_DB_ENV_KEYS = (
+    # Per-test DB base directory often overridden in Character Chat/Streaming tests.
+    "USER_DB_BASE_DIR",
+    # Legacy alias still honored in a few paths.
+    "USER_DB_BASE",
+)
+
 _RISKY_ENV_KEYS = (
     "JOBS_DB_URL",
     "JOBS_DB_PATH",
@@ -263,6 +270,41 @@ def _restore_auth_env_and_singletons():
         from tldw_Server_API.app.core.Jobs.manager import JobManager
 
         JobManager.set_acquire_gate(False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _restore_user_db_env_and_chacha_cache():
+    """Restore USER_DB_BASE_DIR/USER_DB_BASE and clear ChaChaNotes DB cache per test."""
+    baseline = {k: os.environ.get(k) for k in _USER_DB_ENV_KEYS}
+    yield
+
+    for key, baseline_value in baseline.items():
+        if baseline_value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = baseline_value
+
+    # Clear config/Auth settings so restored env is honored next test.
+    try:
+        from tldw_Server_API.app.core.config import clear_config_cache
+
+        clear_config_cache()
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+        reset_settings()
+    except Exception:
+        pass
+
+    # Drop cached ChaChaNotes DB instances to avoid stale file handles.
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import close_all_chacha_db_instances
+
+        close_all_chacha_db_instances()
     except Exception:
         pass
 

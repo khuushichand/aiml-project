@@ -38,6 +38,7 @@ import threading
 import time
 import uuid  # For UUID generation
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from configparser import ConfigParser
 from datetime import datetime, timezone, timedelta  # Use timezone-aware UTC
 from math import ceil
@@ -124,6 +125,9 @@ class ConflictError(DatabaseError):
         if self.identifier:
             details.append(f"ID: {self.identifier}")
         return f"{base} ({', '.join(details)})" if details else base
+
+
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class _RowAdapter:
@@ -1098,10 +1102,21 @@ class MediaDatabase:
         self.default_org_id = default_org_id
         self.default_team_id = default_team_id
 
-        # Transaction-scoped connection and depth (no per-thread caching)
-        self._txn_conn = None
-        self._tx_depth = 0
-        # Persistent non-transaction connection (PostgreSQL) to mimic previous per-thread behavior
+        # Transaction-scoped connection and depth (context-local for async safety)
+        self._txn_conn_var: ContextVar[Optional[Any]] = ContextVar(
+            f"media_db_txn_conn_{id(self)}",
+            default=None,
+        )
+        self._tx_depth_var: ContextVar[int] = ContextVar(
+            f"media_db_tx_depth_{id(self)}",
+            default=0,
+        )
+        # Persistent non-transaction connection (PostgreSQL) is context-local; SQLite in-memory
+        # uses a single persistent connection on the instance.
+        self._persistent_conn_var: ContextVar[Optional[Any]] = ContextVar(
+            f"media_db_persistent_conn_{id(self)}",
+            default=None,
+        )
         self._persistent_conn = None
         # For SQLite in-memory databases, maintain a persistent connection so state persists
         if self.backend_type == BackendType.SQLITE and self.is_memory_db:
@@ -1377,6 +1392,41 @@ class MediaDatabase:
         rows = cursor.fetchall() or []
         return [dict(r) for r in rows]
 
+    def _get_txn_conn(self):
+        return self._txn_conn_var.get()
+
+    def _set_txn_conn(self, conn) -> None:
+        self._txn_conn_var.set(conn)
+
+    def _get_tx_depth(self) -> int:
+        return int(self._tx_depth_var.get() or 0)
+
+    def _set_tx_depth(self, depth: int) -> None:
+        self._tx_depth_var.set(int(depth))
+
+    def _inc_tx_depth(self) -> int:
+        depth = self._get_tx_depth() + 1
+        self._set_tx_depth(depth)
+        return depth
+
+    def _dec_tx_depth(self) -> int:
+        depth = self._get_tx_depth() - 1
+        if depth < 0:
+            depth = 0
+        self._set_tx_depth(depth)
+        return depth
+
+    def _get_persistent_conn(self):
+        if self.backend_type == BackendType.POSTGRESQL:
+            return self._persistent_conn_var.get()
+        return self._persistent_conn
+
+    def _set_persistent_conn(self, conn) -> None:
+        if self.backend_type == BackendType.POSTGRESQL:
+            self._persistent_conn_var.set(conn)
+        else:
+            self._persistent_conn = conn
+
     # --- Connection Management ---
     def get_connection(self):
         """Compatibility shim to return a usable connection.
@@ -1386,30 +1436,47 @@ class MediaDatabase:
         - For PostgreSQL, returns a persistent connection grabbed from the pool
           on first use (released by close_connection()).
         """
-        if self._txn_conn is not None:
-            return self._txn_conn
+        txn_conn = self._get_txn_conn()
+        if txn_conn is not None:
+            return txn_conn
         if self.backend_type == BackendType.SQLITE:
             if self.is_memory_db and self._persistent_conn is not None:
                 return self._persistent_conn
             return self.backend.get_pool().get_connection()
         # PostgreSQL: reuse a single persistent connection outside transactions
-        if self._persistent_conn is None:
-            self._persistent_conn = self.backend.get_pool().get_connection()
+        conn = self._get_persistent_conn()
+        if conn is None:
+            conn = self.backend.get_pool().get_connection()
+            self._set_persistent_conn(conn)
         try:
-            self.backend.apply_scope(self._persistent_conn)
+            self.backend.apply_scope(conn)
         except Exception:
             pass
-        return self._persistent_conn
+        return conn
 
     def close_connection(self):
         """Release persistent non-transaction connection if present."""
-        if self._txn_conn is not None:
+        if self._get_txn_conn() is not None:
             return
         try:
-            if self._persistent_conn is not None:
-                self.backend.get_pool().return_connection(self._persistent_conn)
+            conn = self._get_persistent_conn()
+            if conn is not None:
+                self.backend.get_pool().return_connection(conn)
         finally:
-            self._persistent_conn = None
+            self._set_persistent_conn(None)
+
+    def release_context_connection(self) -> None:
+        """Return context-scoped Postgres connection to the pool (no-op for SQLite)."""
+        if self.backend_type != BackendType.POSTGRESQL:
+            return
+        if self._get_txn_conn() is not None:
+            return
+        try:
+            conn = self._get_persistent_conn()
+            if conn is not None:
+                self.backend.get_pool().return_connection(conn)
+        finally:
+            self._set_persistent_conn(None)
 
     def _ensure_sqlite_backend(self) -> None:
         if self.backend_type != BackendType.SQLITE:
@@ -1466,7 +1533,7 @@ class MediaDatabase:
          """
         prepared_query, prepared_params = self._prepare_backend_statement(query, params)
 
-        eff_conn = connection or self._txn_conn
+        eff_conn = connection or self._get_txn_conn()
 
         if self.backend_type == BackendType.SQLITE:
             try:
@@ -1577,7 +1644,7 @@ class MediaDatabase:
 
         prepared_query, prepared_params_list = self._prepare_backend_many_statement(query, params_list)
 
-        eff_conn = connection or self._txn_conn
+        eff_conn = connection or self._get_txn_conn()
 
         if self.backend_type == BackendType.SQLITE:
             try:
@@ -2146,7 +2213,7 @@ class MediaDatabase:
 
         if self.backend_type == BackendType.SQLITE:
             # Nest-aware transaction handling for SQLite
-            outermost = self._txn_conn is None
+            outermost = self._get_txn_conn() is None
             if outermost:
                 # Dedicated connection for this transaction
                 conn = self._persistent_conn or self.backend.connect()
@@ -2160,13 +2227,13 @@ class MediaDatabase:
                 except sqlite3.Error:
                     pass
             else:
-                conn = self._txn_conn
+                conn = self._get_txn_conn()
 
-            self._tx_depth += 1
+            self._inc_tx_depth()
             try:
                 if outermost:
                     conn.execute("BEGIN")
-                    self._txn_conn = conn
+                    self._set_txn_conn(conn)
                     logging.debug("Started SQLite transaction.")
                 yield conn
                 if outermost:
@@ -2181,9 +2248,9 @@ class MediaDatabase:
                         pass
                 raise
             finally:
-                self._tx_depth -= 1
+                self._dec_tx_depth()
                 if outermost:
-                    self._txn_conn = None
+                    self._set_txn_conn(None)
                     if self._persistent_conn is None:
                         try:
                             conn.close()
@@ -2192,23 +2259,23 @@ class MediaDatabase:
             return
 
         # PostgreSQL and others: reuse a single connection for nested transactions
-        manages_backend_conn = self._txn_conn is None
+        manages_backend_conn = self._get_txn_conn() is None
         if manages_backend_conn:
             conn = self.backend.get_pool().get_connection()
         else:
-            conn = self._txn_conn
+            conn = self._get_txn_conn()
 
-        manages_backend_tx = self._tx_depth == 0
-        self._tx_depth += 1
+        manages_backend_tx = self._get_tx_depth() == 0
+        self._inc_tx_depth()
         ctx = self.backend.transaction(conn) if manages_backend_tx else nullcontext(conn)
         try:
             with ctx as inner_conn:
-                self._txn_conn = inner_conn
+                self._set_txn_conn(inner_conn)
                 yield inner_conn
         finally:
-            self._tx_depth -= 1
-            if self._tx_depth == 0:
-                self._txn_conn = None
+            depth = self._dec_tx_depth()
+            if depth == 0:
+                self._set_txn_conn(None)
             if manages_backend_conn:
                 try:
                     self.backend.get_pool().return_connection(conn)
@@ -8167,6 +8234,10 @@ class MediaDatabase:
             DatabaseError: If the database query fails.
         """
         try:
+            if not (_SAFE_IDENTIFIER_RE.fullmatch(table or "") and _SAFE_IDENTIFIER_RE.fullmatch(id_col or "")):
+                raise DatabaseError(
+                    f"Unsafe identifier in version lookup: table={table!r}, column={id_col!r}"
+                )
             cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))
             result = cursor.fetchone()
             if result:
@@ -9412,7 +9483,7 @@ class MediaDatabase:
             ORDER BY {order_expr}, m.last_modified DESC, m.id DESC
         """
 
-        params = tuple(media_params + [False] + unique_clean_keywords)
+        params = tuple(media_params + unique_clean_keywords + [False])
 
         logger.debug(
             f"Executing fetch_media_for_keywords query for keywords: {unique_clean_keywords}, include_trash: {include_trash}")

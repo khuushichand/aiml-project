@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import os
+import json
 import asyncio
 import threading
 
@@ -138,10 +139,46 @@ class AnthropicAdapter(ChatProvider):
 
         # Convert OpenAI-style messages to Anthropic messages format
         messages: List[Dict[str, Any]] = []
+        tool_result_counter = 0
+        tool_use_counter = 0
+
+        def _tool_result_content(value: Any) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                text_parts: List[str] = []
+                for item in value:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text_parts.append(str(item.get("text", "")))
+                    elif isinstance(item, str):
+                        text_parts.append(item)
+                if text_parts:
+                    return "".join(text_parts)
+            try:
+                return json.dumps(value, ensure_ascii=True)
+            except Exception:
+                return str(value)
+
         for msg in raw_messages:
             if not isinstance(msg, dict):
                 continue
             role = msg.get("role")
+            if role == "tool":
+                tool_use_id = msg.get("tool_call_id") or msg.get("tool_use_id") or msg.get("id")
+                if not tool_use_id:
+                    tool_use_id = f"tool_result_{tool_result_counter}"
+                    tool_result_counter += 1
+                block: Dict[str, Any] = {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": _tool_result_content(msg.get("content")),
+                }
+                if isinstance(msg.get("is_error"), bool):
+                    block["is_error"] = msg.get("is_error")
+                messages.append({"role": "user", "content": [block]})
+                continue
             if role not in ("user", "assistant"):
                 continue
             content = msg.get("content")
@@ -159,6 +196,28 @@ class AnthropicAdapter(ChatProvider):
                         src = self._anthropic_image_source_from_part(p.get("image_url", {}))
                         if src:
                             parts.append({"type": "image", "source": src})
+            if role == "assistant":
+                tool_calls = msg.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    for tc in tool_calls:
+                        if not isinstance(tc, dict):
+                            continue
+                        func = tc.get("function") or {}
+                        name = func.get("name") or tc.get("name")
+                        if not isinstance(name, str) or not name.strip():
+                            continue
+                        args = func.get("arguments")
+                        input_obj: Any = {}
+                        if isinstance(args, str):
+                            try:
+                                input_obj = json.loads(args)
+                            except Exception:
+                                input_obj = args
+                        elif args is not None:
+                            input_obj = args
+                        tool_id = tc.get("id") or f"tool_{tool_use_counter}"
+                        tool_use_counter += 1
+                        parts.append({"type": "tool_use", "id": tool_id, "name": name, "input": input_obj})
             if parts:
                 messages.append({"role": role, "content": parts})
 

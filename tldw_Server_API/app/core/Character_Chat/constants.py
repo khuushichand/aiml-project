@@ -102,6 +102,9 @@ MAX_MESSAGE_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
 MAX_PERSIST_CONTENT_LENGTH = 1_000_000  # 1 MB
 """Maximum length for persisted assistant content."""
 
+MAX_PNG_METADATA_BYTES = 512 * 1024  # 512 KB
+"""Maximum decompressed size for PNG text metadata chunks."""
+
 
 # =============================================================================
 # Throttle Cache Constants

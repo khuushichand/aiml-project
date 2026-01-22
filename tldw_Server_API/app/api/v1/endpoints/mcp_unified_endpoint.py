@@ -24,7 +24,6 @@ from tldw_Server_API.app.core.MCP_unified import (
     MCPResponse,
     get_config
 )
-from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
 from fastapi import Response
@@ -45,7 +44,10 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -163,9 +165,7 @@ def _get_client_ip(request: Optional[Request]) -> Optional[str]:
     if request is None:
         return None
     try:
-        client = getattr(request, "client", None)
-        if client is not None:
-            return getattr(client, "host", None)
+        return resolve_client_ip(request, get_settings())
     except Exception:
         logger.debug("Failed to extract client IP", exc_info=True)
     return None
@@ -203,6 +203,7 @@ async def get_current_user(
     the same key or double-counting usage/audit events.
     """
     # Try AuthNZ JWT first (multi-user)
+    authnz_token_failed = False
     try:
         if credentials and credentials.credentials:
             if request is None:
@@ -232,7 +233,9 @@ async def get_current_user(
                 extra={"auth_method": "authnz_jwt"},
                 exc_info=True,
             )
-            return None
+            authnz_token_failed = True
+            if not x_api_key:
+                return None
         logger.debug(
             "AuthNZ JWT check failed; falling back to MCP JWT / API key",
             extra={"auth_method": "authnz_jwt"},
@@ -241,7 +244,7 @@ async def get_current_user(
 
     # MCP JWT fallback
     try:
-        if credentials and credentials.credentials:
+        if not authnz_token_failed and credentials and credentials.credentials:
             jwt_manager = get_jwt_manager()
             return jwt_manager.verify_token(credentials.credentials)
     except Exception:
@@ -362,7 +365,7 @@ async def get_current_user(
 
 
 async def get_mcp_auth_context(
-    credentials: HTTPAuthorizationCredentials = Security(security),
+    user: Optional[TokenData] = Depends(get_current_user),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     request: Request = None,
 ) -> McpAuthContext:
@@ -374,7 +377,6 @@ async def get_mcp_auth_context(
     :class:`McpAuthContext` (and helper functions like ``_attach_api_key_metadata``)
     rather than re-validating API keys themselves.
     """
-    user = await get_current_user(credentials, x_api_key, request)
     api_key_info: Optional[Dict[str, Any]] = None
     try:
         if request is not None:
@@ -667,28 +669,35 @@ async def mcp_request_batch(
         except Exception as e:
             logger.debug(f"Batch failed to parse safe config: {e}")
 
-    # Build context and process via protocol directly to leverage batch support
+    # If any initialize request is present and no session id was provided, generate one.
+    try:
+        if not mcp_session_id and any(req.method == "initialize" for req in requests):
+            import uuid as _uuid
+            mcp_session_id = _uuid.uuid4().hex
+            if response is not None:
+                response.headers["mcp-session-id"] = mcp_session_id
+    except Exception:
+        pass
+
+    # Build metadata for batch processing
     if auth.user:
         if auth.user.roles:
             metadata.setdefault("roles", auth.user.roles)
         if auth.user.permissions:
             metadata.setdefault("permissions", auth.user.permissions)
+    if mcp_session_id:
+        metadata["session_id"] = mcp_session_id
+    if safe_config:
+        metadata["safe_config"] = safe_config
 
-    ctx = RequestContext(
-        request_id="http_batch",
-        user_id=derived_user_id,
+    resp = await server.handle_http_batch(
+        requests,
         client_id=client_id,
-        session_id=mcp_session_id,
-        metadata={**metadata, **({"safe_config": safe_config} if safe_config else {})},
+        user_id=derived_user_id,
+        metadata=metadata or None
     )
-    payload = [r.model_dump() for r in requests]
-    resp = await server.protocol.process_request(payload, ctx)
     # If only notifications were sent, return empty list
-    if resp is None:
-        return []
-    if isinstance(resp, MCPResponse):
-        return [resp]
-    return resp
+    return resp or []
 
 
 @router.get("/status", response_model=ServerStatusResponse)
@@ -778,7 +787,7 @@ async def list_tools(
     module: Optional[str] = Query(None, description="Filter by module"),
     catalog: Optional[str] = Query(None, description="Filter by tool catalog name"),
     catalog_id: Optional[int] = Query(None, description="Filter by tool catalog id"),
-    user: Optional[TokenData] = Depends(get_current_user),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
     http_request: Request = None,
 ):
@@ -802,15 +811,15 @@ async def list_tools(
         await server.initialize()
 
     # Derive user id from the authenticated token user when present.
+    user = auth.user
     derived_user_id = _get_derived_user_id(user)
 
-    metadata: Dict[str, Any] = {}
+    metadata = await _attach_api_key_metadata(auth, http_request)
     if user:
         if user.roles:
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,
@@ -832,7 +841,7 @@ async def list_tools(
 @router.post("/tools/execute", response_model=ToolExecutionResponse)
 async def execute_tool(
     request: ToolExecutionRequest,
-    user: TokenData = Depends(require_user),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
     http_request: Request = None,
 ):
@@ -857,12 +866,19 @@ async def execute_tool(
     if not server.initialized:
         await server.initialize()
 
-    metadata: Dict[str, Any] = {}
+    if not auth.user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = auth.user
+    metadata = await _attach_api_key_metadata(auth, http_request, log_on_error=True, log_prefix="tools_execute")
     if user.roles:
         metadata["roles"] = user.roles
     if user.permissions:
         metadata["permissions"] = user.permissions
-    _attach_rg_ingress_metadata(metadata, http_request)
 
     derived_user_id = _get_derived_user_id(user)
 
@@ -924,7 +940,7 @@ async def execute_tool(
 
 @router.get("/modules")
 async def list_modules(
-    user: Optional[TokenData] = Depends(get_current_user),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
     http_request: Request = None,
 ):
@@ -940,15 +956,15 @@ async def list_modules(
         await server.initialize()
 
     # Derive user id from the authenticated token user when present.
+    user = auth.user
     derived_user_id = _get_derived_user_id(user)
 
-    metadata: Dict[str, Any] = {}
+    metadata = await _attach_api_key_metadata(auth, http_request)
     if user:
         if user.roles:
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,
@@ -1006,7 +1022,7 @@ async def get_modules_health(
 
 @router.get("/resources")
 async def list_resources(
-    user: Optional[TokenData] = Depends(get_current_user),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
     http_request: Request = None,
 ):
@@ -1022,15 +1038,15 @@ async def list_resources(
         await server.initialize()
 
     # Derive user id from the authenticated token user when present.
+    user = auth.user
     derived_user_id = _get_derived_user_id(user)
 
-    metadata: Dict[str, Any] = {}
+    metadata = await _attach_api_key_metadata(auth, http_request)
     if user:
         if user.roles:
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,
@@ -1051,7 +1067,7 @@ async def list_resources(
 
 @router.get("/prompts")
 async def list_prompts(
-    user: Optional[TokenData] = Depends(get_current_user),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
     http_request: Request = None,
 ):
@@ -1067,15 +1083,15 @@ async def list_prompts(
         await server.initialize()
 
     # Derive user id from the authenticated token user when present.
+    user = auth.user
     derived_user_id = _get_derived_user_id(user)
 
-    metadata: Dict[str, Any] = {}
+    metadata = await _attach_api_key_metadata(auth, http_request)
     if user:
         if user.roles:
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,

@@ -2,6 +2,7 @@ import os
 import base64
 import numpy as np
 import pytest
+from unittest.mock import Mock
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
@@ -66,3 +67,61 @@ def test_batch_token_arrays_input_base64(client):
         raw = np.frombuffer(base64.b64decode(b64), dtype=np.float32)
         # Should match requested dimensions
         assert len(raw) == 128
+
+
+@pytest.mark.unit
+def test_token_array_uses_raw_token_length_for_limits(client, monkeypatch):
+    async def override_user():
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+        return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
+
+    app.dependency_overrides[get_request_user] = override_user
+
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
+    monkeypatch.setattr(emb_mod, "_get_model_max_tokens", lambda _provider, _model: 2)
+
+    payload = {
+        "model": "text-embedding-3-small",
+        "input": [101, 102, 103],
+    }
+    r = client.post("/api/v1/embeddings", json=payload)
+    assert r.status_code == 400
+    data = r.json()
+    assert data.get("error") == "input_too_long"
+    assert data.get("details")[0]["tokens"] == 3
+
+
+@pytest.mark.unit
+def test_tokens_to_texts_logs_decode_failure(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
+
+    class _BadEncoder:
+        def decode(self, _tokens):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(emb_mod, "get_tokenizer", lambda _model: _BadEncoder())
+    warn = Mock()
+    monkeypatch.setattr(emb_mod.logger, "warning", warn)
+
+    texts, total, lengths = emb_mod.tokens_to_texts([1, 2], "text-embedding-3-small")
+    assert texts == [""]
+    assert total == 2
+    assert lengths == [2]
+    assert warn.called
+
+
+@pytest.mark.unit
+def test_list_input_rejects_empty_strings(client):
+    async def override_user():
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+        return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
+
+    app.dependency_overrides[get_request_user] = override_user
+
+    payload = {
+        "model": "text-embedding-3-small",
+        "input": ["ok", "  "],
+    }
+    r = client.post("/api/v1/embeddings", json=payload)
+    assert r.status_code == 400
+    assert "empty strings" in r.json().get("detail", "").lower()

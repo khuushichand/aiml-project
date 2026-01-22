@@ -213,10 +213,10 @@ async def run_video_batch(
         batch_result["processed_count"] = sum(
             1
             for r in final_results_list
-            if r.get("status") in {"Success", "Warning"}
+            if str(r.get("status", "")).lower() in {"success", "warning"}
         )
         batch_result["errors_count"] = sum(
-            1 for r in final_results_list if r.get("status") == "Error"
+            1 for r in final_results_list if str(r.get("status", "")).lower() == "error"
         )
         deduped_errors: List[str] = []
         for err in final_errors_list:

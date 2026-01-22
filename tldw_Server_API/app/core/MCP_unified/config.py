@@ -415,6 +415,20 @@ def validate_config() -> bool:
     """Validate configuration on startup"""
     try:
         config = get_config()
+        test_mode = False
+        try:
+            test_mode = (
+                os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+                or bool(os.getenv("PYTEST_CURRENT_TEST"))
+            )
+        except Exception:
+            test_mode = False
+
+        def _field_was_set(cfg: MCPConfig, field_name: str) -> bool:
+            try:
+                return field_name in cfg.model_fields_set  # type: ignore[attr-defined]
+            except Exception:
+                return field_name in getattr(cfg, "__fields_set__", set())
 
         # Check critical security settings
         if not config.jwt_secret_key:
@@ -424,6 +438,15 @@ def validate_config() -> bool:
         if not config.api_key_salt:
             logger.error("API key salt not configured!")
             return False
+
+        # Require explicit secrets in production (avoid auto-generated defaults)
+        if not config.debug_mode and not test_mode:
+            if not _field_was_set(config, "jwt_secret_key"):
+                logger.error("MCP_JWT_SECRET must be set explicitly in production")
+                return False
+            if not _field_was_set(config, "api_key_salt"):
+                logger.error("MCP_API_KEY_SALT must be set explicitly in production")
+                return False
 
         # Validate database connection
         if not config.database_url:

@@ -695,12 +695,13 @@ class SessionManager:
             try:
                 if not path.exists():
                     continue
+                if not self._is_valid_key_file(path):
+                    logger.warning(
+                        f"Persisted session encryption key at {path} is invalid or insecure; ignoring."
+                    )
+                    continue
                 content = path.read_text(encoding="utf-8").strip()
                 if not content:
-                    continue
-                decoded = base64.urlsafe_b64decode(content.encode("utf-8"))
-                if len(decoded) != 32:
-                    logger.warning(f"Persisted session encryption key at {path} is invalid; ignoring.")
                     continue
                 # Use the first valid candidate found
                 self._persisted_key_path = path
@@ -766,6 +767,22 @@ class SessionManager:
             if not path.exists():
                 return False
             if not path.is_file():
+                return False
+            try:
+                st = os.stat(path, follow_symlinks=False)
+                if not stat.S_ISREG(st.st_mode):
+                    return False
+                if hasattr(os, "getuid") and st.st_uid != os.getuid():
+                    logger.warning(f"Session key file {path} is not owned by the current user; ignoring.")
+                    return False
+                mode = stat.S_IMODE(st.st_mode)
+                if mode & (stat.S_IRWXG | stat.S_IRWXO):
+                    logger.warning(
+                        f"Session key file {path} has insecure permissions {oct(mode)}; ignoring."
+                    )
+                    return False
+            except Exception as exc:
+                logger.warning(f"Failed to inspect session key file {path}: {exc}")
                 return False
             content = path.read_text(encoding="utf-8").strip()
             return bool(content) and self._is_valid_key_content(content)
@@ -928,6 +945,51 @@ class SessionManager:
             return jti, expires_at
         except Exception:
             return None, None
+
+    @staticmethod
+    def _get_unverified_claims(token: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Return unverified JWT claims dict (best-effort)."""
+        if not token:
+            return None
+        try:
+            claims = jose_jwt.get_unverified_claims(token)
+            return claims if isinstance(claims, dict) else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _validate_token_binding(
+        claims: Optional[Dict[str, Any]],
+        session_data: Dict[str, Any],
+        *,
+        token_label: str,
+    ) -> None:
+        """Ensure token subject/session_id claims align with the session record."""
+        if not claims:
+            logger.debug(f"Refresh session: {token_label} token claims missing")
+            raise InvalidSessionError()
+        subject = claims.get("sub") or claims.get("user_id")
+        if subject is None:
+            logger.debug(f"Refresh session: {token_label} token missing subject claim")
+            raise InvalidSessionError()
+        try:
+            subject_id = int(subject)
+        except (TypeError, ValueError):
+            logger.debug(f"Refresh session: {token_label} token subject is invalid")
+            raise InvalidSessionError()
+        if subject_id != int(session_data.get("user_id")):
+            logger.debug(f"Refresh session: {token_label} token subject mismatch")
+            raise InvalidSessionError()
+        session_claim = claims.get("session_id")
+        if session_claim is not None:
+            try:
+                session_claim_id = int(session_claim)
+            except (TypeError, ValueError):
+                logger.debug(f"Refresh session: {token_label} token session_id is invalid")
+                raise InvalidSessionError()
+            if session_claim_id != int(session_data.get("id")):
+                logger.debug(f"Refresh session: {token_label} token session_id mismatch")
+                raise InvalidSessionError()
 
     async def create_session(
         self,
@@ -1285,6 +1347,19 @@ class SessionManager:
                 refresh_hash_candidates
             )
             if not session_data:
+                raise InvalidSessionError()
+
+            # Validate token subject/session binding before updating session records.
+            try:
+                access_claims = self._get_unverified_claims(new_access_token)
+                self._validate_token_binding(access_claims, session_data, token_label="access")
+                if new_refresh_token:
+                    refresh_claims = self._get_unverified_claims(new_refresh_token)
+                    self._validate_token_binding(refresh_claims, session_data, token_label="refresh")
+            except InvalidSessionError:
+                raise
+            except Exception as exc:
+                logger.debug(f"Refresh session: token binding validation failed: {exc}")
                 raise InvalidSessionError()
 
             if new_refresh_token:

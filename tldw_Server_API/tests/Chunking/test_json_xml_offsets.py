@@ -11,6 +11,7 @@ def test_chunk_with_metadata_json_offsets_match_source():
         method="json",
         max_size=1,
         overlap=0,
+        align_text_to_source=True,
     )
 
     assert results, "Expected JSON chunking to return chunks"
@@ -30,6 +31,7 @@ def test_chunk_with_metadata_xml_offsets_match_source():
         method="xml",
         max_size=1,
         overlap=0,
+        align_text_to_source=True,
     )
 
     assert results, "Expected XML chunking to return chunks"

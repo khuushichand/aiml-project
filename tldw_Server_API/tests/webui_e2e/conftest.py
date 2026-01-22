@@ -166,6 +166,12 @@ def browser():
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
+        exec_path = Path(playwright.chromium.executable_path)
+        if exec_path and not exec_path.exists():
+            pytest.skip(
+                "Playwright Chromium binaries are not installed. "
+                "Run `python -m playwright install chromium`."
+            )
         browser = playwright.chromium.launch(headless=True)
         try:
             yield browser

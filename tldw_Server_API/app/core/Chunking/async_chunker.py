@@ -38,16 +38,25 @@ class AsyncChunker:
     Provides async interfaces for I/O-bound operations.
     """
 
-    def __init__(self, config: Optional[ChunkerConfig] = None):
+    def __init__(
+        self,
+        config: Optional[ChunkerConfig] = None,
+        llm_call_func: Optional[Any] = None,
+        llm_config: Optional[Dict[str, Any]] = None,
+    ):
         """
         Initialize async chunker.
 
         Args:
             config: Chunker configuration
+            llm_call_func: Optional LLM function for LLM-dependent strategies
+            llm_config: Optional LLM configuration for LLM-dependent strategies
         """
         self.config = config or ChunkerConfig()
         self._metrics = get_metrics()
         self._closed = False
+        self._llm_call_func = llm_call_func
+        self._llm_config = llm_config
 
         # Thread pool for CPU-bound operations
         self._executor = ThreadPoolExecutor(
@@ -70,16 +79,25 @@ class AsyncChunker:
             except Exception as e:
                 logger.debug(f"AsyncChunker.__del__: error during cleanup: {e}")
 
-    def _get_chunker(self) -> Chunker:
+    def _get_chunker(
+        self,
+        *,
+        llm_call_func: Optional[Any] = None,
+        llm_config: Optional[Dict[str, Any]] = None,
+    ) -> Chunker:
         """Return a fresh Chunker instance per call to avoid shared mutable state."""
         cfg_copy = copy.deepcopy(self.config)
-        return Chunker(config=cfg_copy)
+        effective_llm_call = self._llm_call_func if llm_call_func is None else llm_call_func
+        effective_llm_cfg = self._llm_config if llm_config is None else llm_config
+        return Chunker(config=cfg_copy, llm_call_func=effective_llm_call, llm_config=effective_llm_cfg)
 
     async def chunk_text(self,
                         text: str,
                         method: Optional[str] = None,
                         max_size: Optional[int] = None,
                         overlap: Optional[int] = None,
+                        llm_call_func: Optional[Any] = None,
+                        llm_config: Optional[Dict[str, Any]] = None,
                         **options) -> List[str]:
         """
         Asynchronously chunk text.
@@ -89,6 +107,8 @@ class AsyncChunker:
             method: Chunking method
             max_size: Maximum chunk size
             overlap: Overlap between chunks
+            llm_call_func: Optional per-call LLM function override
+            llm_config: Optional per-call LLM config override
             **options: Additional options
 
         Returns:
@@ -98,7 +118,7 @@ class AsyncChunker:
             loop = asyncio.get_event_loop()
 
             def _run_chunking():
-                chunker = self._get_chunker()
+                chunker = self._get_chunker(llm_call_func=llm_call_func, llm_config=llm_config)
                 return chunker.chunk_text(
                     text,
                     method,
@@ -182,6 +202,8 @@ class AsyncChunker:
                           max_size: Optional[int] = None,
                           overlap: Optional[int] = None,
                           buffer_size: int = 10000,
+                          llm_call_func: Optional[Any] = None,
+                          llm_config: Optional[Dict[str, Any]] = None,
                           **options) -> AsyncGenerator[str, None]:
         """
         Stream chunks from an async text generator.
@@ -192,6 +214,8 @@ class AsyncChunker:
             max_size: Maximum chunk size
             overlap: Overlap between chunks
             buffer_size: Size of text buffer
+            llm_call_func: Optional per-call LLM function override
+            llm_config: Optional per-call LLM config override
             **options: Additional options
 
         Yields:
@@ -237,6 +261,14 @@ class AsyncChunker:
                 return False
             return method_lower == 'words' or method_lower in space_delimited_methods
 
+        def _should_withhold_last_chunk() -> bool:
+            """Whether to carry the final chunk forward instead of emitting it immediately."""
+            if overlap_size <= 0:
+                return False
+            return method_lower != 'words'
+
+        withhold_last = _should_withhold_last_chunk()
+
         def _coerce_overlap_value(value: Any) -> str:
             """Ensure overlap carry-over stays textual even for structured chunks."""
             if isinstance(value, str):
@@ -263,17 +295,26 @@ class AsyncChunker:
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,
-                method, max_size, overlap, **options
+                method, max_size, overlap,
+                llm_call_func=llm_call_func,
+                llm_config=llm_config,
+                **options
             )
 
-            # Overlap handling: when overlap>0, we can yield all chunks now and carry only the tail.
-            # When overlap==0, yield all but the last and carry the last chunk for the next iteration.
-            if overlap_size > 0:
+            # Streaming overlap handling:
+            # - words + overlap>0: emit all and carry overlap tail
+            # - otherwise: emit all but last, carry the last chunk forward
+            if withhold_last:
+                for chunk in chunks[:-1]:
+                    yield chunk
+                withheld = chunks[-1] if chunks else None
+                overlap_buffer = _coerce_overlap_value(withheld) if withheld else ""
+            else:
                 for chunk in chunks:
                     yield chunk
                 if chunks:
                     try:
-                        chunker = self._get_chunker()
+                        chunker = self._get_chunker(llm_call_func=llm_call_func, llm_config=llm_config)
                         overlap_buffer = chunker._compute_overlap_buffer_text(  # noqa: SLF001
                             combined,
                             method_name,
@@ -285,21 +326,12 @@ class AsyncChunker:
                         overlap_buffer = _coerce_overlap_value(chunks[-1])
                 else:
                     overlap_buffer = ''
-            else:
-                for chunk in chunks[:-1]:
-                    yield chunk
-                withheld = chunks[-1] if chunks else None
-                if withheld:
-                    # No explicit overlap: carry full last chunk forward so it will be emitted on next iteration/final flush
-                    overlap_buffer = _coerce_overlap_value(withheld)
-                else:
-                    overlap_buffer = ""
 
             buffer = ""
 
-        # Process remaining buffer; only flush overlap-only tail when overlap == 0
+        # Process remaining buffer; flush overlap-only tail when we withheld the last chunk.
         should_flush = bool(buffer)
-        if not should_flush and overlap_buffer and overlap_size == 0:
+        if not should_flush and overlap_buffer and withhold_last:
             should_flush = True
         if should_flush:
             overlap_text = _coerce_overlap_value(overlap_buffer)
@@ -307,7 +339,10 @@ class AsyncChunker:
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,
-                method, max_size, overlap, **options
+                method, max_size, overlap,
+                llm_call_func=llm_call_func,
+                llm_config=llm_config,
+                **options
             )
             for chunk in chunks:
                 yield chunk
@@ -317,6 +352,8 @@ class AsyncChunker:
                                  method: Optional[str] = None,
                                  max_size: Optional[int] = None,
                                  overlap: Optional[int] = None,
+                                 llm_call_func: Optional[Any] = None,
+                                 llm_config: Optional[Dict[str, Any]] = None,
                                  **options) -> List[ChunkResult]:
         """
         Asynchronously chunk text and return with metadata.
@@ -326,6 +363,8 @@ class AsyncChunker:
             method: Chunking method
             max_size: Maximum chunk size
             overlap: Overlap between chunks
+            llm_call_func: Optional per-call LLM function override
+            llm_config: Optional per-call LLM config override
             **options: Additional options
 
         Returns:
@@ -335,7 +374,7 @@ class AsyncChunker:
             loop = asyncio.get_event_loop()
 
             def _run_chunking():
-                chunker = self._get_chunker()
+                chunker = self._get_chunker(llm_call_func=llm_call_func, llm_config=llm_config)
                 return chunker.chunk_text_with_metadata(
                     text,
                     method,

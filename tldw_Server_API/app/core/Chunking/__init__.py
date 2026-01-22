@@ -106,14 +106,21 @@ def improved_chunking_process(text: str,
     # Create chunker with LLM support if provided
     chunker = Chunker(llm_call_func=llm_call_func, llm_config=llm_api_config)
     # Remove duplicates from options
-    filtered_options = {k: v for k, v in options.items()
-                       if k not in ['method', 'max_size', 'overlap', 'language']}
+    filtered_options = {
+        k: v
+        for k, v in options.items()
+        if k not in ['method', 'max_size', 'overlap', 'language', 'align_text_to_source']
+    }
+    align_text_to_source = options.get('align_text_to_source')
+    if align_text_to_source is None:
+        align_text_to_source = True
     chunks = chunker.chunk_text_with_metadata(
         text=text,
         method=method,
         max_size=max_size,
         overlap=overlap,
         language=language,
+        align_text_to_source=bool(align_text_to_source),
         **filtered_options
     )
 

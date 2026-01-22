@@ -4,6 +4,7 @@
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 from collections.abc import Mapping
+import inspect
 import asyncio
 import threading
 import re
@@ -55,7 +56,10 @@ from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
 from tldw_Server_API.app.core.External_Sources.connectors_service import get_policy
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
 from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
@@ -131,13 +135,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
         if settings and settings.SINGLE_USER_API_KEY:
             allowed_keys.add(settings.SINGLE_USER_API_KEY)
         if api_key in allowed_keys:
-            client_ip = None
-            try:
-                client = getattr(request, "client", None)
-                if client is not None:
-                    client_ip = getattr(client, "host", None)
-            except Exception:
-                client_ip = None
+            client_ip = resolve_client_ip(request, settings)
             if settings and settings.AUTH_MODE == "single_user":
                 if not is_single_user_ip_allowed(client_ip, settings):
                     raise HTTPException(
@@ -680,6 +678,7 @@ async def get_current_user(
 
     bearer_token = credentials.credentials if credentials else None
     bearer_is_jwt = _looks_like_jwt(bearer_token) if bearer_token else False
+
     api_key_candidate = x_api_key
     if not api_key_candidate and bearer_token and not bearer_is_jwt:
         api_key_candidate = bearer_token
@@ -720,6 +719,13 @@ async def get_current_user(
             detail="Inactive user",
         ) from exc
     except HTTPException as exc:
+        # If a JWT fails but an explicit X-API-KEY is present, fall back to API key auth.
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED and x_api_key:
+            try:
+                return await _authenticate_api_key_from_request(request, x_api_key)
+            except HTTPException:
+                # If API key auth fails, continue with the JWT failure handling below.
+                pass
         if exc.status_code == status.HTTP_401_UNAUTHORIZED:
             # Normalize 401 semantics for callers: detail must contain
             # "Authentication required" and include WWW-Authenticate header.
@@ -1571,6 +1577,38 @@ def rbac_rate_limit(resource: str):
 # Scoped Virtual-Key Enforcement
 
 _VK_USAGE: dict = {}
+_VK_USAGE_LOCK = threading.Lock()
+
+
+def _vk_usage_ttl_seconds() -> int:
+    try:
+        ttl = int(os.getenv("VK_USAGE_TTL_SECONDS", "3600"))
+    except (TypeError, ValueError):
+        ttl = 3600
+    return max(ttl, 60)
+
+
+def _vk_usage_check_and_increment(key: object, limit: int) -> bool:
+    """Process-local quota fallback with TTL to avoid unbounded growth."""
+    now = time.monotonic()
+    ttl = _vk_usage_ttl_seconds()
+    with _VK_USAGE_LOCK:
+        # Opportunistic pruning on each fallback use.
+        if _VK_USAGE:
+            expired = [k for k, (_cnt, exp) in _VK_USAGE.items() if exp <= now]
+            for k in expired:
+                _VK_USAGE.pop(k, None)
+        entry = _VK_USAGE.get(key)
+        if entry:
+            count, expires_at = entry
+            if expires_at <= now:
+                count = 0
+        else:
+            count = 0
+        if count >= int(limit):
+            return False
+        _VK_USAGE[key] = (count + 1, now + ttl)
+        return True
 
 
 def require_token_scope(
@@ -1620,6 +1658,49 @@ def require_token_scope(
         token = credentials.credentials if credentials else None
         token_is_jwt = _looks_like_jwt(token) if token else False
 
+        # Optional admin bypass based on the resolved principal (not token claims).
+        if allow_admin_bypass:
+            principal = None
+            try:
+                ctx = getattr(request.state, "auth", None)
+                if isinstance(ctx, AuthContext):
+                    principal = ctx.principal
+            except Exception:
+                principal = None
+            if principal is None and credentials:
+                try:
+                    resolver = get_auth_principal
+                    try:
+                        app = getattr(request, "app", None)
+                        if app is not None:
+                            override_fn = app.dependency_overrides.get(get_auth_principal)
+                            if override_fn is not None:
+                                resolver = override_fn
+                    except Exception:
+                        resolver = get_auth_principal
+
+                    if resolver is get_auth_principal:
+                        principal = await resolver(request)
+                    else:
+                        try:
+                            sig = inspect.signature(resolver)
+                            has_no_params = len(sig.parameters) == 0
+                        except (TypeError, ValueError):
+                            has_no_params = False
+                        try:
+                            result = resolver() if has_no_params else resolver(request)
+                        except TypeError:
+                            result = resolver()
+                        if inspect.isawaitable(result):
+                            result = await result
+                        principal = result
+                except HTTPException:
+                    principal = None
+                except Exception:
+                    principal = None
+            if principal is not None and principal.is_admin:
+                return None
+
         # If we have Authorization bearer and it looks like a JWT, apply JWT-based checks.
         if token and token_is_jwt:
             try:
@@ -1627,9 +1708,21 @@ def require_token_scope(
             except (InvalidTokenError, TokenExpiredError):
                 # Defensive: malformed tokens should fall back to upstream auth handling.
                 return None
-            # Optional admin bypass based on token role claim
-            if allow_admin_bypass and str(payload.get("role", "")) == "admin":
-                return None
+            # Enforce revocation/blacklist checks for scoped JWTs.
+            try:
+                from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+
+                session_manager = await get_session_manager()
+                if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                    raise HTTPException(status_code=401, detail="Token has been revoked")
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "require_token_scope: token revocation check failed; denying: {}",
+                    exc,
+                )
+                raise HTTPException(status_code=401, detail="Could not validate credentials") from exc
             tok_scope = str(payload.get("scope") or "").strip()
             if tok_scope:
                 try:
@@ -1712,13 +1805,11 @@ def require_token_scope(
                                 raise
                             except Exception as err:
                                 # Defensive: fall back to process-local counters if quota backend fails.
-                                cur = int(_VK_USAGE.get(key, 0))
-                                if cur >= int(max_calls):
+                                if not _vk_usage_check_and_increment(key, int(max_calls)):
                                     raise HTTPException(
                                         status_code=403,
                                         detail="Forbidden: token quota exceeded",
                                     ) from err
-                                _VK_USAGE[key] = cur + 1
             except HTTPException:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -1757,15 +1848,38 @@ def require_token_scope(
             api_key = token
         if api_key:
             try:
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
+                    normalize_scope as _normalize_scope,
+                    has_scope as _has_scope,
+                    VALID_SCOPE_VALUES as _VALID_SCOPE_VALUES,
+                )
+
+                def _required_scope_for_api_key(scope_value: str, method: str) -> Optional[str]:
+                    scope_norm = str(scope_value or "").strip().lower()
+                    if scope_norm in _VALID_SCOPE_VALUES:
+                        return scope_norm
+                    if method in {"GET", "HEAD", "OPTIONS"}:
+                        return "read"
+                    if method:
+                        return "write"
+                    return None
+
                 api_mgr = await get_api_key_manager()
-                client_ip = request.client.host if getattr(request, "client", None) else None
+                client_ip = resolve_client_ip(request, get_settings())
                 info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
                 if not info:
                     # Let upstream auth fail; do not enforce here
                     return None
                 # Admin bypass via scope 'admin'
-                if allow_admin_bypass and str(info.get("scope", "")).lower() == "admin":
+                key_scopes = _normalize_scope(info.get("scope"))
+                if allow_admin_bypass and (_has_scope(key_scopes, "admin") or _has_scope(key_scopes, "service")):
                     return None
+                required_scope = _required_scope_for_api_key(scope, str(getattr(request, "method", "")).upper())
+                if required_scope and not _has_scope(key_scopes, required_scope):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Forbidden: API key lacks required scope",
+                    )
                 # Allowed endpoints from llm_allowed_endpoints
                 allowed_eps = info.get("llm_allowed_endpoints")
                 if isinstance(allowed_eps, str):
@@ -1820,13 +1934,11 @@ def require_token_scope(
                                 except Exception as err:
                                     # Defensive: fall back to process-local counters if quota backend fails.
                                     key = (f"apikey:{key_id}", str(count_as))
-                                    cur = int(_VK_USAGE.get(key, 0))
-                                    if cur >= int(quota):
+                                    if not _vk_usage_check_and_increment(key, int(quota)):
                                         raise HTTPException(
                                             status_code=403,
                                             detail="Forbidden: API key quota exceeded",
                                         ) from err
-                                    _VK_USAGE[key] = cur + 1
             except HTTPException:
                 raise
             except Exception:  # noqa: BLE001

@@ -83,5 +83,10 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
                 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
                 raise ChatProviderError(provider=self.name, message=str(e))
 
-        logger.debug("GoogleEmbeddingsAdapter: native HTTP disabled and no legacy fallback; returning empty result")
-        return {"data": [], "object": "list", "model": model}
+        msg = (
+            "GoogleEmbeddingsAdapter: native HTTP disabled "
+            "(set LLM_EMBEDDINGS_NATIVE_HTTP_GOOGLE=1 to enable)"
+        )
+        logger.debug(msg)
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider=self.name, message=msg)

@@ -890,11 +890,15 @@ def _refresh_claim_embedding(
     except Exception:
         return
     embedding_config = dict(settings.get("EMBEDDING_CONFIG") or {})
-    embedding_config["USER_DB_BASE_DIR"] = settings.get("USER_DB_BASE_DIR")
-    if not embedding_config.get("USER_DB_BASE_DIR"):
+    user_db_base_dir = settings.get("USER_DB_BASE_DIR")
+    if not user_db_base_dir:
         return
     try:
-        manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
+        user_embedding_config = {
+            "USER_DB_BASE_DIR": user_db_base_dir,
+            "embedding_config": embedding_config,
+        }
+        manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=user_embedding_config)
     except Exception:
         return
     collection_name = f"claims_for_{user_id}"
@@ -921,7 +925,7 @@ def _refresh_claim_embedding(
     try:
         embeddings = create_embeddings_batch(
             texts=[new_text],
-            user_app_config=embedding_config,
+            user_app_config=user_embedding_config,
             model_id_override=model_id,
         )
     except Exception:

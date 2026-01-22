@@ -123,19 +123,19 @@ def test_get_available_templates_no_dir():
 def test_default_raw_passthrough_template():
     assert DEFAULT_RAW_PASSTHROUGH_TEMPLATE is not None
     assert DEFAULT_RAW_PASSTHROUGH_TEMPLATE.name == "raw_passthrough"
-    data = {"message_content": "test content", "original_system_message_from_request": "system content"}
+    data = {"message_content": "test content", "system_messages_combined": "system content"}
 
     # User message template (is "{{message_content}}")
     assert apply_template_to_string(DEFAULT_RAW_PASSTHROUGH_TEMPLATE.user_message_content_template,
                                     data) == "test content"
-    # System message template (is "{{original_system_message_from_request}}")
+    # System message template (is "{{system_messages_combined}}")
     assert apply_template_to_string(DEFAULT_RAW_PASSTHROUGH_TEMPLATE.system_message_template,
                                     data) == "system content"
 
-    data_empty_sys = {"original_system_message_from_request": ""}
+    data_empty_sys = {"system_messages_combined": ""}
     assert apply_template_to_string(DEFAULT_RAW_PASSTHROUGH_TEMPLATE.system_message_template,
                                     data_empty_sys) == ""
 
-    data_missing_sys = {"message_content": "some_content"}  # original_system_message_from_request is missing
+    data_missing_sys = {"message_content": "some_content"}  # system_messages_combined is missing
     assert apply_template_to_string(DEFAULT_RAW_PASSTHROUGH_TEMPLATE.system_message_template,
                                     data_missing_sys) == ""  # Jinja renders missing as empty

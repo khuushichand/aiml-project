@@ -50,6 +50,11 @@ def _extract_text_from_message_content(content: Union[str, List[Dict[str, Any]]]
         text_parts.append(content)
     elif isinstance(content, list):
         for part in content:
+            if isinstance(part, str):
+                text_parts.append(part)
+                continue
+            if not isinstance(part, dict):
+                continue
             if part.get("type") == "text":
                 text_parts.append(part.get("text", ""))
             elif part.get("type") == "image_url":

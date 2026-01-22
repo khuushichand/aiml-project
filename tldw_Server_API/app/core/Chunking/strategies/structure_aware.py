@@ -175,7 +175,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
             'markdown_header': re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE),
             # Broaden code fence support: ``` or ~~~, flexible language tags, optional newline before close
             # Groups: 1=fence, 2=language spec (may contain non-word chars), 3=body
-            'code_block': re.compile(r'(?:\A|\n)(```|~~~)([^\n]*)\n(.*?)(?:\n\1|\1)', re.DOTALL),
+            'code_block': re.compile(r'(?:\A|\n)(`{3,}|~{3,})([^\n]*)\n(.*?)(?:\n\1|\1)', re.DOTALL),
             'table_markdown': re.compile(r'^\|.*\|.*$', re.MULTILINE),
             'list_item': re.compile(r'^[\s]*[-*+]\s+(.+)$', re.MULTILINE),
             'numbered_list': re.compile(r'^[\s]*\d+\.\s+(.+)$', re.MULTILINE),
@@ -259,6 +259,89 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
 
         logger.debug(f"Created {len(text_chunks)} structure-aware chunks")
         return text_chunks
+
+    def chunk_with_metadata(self,
+                            text: str,
+                            max_size: int,
+                            overlap: int = 0,
+                            **options) -> List[ChunkResult]:
+        """Chunk text and return metadata using source spans from structural elements."""
+        if not self.validate_parameters(text, max_size, overlap):
+            return []
+        if overlap >= max_size:
+            logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
+            overlap = max_size - 1
+
+        elements = self._parse_document_structure(text, **options)
+        if not elements:
+            return []
+
+        chunks = self._group_elements_into_chunks(elements, max_size, overlap, **options)
+
+        # Prepare global header index for breadcrumb computation (mirrors chunk())
+        global_headers: List[Tuple[int, int, str]] = []  # (start, level, text)
+        for e in elements:
+            if e.type == StructureType.HEADER and isinstance(e.level, int):
+                start_pos = e.metadata.get('start') if isinstance(e.metadata, dict) else None
+                if isinstance(start_pos, int):
+                    global_headers.append((start_pos, int(e.level), e.content.strip()))
+        global_headers.sort(key=lambda t: t[0])
+
+        results: List[ChunkResult] = []
+        total = len(chunks)
+        for idx, chunk_elements in enumerate(chunks):
+            chunk_start = None
+            chunk_end = None
+            for ce in chunk_elements:
+                if not isinstance(ce, DocumentElement):
+                    continue
+                if isinstance(ce.metadata, dict):
+                    s = ce.metadata.get('start')
+                    e = ce.metadata.get('end')
+                else:
+                    s = None
+                    e = None
+                if isinstance(s, int):
+                    chunk_start = s if chunk_start is None else min(chunk_start, s)
+                if isinstance(e, int):
+                    chunk_end = e if chunk_end is None else max(chunk_end, e)
+
+            if chunk_start is None:
+                chunk_start = 0
+            if chunk_end is None:
+                chunk_end = chunk_start
+            if chunk_end < chunk_start:
+                chunk_end = chunk_start
+            try:
+                chunk_end = self._expand_end_to_grapheme_boundary(text, chunk_end)
+            except Exception:
+                pass
+
+            chunk_text = self._elements_to_text(
+                chunk_elements,
+                _global_headers=global_headers,
+                _chunk_start=int(chunk_start),
+                **options,
+            )
+            if not chunk_text.strip():
+                continue
+
+            metadata = ChunkMetadata(
+                index=idx,
+                start_char=int(chunk_start),
+                end_char=int(chunk_end),
+                word_count=len(chunk_text.split()),
+                language=self.language,
+                overlap_with_previous=overlap if idx > 0 else 0,
+                overlap_with_next=overlap if idx < total - 1 else 0,
+                method='structure_aware',
+                options={
+                    'element_count': len(chunk_elements),
+                },
+            )
+            results.append(ChunkResult(text=chunk_text, metadata=metadata))
+
+        return results
 
     def _parse_document_structure(self, text: str, **options) -> List[DocumentElement]:
         """

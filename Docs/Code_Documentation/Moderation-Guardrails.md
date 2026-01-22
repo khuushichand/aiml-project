@@ -25,8 +25,9 @@ Configuration ([Moderation] in `tldw_Server_API/Config_Files/config.txt`)
 - `categories_enabled` (csv): categories to permit globally (empty = allow all).
 - `runtime_overrides_file` (path): default `tldw_Server_API/Config_Files/moderation_runtime_overrides.json`.
 - Performance/Safety (optional):
-  - `max_scan_chars` (int): max chars to scan/redact per text (default 200000).
+  - `max_scan_chars` (int): scan chunk size per text (default 200000; full text is scanned in chunks).
   - `max_replacements_per_pattern` (int): replacement limit per pattern (default 1000).
+  - `match_window_chars` (int): lookahead window to catch matches spanning chunk boundaries (default 4096).
   - `blocklist_write_debounce_ms` (int): debounce window for blocklist writes in milliseconds (default 0=disabled). Useful to coalesce rapid edits from the Web UI.
 - ENV overrides: `MODERATION_*` keys mirror the above.
 
