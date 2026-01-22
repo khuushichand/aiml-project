@@ -658,6 +658,11 @@ class TTSServiceV2:
                     response = await adapter.generate(request_for_provider)
 
                 if fallback_plan is None and response is not None:
+                    if response.metadata:
+                        try:
+                            setattr(request, "_tts_metadata", response.metadata)
+                        except Exception:
+                            pass
                     if response.audio_stream:
                         async for chunk in response.audio_stream:
                             # Record TTFB on first emitted chunk

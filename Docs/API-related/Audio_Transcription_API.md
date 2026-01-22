@@ -772,6 +772,8 @@ WebSocket limits
 
 TTS
 - `POST /api/v1/audio/speech`: 10 requests/minute; OpenAI-compatible request with `model`, `input`, `voice`, `response_format` (mp3, opus, aac, flac, wav, pcm).
+- Non-streaming responses may include `X-TTS-Alignment` (base64url JSON) when alignment metadata is available.
+- Streaming alignment support: `POST /api/v1/audio/speech/metadata` with the same payload to return alignment JSON (200) or no-content (204).
 - `GET /api/v1/audio/voices/catalog`: Lists available TTS voices across providers; optional `provider` filter.
 
 ## Security Considerations

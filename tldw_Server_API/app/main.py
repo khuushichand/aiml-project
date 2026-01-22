@@ -2152,6 +2152,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Audio Jobs worker: {e}")
 
+    # Audiobook Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.audiobook_jobs_worker import (
+            run_audiobook_jobs_worker as _run_audiobook_jobs,
+        )
+
+        _enabled = _should_start_worker("AUDIOBOOK_JOBS_WORKER_ENABLED", "audiobooks")
+        if _enabled:
+            audiobook_jobs_stop_event = _asyncio.Event()
+            audiobook_jobs_task = _asyncio.create_task(_run_audiobook_jobs(audiobook_jobs_stop_event))
+            logger.info("Audiobook Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Audiobook Jobs worker disabled by flag (AUDIOBOOK_JOBS_WORKER_ENABLED)")
+    except Exception as e:
+        logger.warning(f"Failed to start Audiobook Jobs worker: {e}")
+
     # Media Ingest Jobs worker
     try:
         import os as _os

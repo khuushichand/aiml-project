@@ -31,6 +31,7 @@ def generate_subtitles(
     words_per_cue: Optional[int] = None,
     max_chars: Optional[int] = None,
     max_lines: Optional[int] = None,
+    max_duration_ms: Optional[int] = None,
 ) -> str:
     """Generate subtitle content for the requested format."""
     words = alignment.words
@@ -42,7 +43,13 @@ def generate_subtitles(
         raise ValueError("words_per_cue must be positive")
 
     effective_max_chars = _resolve_max_chars(max_chars, variant)
-    cues = _build_cues(words, mode, effective_words_per_cue)
+    if mode == "sentence":
+        cues = _chunk_sentences(words)
+        duration_limit = max_duration_ms if max_duration_ms is not None else 6000
+        if _should_fallback_sentence(cues, effective_max_chars, duration_limit):
+            cues = _chunk_words(words, effective_words_per_cue)
+    else:
+        cues = _build_cues(words, mode, effective_words_per_cue)
     line_sep = "\\N" if format == "ass" else "\n"
 
     rendered: List[SubtitleCue] = []
@@ -51,15 +58,27 @@ def generate_subtitles(
         end_ms = cue_words[-1].end_ms
         if end_ms < start_ms:
             raise ValueError("alignment end_ms must be >= start_ms")
-        text = _render_text(cue_words, effective_max_chars, max_lines, line_sep)
+        if mode == "highlight":
+            word = cue_words[0]
+            if format == "vtt":
+                text = f"<c.hl>{word.word}</c>"
+            elif format == "ass":
+                duration_cs = max(1, (end_ms - start_ms) // 10)
+                text = f"{{\\k{duration_cs}}}{word.word}"
+            else:
+                text = word.word
+        else:
+            text = _render_text(cue_words, effective_max_chars, max_lines, line_sep)
+        if mode == "word_count":
+            start_ms, end_ms = _clamp_cue_duration(start_ms, end_ms)
         rendered.append(SubtitleCue(index=idx, start_ms=start_ms, end_ms=end_ms, text=text))
 
     if format == "srt":
         return _format_srt(rendered)
     if format == "vtt":
-        return _format_vtt(rendered)
+        return _format_vtt(rendered, variant)
     if format == "ass":
-        return _format_ass(rendered)
+        return _format_ass(rendered, variant)
     raise ValueError(f"unsupported subtitle format: {format}")
 
 
@@ -67,6 +86,8 @@ def _resolve_max_chars(max_chars: Optional[int], variant: SubtitleVariant) -> Op
     if max_chars is not None:
         return max_chars
     if variant == "narrow":
+        return 28
+    if variant in {"wide", "centered"}:
         return 42
     return None
 
@@ -82,8 +103,7 @@ def _build_cues(
         return _chunk_words(words, words_per_cue)
     if mode == "sentence":
         return _chunk_sentences(words)
-    # line mode defaults to a single cue unless word_count requested
-    return [list(words)]
+    return _chunk_lines(words)
 
 
 def _chunk_words(words: Sequence[AlignmentWord], words_per_cue: int) -> List[List[AlignmentWord]]:
@@ -106,6 +126,48 @@ def _chunk_sentences(words: Sequence[AlignmentWord]) -> List[List[AlignmentWord]
     return cues
 
 
+def _chunk_lines(words: Sequence[AlignmentWord]) -> List[List[AlignmentWord]]:
+    cues: List[List[AlignmentWord]] = []
+    current: List[AlignmentWord] = []
+    for word in words:
+        current.append(word)
+        if "\n" in word.word:
+            cues.append(current)
+            current = []
+    if current:
+        cues.append(current)
+    return cues
+
+
+def _should_fallback_sentence(
+    cues: Sequence[Sequence[AlignmentWord]],
+    max_chars: Optional[int],
+    max_duration_ms: int,
+) -> bool:
+    for cue in cues:
+        if not cue:
+            continue
+        duration = cue[-1].end_ms - cue[0].start_ms
+        if duration > max_duration_ms:
+            return True
+        if max_chars is not None:
+            text = " ".join(word.word for word in cue).replace("\n", " ").strip()
+            if len(text) > max_chars:
+                return True
+    return False
+
+
+def _clamp_cue_duration(start_ms: int, end_ms: int) -> tuple[int, int]:
+    min_duration = 800
+    max_duration = 6000
+    duration = end_ms - start_ms
+    if duration < min_duration:
+        end_ms = start_ms + min_duration
+    elif duration > max_duration:
+        end_ms = start_ms + max_duration
+    return start_ms, end_ms
+
+
 def _render_text(
     words: Sequence[AlignmentWord],
     max_chars: Optional[int],
@@ -113,8 +175,30 @@ def _render_text(
     line_sep: str,
 ) -> str:
     tokens = [word.word for word in words]
+    if max_lines is not None and max_lines <= 0:
+        raise ValueError("max_lines must be positive")
+    if max_chars is not None and max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+
+    if line_sep == "\n":
+        raw_text = " ".join(tokens).replace("\n", " ").strip()
+    else:
+        raw_text = " ".join(tokens).strip()
+    if max_chars is None and max_lines is None:
+        return raw_text
+
     if max_chars is None:
-        return " ".join(tokens).strip()
+        if max_lines is None:
+            return raw_text
+        # split lines only on explicit newlines for line mode cues
+        if line_sep == "\n":
+            lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
+        else:
+            lines = [raw_text]
+        if max_lines is not None and len(lines) > max_lines:
+            merged = " ".join(lines[max_lines - 1 :])
+            lines = lines[: max_lines - 1] + [merged]
+        return line_sep.join(lines).strip()
     lines: List[str] = []
     current: List[str] = []
     for token in tokens:
@@ -129,7 +213,11 @@ def _render_text(
     if max_lines is not None and len(lines) > max_lines:
         merged = " ".join(lines[max_lines - 1 :])
         lines = lines[: max_lines - 1] + [merged]
-    return line_sep.join(lines).strip()
+    if line_sep == "\n":
+        rendered = line_sep.join(lines).replace("\n\n", "\n").strip()
+    else:
+        rendered = line_sep.join(lines).strip()
+    return rendered
 
 
 def _format_srt(cues: Iterable[SubtitleCue]) -> str:
@@ -141,16 +229,18 @@ def _format_srt(cues: Iterable[SubtitleCue]) -> str:
     return "\n\n".join(blocks).strip()
 
 
-def _format_vtt(cues: Iterable[SubtitleCue]) -> str:
+def _format_vtt(cues: Iterable[SubtitleCue], variant: SubtitleVariant) -> str:
     blocks: List[str] = ["WEBVTT"]
+    settings = " align:center" if variant == "centered" else ""
     for cue in cues:
         start = _format_vtt_time(cue.start_ms)
         end = _format_vtt_time(cue.end_ms)
-        blocks.append(f"{start} --> {end}\n{cue.text}")
+        blocks.append(f"{start} --> {end}{settings}\n{cue.text}")
     return "\n\n".join(blocks).strip()
 
 
-def _format_ass(cues: Iterable[SubtitleCue]) -> str:
+def _format_ass(cues: Iterable[SubtitleCue], variant: SubtitleVariant) -> str:
+    alignment = "2" if variant == "centered" else "1"
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n\n"
@@ -159,7 +249,7 @@ def _format_ass(cues: Iterable[SubtitleCue]) -> str:
         "Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,"
         "Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
         "Style: Default,Arial,28,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
-        "0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1\n\n"
+        f"0,0,0,0,100,100,0,0,1,2,0,{alignment},10,10,10,1\n\n"
         "[Events]\n"
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text"
     )

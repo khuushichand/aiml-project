@@ -28,6 +28,7 @@ import {
   Table2,
   Library,
   PenLine,
+  ShieldCheck,
 } from "lucide-react"
 
 const classNames = (...classes: (string | false | null | undefined)[]) =>
@@ -268,6 +269,12 @@ export function HeaderShortcuts({
             to: "/chatbooks",
             icon: BookOpen,
             label: t("option:header.chatbooksPlayground", "Chatbooks Playground"),
+          },
+          {
+            type: "link" as const,
+            to: "/moderation-playground",
+            icon: ShieldCheck,
+            label: t("option:moderationPlayground.nav", "Moderation Playground"),
           },
           {
             type: "link" as const,

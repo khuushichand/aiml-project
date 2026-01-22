@@ -771,7 +771,8 @@ class KokoroAdapter(TTSAdapter):
                     sample_rate=self.sample_rate,
                     channels=1,
                     voice_used=voice,
-                    provider=self.provider_name
+                    provider=self.provider_name,
+                    metadata={}
                 )
 
             # PyTorch backend: preserve true streaming semantics
@@ -785,14 +786,23 @@ class KokoroAdapter(TTSAdapter):
                     provider=self.provider_name
                 )
 
-            audio_data = await self._generate_complete_kokoro(text, voice, lang, request)
+            audio_data, alignment_payload = await self._generate_complete_kokoro_with_alignment(
+                text,
+                voice,
+                lang,
+                request,
+            )
+            metadata = {}
+            if alignment_payload:
+                metadata["alignment"] = alignment_payload
             return TTSResponse(
                 audio_data=audio_data,
                 format=request.format,
                 sample_rate=self.sample_rate,
                 channels=1,
                 voice_used=voice,
-                provider=self.provider_name
+                provider=self.provider_name,
+                metadata=metadata
             )
 
         except Exception as e:
@@ -804,7 +814,8 @@ class KokoroAdapter(TTSAdapter):
         text: str,
         voice: str,
         lang: str,
-        request: TTSRequest
+        request: TTSRequest,
+        alignment_out: Optional[list] = None,
     ) -> AsyncGenerator[bytes, None]:
         """Stream audio from Kokoro"""
         if self.use_onnx:
@@ -892,6 +903,24 @@ class KokoroAdapter(TTSAdapter):
                 stream_iter = _async_iter()
 
             async for item in stream_iter:
+                if alignment_out is not None and getattr(item, "tokens", None):
+                    try:
+                        text_index = getattr(item, "text_index", None)
+                        if text_index is None:
+                            alignment_out.extend(item.tokens)
+                        else:
+                            for token in item.tokens:
+                                try:
+                                    meta = getattr(token, "_", None)
+                                    if meta is None:
+                                        meta = token.Underscore()
+                                        token._ = meta
+                                    meta["segment_index"] = text_index
+                                except Exception:
+                                    pass
+                                alignment_out.append(token)
+                    except Exception:
+                        pass
                 samples_chunk, sr_chunk = self._unpack_stream_item(item)
                 if samples_chunk is not None and len(samples_chunk) > 0:
                     # Heuristic de-duplication for providers that may repeat phrases
@@ -1000,6 +1029,163 @@ class KokoroAdapter(TTSAdapter):
         async for chunk in self._stream_audio_kokoro(text, voice, lang, request):
             all_audio += chunk
         return all_audio
+
+    async def _generate_complete_kokoro_with_alignment(
+        self,
+        text: str,
+        voice: str,
+        lang: str,
+        request: TTSRequest,
+    ) -> tuple[bytes, Optional[dict]]:
+        if self.use_onnx:
+            audio_bytes = await self._generate_complete_kokoro(text, voice, lang, request)
+            return audio_bytes, None
+
+        alignment_tokens: list = []
+        all_audio = b""
+        async for chunk in self._stream_audio_kokoro(
+            text,
+            voice,
+            lang,
+            request,
+            alignment_out=alignment_tokens,
+        ):
+            all_audio += chunk
+        alignment_payload = self._build_alignment_payload(
+            alignment_tokens,
+            sample_rate=self.sample_rate,
+            text=text,
+        )
+        return all_audio, alignment_payload
+
+    def _build_alignment_payload(
+        self,
+        tokens: list,
+        *,
+        sample_rate: int,
+        text: Optional[str] = None,
+    ) -> Optional[dict]:
+        words: list[dict] = []
+        cursor = 0
+        source_text = text
+        text_len = len(source_text) if source_text is not None else 0
+        segments = None
+        segment_cursors: dict[int, int] = {}
+        if source_text is not None:
+            segments = self._split_text_with_offsets(source_text, split_pattern=r"\n+")
+        for token in tokens:
+            token_text = getattr(token, "text", "") or ""
+            if not token_text.strip():
+                continue
+            start_ts = getattr(token, "start_ts", None)
+            end_ts = getattr(token, "end_ts", None)
+            if start_ts is None or end_ts is None:
+                continue
+            char_start = None
+            char_end = None
+            if source_text is not None:
+                segment_index = None
+                meta = getattr(token, "_", None)
+                if meta is not None:
+                    try:
+                        segment_index = meta.get("segment_index")
+                    except Exception:
+                        segment_index = None
+                if (
+                    segment_index is not None
+                    and segments is not None
+                    and 0 <= segment_index < len(segments)
+                ):
+                    segment = segments[segment_index]
+                    seg_text = segment["text"]
+                    seg_cursor = segment_cursors.get(segment_index, 0)
+                    try:
+                        idx = seg_text.find(token_text, seg_cursor)
+                    except Exception:
+                        idx = -1
+                    if idx == -1 and seg_cursor < len(seg_text):
+                        try:
+                            candidate = seg_text[seg_cursor : seg_cursor + len(token_text)]
+                            if candidate == token_text:
+                                idx = seg_cursor
+                        except Exception:
+                            idx = -1
+                    if idx != -1:
+                        char_start = segment["start"] + idx
+                        char_end = char_start + len(token_text)
+                        seg_cursor = idx + len(token_text)
+                        whitespace = getattr(token, "whitespace", "") or ""
+                        if whitespace:
+                            try:
+                                if seg_text[seg_cursor : seg_cursor + len(whitespace)] == whitespace:
+                                    seg_cursor = seg_cursor + len(whitespace)
+                            except Exception:
+                                pass
+                        segment_cursors[segment_index] = seg_cursor
+                        if char_end is not None:
+                            cursor = max(cursor, char_end)
+                            if whitespace:
+                                try:
+                                    if source_text[char_end : char_end + len(whitespace)] == whitespace:
+                                        cursor = max(cursor, char_end + len(whitespace))
+                                except Exception:
+                                    pass
+                if char_start is None:
+                    try:
+                        idx = source_text.find(token_text, cursor)
+                    except Exception:
+                        idx = -1
+                    if idx == -1 and cursor < text_len:
+                        try:
+                            candidate = source_text[cursor : cursor + len(token_text)]
+                            if candidate == token_text:
+                                idx = cursor
+                        except Exception:
+                            idx = -1
+                    if idx != -1:
+                        char_start = idx
+                        char_end = idx + len(token_text)
+                        cursor = char_end
+                        whitespace = getattr(token, "whitespace", "") or ""
+                        if whitespace:
+                            try:
+                                if source_text[char_end : char_end + len(whitespace)] == whitespace:
+                                    cursor = char_end + len(whitespace)
+                            except Exception:
+                                pass
+            words.append(
+                {
+                    "word": token_text.strip(),
+                    "start_ms": int(start_ts * 1000),
+                    "end_ms": int(end_ts * 1000),
+                    "char_start": char_start,
+                    "char_end": char_end,
+                }
+            )
+        if not words:
+            return None
+        return {"engine": "kokoro", "sample_rate": sample_rate, "words": words}
+
+    def _split_text_with_offsets(self, text: str, split_pattern: Optional[str]) -> list[dict]:
+        if not split_pattern:
+            return [{"text": text, "start": 0, "end": len(text)}]
+        segments: list[dict] = []
+        try:
+            regex = re.compile(split_pattern)
+        except re.error:
+            return [{"text": text, "start": 0, "end": len(text)}]
+        last_end = 0
+        for match in regex.finditer(text):
+            segments.append(
+                {
+                    "text": text[last_end:match.start()],
+                    "start": last_end,
+                    "end": match.start(),
+                }
+            )
+            last_end = match.end()
+        segments.append({"text": text[last_end:], "start": last_end, "end": len(text)})
+        return segments
 
     def _process_voice(self, voice: str) -> str:
         """

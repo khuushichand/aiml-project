@@ -182,6 +182,8 @@ class ImageAdapter:
     def _allowed_extra_params(backend: str, config) -> set[str]:
         if backend == "stable_diffusion_cpp":
             return set(config.sd_cpp_allowed_extra_params or [])
+        if backend == "swarmui":
+            return set(config.swarmui_allowed_extra_params or [])
         return set()
 
     def _validate_extra_params(

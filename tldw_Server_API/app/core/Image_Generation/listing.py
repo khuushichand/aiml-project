@@ -30,6 +30,12 @@ def _is_sd_cpp_configured(cfg, enabled: bool) -> bool:
     return False
 
 
+def _is_swarmui_configured(cfg, enabled: bool) -> bool:
+    if not enabled:
+        return False
+    return bool(getattr(cfg, "swarmui_base_url", None))
+
+
 def _resolve_supported_formats(name: str) -> Optional[List[str]]:
     registry = get_registry()
     try:
@@ -63,6 +69,12 @@ def list_image_models_for_catalog() -> List[Dict[str, Any]]:
         if name == "stable_diffusion_cpp":
             try:
                 is_configured = _is_sd_cpp_configured(cfg, enabled)
+            except Exception as exc:
+                logger.debug("Image backend config check failed for %s: %s", name, exc)
+                is_configured = False
+        if name == "swarmui":
+            try:
+                is_configured = _is_swarmui_configured(cfg, enabled)
             except Exception as exc:
                 logger.debug("Image backend config check failed for %s: %s", name, exc)
                 is_configured = False

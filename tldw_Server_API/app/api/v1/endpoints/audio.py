@@ -558,6 +558,134 @@ async def get_tts_service() -> TTSServiceV2:
     """Get the V2 TTS service instance."""
     return await get_tts_service_v2()
 
+def _raise_for_tts_error(exc: Exception, request_id: Optional[str]) -> None:
+    if isinstance(exc, TTSValidationError):
+        logger.warning(f"TTS validation error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("TTS validation failed", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSProviderNotConfiguredError):
+        logger.error(f"TTS provider not configured: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_http_error_detail("TTS service unavailable", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSAuthenticationError):
+        logger.error(f"TTS authentication error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_http_error_detail("TTS provider authentication failed", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSRateLimitError):
+        logger.warning(f"TTS rate limit exceeded: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=_http_error_detail(
+                "TTS provider rate limit exceeded. Please try again later.", request_id, exc=exc
+            ),
+        )
+    if isinstance(exc, TTSQuotaExceededError):
+        logger.warning(f"TTS quota exceeded: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=_http_error_detail("TTS quota exceeded. Please review your plan or quota.", request_id, exc=exc),
+        )
+    if isinstance(exc, TTSError):
+        logger.error(f"TTS error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_http_error_detail("TTS generation failed", request_id, exc=exc),
+        )
+    logger.error(f"Unexpected error during audio generation: {exc}", exc_info=True)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=_http_error_detail("An unexpected error occurred during audio generation", request_id, exc=exc),
+    )
+
+
+def _sanitize_speech_request(
+    request_data: OpenAISpeechRequest,
+    *,
+    request_id: Optional[str],
+) -> Optional[str]:
+    """Validate and sanitize input text, returning provider hint."""
+    try:
+        tts_config = get_tts_config()
+        validator = TTSInputValidator({"strict_validation": tts_config.strict_validation})
+
+        provider_hint = _infer_tts_provider_from_model(getattr(request_data, "model", None))
+        sanitized_text = validator.sanitize_text(request_data.input, provider=provider_hint)
+        if not sanitized_text or len(sanitized_text.strip()) == 0:
+            raise TTSValidationError(
+                "Input text cannot be empty after sanitization",
+                details={"original_length": len(request_data.input)},
+            )
+        request_data.input = sanitized_text
+        return provider_hint
+    except TTSValidationError as exc:
+        logger.warning(f"TTS validation error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("TTS validation failed", request_id, exc=exc),
+        ) from exc
+
+
+def _tts_fallback_resolver(name: str) -> Optional[str]:
+    try:
+        cfg = get_tts_config()
+        provider_cfg = getattr(cfg, "providers", {}).get(name)
+        api_key = getattr(provider_cfg, "api_key", None) if provider_cfg else None
+        return api_key or None
+    except (AttributeError, KeyError, TypeError) as exc:
+        logger.debug(f"TTS fallback resolver failed for provider '{name}': {exc}")
+        return None
+
+
+async def _resolve_tts_byok(
+    *,
+    provider_hint: Optional[str],
+    current_user: User,
+    request: Request,
+) -> tuple[Optional[int], Optional[Dict[str, Any]], Optional[Any]]:
+    user_id_int: Optional[int] = None
+    try:
+        user_id_int = getattr(current_user, "id_int", None)
+        if user_id_int is None:
+            raw_id = getattr(current_user, "id", None)
+            if raw_id is not None:
+                user_id_int = int(raw_id)
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.debug(f"Failed to extract user_id from current_user: {exc}")
+        user_id_int = None
+
+    tts_overrides: Optional[Dict[str, Any]] = None
+    byok_tts_resolution = None
+    if provider_hint:
+        byok_tts_resolution = await resolve_byok_credentials(
+            provider_hint,
+            user_id=user_id_int,
+            request=request,
+            fallback_resolver=_tts_fallback_resolver,
+        )
+        if byok_tts_resolution.uses_byok:
+            tts_overrides = {"api_key": byok_tts_resolution.api_key}
+            base_url = byok_tts_resolution.credential_fields.get("base_url")
+            if isinstance(base_url, str) and base_url.strip():
+                tts_overrides["base_url"] = base_url.strip()
+        elif not byok_tts_resolution.api_key:
+            if provider_hint in {"openai", "elevenlabs"}:
+                record_byok_missing_credentials(provider_hint, operation="audio_tts")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error_code": "missing_provider_credentials",
+                        "message": f"TTS provider '{provider_hint}' requires an API key.",
+                    },
+                )
+
+    return user_id_int, tts_overrides, byok_tts_resolution
+
 
 # --- End of Placeholder ---
 
@@ -569,6 +697,20 @@ async def get_tts_service() -> TTSServiceV2:
         Depends(check_rate_limit),
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
     ],
+    responses={
+        200: {
+            "headers": {
+                "X-TTS-Alignment": {
+                    "description": "Base64url-encoded JSON alignment payload when available (non-streaming).",
+                    "schema": {"type": "string"},
+                },
+                "X-TTS-Alignment-Format": {
+                    "description": "Alignment header encoding format (currently json+base64).",
+                    "schema": {"type": "string"},
+                },
+            }
+        }
+    },
 )
 async def create_speech(
     request_data: OpenAISpeechRequest,  # FastAPI will parse JSON body into this
@@ -607,81 +749,14 @@ async def create_speech(
 
     request_id = ensure_request_id(request)
 
-    # Input validation using the new validation system
-    provider_hint: Optional[str] = None
-    try:
-        # Create validator instance; strictness can be configured via TTS config
-        tts_config = get_tts_config()
-        validator = TTSInputValidator({"strict_validation": tts_config.strict_validation})
-
-        # Validate and sanitize input text
-        provider_hint = _infer_tts_provider_from_model(getattr(request_data, "model", None))
-        sanitized_text = validator.sanitize_text(request_data.input, provider=provider_hint)
-
-        # Check for empty input after sanitization
-        if not sanitized_text or len(sanitized_text.strip()) == 0:
-            raise TTSValidationError(
-                "Input text cannot be empty after sanitization", details={"original_length": len(request_data.input)}
-            )
-
-        # Update request with sanitized text
-        request_data.input = sanitized_text
-
-    except TTSValidationError as e:
-        logger.warning(f"TTS validation error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_http_error_detail("TTS validation failed", request_id, exc=e),
-        ) from e
-
-    # Resolve BYOK credentials for TTS providers (OpenAI/ElevenLabs)
-    user_id_int: Optional[int] = None
-    try:
-        user_id_int = getattr(current_user, "id_int", None)
-        if user_id_int is None:
-            raw_id = getattr(current_user, "id", None)
-            if raw_id is not None:
-                user_id_int = int(raw_id)
-    except (AttributeError, TypeError, ValueError) as exc:
-        logger.debug(f"Failed to extract user_id from current_user: {exc}")
-        user_id_int = None
+    provider_hint = _sanitize_speech_request(request_data, request_id=request_id)
 
     tts_provider_hint = provider_hint
-
-    def _tts_fallback_resolver(name: str) -> Optional[str]:
-        try:
-            cfg = get_tts_config()
-            provider_cfg = getattr(cfg, "providers", {}).get(name)
-            api_key = getattr(provider_cfg, "api_key", None) if provider_cfg else None
-            return api_key or None
-        except (AttributeError, KeyError, TypeError) as exc:
-            logger.debug(f"TTS fallback resolver failed for provider '{name}': {exc}")
-            return None
-
-    byok_tts_resolution = None
-    tts_overrides: Optional[Dict[str, Any]] = None
-    if tts_provider_hint:
-        byok_tts_resolution = await resolve_byok_credentials(
-            tts_provider_hint,
-            user_id=user_id_int,
-            request=request,
-            fallback_resolver=_tts_fallback_resolver,
-        )
-        if byok_tts_resolution.uses_byok:
-            tts_overrides = {"api_key": byok_tts_resolution.api_key}
-            base_url = byok_tts_resolution.credential_fields.get("base_url")
-            if isinstance(base_url, str) and base_url.strip():
-                tts_overrides["base_url"] = base_url.strip()
-        elif not byok_tts_resolution.api_key:
-            if tts_provider_hint in {"openai", "elevenlabs"}:
-                record_byok_missing_credentials(tts_provider_hint, operation="audio_tts")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "error_code": "missing_provider_credentials",
-                        "message": f"TTS provider '{tts_provider_hint}' requires an API key.",
-                    },
-                )
+    user_id_int, tts_overrides, byok_tts_resolution = await _resolve_tts_byok(
+        provider_hint=tts_provider_hint,
+        current_user=current_user,
+        request=request,
+    )
     logger.info(
         f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}, request_id={request_id}"
     )
@@ -732,51 +807,6 @@ async def create_speech(
             detail=f"Unsupported response_format: {request_data.response_format}. Supported formats are: {', '.join(content_type_map.keys())}",
         )
 
-    def _raise_for_tts_error(exc: Exception) -> None:
-        if isinstance(exc, TTSValidationError):
-            logger.warning(f"TTS validation error: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=_http_error_detail("TTS validation failed", request_id, exc=exc),
-            )
-        if isinstance(exc, TTSProviderNotConfiguredError):
-            logger.error(f"TTS provider not configured: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=_http_error_detail("TTS service unavailable", request_id, exc=exc),
-            )
-        if isinstance(exc, TTSAuthenticationError):
-            logger.error(f"TTS authentication error: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=_http_error_detail("TTS provider authentication failed", request_id, exc=exc),
-            )
-        if isinstance(exc, TTSRateLimitError):
-            logger.warning(f"TTS rate limit exceeded: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=_http_error_detail(
-                    "TTS provider rate limit exceeded. Please try again later.", request_id, exc=exc
-                ),
-            )
-        if isinstance(exc, TTSQuotaExceededError):
-            logger.warning(f"TTS quota exceeded: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail=_http_error_detail("TTS quota exceeded. Please review your plan or quota.", request_id, exc=exc),
-            )
-        if isinstance(exc, TTSError):
-            logger.error(f"TTS error: {exc}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=_http_error_detail("TTS generation failed", request_id, exc=exc),
-            )
-        logger.error(f"Unexpected error during audio generation: {exc}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_http_error_detail("An unexpected error occurred during audio generation", request_id, exc=exc),
-        )
-
     try:
         speech_iter = tts_service.generate_speech(
             request_data,
@@ -788,7 +818,7 @@ async def create_speech(
             user_id=user_id_int,
         )
     except Exception as exc:
-        _raise_for_tts_error(exc)
+        _raise_for_tts_error(exc, request_id)
 
     async def _pull_first_chunk() -> bytes:
         try:
@@ -798,7 +828,7 @@ async def create_speech(
         except HTTPException:
             raise
         except Exception as exc:
-            _raise_for_tts_error(exc)
+            _raise_for_tts_error(exc, request_id)
 
     async def _stream_chunks(initial_chunk: bytes):
         try:
@@ -815,7 +845,7 @@ async def create_speech(
         except HTTPException:
             raise
         except Exception as exc:
-            _raise_for_tts_error(exc)
+            _raise_for_tts_error(exc, request_id)
         finally:
             if byok_tts_resolution is not None:
                 try:
@@ -853,7 +883,7 @@ async def create_speech(
     except HTTPException:
         raise
     except Exception as exc:
-        _raise_for_tts_error(exc)
+        _raise_for_tts_error(exc, request_id)
 
     # Drop any internal boundary markers if present
     all_audio_bytes = all_audio_bytes.replace(b"--final_boundary_for_non_streamed--", b"")
@@ -870,15 +900,123 @@ async def create_speech(
         except Exception as exc:
             logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
 
+    headers = {
+        "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
+        "Cache-Control": "no-cache",
+        "X-Request-Id": request_id,
+    }
+    try:
+        metadata = getattr(request_data, "_tts_metadata", None)
+        if isinstance(metadata, dict):
+            alignment_payload = metadata.get("alignment")
+        else:
+            alignment_payload = None
+    except Exception:
+        alignment_payload = None
+    if alignment_payload:
+        try:
+            alignment_json = json.dumps(alignment_payload, separators=(",", ":"), ensure_ascii=True)
+            alignment_b64 = base64.urlsafe_b64encode(alignment_json.encode("utf-8")).decode("ascii")
+            headers["X-TTS-Alignment"] = alignment_b64
+            headers["X-TTS-Alignment-Format"] = "json+base64"
+        except Exception as exc:
+            logger.debug(f"Failed to encode alignment metadata header: {exc}")
+
     return Response(
         content=all_audio_bytes,
         media_type=content_type,
-        headers={
-            "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
-            "Cache-Control": "no-cache",
-            "X-Request-Id": request_id,
-        },
+        headers=headers,
     )
+
+
+@router.post(
+    "/speech/metadata",
+    summary="Returns alignment metadata for a TTS request.",
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+    ],
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "alignment": {
+                            "engine": "kokoro",
+                            "sample_rate": 24000,
+                            "words": [
+                                {"word": "Hello", "start_ms": 0, "end_ms": 400},
+                                {"word": "world", "start_ms": 450, "end_ms": 900},
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        204: {"description": "No alignment metadata available for this request."},
+    },
+)
+async def create_speech_metadata(
+    request_data: OpenAISpeechRequest,
+    request: Request,
+    tts_service: TTSServiceV2 = Depends(get_tts_service),
+    current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
+):
+    request_id = ensure_request_id(request)
+    provider_hint = _sanitize_speech_request(request_data, request_id=request_id)
+    tts_provider_hint = provider_hint
+    user_id_int, tts_overrides, byok_tts_resolution = await _resolve_tts_byok(
+        provider_hint=tts_provider_hint,
+        current_user=current_user,
+        request=request,
+    )
+
+    try:
+        usage_log.log_event(
+            "audio.tts.metadata",
+            tags=[str(request_data.model or ""), str(request_data.voice or "")],
+            metadata={"stream": bool(getattr(request_data, "stream", False)), "format": request_data.response_format},
+        )
+    except Exception as exc:
+        logger.debug(f"usage_log audio.tts.metadata failed: error={exc}")
+
+    try:
+        request_data.stream = False
+    except Exception:
+        pass
+
+    try:
+        speech_iter = tts_service.generate_speech(
+            request_data,
+            provider=tts_provider_hint,
+            fallback=True,
+            provider_overrides=tts_overrides,
+            voice_to_voice_route="audio.speech.metadata",
+            user_id=user_id_int,
+        )
+    except Exception as exc:
+        _raise_for_tts_error(exc, request_id)
+
+    try:
+        async for _ in speech_iter:
+            pass
+    except Exception as exc:
+        _raise_for_tts_error(exc, request_id)
+    finally:
+        if byok_tts_resolution is not None:
+            try:
+                await byok_tts_resolution.touch_last_used()
+            except Exception as exc:
+                logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
+
+    metadata = getattr(request_data, "_tts_metadata", None)
+    alignment_payload = None
+    if isinstance(metadata, dict):
+        alignment_payload = metadata.get("alignment")
+    if not alignment_payload:
+        return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"X-Request-Id": request_id})
+    return JSONResponse(content={"alignment": alignment_payload}, headers={"X-Request-Id": request_id})
 
 
 @router.post(

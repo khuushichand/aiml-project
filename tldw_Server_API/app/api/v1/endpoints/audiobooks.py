@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path as PathlibPath
 from typing import Optional
 from uuid import uuid4
@@ -12,6 +13,7 @@ from starlette import status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import (
+    ArtifactInfo,
     AudiobookArtifactsResponse,
     AudiobookJobCreateResponse,
     AudiobookJobRequest,
@@ -37,7 +39,9 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib 
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.Audiobooks.subtitle_generator import generate_subtitles
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
 
@@ -129,6 +133,30 @@ def _detect_chapters(
             )
         )
     return chapters
+
+
+def _get_job_manager() -> JobManager:
+    return JobManager()
+
+
+def _normalize_job_status(status: Optional[str]) -> str:
+    if not status:
+        return "queued"
+    norm = status.lower()
+    if norm == "cancelled":
+        return "canceled"
+    if norm == "quarantined":
+        return "failed"
+    return norm
+
+
+def _job_project_id(job_row: dict) -> str:
+    payload = job_row.get("payload") if isinstance(job_row, dict) else None
+    if isinstance(payload, dict):
+        project_id = payload.get("project_id")
+        if isinstance(project_id, str) and project_id:
+            return project_id
+    return f"abk_{job_row.get('id', 0)}"
 
 
 @router.post(
@@ -226,7 +254,36 @@ async def create_audiobook_job(
     request: AudiobookJobRequest,
     _current_user: User = Depends(get_request_user),
 ) -> AudiobookJobCreateResponse:
-    _not_implemented("audiobook_job_create_not_implemented")
+    project_id = f"abk_{uuid4().hex[:12]}"
+    priority = 5
+    if request.queue is not None:
+        try:
+            priority = int(request.queue.priority)
+        except Exception:
+            priority = 5
+    if priority < 1:
+        priority = 1
+    if priority > 10:
+        priority = 10
+
+    payload = request.model_dump()
+    payload["project_id"] = project_id
+
+    job_manager = _get_job_manager()
+    job = job_manager.create_job(
+        domain="audiobooks",
+        queue="default",
+        job_type="audiobook_generate",
+        payload=payload,
+        owner_user_id=str(getattr(_current_user, "id", "")),
+        priority=priority,
+    )
+
+    return AudiobookJobCreateResponse(
+        job_id=int(job["id"]),
+        project_id=project_id,
+        status=_normalize_job_status(job.get("status")),
+    )
 
 
 @router.get(
@@ -238,7 +295,40 @@ async def get_audiobook_job_status(
     job_id: int = Path(..., ge=1, description="Audiobook job id"),
     _current_user: User = Depends(get_request_user),
 ) -> AudiobookJobStatusResponse:
-    _not_implemented("audiobook_job_status_not_implemented")
+    job_manager = _get_job_manager()
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+
+    status = _normalize_job_status(job.get("status"))
+    project_id = _job_project_id(job)
+
+    errors: list[str] = []
+    for key in ("error_message", "last_error", "error_code"):
+        value = job.get(key)
+        if value:
+            errors.append(str(value))
+
+    progress = None
+    percent = job.get("progress_percent")
+    stage = job.get("progress_message")
+    if percent is not None or stage:
+        try:
+            percent_val = int(percent) if percent is not None else None
+        except Exception:
+            percent_val = None
+        progress = {
+            "stage": str(stage or "audiobook_job"),
+            "percent": percent_val,
+        }
+
+    return AudiobookJobStatusResponse(
+        job_id=int(job["id"]),
+        project_id=project_id,
+        status=status,
+        progress=progress,
+        errors=errors,
+    )
 
 
 @router.get(
@@ -250,7 +340,49 @@ async def get_audiobook_job_artifacts(
     job_id: int = Path(..., ge=1, description="Audiobook job id"),
     _current_user: User = Depends(get_request_user),
 ) -> AudiobookArtifactsResponse:
-    _not_implemented("audiobook_job_artifacts_not_implemented")
+    job_manager = _get_job_manager()
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    project_id = _job_project_id(job)
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        return AudiobookArtifactsResponse(project_id=project_id, artifacts=[])
+
+    collections_db = CollectionsDatabase(user_id)
+    rows, _total = collections_db.list_output_artifacts(job_id=int(job_id), limit=200, offset=0)
+    artifacts: list[ArtifactInfo] = []
+    type_map = {
+        "audiobook_audio": "audio",
+        "audiobook_subtitle": "subtitle",
+        "audiobook_alignment": "alignment",
+        "audiobook_package": "package",
+    }
+    for row in rows:
+        metadata = {}
+        if row.metadata_json:
+            try:
+                metadata = json.loads(row.metadata_json)
+            except Exception:
+                metadata = {}
+        artifact_type = metadata.get("artifact_type")
+        if not artifact_type:
+            artifact_type = type_map.get(str(row.type), "audio")
+        artifact_type = str(artifact_type)
+        scope = metadata.get("scope")
+        chapter_id = metadata.get("chapter_id")
+        download_url = f"/api/v1/outputs/{row.id}/download"
+        artifacts.append(
+            ArtifactInfo(
+                artifact_type=artifact_type,
+                format=row.format,
+                scope=scope,
+                chapter_id=chapter_id,
+                output_id=row.id,
+                download_url=download_url,
+            )
+        )
+    return AudiobookArtifactsResponse(project_id=project_id, artifacts=artifacts)
 
 
 @router.post(

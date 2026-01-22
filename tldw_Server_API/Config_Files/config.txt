@@ -45,6 +45,18 @@ sd_cpp_default_sampler = euler_a
 sd_cpp_device = auto
 sd_cpp_timeout_seconds = 120
 
+# SwarmUI backend settings
+# Base URL for SwarmUI (eg http://localhost:7801)
+swarmui_base_url =
+# Optional default model to use when payload.model is omitted.
+swarmui_default_model =
+# Optional swarm_token cookie value for authenticated SwarmUI instances.
+swarmui_swarm_token =
+# Optional allowlist for extra_params keys (JSON array or comma-separated).
+# Empty list disables extra_params passthrough.
+swarmui_allowed_extra_params = []
+swarmui_timeout_seconds = 120
+
 [ACP]
 # Command used to launch the ACP runner (tldw-agent-acp).
 runner_command = go

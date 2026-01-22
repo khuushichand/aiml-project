@@ -25,7 +25,8 @@ import {
   Trash2,
   Table2,
   Library,
-  PenLine
+  PenLine,
+  ShieldCheck
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import OptionLayout from "~/components/Layouts/Layout"
@@ -156,6 +157,7 @@ const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
 const OptionWritingPlayground = lazy(() => import("./option-writing-playground"))
+const OptionModerationPlayground = lazy(() => import("./option-moderation-playground"))
 
 const ERROR_BOUNDARY_TEST_ENABLED = process.env.NODE_ENV !== "production"
 
@@ -408,6 +410,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "option:header.writingPlayground",
       icon: PenLine,
       order: 7
+    }
+  },
+  {
+    kind: "options",
+    path: "/moderation-playground",
+    element: <OptionModerationPlayground />,
+    nav: {
+      group: "server",
+      labelToken: "option:moderationPlayground.nav",
+      icon: ShieldCheck,
+      order: 10
     }
   },
   { kind: "options", path: "/chatbooks", element: <OptionChatbooksPlayground /> },

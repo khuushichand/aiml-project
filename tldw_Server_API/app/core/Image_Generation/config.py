@@ -24,6 +24,7 @@ DEFAULT_SD_CPP_CFG_SCALE = 7.5
 DEFAULT_SD_CPP_SAMPLER = "euler_a"
 DEFAULT_SD_CPP_DEVICE = "auto"
 DEFAULT_SD_CPP_TIMEOUT_SECONDS = 120
+DEFAULT_SWARMUI_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,11 @@ class ImageGenerationConfig:
     sd_cpp_default_sampler: str
     sd_cpp_device: str
     sd_cpp_timeout_seconds: int
+    swarmui_base_url: Optional[str]
+    swarmui_default_model: Optional[str]
+    swarmui_swarm_token: Optional[str]
+    swarmui_allowed_extra_params: List[str]
+    swarmui_timeout_seconds: int
 
 
 _config_cache: Optional[ImageGenerationConfig] = None
@@ -130,6 +136,11 @@ def get_image_generation_config(*, reload: bool = False) -> ImageGenerationConfi
         sd_cpp_default_sampler=_get_config_value(section, "sd_cpp_default_sampler") or DEFAULT_SD_CPP_SAMPLER,
         sd_cpp_device=_get_config_value(section, "sd_cpp_device") or DEFAULT_SD_CPP_DEVICE,
         sd_cpp_timeout_seconds=_coerce_int(section.get("sd_cpp_timeout_seconds"), DEFAULT_SD_CPP_TIMEOUT_SECONDS),
+        swarmui_base_url=_get_config_value(section, "swarmui_base_url"),
+        swarmui_default_model=_get_config_value(section, "swarmui_default_model"),
+        swarmui_swarm_token=_get_config_value(section, "swarmui_swarm_token"),
+        swarmui_allowed_extra_params=_parse_list(section.get("swarmui_allowed_extra_params")),
+        swarmui_timeout_seconds=_coerce_int(section.get("swarmui_timeout_seconds"), DEFAULT_SWARMUI_TIMEOUT_SECONDS),
     )
 
     _config_cache = config

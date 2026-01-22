@@ -17,6 +17,7 @@ class ImageAdapterRegistry:
 
     DEFAULT_ADAPTERS: Dict[str, str] = {
         "stable_diffusion_cpp": "tldw_Server_API.app.core.Image_Generation.adapters.stable_diffusion_cpp_adapter.StableDiffusionCppAdapter",
+        "swarmui": "tldw_Server_API.app.core.Image_Generation.adapters.swarmui_adapter.SwarmUIAdapter",
     }
 
     def __init__(self, config_override: Optional[Dict[str, Any]] = None) -> None:

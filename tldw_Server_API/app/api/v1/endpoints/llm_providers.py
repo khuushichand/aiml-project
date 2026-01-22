@@ -1273,7 +1273,10 @@ async def get_llm_providers(include_deprecated: bool = False):
 
 @router.get("/llm/models/metadata",
     summary="Get model metadata across providers",
-    description="Returns flattened model metadata for all providers",
+    description=(
+        "Returns flattened model metadata for all providers (chat, embeddings, image). "
+        "Image backends appear with type=image and modalities output=image."
+    ),
     response_model=Dict[str, Any])
 async def get_models_metadata(
     include_deprecated: bool = False,
@@ -1378,7 +1381,10 @@ async def get_provider_details(provider_name: str, include_deprecated: bool = Fa
 
 @router.get("/llm/models",
     summary="Get all available models",
-    description="Returns a flat list of all available models across all providers",
+    description=(
+        "Returns a flat list of all available models across all providers. "
+        "Includes image backends as image/<backend> entries."
+    ),
     response_model=List[str])
 async def get_all_models(
     include_deprecated: bool = False,

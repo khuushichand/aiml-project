@@ -157,6 +157,75 @@ class TestTTSGenerateEndpoint:
 
             assert response.status_code == status.HTTP_200_OK
 
+    async def test_generate_returns_alignment_metadata_header(self, test_client, auth_headers):
+        """Test non-streaming speech returns alignment metadata header when available."""
+        alignment_payload = {
+            "engine": "kokoro",
+            "sample_rate": 24000,
+            "words": [
+                {"word": "Hello", "start_ms": 0, "end_ms": 400, "char_start": 0, "char_end": 5},
+                {"word": "world", "start_ms": 450, "end_ms": 900, "char_start": 6, "char_end": 11},
+            ],
+        }
+
+        async def mock_stream(request_obj, *args, **kwargs):
+            request_obj._tts_metadata = {"alignment": alignment_payload}
+            yield b"audio_data"
+
+        with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
+            mock_generate_speech.side_effect = mock_stream
+
+            response = test_client.post(
+                "/api/v1/audio/speech",
+                json={
+                    "input": "Hello world",
+                    "voice": "af_heart",
+                    "model": "kokoro",
+                    "response_format": "wav",
+                    "stream": False,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            encoded = response.headers.get("X-TTS-Alignment")
+            assert encoded
+            decoded = json.loads(base64.urlsafe_b64decode(encoded).decode("utf-8"))
+            assert decoded == alignment_payload
+            assert response.headers.get("X-TTS-Alignment-Format") == "json+base64"
+
+    async def test_generate_alignment_metadata_endpoint(self, test_client, auth_headers):
+        """Test /api/v1/audio/speech/metadata returns alignment JSON."""
+        alignment_payload = {
+            "engine": "kokoro",
+            "sample_rate": 24000,
+            "words": [
+                {"word": "Hello", "start_ms": 0, "end_ms": 400, "char_start": 0, "char_end": 5},
+                {"word": "world", "start_ms": 450, "end_ms": 900, "char_start": 6, "char_end": 11},
+            ],
+        }
+
+        async def mock_stream(request_obj, *args, **kwargs):
+            request_obj._tts_metadata = {"alignment": alignment_payload}
+            yield b"audio_data"
+
+        with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
+            mock_generate_speech.side_effect = mock_stream
+
+            response = test_client.post(
+                "/api/v1/audio/speech/metadata",
+                json={
+                    "input": "Hello world",
+                    "voice": "af_heart",
+                    "model": "kokoro",
+                    "response_format": "wav",
+                    "stream": True,
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json().get("alignment") == alignment_payload
     async def test_generate_with_long_text(self, test_client, auth_headers):
         """Test generation with long text that needs chunking."""
         long_text = " ".join(["This is sentence number {}.".format(i) for i in range(500)])
