@@ -1666,6 +1666,7 @@ class Chunker:
 
         # Use defaults if not specified
         options_raw: Dict[str, Any] = dict(options)
+        align_text_to_source = bool(options_raw.pop("align_text_to_source", False))
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap

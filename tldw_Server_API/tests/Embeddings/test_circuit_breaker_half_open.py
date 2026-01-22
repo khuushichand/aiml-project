@@ -44,4 +44,5 @@ def test_half_open_allows_sequential_calls_up_to_success_threshold():
     with pytest.raises(CircuitBreakerError):
         # Confirm breaker stays closed/open behavior isn't impacted by the fix.
         breaker._state = CircuitState.OPEN
+        breaker._last_failure_time = time.time()
         breaker.call(ok)

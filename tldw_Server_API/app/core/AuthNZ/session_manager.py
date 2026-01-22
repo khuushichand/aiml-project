@@ -946,6 +946,51 @@ class SessionManager:
         except Exception:
             return None, None
 
+    @staticmethod
+    def _get_unverified_claims(token: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Return unverified JWT claims dict (best-effort)."""
+        if not token:
+            return None
+        try:
+            claims = jose_jwt.get_unverified_claims(token)
+            return claims if isinstance(claims, dict) else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _validate_token_binding(
+        claims: Optional[Dict[str, Any]],
+        session_data: Dict[str, Any],
+        *,
+        token_label: str,
+    ) -> None:
+        """Ensure token subject/session_id claims align with the session record."""
+        if not claims:
+            logger.debug(f"Refresh session: {token_label} token claims missing")
+            raise InvalidSessionError()
+        subject = claims.get("sub") or claims.get("user_id")
+        if subject is None:
+            logger.debug(f"Refresh session: {token_label} token missing subject claim")
+            raise InvalidSessionError()
+        try:
+            subject_id = int(subject)
+        except (TypeError, ValueError):
+            logger.debug(f"Refresh session: {token_label} token subject is invalid")
+            raise InvalidSessionError()
+        if subject_id != int(session_data.get("user_id")):
+            logger.debug(f"Refresh session: {token_label} token subject mismatch")
+            raise InvalidSessionError()
+        session_claim = claims.get("session_id")
+        if session_claim is not None:
+            try:
+                session_claim_id = int(session_claim)
+            except (TypeError, ValueError):
+                logger.debug(f"Refresh session: {token_label} token session_id is invalid")
+                raise InvalidSessionError()
+            if session_claim_id != int(session_data.get("id")):
+                logger.debug(f"Refresh session: {token_label} token session_id mismatch")
+                raise InvalidSessionError()
+
     async def create_session(
         self,
         user_id: int,
@@ -1302,6 +1347,19 @@ class SessionManager:
                 refresh_hash_candidates
             )
             if not session_data:
+                raise InvalidSessionError()
+
+            # Validate token subject/session binding before updating session records.
+            try:
+                access_claims = self._get_unverified_claims(new_access_token)
+                self._validate_token_binding(access_claims, session_data, token_label="access")
+                if new_refresh_token:
+                    refresh_claims = self._get_unverified_claims(new_refresh_token)
+                    self._validate_token_binding(refresh_claims, session_data, token_label="refresh")
+            except InvalidSessionError:
+                raise
+            except Exception as exc:
+                logger.debug(f"Refresh session: token binding validation failed: {exc}")
                 raise InvalidSessionError()
 
             if new_refresh_token:

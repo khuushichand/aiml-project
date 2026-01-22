@@ -2265,8 +2265,8 @@ async def _audio_ws_authenticate(
             return False, None
 
     # Single-user mode
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 
     settings = get_settings()
     expected_key = settings.SINGLE_USER_API_KEY

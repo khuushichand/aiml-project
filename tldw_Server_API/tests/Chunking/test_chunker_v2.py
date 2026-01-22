@@ -214,21 +214,30 @@ class TestV2Chunker:
         assert any("Bold Heading" in (c.get("metadata", {}).get("section_path") or "") for c in chunks)
 
     def test_hierarchical_preserves_raw_bidi_override(self):
-        """Hierarchical output should keep raw text slices for fidelity."""
+        """Hierarchical output defaults to sanitized text, with optional raw fidelity."""
         chunker = Chunker()
         text = "Alpha\u202eBeta Gamma"
 
         plain_chunks = chunker.chunk_text(text, method="words", max_size=2, overlap=0, language="en")
-        hier_chunks = chunker.chunk_text_hierarchical_flat(
+        hier_chunks_sanitized = chunker.chunk_text_hierarchical_flat(
             text,
             method="words",
             max_size=2,
             overlap=0,
             language="en",
         )
+        hier_chunks_raw = chunker.chunk_text_hierarchical_flat(
+            text,
+            method="words",
+            max_size=2,
+            overlap=0,
+            language="en",
+            method_options={"sanitize_output": False},
+        )
 
         assert all("\u202e" not in ch for ch in plain_chunks)
-        assert any("\u202e" in row["text"] for row in hier_chunks)
+        assert all("\u202e" not in row["text"] for row in hier_chunks_sanitized)
+        assert any("\u202e" in row["text"] for row in hier_chunks_raw)
 
     def test_hierarchical_flat_includes_chunk_type(self):
         """Flattened hierarchical chunks should include a normalized chunk_type."""

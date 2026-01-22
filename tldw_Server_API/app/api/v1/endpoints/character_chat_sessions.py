@@ -1234,6 +1234,7 @@ async def character_chat_completion(
                     character_name=character.get('name', 'Assistant'),
                     message_content=body.append_user_message,
                     is_user_message=True,
+                    sender_override="user",
                 )
                 if not appended_user_id:
                     raise HTTPException(

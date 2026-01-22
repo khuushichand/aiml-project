@@ -36,6 +36,23 @@ from tldw_Server_API.app.core.Character_Chat.constants import MAX_PERSIST_CONTEN
 
 # Aliases are sourced from character_utils for consistency across modules.
 _DEFAULT_FIRST_MESSAGE_TEMPLATE = "Hello, I am {{char}}. How can I help you, {{user}}?"
+_PLACEHOLDER_TOKENS_FOR_LENGTH = (
+    "{{char}}",
+    "{{user}}",
+    "{{random_user}}",
+    "<USER>",
+    "<CHAR>",
+)
+
+
+def _content_length_for_guardrails(text: str) -> int:
+    """Estimate content length for guardrails, discounting placeholder tokens."""
+    if not text:
+        return 0
+    normalized = text
+    for token in _PLACEHOLDER_TOKENS_FOR_LENGTH:
+        normalized = normalized.replace(token, "X")
+    return len(normalized)
 
 
 def _extract_message_attachments(msg_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1143,9 +1160,11 @@ def post_message_to_conversation(
         except Exception:
             pass
         if max_content_len and len(message_content) > max_content_len:
-            raise InputError(
-                f"Message content exceeds maximum length of {max_content_len} characters"
-            )
+            effective_len = _content_length_for_guardrails(message_content)
+            if effective_len > max_content_len:
+                raise InputError(
+                    f"Message content exceeds maximum length of {max_content_len} characters"
+                )
 
     # Optional preflight image size guard (mirrors DB constraints for clearer API errors)
     if image_data is not None:

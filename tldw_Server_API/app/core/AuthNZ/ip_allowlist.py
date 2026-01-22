@@ -52,13 +52,16 @@ def resolve_client_ip(request: Any, settings: Optional[Settings] = None) -> Opti
     """Resolve client IP, honoring proxy headers only for trusted proxies."""
     if request is None:
         return None
-    s = settings or get_settings()
+    try:
+        s = settings or get_settings()
+    except Exception:
+        s = settings
     try:
         peer = getattr(getattr(request, "client", None), "host", None)
     except Exception:
         peer = None
 
-    trust_xff = bool(getattr(s, "AUTH_TRUST_X_FORWARDED_FOR", False))
+    trust_xff = bool(getattr(s, "AUTH_TRUST_X_FORWARDED_FOR", False)) if s is not None else False
     if trust_xff and is_trusted_proxy_ip(peer, s):
         try:
             xr = request.headers.get("x-real-ip") or request.headers.get("X-Real-IP")

@@ -1030,7 +1030,27 @@ class APIKeyManager:
 
 # Global instance
 _api_key_manager: Optional[APIKeyManager] = None
-_api_key_manager_lock = asyncio.Lock()
+_api_key_manager_lock_guard = threading.Lock()
+_api_key_manager_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
+
+
+def _get_api_key_manager_lock() -> asyncio.Lock:
+    """Return a per-event-loop asyncio.Lock to avoid cross-loop binding issues."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = None
+    if loop is None:
+        return asyncio.Lock()
+    with _api_key_manager_lock_guard:
+        lock = _api_key_manager_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _api_key_manager_locks[loop] = lock
+        return lock
 
 async def get_api_key_manager() -> APIKeyManager:
     """Get APIKeyManager singleton instance"""
@@ -1043,7 +1063,7 @@ async def get_api_key_manager() -> APIKeyManager:
         logger.debug("Failed to compute HMAC fingerprint; will recreate manager: {}", exc)
         current_fp = ""
 
-    async with _api_key_manager_lock:
+    async with _get_api_key_manager_lock():
         if _api_key_manager is not None:
             try:
                 if getattr(_api_key_manager, "_hmac_key_fingerprint", None) != current_fp:
@@ -1062,7 +1082,7 @@ async def get_api_key_manager() -> APIKeyManager:
 async def reset_api_key_manager() -> None:
     """Reset the APIKeyManager singleton (mainly for testing)."""
     global _api_key_manager
-    async with _api_key_manager_lock:
+    async with _get_api_key_manager_lock():
         _api_key_manager = None
 
 #

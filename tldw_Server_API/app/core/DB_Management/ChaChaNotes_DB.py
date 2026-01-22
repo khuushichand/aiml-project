@@ -84,11 +84,11 @@ from tldw_Server_API.app.core.config import load_comprehensive_config, settings
 # Functions:
 
 # --- Order-by validation helpers (defense in depth) ---
-_ORDER_BY_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)?$")
+_ORDER_BY_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 _ORDER_BY_EXPR_RE = re.compile(
-    r"^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)?"
-    r"(?:\\s+COLLATE\\s+NOCASE)?"
-    r"(?:\\s+(?:ASC|DESC))?$",
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?"
+    r"(?:\s+COLLATE\s+NOCASE)?"
+    r"(?:\s+(?:ASC|DESC))?$",
     re.IGNORECASE,
 )
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
