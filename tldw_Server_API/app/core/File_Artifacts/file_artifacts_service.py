@@ -49,6 +49,9 @@ EXPORT_MIME_TYPES = {
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "csv": "text/csv",
     "json": "application/json",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "webp": "image/webp",
 }
 
 
@@ -200,7 +203,7 @@ class FileArtifactsService:
             raise FileArtifactsValidationError("unsupported_export_format")
         export_req = FileExportRequest(format=export_format, mode="url", async_mode="async")
         export_result = await self._export_sync(adapter, structured, export_format)
-        return await self._finalize_export(file_id, export_req, export_result, options)
+        return await self._finalize_export(file_id, export_req, export_result, options, file_type=adapter.file_type)
 
     async def _handle_export(
         self,
@@ -218,6 +221,11 @@ class FileArtifactsService:
         async_mode = export_req.async_mode
         if async_mode not in {"auto", "sync", "async"}:
             raise FileArtifactsValidationError("invalid_async_mode")
+        if adapter.file_type == "image":
+            if export_req.mode != "inline":
+                raise FileArtifactsValidationError("invalid_export_mode")
+            if async_mode != "sync":
+                raise FileArtifactsValidationError("invalid_async_mode")
 
         if async_mode == "async" or (
             async_mode == "auto"
@@ -268,7 +276,11 @@ class FileArtifactsService:
             return export_info, HTTPStatus.ACCEPTED
 
         export_result = await self._export_sync(adapter, structured, export_req.format)
-        export_info = await self._finalize_export(file_id, export_req, export_result, options)
+        if adapter.file_type == "image" and export_result.content:
+            inline_max_bytes = self._resolve_inline_max_bytes_for_file_type(adapter.file_type)
+            if len(export_result.content) > inline_max_bytes:
+                raise FileArtifactsValidationError("export_size_exceeded")
+        export_info = await self._finalize_export(file_id, export_req, export_result, options, file_type=adapter.file_type)
         self._emit_metric("export", "success", file_type=adapter.file_type, export_format=export_req.format)
         return export_info, HTTPStatus.OK
 
@@ -288,6 +300,8 @@ class FileArtifactsService:
         export_req: FileExportRequest,
         export_result: ExportResult,
         options: FileCreateOptions,
+        *,
+        file_type: str,
     ) -> FileExportInfo:
         if export_result.status != "ready" or not export_result.content:
             raise FileArtifactsError("export_failed")
@@ -299,7 +313,7 @@ class FileArtifactsService:
 
         content_type = export_result.content_type or EXPORT_MIME_TYPES.get(export_req.format)
         content_b64 = None
-        inline_max_bytes = self._resolve_inline_max_bytes()
+        inline_max_bytes = self._resolve_inline_max_bytes_for_file_type(file_type)
         inline_ready = export_req.mode == "inline" and inline_max_bytes > 0 and byte_count <= inline_max_bytes
         if inline_ready:
             content_b64 = base64.b64encode(export_result.content).decode("ascii")
@@ -461,6 +475,33 @@ class FileArtifactsService:
         if value > INLINE_MAX_BYTES_UPPER_BOUND:
             logger.warning(
                 "inline_max_bytes capped at {} bytes (configured {}).",
+                INLINE_MAX_BYTES_UPPER_BOUND,
+                value,
+            )
+            return INLINE_MAX_BYTES_UPPER_BOUND
+        return value
+
+    @staticmethod
+    def _resolve_inline_max_bytes_for_file_type(file_type: str) -> int:
+        if file_type != "image":
+            return FileArtifactsService._resolve_inline_max_bytes()
+        raw = get_config_value("Image-Generation", "inline_max_bytes")
+        if raw is None:
+            return FileArtifactsService._resolve_inline_max_bytes()
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return FileArtifactsService._resolve_inline_max_bytes()
+        if value <= 0:
+            logger.warning(
+                "Invalid image inline_max_bytes: {}. Using default {} bytes.",
+                value,
+                INLINE_MAX_BYTES,
+            )
+            return FileArtifactsService._resolve_inline_max_bytes()
+        if value > INLINE_MAX_BYTES_UPPER_BOUND:
+            logger.warning(
+                "image inline_max_bytes capped at {} bytes (configured {}).",
                 INLINE_MAX_BYTES_UPPER_BOUND,
                 value,
             )

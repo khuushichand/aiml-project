@@ -225,10 +225,9 @@ export const applyFimTemplate = (
   const fillPlaceholder = "{fill}"
   const predictPlaceholder = "{predict}"
 
-  let placeholderRegex = predictPlaceholder
-  if (template?.fimTemplate) {
-    placeholderRegex += `|${fillPlaceholder}`
-  }
+  const placeholderRegex = template?.fimTemplate
+    ? `${escapeRegExp(predictPlaceholder)}|${escapeRegExp(fillPlaceholder)}`
+    : escapeRegExp(predictPlaceholder)
 
   let leftPromptChunks: WritingPromptChunk[] | undefined
   let rightPromptChunks: WritingPromptChunk[] | undefined

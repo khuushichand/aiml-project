@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
 from loguru import logger
@@ -29,10 +29,7 @@ from tldw_Server_API.app.core.LLM_Calls.anthropic_messages import (
     openai_stream_to_anthropic,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-from tldw_Server_API.app.core.http_client import (
-    create_async_client as async_http_client_factory,
-    create_client as http_client_factory,
-)
+from tldw_Server_API.app.core.http_client import create_async_client as async_http_client_factory
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
@@ -63,7 +60,7 @@ def _config_default_llm_provider() -> Optional[str]:
     def _extract(section: str) -> Optional[str]:
         try:
             data = cfg.get(section)
-        except Exception:
+        except (AttributeError, TypeError, KeyError):
             data = None
         if isinstance(data, dict):
             default_api = data.get("default_api")
@@ -93,7 +90,7 @@ def _resolve_messages_base_url(provider: str, app_config: Optional[Dict[str, Any
         base = None
         try:
             anth = cfg.get("anthropic_api")
-        except Exception:
+        except (AttributeError, TypeError, KeyError):
             anth = None
         if isinstance(anth, dict):
             base = anth.get("api_base_url")
@@ -104,7 +101,7 @@ def _resolve_messages_base_url(provider: str, app_config: Optional[Dict[str, Any
         base = None
         try:
             llama = cfg.get("llama_api")
-        except Exception:
+        except (AttributeError, TypeError, KeyError):
             llama = None
         if isinstance(llama, dict):
             base = llama.get("api_ip") or llama.get("api_base_url")
@@ -172,7 +169,7 @@ def _apply_override_credentials(
         if isinstance(base_url, str) and base_url.strip():
             try:
                 merged = dict(app_config_override or dict(loaded_config_data))
-            except Exception:
+            except (TypeError, ValueError):
                 merged = dict(app_config_override or {})
             llama_cfg = merged.get("llama_api")
             if not isinstance(llama_cfg, dict):
@@ -185,7 +182,7 @@ def _apply_override_credentials(
 
     try:
         base_config = app_config_override or dict(loaded_config_data)
-    except Exception:
+    except (TypeError, ValueError):
         base_config = app_config_override or {}
     return merge_app_config_overrides(
         base_config,
@@ -198,7 +195,7 @@ def _resolve_llamacpp_api_key(app_config: Optional[Dict[str, Any]]) -> Optional[
     def _from_cfg(cfg: Any) -> Optional[str]:
         try:
             llama = cfg.get("llama_api")
-        except Exception:
+        except (AttributeError, TypeError, KeyError):
             llama = None
         if isinstance(llama, dict):
             key = llama.get("api_key")
@@ -220,14 +217,14 @@ def _resolve_native_timeout(provider: str, app_config: Optional[Dict[str, Any]])
     default_timeout = 60.0 if provider == "anthropic" else 120.0
     try:
         section_cfg = cfg.get(section)
-    except Exception:
+    except (AttributeError, TypeError, KeyError):
         section_cfg = None
     if not isinstance(section_cfg, dict):
         return default_timeout
     raw = section_cfg.get("api_timeout")
     try:
         return float(raw)
-    except Exception:
+    except (TypeError, ValueError):
         return default_timeout
 
 
@@ -310,19 +307,61 @@ def _prepare_native_payload(request_data: Any, *, model: str) -> Dict[str, Any]:
     return payload
 
 
-def _proxy_native_stream(
+async def _proxy_native_stream(
     url: str,
     headers: Dict[str, str],
     payload: Dict[str, Any],
     *,
     timeout: Optional[float] = None,
-) -> Iterable[bytes]:
-    with http_client_factory(timeout=timeout) as client:
-        with client.stream("POST", url, headers=headers, json=payload) as resp:
+) -> AsyncIterator[bytes]:
+    async with async_http_client_factory(timeout=timeout) as client:
+        async with client.stream("POST", url, headers=headers, json=payload) as resp:
             resp.raise_for_status()
-            for chunk in resp.iter_raw():
+            async for chunk in resp.aiter_raw():
                 if chunk:
                     yield chunk
+
+
+async def _resolve_credentials_for_request(
+    provider: str,
+    current_user: User,
+    request: Request,
+    *,
+    operation: str,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    user_id_int = getattr(current_user, "id_int", None)
+    if user_id_int is None:
+        try:
+            user_id_int = int(getattr(current_user, "id", None))
+        except (TypeError, ValueError):
+            user_id_int = None
+
+    byok_resolution = await resolve_byok_credentials(
+        provider,
+        user_id=user_id_int,
+        request=request,
+        fallback_resolver=_fallback_resolver,
+    )
+    api_key = byok_resolution.api_key
+    app_config_override = _apply_override_credentials(
+        provider,
+        byok_resolution.app_config,
+        uses_byok=byok_resolution.uses_byok,
+    )
+    if provider == "llama.cpp" and not api_key:
+        api_key = _resolve_llamacpp_api_key(app_config_override)
+
+    if provider_requires_api_key(provider) and not api_key:
+        record_byok_missing_credentials(provider, operation=operation)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "missing_provider_credentials",
+                "message": f"Provider '{provider}' requires an API key. Please configure credentials.",
+            },
+        )
+
+    return api_key, app_config_override
 
 
 async def _handle_messages(
@@ -338,38 +377,12 @@ async def _handle_messages(
     if override_error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
-    user_id_int = getattr(current_user, "id_int", None)
-    if user_id_int is None:
-        try:
-            user_id_int = int(getattr(current_user, "id", None))
-        except Exception:
-            user_id_int = None
-
-    byok_resolution = await resolve_byok_credentials(
+    api_key, app_config_override = await _resolve_credentials_for_request(
         provider,
-        user_id=user_id_int,
-        request=request,
-        fallback_resolver=_fallback_resolver,
+        current_user,
+        request,
+        operation="messages",
     )
-    api_key = byok_resolution.api_key
-    app_config_override = byok_resolution.app_config
-    app_config_override = _apply_override_credentials(
-        provider,
-        app_config_override,
-        uses_byok=byok_resolution.uses_byok,
-    )
-    if provider == "llama.cpp" and not api_key:
-        api_key = _resolve_llamacpp_api_key(app_config_override)
-
-    if provider_requires_api_key(provider) and not api_key:
-        record_byok_missing_credentials(provider, operation="messages")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "missing_provider_credentials",
-                "message": f"Provider '{provider}' requires an API key. Please configure credentials.",
-            },
-        )
 
     if provider in MESSAGES_NATIVE_PROVIDERS:
         base_url = _resolve_messages_base_url(provider, app_config_override)
@@ -430,38 +443,12 @@ async def _handle_count_tokens(
     if override_error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
-    user_id_int = getattr(current_user, "id_int", None)
-    if user_id_int is None:
-        try:
-            user_id_int = int(getattr(current_user, "id", None))
-        except Exception:
-            user_id_int = None
-
-    byok_resolution = await resolve_byok_credentials(
+    api_key, app_config_override = await _resolve_credentials_for_request(
         provider,
-        user_id=user_id_int,
-        request=request,
-        fallback_resolver=_fallback_resolver,
+        current_user,
+        request,
+        operation="messages.count_tokens",
     )
-    api_key = byok_resolution.api_key
-    app_config_override = byok_resolution.app_config
-    app_config_override = _apply_override_credentials(
-        provider,
-        app_config_override,
-        uses_byok=byok_resolution.uses_byok,
-    )
-    if provider == "llama.cpp" and not api_key:
-        api_key = _resolve_llamacpp_api_key(app_config_override)
-
-    if provider_requires_api_key(provider) and not api_key:
-        record_byok_missing_credentials(provider, operation="messages.count_tokens")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "missing_provider_credentials",
-                "message": f"Provider '{provider}' requires an API key. Please configure credentials.",
-            },
-        )
 
     if provider not in MESSAGES_NATIVE_PROVIDERS:
         raise HTTPException(

@@ -412,6 +412,45 @@ def _resolve_config_path(config_path_arg: Optional[str]) -> Optional[Path]:
     return None
 
 
+def _check_module_import(output_dir: Path) -> bool:
+    """
+    Sanity-check that pocket_tts_onnx can be imported from the output directory.
+
+    Args:
+        output_dir: Directory containing pocket_tts_onnx.py or pocket_tts_onnx package.
+
+    Returns:
+        True if the module can be imported, False otherwise.
+    """
+    module_dir = output_dir
+    module_dir_str = str(module_dir)
+    added = False
+    if module_dir_str not in sys.path:
+        sys.path.insert(0, module_dir_str)
+        added = True
+
+    try:
+        import importlib
+
+        importlib.invalidate_caches()
+        module = importlib.import_module("pocket_tts_onnx")
+        if not hasattr(module, "PocketTTSOnnx"):
+            logger.error("pocket_tts_onnx imported, but PocketTTSOnnx class not found.")
+            return False
+    except Exception as exc:
+        logger.error("pocket_tts_onnx import check failed: {}", exc)
+        logger.opt(exception=exc).debug("PocketTTS import failure")
+        return False
+    finally:
+        if added:
+            try:
+                sys.path.remove(module_dir_str)
+            except ValueError:
+                pass
+
+    return True
+
+
 def main() -> int:
     """
     CLI entrypoint for downloading PocketTTS ONNX assets.
@@ -427,6 +466,7 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="Force re-download even if files exist")
     parser.add_argument("--config-path", default=None, help="Optional tts_providers_config.yaml path to update")
     parser.add_argument("--no-config-update", action="store_true", help="Skip updating tts_providers_config.yaml")
+    parser.add_argument("--no-import-check", action="store_true", help="Skip sanity check for pocket_tts_onnx import")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir).expanduser()
@@ -465,6 +505,14 @@ def main() -> int:
                 tokenizer_name=str(args.tokenizer_name),
                 repo_root=repo_root,
             )
+
+    if not args.no_import_check:
+        if not _check_module_import(output_dir):
+            logger.error(
+                "PocketTTS module is not importable. "
+                "Ensure runtime deps are installed and module_path points to pocket_tts_onnx."
+            )
+            return 1
 
     logger.info("PocketTTS assets downloaded.")
     logger.info("  Models dir : {}", output_dir / args.onnx_subdir)

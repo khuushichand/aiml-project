@@ -2569,7 +2569,7 @@ class CollectionsDatabase:
             "SELECT * FROM reading_digest_schedules "
             f"WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
-        rows = self.backend.execute(q, tuple(params + [limit, offset])).rows
+        rows = self.backend.execute(q, tuple([*params, limit, offset])).rows
         return [self._reading_digest_row_from_db(row) for row in rows], total
 
     def set_reading_digest_history(

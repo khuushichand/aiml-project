@@ -5,7 +5,7 @@ from functools import partial
 from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import urlparse, urljoin
 import os
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from loguru import logger
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.http_client import fetch as _http_fetch, RetryPolicy as _RetryPolicy
@@ -20,6 +20,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 import tldw_Server_API.app.core.LLM_Calls.adapter_registry as llm_adapter_registry
+from tldw_Server_API.app.core.Image_Generation.listing import list_image_models_for_catalog
 
 #######################################################################################################################
 #
@@ -1135,6 +1136,69 @@ def get_all_available_models() -> List[str]:
 
     return models
 
+
+def _normalize_filter_values(values: Optional[List[str]]) -> Optional[set[str]]:
+    if not values:
+        return None
+    normalized = {str(v).strip().lower() for v in values if v and str(v).strip()}
+    return normalized or None
+
+
+def _infer_model_type(model_info: Dict[str, Any]) -> str:
+    declared = model_info.get("type")
+    if declared:
+        return str(declared).strip().lower()
+    name = str(model_info.get("name") or model_info.get("id") or "").lower()
+    if "embed" in name or "embedding" in name:
+        return "embedding"
+    caps = model_info.get("capabilities")
+    if isinstance(caps, dict) and caps.get("embedding"):
+        return "embedding"
+    return "chat"
+
+
+def _normalize_modalities(value: Any) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(v).strip().lower() for v in value if v and str(v).strip()]
+    return [str(value).strip().lower()]
+
+
+def _model_matches_filters(
+    model_info: Dict[str, Any],
+    *,
+    type_filters: Optional[set[str]],
+    input_filters: Optional[set[str]],
+    output_filters: Optional[set[str]],
+) -> bool:
+    model_type = _infer_model_type(model_info)
+    if type_filters and model_type not in type_filters:
+        return False
+
+    modalities = model_info.get("modalities")
+    input_mods: List[str] = []
+    output_mods: List[str] = []
+    if isinstance(modalities, dict):
+        input_mods = _normalize_modalities(modalities.get("input"))
+        output_mods = _normalize_modalities(modalities.get("output"))
+
+    if not input_mods:
+        input_mods = ["text"]
+    if not output_mods:
+        if model_type == "image":
+            output_mods = ["image"]
+        elif model_type == "embedding":
+            output_mods = ["embedding"]
+        else:
+            output_mods = ["text"]
+
+    if input_filters and not set(input_mods).intersection(input_filters):
+        return False
+    if output_filters and not set(output_mods).intersection(output_filters):
+        return False
+    return True
+
 #######################################################################################################################
 #
 # Endpoints:
@@ -1211,17 +1275,58 @@ async def get_llm_providers(include_deprecated: bool = False):
     summary="Get model metadata across providers",
     description="Returns flattened model metadata for all providers",
     response_model=Dict[str, Any])
-async def get_models_metadata(include_deprecated: bool = False):
+async def get_models_metadata(
+    include_deprecated: bool = False,
+    model_type: Optional[List[str]] = Query(
+        None,
+        alias="type",
+        description="Optional model type filter (repeatable).",
+    ),
+    input_modality: Optional[List[str]] = Query(
+        None,
+        description="Optional input modality filter (repeatable).",
+    ),
+    output_modality: Optional[List[str]] = Query(
+        None,
+        description="Optional output modality filter (repeatable).",
+    ),
+):
     try:
+        type_filters = _normalize_filter_values(model_type)
+        input_filters = _normalize_filter_values(input_modality)
+        output_filters = _normalize_filter_values(output_modality)
         result = await get_configured_providers_async(include_deprecated=include_deprecated)
         result = apply_llm_provider_overrides_to_listing(result)
         flattened: List[Dict[str, Any]] = []
         for provider in result.get('providers', []):
             for mi in provider.get('models_info', []):
-                flattened.append({
+                entry = {
                     'provider': provider.get('name'),
                     **mi,
-                })
+                }
+                if not _model_matches_filters(
+                    entry,
+                    type_filters=type_filters,
+                    input_filters=input_filters,
+                    output_filters=output_filters,
+                ):
+                    continue
+                flattened.append(entry)
+        # Append image generation backends to the catalog
+        try:
+            image_models = list_image_models_for_catalog()
+        except Exception as exc:
+            logger.warning(f"Failed to list image generation models: {exc}")
+            image_models = []
+        for entry in image_models:
+            if not _model_matches_filters(
+                entry,
+                type_filters=type_filters,
+                input_filters=input_filters,
+                output_filters=output_filters,
+            ):
+                continue
+            flattened.append(entry)
         return {
             'models': flattened,
             'total': len(flattened)
@@ -1275,7 +1380,22 @@ async def get_provider_details(provider_name: str, include_deprecated: bool = Fa
     summary="Get all available models",
     description="Returns a flat list of all available models across all providers",
     response_model=List[str])
-async def get_all_models(include_deprecated: bool = False):
+async def get_all_models(
+    include_deprecated: bool = False,
+    model_type: Optional[List[str]] = Query(
+        None,
+        alias="type",
+        description="Optional model type filter (repeatable).",
+    ),
+    input_modality: Optional[List[str]] = Query(
+        None,
+        description="Optional input modality filter (repeatable).",
+    ),
+    output_modality: Optional[List[str]] = Query(
+        None,
+        description="Optional output modality filter (repeatable).",
+    ),
+):
     """
     Get all available models from all configured providers.
 
@@ -1283,11 +1403,43 @@ async def get_all_models(include_deprecated: bool = False):
         List of model names with provider prefix
     """
     try:
+        type_filters = _normalize_filter_values(model_type)
+        input_filters = _normalize_filter_values(input_modality)
+        output_filters = _normalize_filter_values(output_modality)
         result = await get_configured_providers_async(include_deprecated=include_deprecated)
         models: List[str] = []
         for provider in result.get('providers', []):
+            provider_name = provider.get('name') or "unknown"
             for model in provider.get('models', []):
-                models.append(f"{provider['name']}/{model}")
+                entry = {
+                    "provider": provider_name,
+                    **get_model_metadata(provider_name, model),
+                }
+                if not _model_matches_filters(
+                    entry,
+                    type_filters=type_filters,
+                    input_filters=input_filters,
+                    output_filters=output_filters,
+                ):
+                    continue
+                models.append(f"{provider_name}/{model}")
+        # Append image generation backends to the flat list
+        try:
+            image_models = list_image_models_for_catalog()
+        except Exception as exc:
+            logger.warning(f"Failed to list image generation models: {exc}")
+            image_models = []
+        for entry in image_models:
+            if not _model_matches_filters(
+                entry,
+                type_filters=type_filters,
+                input_filters=input_filters,
+                output_filters=output_filters,
+            ):
+                continue
+            model_id = entry.get("id") or f"image/{entry.get('name') or ''}"
+            if model_id:
+                models.append(str(model_id))
         logger.info(f"Found {len(models)} total models across all providers")
         return models
     except Exception as e:

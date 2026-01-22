@@ -5271,6 +5271,19 @@ else:
     except Exception as _e:
         logger.warning(f"Outputs endpoint not available: {_e}")
     try:
+        # Optional audiobook creation endpoint
+        from tldw_Server_API.app.api.v1.endpoints.audiobooks import router as audiobooks_router
+
+        _include_if_enabled(
+            "audiobooks",
+            audiobooks_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["audiobooks"],
+            default_stable=False,
+        )
+    except Exception as _e:
+        logger.warning(f"Audiobooks endpoint not available: {_e}")
+    try:
         # Optional files artifacts endpoint
         from tldw_Server_API.app.api.v1.endpoints.files import router as _files_router
 

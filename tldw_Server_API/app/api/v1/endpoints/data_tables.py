@@ -78,13 +78,16 @@ _job_manager_lock = threading.Lock()
 _FILE_ARTIFACTS_ERROR_STATUS = {
     "unsupported_file_type": status.HTTP_400_BAD_REQUEST,
     "persist_required": status.HTTP_400_BAD_REQUEST,
+    "image_backend_unavailable": status.HTTP_400_BAD_REQUEST,
     "unsupported_export_format": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "invalid_export_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "invalid_async_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "export_size_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "row_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "cell_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "export_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
     "export_job_enqueue_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+    "image_generation_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
 
 

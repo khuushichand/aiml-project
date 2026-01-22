@@ -34,18 +34,24 @@ _EXPORT_MIME_TYPES = {
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "csv": "text/csv",
     "json": "application/json",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "webp": "image/webp",
 }
 
 _FILE_ARTIFACTS_ERROR_STATUS = {
     "unsupported_file_type": status.HTTP_400_BAD_REQUEST,
     "persist_required": status.HTTP_400_BAD_REQUEST,
+    "image_backend_unavailable": status.HTTP_400_BAD_REQUEST,
     "unsupported_export_format": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "invalid_export_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "invalid_async_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "export_size_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "row_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "cell_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "export_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
     "export_job_enqueue_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+    "image_generation_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
 
 
@@ -169,7 +175,7 @@ async def get_file_artifact(
 )
 async def export_file_artifact(
     file_id: int,
-    format: str = Query(..., description="Export format (ics|md|html|xlsx|csv|json)"),
+    format: str = Query(..., description="Export format (ics|md|html|xlsx|csv|json|png|jpg|webp)"),
     cdb: CollectionsDatabase = Depends(get_collections_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> FileResponse:
