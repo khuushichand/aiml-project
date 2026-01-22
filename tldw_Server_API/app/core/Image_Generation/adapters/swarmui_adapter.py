@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import io
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, quote
 
@@ -16,10 +17,15 @@ from tldw_Server_API.app.core.Image_Generation.config import (
 from tldw_Server_API.app.core.Image_Generation.exceptions import ImageBackendUnavailableError, ImageGenerationError
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
+try:
+    from PIL import Image
+except Exception:  # pragma: no cover - optional dependency guard
+    Image = None  # type: ignore
+
 
 class SwarmUIAdapter:
     name = "swarmui"
-    supported_formats = {"png"}
+    supported_formats = {"png", "jpg"}
 
     def __init__(self) -> None:
         self._config = get_image_generation_config()
@@ -44,19 +50,13 @@ class SwarmUIAdapter:
         if image_ref.startswith("data:"):
             content, content_type = _decode_data_url(image_ref)
             fmt = _format_from_content_type(content_type)
-            if fmt and fmt != output_format:
-                raise ImageGenerationError(
-                    f"SwarmUI returned {fmt} but {output_format} was requested"
-                )
+            content, content_type = _maybe_convert_format(content, content_type, fmt, output_format)
             return ImageGenResult(content=content, content_type=content_type, bytes_len=len(content))
 
         image_url = self._resolve_image_url(base_url, image_ref)
         content, content_type = self._fetch_image_bytes(image_url)
         fmt = _format_from_content_type(content_type) or _format_from_url(image_ref)
-        if fmt and fmt != output_format:
-            raise ImageGenerationError(
-                f"SwarmUI returned {fmt} but {output_format} was requested"
-            )
+        content, content_type = _maybe_convert_format(content, content_type, fmt, output_format)
         return ImageGenResult(content=content, content_type=content_type, bytes_len=len(content))
 
     def _resolve_base_url(self) -> str:
@@ -257,3 +257,45 @@ def _format_from_url(url: str) -> Optional[str]:
     if lowered.endswith(".webp"):
         return "webp"
     return None
+
+
+def _maybe_convert_format(
+    content: bytes,
+    content_type: str,
+    actual_format: Optional[str],
+    requested_format: str,
+) -> tuple[bytes, str]:
+    if requested_format == actual_format:
+        return content, content_type
+    if requested_format not in {"png", "jpg"}:
+        raise ImageGenerationError(f"unsupported output format: {requested_format}")
+    # If we don't know the actual format and PNG was requested, keep as-is.
+    if actual_format is None and requested_format == "png":
+        return content, content_type
+    converted = _convert_image_bytes(content, requested_format)
+    return converted, _content_type_for_format(requested_format)
+
+
+def _convert_image_bytes(content: bytes, target_format: str) -> bytes:
+    if Image is None:
+        raise ImageGenerationError("Pillow is required for image format conversion")
+    try:
+        with Image.open(io.BytesIO(content)) as img:
+            if target_format == "jpg" and img.mode not in {"RGB"}:
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            save_format = "JPEG" if target_format == "jpg" else "PNG"
+            img.save(buf, format=save_format)
+            return buf.getvalue()
+    except Exception as exc:
+        raise ImageGenerationError(f"failed to convert image: {exc}") from exc
+
+
+def _content_type_for_format(fmt: str) -> str:
+    if fmt == "png":
+        return "image/png"
+    if fmt == "jpg":
+        return "image/jpeg"
+    if fmt == "webp":
+        return "image/webp"
+    return "application/octet-stream"

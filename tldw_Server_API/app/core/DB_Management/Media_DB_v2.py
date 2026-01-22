@@ -230,7 +230,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 9  # Add visibility and owner_user_id columns
+    _CURRENT_SCHEMA_VERSION = 18  # Latest sqlite migrations (audiobook + collections enhancements)
 
     # <<< Schema Definition (Version 1) >>>
 

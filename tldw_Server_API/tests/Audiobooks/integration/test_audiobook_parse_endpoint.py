@@ -138,6 +138,28 @@ def test_parse_srt_strips_timestamps(client_user_only):
     assert "00:00:00" not in text
 
 
+def test_parse_tagged_text_overrides_chapters(client_user_only):
+    raw = (
+        "[[chapter:title=Intro]]\n"
+        "Intro text.\n"
+        "[[chapter:id=ch_custom]]\n"
+        "[[chapter:title=Second]]\n"
+        "Second text.\n"
+    )
+    payload = {
+        "source": {"input_type": "txt", "raw_text": raw},
+        "detect_chapters": True,
+    }
+    resp = _post_parse(client_user_only, payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "[[" not in data["normalized_text"]
+    assert len(data["chapters"]) == 2
+    assert data["chapters"][0]["title"] == "Intro"
+    assert data["chapters"][1]["chapter_id"] == "ch_custom"
+    assert "tag_markers" in data["metadata"]
+
+
 def test_parse_media_id_uses_db_content(client_user_only, tmp_path):
     db_path = tmp_path / "Media_DB_v2.db"
     db = MediaDatabase(db_path=str(db_path), client_id="test")

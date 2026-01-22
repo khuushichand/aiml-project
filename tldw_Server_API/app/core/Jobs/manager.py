@@ -971,6 +971,7 @@ class JobManager:
         payload: Dict[str, Any],
         owner_user_id: Optional[str],
         project_id: Optional[int] = None,
+        batch_group: Optional[str] = None,
         priority: int = 5,
         max_retries: int = 3,
         available_at: Optional[datetime] = None,
@@ -987,6 +988,7 @@ class JobManager:
             payload: Opaque payload to be interpreted by the worker.
             owner_user_id: Owner of the job for scoping/quotas.
             project_id: Optional project association.
+            batch_group: Optional batch identifier for client-managed grouping.
             priority: Lower number means higher priority (default 5).
             max_retries: Maximum automatic retries on failure.
             available_at: Optional schedule time before the job becomes acquirable.
@@ -1107,8 +1109,8 @@ class JobManager:
                             # Cast payload to jsonb explicitly to avoid adapter issues
                             cur.execute(
                                 (
-                                    "INSERT INTO jobs (uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, created_at, updated_at, request_id, trace_id) "
-                                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW(), %s, %s) "
+                                    "INSERT INTO jobs (uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, created_at, updated_at, request_id, trace_id) "
+                                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW(), %s, %s) "
                                     "ON CONFLICT (domain, queue, job_type, idempotency_key) DO NOTHING RETURNING *"
                                 ),
                                 (
@@ -1118,6 +1120,7 @@ class JobManager:
                                     job_type,
                                     owner_user_id,
                                     project_id,
+                                    batch_group,
                                     idempotency_key,
                                     payload_json,
                                     priority,
@@ -1237,8 +1240,8 @@ class JobManager:
                         # Non-idempotent insert
                         cur.execute(
                             (
-                                "INSERT INTO jobs (uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, created_at, updated_at, request_id, trace_id) "
-                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW(), %s, %s) RETURNING *"
+                                "INSERT INTO jobs (uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, created_at, updated_at, request_id, trace_id) "
+                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW(), %s, %s) RETURNING *"
                             ),
                             (
                                 uuid_val,
@@ -1247,6 +1250,7 @@ class JobManager:
                                 job_type,
                                 owner_user_id,
                                 project_id,
+                                batch_group,
                                 idempotency_key,
                                 payload_json,
                                 priority,
@@ -1382,10 +1386,10 @@ class JobManager:
                         conn.execute(
                             """
                             INSERT OR IGNORE INTO jobs (
-                              uuid, domain, queue, job_type, owner_user_id, project_id,
+                              uuid, domain, queue, job_type, owner_user_id, project_id, batch_group,
                               idempotency_key, payload, result, status, priority, max_retries,
                               retry_count, available_at, created_at, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'queued', ?, ?, 0, ?, ?, ?)
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'queued', ?, ?, 0, ?, ?, ?)
                             """,
                             (
                                 uuid_val,
@@ -1394,6 +1398,7 @@ class JobManager:
                                 job_type,
                                 owner_user_id,
                                 project_id,
+                                batch_group,
                                 idempotency_key,
                                 payload_json,
                                 priority,
@@ -1433,10 +1438,10 @@ class JobManager:
                     conn.execute(
                         """
                         INSERT INTO jobs (
-                          uuid, domain, queue, job_type, owner_user_id, project_id,
+                          uuid, domain, queue, job_type, owner_user_id, project_id, batch_group,
                           idempotency_key, payload, result, status, priority, max_retries,
                           retry_count, available_at, created_at, updated_at, request_id, trace_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'queued', ?, ?, 0, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'queued', ?, ?, 0, ?, ?, ?, ?, ?)
                         """,
                         (
                             uuid_val,
@@ -1445,6 +1450,7 @@ class JobManager:
                             job_type,
                             owner_user_id,
                             project_id,
+                            batch_group,
                             idempotency_key,
                             json.dumps(payload),
                             priority,
@@ -5269,7 +5275,7 @@ class JobManager:
                         # Optional archive copy
                         if str(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")).lower() in {"1", "true", "yes", "y", "on"}:
                             cur.execute(
-                                f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
+                                f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
                                 tuple(params),
                             )
                             # Optional compression for archived payload/result (Postgres)
@@ -5475,7 +5481,7 @@ class JobManager:
                     # Optional archive copy
                     if str(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")).lower() in {"1", "true", "yes", "y", "on"}:
                         conn.execute(
-                            f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
+                            f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
                             tuple(params),
                         )
                         # Optional compression for archived payload/result (SQLite: base64-gz prefix)

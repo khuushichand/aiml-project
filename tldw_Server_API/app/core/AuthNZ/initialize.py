@@ -196,6 +196,23 @@ def _detect_env_issues(auth_mode: str, env_values: dict[str, str]) -> tuple[set[
             missing_keys.add("JWT_SECRET_KEY")
             issues.append("JWT_SECRET_KEY must be at least 32 characters")
 
+    # MCP Unified requires explicit secrets in production; generate during setup.
+    mcp_jwt = _effective_env_value("MCP_JWT_SECRET", env_values)
+    if not mcp_jwt:
+        missing_keys.add("MCP_JWT_SECRET")
+        issues.append("MCP_JWT_SECRET must be set for MCP security hardening")
+    elif len(mcp_jwt) < 32:
+        missing_keys.add("MCP_JWT_SECRET")
+        issues.append("MCP_JWT_SECRET must be at least 32 characters")
+
+    mcp_salt = _effective_env_value("MCP_API_KEY_SALT", env_values)
+    if not mcp_salt:
+        missing_keys.add("MCP_API_KEY_SALT")
+        issues.append("MCP_API_KEY_SALT must be set for MCP security hardening")
+    elif len(mcp_salt) < 32:
+        missing_keys.add("MCP_API_KEY_SALT")
+        issues.append("MCP_API_KEY_SALT must be at least 32 characters")
+
     return missing_keys, issues
 
 
@@ -271,6 +288,8 @@ def _apply_test_setup_env() -> Path:
     values = {
         "AUTH_MODE": "single_user",
         "SINGLE_USER_API_KEY": TEST_SETUP_API_KEY,
+        "MCP_JWT_SECRET": secrets.token_urlsafe(32),
+        "MCP_API_KEY_SALT": secrets.token_urlsafe(32),
     }
     _write_env_values(env_path, values)
     load_dotenv(dotenv_path=str(env_path), override=True)
@@ -390,6 +409,10 @@ def generate_secure_keys(requested_keys: Optional[Iterable[str]] = None):
         from cryptography.fernet import Fernet
 
         keys['SESSION_ENCRYPTION_KEY'] = Fernet.generate_key().decode()
+    if requested is None or "MCP_JWT_SECRET" in requested:
+        keys["MCP_JWT_SECRET"] = secrets.token_urlsafe(32)
+    if requested is None or "MCP_API_KEY_SALT" in requested:
+        keys["MCP_API_KEY_SALT"] = secrets.token_urlsafe(32)
 
     print("\n📝 Generated keys (save these in your .env file):")
     print("-" * 50)

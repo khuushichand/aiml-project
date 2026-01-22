@@ -61,7 +61,7 @@ providers:
 
   # PocketTTS ONNX Configuration (local; voice cloning)
   pocket_tts:
-    enabled: false  # Disabled by default; enable after downloading assets
+    enabled: true  # Enabled by default; ensure assets are installed
     model_path: "models/pocket_tts_onnx/onnx"  # Directory with ONNX files
     tokenizer_path: "models/pocket_tts_onnx/tokenizer.model"
     module_path: "models/pocket_tts_onnx"  # Directory containing pocket_tts_onnx.py or package
@@ -185,7 +185,7 @@ providers:
 
   # NeuTTS Air (Neuphonic) Configuration
   neutts:
-    enabled: false  # Disabled by default; explicitly enable only after completing NeuTTS setup
+    enabled: true  # Enabled by default; ensure NeuTTS dependencies are installed
     # Backbone options:
     #  - "neuphonic/neutts-nano" (HF transformers)
     #  - "neuphonic/neutts-air" (HF transformers)

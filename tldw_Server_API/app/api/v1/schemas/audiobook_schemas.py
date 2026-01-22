@@ -122,6 +122,7 @@ class AudiobookJobItem(BaseModel):
     """Per-item override for batch jobs."""
 
     source: SourceRef = Field(..., description="Source reference for this item")
+    voice_profile_id: Optional[str] = Field(None, description="Voice profile id override")
     chapters: Optional[List[ChapterSelection]] = Field(None, description="Per-item chapter selection")
     output: Optional[OutputOptions] = Field(None, description="Per-item output options")
     subtitles: Optional[SubtitleOptions] = Field(None, description="Per-item subtitle options")
@@ -229,6 +230,7 @@ class AudiobookJobRequest(BaseModel):
     project_title: str = Field(..., min_length=1, max_length=200, description="Project title")
     source: Optional[SourceRef] = Field(None, description="Single source reference")
     items: Optional[List[AudiobookJobItem]] = Field(None, description="Batch items")
+    voice_profile_id: Optional[str] = Field(None, description="Voice profile id to apply")
     chapters: Optional[List[ChapterSelection]] = Field(None, description="Chapter selection")
     output: Optional[OutputOptions] = Field(None, description="Output options")
     subtitles: Optional[SubtitleOptions] = Field(None, description="Subtitle options")
@@ -240,6 +242,7 @@ class AudiobookJobRequest(BaseModel):
             "example": {
                 "project_title": "Example Book",
                 "source": {"input_type": "epub", "upload_id": "upload_4d8f"},
+                "voice_profile_id": "vp_01J7Y2NV6F",
                 "chapters": [
                     {"chapter_id": "ch_001", "include": True, "voice": "af_heart", "speed": 1.0},
                     {"chapter_id": "ch_002", "include": True, "voice": "am_adam", "speed": 0.98},
@@ -326,6 +329,141 @@ class AudiobookJobStatusResponse(BaseModel):
                     "percent": 45,
                 },
                 "errors": [],
+            }
+        }
+    }
+
+
+class AudiobookProjectInfo(BaseModel):
+    """Audiobook project summary."""
+
+    project_db_id: int = Field(..., description="Internal project id")
+    project_id: Optional[str] = Field(None, description="External project id")
+    title: Optional[str] = Field(None, description="Project title")
+    status: Optional[str] = Field(None, description="Project status")
+    source_ref: Optional[Dict[str, Any]] = Field(None, description="Source reference metadata")
+    settings: Optional[Dict[str, Any]] = Field(None, description="Project settings")
+    created_at: str = Field(..., description="Created timestamp")
+    updated_at: str = Field(..., description="Updated timestamp")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "project_db_id": 12,
+                "project_id": "abk_01J7Y2M4G1",
+                "title": "Example Book",
+                "status": "completed",
+                "source_ref": {"input_type": "epub", "upload_id": "upload_4d8f"},
+                "settings": {
+                    "project_id": "abk_01J7Y2M4G1",
+                    "project_title": "Example Book",
+                    "language": "en",
+                },
+                "created_at": "2025-01-21T10:00:00+00:00",
+                "updated_at": "2025-01-21T10:05:00+00:00",
+            }
+        }
+    }
+
+
+class AudiobookProjectListResponse(BaseModel):
+    """List response for audiobook projects."""
+
+    projects: List[AudiobookProjectInfo] = Field(..., description="Project list")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "projects": [
+                    {
+                        "project_db_id": 12,
+                        "project_id": "abk_01J7Y2M4G1",
+                        "title": "Example Book",
+                        "status": "completed",
+                        "source_ref": {"input_type": "epub", "upload_id": "upload_4d8f"},
+                        "settings": {"project_id": "abk_01J7Y2M4G1", "project_title": "Example Book"},
+                        "created_at": "2025-01-21T10:00:00+00:00",
+                        "updated_at": "2025-01-21T10:05:00+00:00",
+                    }
+                ]
+            }
+        }
+    }
+
+
+class AudiobookProjectResponse(BaseModel):
+    """Single project response."""
+
+    project: AudiobookProjectInfo = Field(..., description="Project details")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "project": {
+                    "project_db_id": 12,
+                    "project_id": "abk_01J7Y2M4G1",
+                    "title": "Example Book",
+                    "status": "completed",
+                    "source_ref": {"input_type": "epub", "upload_id": "upload_4d8f"},
+                    "settings": {"project_id": "abk_01J7Y2M4G1", "project_title": "Example Book"},
+                    "created_at": "2025-01-21T10:00:00+00:00",
+                    "updated_at": "2025-01-21T10:05:00+00:00",
+                }
+            }
+        }
+    }
+
+
+class AudiobookChapterInfo(BaseModel):
+    """Audiobook chapter info."""
+
+    id: int = Field(..., description="Chapter id")
+    chapter_index: int = Field(..., description="Zero-based chapter index")
+    title: Optional[str] = Field(None, description="Chapter title")
+    start_offset: Optional[int] = Field(None, description="Start offset in characters")
+    end_offset: Optional[int] = Field(None, description="End offset in characters")
+    voice_profile_id: Optional[str] = Field(None, description="Voice profile id")
+    speed: Optional[float] = Field(None, description="Speed override")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Chapter metadata")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "id": 101,
+                "chapter_index": 0,
+                "title": "Chapter 1",
+                "start_offset": 0,
+                "end_offset": 12458,
+                "voice_profile_id": None,
+                "speed": 1.0,
+                "metadata": {"chapter_id": "ch_001", "item_index": 0},
+            }
+        }
+    }
+
+
+class AudiobookChapterListResponse(BaseModel):
+    """List response for audiobook chapters."""
+
+    project_id: str = Field(..., description="Project identifier")
+    chapters: List[AudiobookChapterInfo] = Field(..., description="Chapter list")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "project_id": "abk_01J7Y2M4G1",
+                "chapters": [
+                    {
+                        "id": 101,
+                        "chapter_index": 0,
+                        "title": "Chapter 1",
+                        "start_offset": 0,
+                        "end_offset": 12458,
+                        "voice_profile_id": None,
+                        "speed": 1.0,
+                        "metadata": {"chapter_id": "ch_001", "item_index": 0},
+                    }
+                ],
             }
         }
     }
@@ -502,6 +640,11 @@ __all__ = [
     "AudiobookJobCreateResponse",
     "JobProgress",
     "AudiobookJobStatusResponse",
+    "AudiobookProjectInfo",
+    "AudiobookProjectListResponse",
+    "AudiobookProjectResponse",
+    "AudiobookChapterInfo",
+    "AudiobookChapterListResponse",
     "ArtifactInfo",
     "AudiobookArtifactsResponse",
     "VoiceProfileCreateRequest",

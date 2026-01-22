@@ -312,7 +312,85 @@ Schema (draft):
 }
 ```
 
-### 9.4 Voice Profiles (API-only support)
+### 9.4 Project Queries (API-only)
+`GET /api/v1/audiobooks/projects`
+`GET /api/v1/audiobooks/projects/{project_ref}`
+`GET /api/v1/audiobooks/projects/{project_ref}/chapters`
+`GET /api/v1/audiobooks/projects/{project_ref}/artifacts`
+- `project_ref` accepts the external `project_id` (e.g., `abk_01J7Y2M4G1`) or the numeric DB id.
+- Supports pagination via `limit` + `offset`.
+
+Example response (projects):
+```json
+{
+  "projects": [
+    {
+      "project_db_id": 12,
+      "project_id": "abk_01J7Y2M4G1",
+      "title": "Example Book",
+      "status": "completed",
+      "source_ref": { "input_type": "epub", "upload_id": "upload_4d8f" },
+      "settings": { "project_id": "abk_01J7Y2M4G1", "project_title": "Example Book" },
+      "created_at": "2025-01-21T10:00:00+00:00",
+      "updated_at": "2025-01-21T10:05:00+00:00"
+    }
+  ]
+}
+```
+
+Example response (project detail):
+```json
+{
+  "project": {
+    "project_db_id": 12,
+    "project_id": "abk_01J7Y2M4G1",
+    "title": "Example Book",
+    "status": "completed",
+    "source_ref": { "input_type": "epub", "upload_id": "upload_4d8f" },
+    "settings": { "project_id": "abk_01J7Y2M4G1", "project_title": "Example Book" },
+    "created_at": "2025-01-21T10:00:00+00:00",
+    "updated_at": "2025-01-21T10:05:00+00:00"
+  }
+}
+```
+
+Example response (chapters):
+```json
+{
+  "project_id": "abk_01J7Y2M4G1",
+  "chapters": [
+    {
+      "id": 101,
+      "chapter_index": 0,
+      "title": "Chapter 1",
+      "start_offset": 0,
+      "end_offset": 12458,
+      "voice_profile_id": null,
+      "speed": 1.0,
+      "metadata": { "chapter_id": "ch_001", "item_index": 0 }
+    }
+  ]
+}
+```
+
+Example response (project artifacts):
+```json
+{
+  "project_id": "abk_01J7Y2M4G1",
+  "artifacts": [
+    {
+      "artifact_type": "audio",
+      "format": "mp3",
+      "scope": "chapter",
+      "chapter_id": "ch_001",
+      "output_id": 456,
+      "download_url": "/api/v1/outputs/456/download"
+    }
+  ]
+}
+```
+
+### 9.5 Voice Profiles (API-only support)
 `POST /api/v1/audiobooks/voices/profiles`
 `GET /api/v1/audiobooks/voices/profiles`
 `DELETE /api/v1/audiobooks/voices/profiles/{profile_id}`
@@ -524,7 +602,7 @@ Schema (draft):
 ## 10) Data Model and Storage
 Store audiobook metadata in the per-user Media DB (Collections tables) via `Collections_DB.py`.
 Proposed tables (add via DB_Management abstractions):
-- `audiobook_projects`: id, user_id, title, source_ref, status, created_at, updated_at, settings_json.
+- `audiobook_projects`: id, user_id, project_id (external), title, source_ref, status, created_at, updated_at, settings_json.
 - `audiobook_chapters`: id, project_id, chapter_index, title, start_offset, end_offset, voice_profile_id, speed, metadata_json.
 - `audiobook_artifacts`: id, project_id, artifact_type (audio/subtitle/package/alignment), format, output_id, metadata_json.
 
@@ -532,6 +610,7 @@ Audio, subtitle, and alignment files are stored as Collections outputs (existing
 
 ### 10.1 Migration Mapping
 - Add `tldw_Server_API/app/core/DB_Management/migrations/016_audiobook_tables.json` (SQLite) to create the three tables and indexes.
+- Add `tldw_Server_API/app/core/DB_Management/migrations/018_audiobook_project_id.json` to add `project_id` + index.
 - Extend `tldw_Server_API/app/core/DB_Management/Collections_DB.py` to include the new tables in `ensure_schema()` for both SQLite and Postgres.
 - Add `Collections_DB` accessors for project/chapter/artifact create + list to keep API handlers DB-agnostic.
 
@@ -542,6 +621,7 @@ Audio, subtitle, and alignment files are stored as Collections outputs (existing
   - `outputs.metadata_json`: `project_id`, `chapter_id`, `chapter_index`, `voice`, `speed`, `subtitle_mode`, `alignment_engine`, `alignment_sample_rate`
 - `audiobook_artifacts.output_id` references `outputs.id` as the primary file pointer (including alignment artifacts).
 - Alignment artifacts use existing outputs retention/expiry behavior.
+- Subtitle exports are generated on demand by default and are not persisted unless explicitly requested (or cached by policy).
 
 ## 11) TTS Alignment and Subtitle Generation
 ### 11.1 Alignment Source
@@ -563,13 +643,13 @@ Audio, subtitle, and alignment files are stored as Collections outputs (existing
 - `narrow`: max_chars=28, max_lines=2.
 - `centered`: same as `wide`, plus centered alignment tags where supported (ASS/VTT). SRT falls back to `wide`.
 
-### 11.4 Timestamped Text Detection
-Detect embedded markers in text for segment boundaries and overrides.
+### 11.4 Canonical Tag Markers (Reprocessing + Timestamp Anchors)
+Detect embedded markers in text for segment boundaries and overrides. These are the canonical tags for reprocessing (normalized and re-emitted by the system). Other tags may be ignored.
 
 Tag format:
 - `[[key=value]]` or `[[key:attr=value]]`
 
-Supported keys and constraints:
+Canonical keys and constraints:
 - `chapter:title`: starts a new chapter. Value length <= 128.
 - `chapter:id`: explicit chapter id, `[A-Za-z0-9_-]{1,64}`.
 - `voice`: Kokoro voice id (must exist).
@@ -579,13 +659,14 @@ Supported keys and constraints:
 Parsing rules:
 - Tags must appear on their own line to be recognized.
 - Chapter tags create hard boundaries; explicit tags override detected chapters.
+- `chapter:id` + `chapter:title` may appear in any order before the next text line; both apply to the next chapter block.
 - `voice` and `speed` tags apply forward until replaced.
 - `ts` anchors adjust alignment for the next block; if impossible, log warning and ignore.
 - Tags are stripped before TTS but preserved in metadata for reprocessing.
 
 ### 11.5 Speed Adjustment
 - Preferred: regenerate TTS with new speed.
-- Optional: ffmpeg time-stretch for small adjustments (configurable threshold).
+- Optional: ffmpeg time-stretch for small adjustments (configurable threshold). When enabled, TTS is generated at 1.0x, audio is time-stretched, and alignment timestamps are scaled to match.
 
 ## 12) Output Formats and Packaging
 Supported outputs:
@@ -601,16 +682,19 @@ Implementation notes:
 Use Jobs system with a new domain `audiobook`:
 - Job types: `audiobook_parse`, `audiobook_tts`, `audiobook_subtitles`, `audiobook_package`.
 - Support batch mode: request accepts an array of items with per-item overrides.
-- Enforce quotas via existing audio quota mechanisms.
+- Enforce quotas via existing audio quota mechanisms plus per-user audiobook artifact caps.
 
 ## 14) Configuration and Feature Flags
 Add configuration keys (examples):
-- `AUDIOBOOK_ENABLE_SPAcY=0/1`
+- `AUDIOBOOK_ENABLE_SPACY=0/1`
+- `AUDIOBOOK_SPACY_MODEL=en_core_web_sm` (optional)
 - `AUDIOBOOK_DEFAULT_VOICE=af_heart`
 - `AUDIOBOOK_DEFAULT_SPEED=1.0`
 - `AUDIOBOOK_ALLOW_M4B=1`
 - `AUDIOBOOK_MAX_CHARS=200000`
-- `AUDIOBOOK_TIME_STRETCH_MAX_RATIO=1.1`
+- `AUDIOBOOK_TIME_STRETCH_MAX_RATIO=1.1` (enable ffmpeg atempo when requested speed is within `[1/max_ratio, max_ratio]`)
+- `AUDIOBOOK_SUBTITLES_PERSIST=0/1` (default 0; on-demand generation)
+- `AUDIOBOOK_ARTIFACT_QUOTA_MB=1024` (per-user cap for audiobook outputs)
 
 ## 15) Security and Compliance
 - Validate uploads through ingestion pipeline (no direct file path usage).
@@ -642,12 +726,15 @@ Add configuration keys (examples):
 - Subtitle drift for long chapters: enforce chunking + alignment stitching.
 - spaCy dependency bloat: optional flag with graceful fallback to regex splits.
 
-## 19) Open Questions
-- Which chapter markers and metadata tags should be canonical for reprocessing?
-- Should subtitle exports be persisted by default or generated on demand?
-- Do we need per-user storage quotas for audiobook artifacts?
+## 19) Decisions (Resolved)
+- Canonical reprocessing tags: `chapter:id`, `chapter:title`, `voice`, `speed`, `ts` (see 11.4).
+- Subtitle exports are generated on demand by default; persistence is opt-in or policy-driven.
+- Per-user storage quotas are required for audiobook artifacts (audio, packages, alignment).
 
-## 20) Phased Delivery
+## 20) Open Questions
+- None (for now).
+
+## 21) Phased Delivery
 Phase 0:
 - Parse endpoint + chapter preview.
 - Kokoro alignment metadata.
@@ -658,7 +745,7 @@ Phase 2:
 - M4B packaging with chapters.
 - Voice profile API and batch queue enhancements.
 
-## 21) Implementation Plan (Staged)
+## 22) Implementation Plan (Staged)
 This staged plan matches the project guidelines (small, testable increments).
 
 ### Stage 0: API Contracts and Schema Scaffolding

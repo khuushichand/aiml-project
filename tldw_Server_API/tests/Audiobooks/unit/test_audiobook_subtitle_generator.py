@@ -31,6 +31,44 @@ def test_generate_srt_sentence_mode_splits_on_punctuation():
     assert "Next sentence." in blocks[1]
 
 
+def test_generate_sentence_mode_uses_spacy_when_enabled(monkeypatch):
+    class _FakeSpan:
+        def __init__(self, start, end):
+            self.start_char = start
+            self.end_char = end
+
+    class _FakeDoc:
+        def __init__(self, spans):
+            self.sents = spans
+
+    def _fake_nlp(text):
+        return _FakeDoc([_FakeSpan(0, 12), _FakeSpan(13, len(text))])
+
+    from tldw_Server_API.app.core.Audiobooks import subtitle_generator as sg
+
+    monkeypatch.setattr(sg, "_load_spacy_model", lambda: _fake_nlp)
+
+    words = [
+        AlignmentWord(word="Hello", start_ms=0, end_ms=400, char_start=0, char_end=5),
+        AlignmentWord(word="world.", start_ms=450, end_ms=900, char_start=6, char_end=12),
+        AlignmentWord(word="Next", start_ms=1000, end_ms=1300, char_start=13, char_end=17),
+        AlignmentWord(word="sentence.", start_ms=1350, end_ms=1800, char_start=18, char_end=27),
+    ]
+    alignment = AlignmentPayload(engine="kokoro", sample_rate=24000, words=words)
+    content = sg.generate_subtitles(
+        alignment,
+        format="srt",
+        mode="sentence",
+        variant="wide",
+        source_text="Hello world. Next sentence.",
+        enable_spacy=True,
+    )
+    blocks = [block for block in content.strip().split("\n\n") if block]
+    assert len(blocks) == 2
+    assert "Hello world." in blocks[0]
+    assert "Next sentence." in blocks[1]
+
+
 def test_generate_word_count_groups_into_multiple_cues():
     alignment = _make_alignment()
     content = generate_subtitles(

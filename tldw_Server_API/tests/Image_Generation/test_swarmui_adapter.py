@@ -124,3 +124,28 @@ def test_swarmui_invalid_session_refresh(monkeypatch):
     assert result.content_type == "image/png"
     assert len(session_calls) == 2
     assert len(generate_calls) == 2
+
+
+def test_swarmui_converts_to_jpg(monkeypatch):
+    cfg = _make_config()
+    monkeypatch.setattr(swarmui_module, "get_image_generation_config", lambda: cfg)
+
+    png_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+    )
+    data_url = f"data:image/png;base64,{png_b64}"
+
+    def fake_fetch_json(method, url, json, **kwargs):
+        if url.endswith("/API/GetNewSession"):
+            return {"session_id": "sess"}
+        if url.endswith("/API/GenerateText2Image"):
+            return {"images": [data_url]}
+        raise AssertionError("unexpected URL")
+
+    monkeypatch.setattr(swarmui_module, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(swarmui_module, "fetch", lambda *args, **kwargs: None)
+
+    adapter = swarmui_module.SwarmUIAdapter()
+    result = adapter.generate(_make_request(format="jpg"))
+    assert result.content_type == "image/jpeg"
+    assert result.content[:2] == b"\xff\xd8"

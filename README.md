@@ -186,10 +186,14 @@ cat > .env << 'EOF'
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=CHANGE_ME_TO_SECURE_API_KEY
 DATABASE_URL=sqlite:///./Databases/users.db
+# MCP Unified secrets (required in production; initializer can generate if missing)
+# MCP_JWT_SECRET=change-me-to-secure-mcp-jwt-secret
+# MCP_API_KEY_SALT=change-me-to-secure-mcp-salt
 EOF
 
 # First-time initialization (validates config, sets up DBs)
 python -m tldw_Server_API.app.core.AuthNZ.initialize
+# This will also generate MCP_JWT_SECRET and MCP_API_KEY_SALT if they are missing.
 # Add provider API keys in .env or tldw_Server_API/Config_Files/config.txt
 ```
 3) Run the API

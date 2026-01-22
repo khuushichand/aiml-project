@@ -64,6 +64,9 @@ cat > .env <<'EOF'
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=CHANGE_ME_TO_SECURE_API_KEY
 DATABASE_URL=sqlite:///./Databases/users.db
+# MCP Unified secrets (required in production; initializer can generate if missing)
+# MCP_JWT_SECRET=change-me-to-secure-mcp-jwt-secret
+# MCP_API_KEY_SALT=change-me-to-secure-mcp-salt
 # Provider keys (examples)
 # OPENAI_API_KEY=sk-...
 # ANTHROPIC_API_KEY=...
@@ -74,6 +77,8 @@ You can also keep large provider configs in `tldw_Server_API/Config_Files/config
 > Important: Replace `CHANGE_ME_TO_SECURE_API_KEY` with a strong random value before continuing.
 > - **Option A (simple)**: run `python -c "import secrets; print(secrets.token_urlsafe(32))"` and paste the result into `SINGLE_USER_API_KEY`.
 > - **Option B (rotate later)**: once you have a working `.env`, you can re-run the initializer (below), answer `y` to the “Generate new secure keys?” prompt to print fresh values, then paste them into `.env` and re-run the initializer.
+>
+> MCP Unified requires `MCP_JWT_SECRET` and `MCP_API_KEY_SALT`. The initializer will generate and write them to `.env` if they are missing.
 
 ### 3.3 Initialize AuthNZ and databases
 ```bash

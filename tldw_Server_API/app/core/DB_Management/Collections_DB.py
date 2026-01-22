@@ -50,6 +50,9 @@ def _utcnow_iso() -> str:
 
 
 _SQLITE_PRAGMA_TABLES = {
+    "audiobook_artifacts",
+    "audiobook_chapters",
+    "audiobook_projects",
     "collection_tags",
     "content_item_tags",
     "content_items",
@@ -158,6 +161,54 @@ class ReadingDigestScheduleRow:
     last_status: Optional[str]
     created_at: str
     updated_at: str
+
+
+@dataclass
+class VoiceProfileRow:
+    profile_id: str
+    user_id: str
+    name: str
+    default_voice: str
+    default_speed: float
+    chapter_overrides_json: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class AudiobookProjectRow:
+    id: int
+    user_id: str
+    project_id: Optional[str]
+    title: Optional[str]
+    source_ref: Optional[str]
+    status: Optional[str]
+    settings_json: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class AudiobookChapterRow:
+    id: int
+    project_id: int
+    chapter_index: int
+    title: Optional[str]
+    start_offset: Optional[int]
+    end_offset: Optional[int]
+    voice_profile_id: Optional[str]
+    speed: Optional[float]
+    metadata_json: Optional[str]
+
+
+@dataclass
+class AudiobookArtifactRow:
+    id: int
+    project_id: int
+    artifact_type: str
+    format: str
+    output_id: int
+    metadata_json: Optional[str]
 
 
 class CollectionsDatabase:
@@ -285,6 +336,38 @@ class CollectionsDatabase:
                 columns.add(str(name))
         return columns
 
+    def _backfill_audiobook_project_ids(self) -> None:
+        try:
+            rows = self.backend.execute(
+                "SELECT id, settings_json FROM audiobook_projects WHERE project_id IS NULL OR project_id = ''",
+                tuple(),
+            ).rows
+        except Exception as exc:
+            logger.debug("collections backfill: audiobook_projects.project_id fetch failed: %s", exc)
+            return
+        updated = 0
+        for row in rows:
+            raw_settings = row.get("settings_json")
+            if not raw_settings:
+                continue
+            try:
+                settings = json.loads(raw_settings)
+            except Exception:
+                continue
+            project_id = settings.get("project_id") if isinstance(settings, dict) else None
+            if not isinstance(project_id, str) or not project_id:
+                continue
+            try:
+                self.backend.execute(
+                    "UPDATE audiobook_projects SET project_id = ? WHERE id = ? AND user_id = ?",
+                    (project_id, row.get("id"), self.user_id),
+                )
+                updated += 1
+            except Exception as exc:
+                logger.debug("collections backfill: audiobook_projects.project_id update failed: %s", exc)
+        if updated:
+            logger.debug("collections backfill: audiobook_projects.project_id updated %s rows", updated)
+
     def ensure_schema(self) -> None:
         """Create tables if they do not already exist."""
         if self.backend.backend_type == BackendType.POSTGRESQL:
@@ -396,6 +479,56 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_retention_until ON file_artifacts(retention_until);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_deleted_at ON file_artifacts(deleted_at);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_expires_at ON file_artifacts(export_expires_at);
+
+            CREATE TABLE IF NOT EXISTS audiobook_projects (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                project_id TEXT,
+                title TEXT,
+                source_ref TEXT,
+                status TEXT,
+                settings_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_projects_user ON audiobook_projects(user_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_chapters (
+                id BIGSERIAL PRIMARY KEY,
+                project_id BIGINT NOT NULL,
+                chapter_index INTEGER NOT NULL,
+                title TEXT,
+                start_offset INTEGER,
+                end_offset INTEGER,
+                voice_profile_id TEXT,
+                speed DOUBLE PRECISION,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_chapters_project ON audiobook_chapters(project_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_audiobook_chapters_project_index ON audiobook_chapters(project_id, chapter_index);
+
+            CREATE TABLE IF NOT EXISTS audiobook_artifacts (
+                id BIGSERIAL PRIMARY KEY,
+                project_id BIGINT NOT NULL,
+                artifact_type TEXT NOT NULL,
+                format TEXT NOT NULL,
+                output_id BIGINT NOT NULL,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_artifacts_project ON audiobook_artifacts(project_id);
+            CREATE INDEX IF NOT EXISTS idx_audiobook_artifacts_output ON audiobook_artifacts(output_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_voice_profiles (
+                profile_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                default_voice TEXT NOT NULL,
+                default_speed DOUBLE PRECISION NOT NULL,
+                chapter_overrides_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_voice_profiles_user ON audiobook_voice_profiles(user_id);
             """
         else:
             ddl = """
@@ -506,6 +639,56 @@ class CollectionsDatabase:
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_retention_until ON file_artifacts(retention_until);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_deleted_at ON file_artifacts(deleted_at);
             CREATE INDEX IF NOT EXISTS idx_file_artifacts_export_expires_at ON file_artifacts(export_expires_at);
+
+            CREATE TABLE IF NOT EXISTS audiobook_projects (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                project_id TEXT,
+                title TEXT,
+                source_ref TEXT,
+                status TEXT,
+                settings_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_projects_user ON audiobook_projects(user_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_chapters (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER NOT NULL,
+                chapter_index INTEGER NOT NULL,
+                title TEXT,
+                start_offset INTEGER,
+                end_offset INTEGER,
+                voice_profile_id TEXT,
+                speed REAL,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_chapters_project ON audiobook_chapters(project_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_audiobook_chapters_project_index ON audiobook_chapters(project_id, chapter_index);
+
+            CREATE TABLE IF NOT EXISTS audiobook_artifacts (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER NOT NULL,
+                artifact_type TEXT NOT NULL,
+                format TEXT NOT NULL,
+                output_id INTEGER NOT NULL,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_artifacts_project ON audiobook_artifacts(project_id);
+            CREATE INDEX IF NOT EXISTS idx_audiobook_artifacts_output ON audiobook_artifacts(output_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_voice_profiles (
+                profile_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                default_voice TEXT NOT NULL,
+                default_speed REAL NOT NULL,
+                chapter_overrides_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audiobook_voice_profiles_user ON audiobook_voice_profiles(user_id);
             """
         try:
             self.backend.create_tables(ddl)
@@ -517,12 +700,14 @@ class CollectionsDatabase:
         digest_columns: set[str] = set()
         file_artifact_columns: set[str] = set()
         content_columns: set[str] = set()
+        audiobook_project_columns: set[str] = set()
         if self.backend.backend_type == BackendType.SQLITE:
             output_template_columns = self._sqlite_columns("output_templates")
             output_columns = self._sqlite_columns("outputs")
             digest_columns = self._sqlite_columns("reading_digest_schedules")
             file_artifact_columns = self._sqlite_columns("file_artifacts")
             content_columns = self._sqlite_columns("content_items")
+            audiobook_project_columns = self._sqlite_columns("audiobook_projects")
         # Backfill columns for existing tables
         if "metadata_json" not in output_template_columns:
             try:
@@ -757,6 +942,45 @@ class CollectionsDatabase:
                     logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
                 else:
                     raise
+        # Audiobook projects backfills
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            try:
+                self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN IF NOT EXISTS project_id TEXT", tuple())
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
+                else:
+                    raise
+            try:
+                self.backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
+                    tuple(),
+                )
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: audiobook_projects.project_id index already exists or skipped")
+                else:
+                    raise
+        else:
+            if "project_id" not in audiobook_project_columns:
+                try:
+                    self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN project_id TEXT", tuple())
+                except Exception as exc:
+                    if _is_backfill_noop_error(exc):
+                        logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
+                    else:
+                        raise
+            try:
+                self.backend.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
+                    tuple(),
+                )
+            except Exception as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: audiobook_projects.project_id index already exists or skipped")
+                else:
+                    raise
+        self._backfill_audiobook_project_ids()
         # Collections layer tables
         fts_available = self.backend.backend_type == BackendType.SQLITE
         if self.backend.backend_type == BackendType.POSTGRESQL:
@@ -2335,6 +2559,33 @@ class CollectionsDatabase:
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
         return [CollectionsDatabase.OutputArtifactRow(**row) for row in rows], total
 
+    def list_output_artifacts_by_types(
+        self,
+        *,
+        types: list[str],
+        limit: int = 200,
+        offset: int = 0,
+        include_deleted: bool = False,
+    ) -> tuple[list["CollectionsDatabase.OutputArtifactRow"], int]:
+        if not types:
+            return [], 0
+        where = ["user_id = ?"]
+        params: list[Any] = [self.user_id]
+        if not include_deleted:
+            where.append("deleted = 0")
+        placeholders = ", ".join(["?"] * len(types))
+        where.append(f"type IN ({placeholders})")
+        params.extend(types)
+        where_sql = " AND ".join(where)
+        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"
+        total = int(self.backend.execute(cq, tuple(params)).scalar or 0)
+        sq = (
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path "
+            f"FROM outputs WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
+        return [CollectionsDatabase.OutputArtifactRow(**row) for row in rows], total
+
     def rename_output_artifact(self, output_id: int, new_title: str, new_storage_path: Optional[str] = None) -> "CollectionsDatabase.OutputArtifactRow":
         fields = ["title = ?"]
         params: list[Any] = [new_title]
@@ -2348,6 +2599,249 @@ class CollectionsDatabase:
         if res.rowcount <= 0:
             raise KeyError("output_not_found")
         return self.get_output_artifact(output_id)
+
+    # ------------------------
+    # Audiobook voice profiles
+    # ------------------------
+    def create_audiobook_project(
+        self,
+        *,
+        project_id: Optional[str],
+        title: Optional[str],
+        source_ref: Optional[str],
+        status: Optional[str],
+        settings_json: Optional[str],
+    ) -> AudiobookProjectRow:
+        now = _utcnow_iso()
+        q = (
+            "INSERT INTO audiobook_projects (user_id, project_id, title, source_ref, status, settings_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            self.user_id,
+            project_id,
+            title,
+            source_ref,
+            status,
+            settings_json,
+            now,
+            now,
+        )
+        res = self._execute_insert(q, params)
+        project_id = self._extract_lastrowid(res)
+        if project_id is None:
+            raise DatabaseError("audiobook_project_insert_failed")
+        return self.get_audiobook_project(project_id)
+
+    def get_audiobook_project(self, project_id: int) -> AudiobookProjectRow:
+        q = (
+            "SELECT id, user_id, project_id, title, source_ref, status, settings_json, created_at, updated_at "
+            "FROM audiobook_projects WHERE id = ? AND user_id = ?"
+        )
+        row = self.backend.execute(q, (project_id, self.user_id)).first
+        if not row:
+            raise KeyError("audiobook_project_not_found")
+        return AudiobookProjectRow(**row)
+
+    def get_audiobook_project_by_project_id(self, project_id: str) -> AudiobookProjectRow:
+        q = (
+            "SELECT id, user_id, project_id, title, source_ref, status, settings_json, created_at, updated_at "
+            "FROM audiobook_projects WHERE user_id = ? AND project_id = ?"
+        )
+        row = self.backend.execute(q, (self.user_id, project_id)).first
+        if not row:
+            raise KeyError("audiobook_project_not_found")
+        return AudiobookProjectRow(**row)
+
+    def list_audiobook_projects(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AudiobookProjectRow]:
+        q = (
+            "SELECT id, user_id, project_id, title, source_ref, status, settings_json, created_at, updated_at "
+            "FROM audiobook_projects WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, (self.user_id, limit, offset)).rows
+        return [AudiobookProjectRow(**row) for row in rows]
+
+    def update_audiobook_project_status(
+        self,
+        project_id: int,
+        *,
+        status: str,
+        settings_json: Optional[str] = None,
+    ) -> AudiobookProjectRow:
+        fields = ["status = ?", "updated_at = ?"]
+        params: list[Any] = [status, _utcnow_iso()]
+        if settings_json is not None:
+            fields.append("settings_json = ?")
+            params.append(settings_json)
+        params.extend([project_id, self.user_id])
+        q = f"UPDATE audiobook_projects SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        res = self.backend.execute(q, tuple(params))
+        if res.rowcount <= 0:
+            raise KeyError("audiobook_project_not_found")
+        return self.get_audiobook_project(project_id)
+
+    def create_audiobook_chapter(
+        self,
+        *,
+        project_id: int,
+        chapter_index: int,
+        title: Optional[str],
+        start_offset: Optional[int],
+        end_offset: Optional[int],
+        voice_profile_id: Optional[str],
+        speed: Optional[float],
+        metadata_json: Optional[str],
+    ) -> AudiobookChapterRow:
+        q = (
+            "INSERT INTO audiobook_chapters (project_id, chapter_index, title, start_offset, end_offset, "
+            "voice_profile_id, speed, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            project_id,
+            chapter_index,
+            title,
+            start_offset,
+            end_offset,
+            voice_profile_id,
+            speed,
+            metadata_json,
+        )
+        res = self._execute_insert(q, params)
+        chapter_id = self._extract_lastrowid(res)
+        if chapter_id is None:
+            raise DatabaseError("audiobook_chapter_insert_failed")
+        return self.get_audiobook_chapter(chapter_id)
+
+    def get_audiobook_chapter(self, chapter_id: int) -> AudiobookChapterRow:
+        q = (
+            "SELECT id, project_id, chapter_index, title, start_offset, end_offset, voice_profile_id, speed, metadata_json "
+            "FROM audiobook_chapters WHERE id = ?"
+        )
+        row = self.backend.execute(q, (chapter_id,)).first
+        if not row:
+            raise KeyError("audiobook_chapter_not_found")
+        return AudiobookChapterRow(**row)
+
+    def list_audiobook_chapters(
+        self,
+        *,
+        project_id: int,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[AudiobookChapterRow]:
+        q = (
+            "SELECT id, project_id, chapter_index, title, start_offset, end_offset, voice_profile_id, speed, metadata_json "
+            "FROM audiobook_chapters WHERE project_id = ? ORDER BY chapter_index ASC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, (project_id, limit, offset)).rows
+        return [AudiobookChapterRow(**row) for row in rows]
+
+    def create_audiobook_artifact(
+        self,
+        *,
+        project_id: int,
+        artifact_type: str,
+        format_: str,
+        output_id: int,
+        metadata_json: Optional[str],
+    ) -> AudiobookArtifactRow:
+        q = (
+            "INSERT INTO audiobook_artifacts (project_id, artifact_type, format, output_id, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?)"
+        )
+        params = (
+            project_id,
+            artifact_type,
+            format_,
+            output_id,
+            metadata_json,
+        )
+        res = self._execute_insert(q, params)
+        artifact_id = self._extract_lastrowid(res)
+        if artifact_id is None:
+            raise DatabaseError("audiobook_artifact_insert_failed")
+        return self.get_audiobook_artifact(artifact_id)
+
+    def get_audiobook_artifact(self, artifact_id: int) -> AudiobookArtifactRow:
+        q = (
+            "SELECT id, project_id, artifact_type, format, output_id, metadata_json "
+            "FROM audiobook_artifacts WHERE id = ?"
+        )
+        row = self.backend.execute(q, (artifact_id,)).first
+        if not row:
+            raise KeyError("audiobook_artifact_not_found")
+        return AudiobookArtifactRow(**row)
+
+    def list_audiobook_artifacts(
+        self,
+        *,
+        project_id: int,
+        limit: int = 2000,
+        offset: int = 0,
+    ) -> list[AudiobookArtifactRow]:
+        q = (
+            "SELECT id, project_id, artifact_type, format, output_id, metadata_json "
+            "FROM audiobook_artifacts WHERE project_id = ? ORDER BY id ASC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, (project_id, limit, offset)).rows
+        return [AudiobookArtifactRow(**row) for row in rows]
+
+    def create_voice_profile(
+        self,
+        *,
+        profile_id: str,
+        name: str,
+        default_voice: str,
+        default_speed: float,
+        chapter_overrides_json: Optional[str],
+    ) -> VoiceProfileRow:
+        now = _utcnow_iso()
+        q = (
+            "INSERT INTO audiobook_voice_profiles (profile_id, user_id, name, default_voice, default_speed, chapter_overrides_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            profile_id,
+            self.user_id,
+            name,
+            default_voice,
+            default_speed,
+            chapter_overrides_json,
+            now,
+            now,
+        )
+        self.backend.execute(q, params)
+        return self.get_voice_profile(profile_id)
+
+    def get_voice_profile(self, profile_id: str) -> VoiceProfileRow:
+        q = (
+            "SELECT profile_id, user_id, name, default_voice, default_speed, chapter_overrides_json, created_at, updated_at "
+            "FROM audiobook_voice_profiles WHERE profile_id = ? AND user_id = ?"
+        )
+        row = self.backend.execute(q, (profile_id, self.user_id)).first
+        if not row:
+            raise KeyError("voice_profile_not_found")
+        return VoiceProfileRow(**row)
+
+    def list_voice_profiles(self, *, limit: int = 100, offset: int = 0) -> list[VoiceProfileRow]:
+        q = (
+            "SELECT profile_id, user_id, name, default_voice, default_speed, chapter_overrides_json, created_at, updated_at "
+            "FROM audiobook_voice_profiles WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        rows = self.backend.execute(q, (self.user_id, limit, offset)).rows
+        return [VoiceProfileRow(**row) for row in rows]
+
+    def delete_voice_profile(self, profile_id: str) -> None:
+        q = "DELETE FROM audiobook_voice_profiles WHERE profile_id = ? AND user_id = ?"
+        res = self.backend.execute(q, (profile_id, self.user_id))
+        if res.rowcount <= 0:
+            raise KeyError("voice_profile_not_found")
 
     # ------------------------
     # Reading digest schedules API

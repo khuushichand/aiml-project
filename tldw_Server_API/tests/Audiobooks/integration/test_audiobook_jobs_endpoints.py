@@ -48,6 +48,13 @@ def test_create_job_status_and_artifacts(client_audiobooks_jobs, job_payload):
     assert isinstance(data["job_id"], int)
     assert data["project_id"].startswith("abk_")
 
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+    jm = JobManager()
+    job = jm.get_job(int(data["job_id"]))
+    assert job is not None
+    assert job.get("batch_group") == "batch_01"
+
     status_resp = client_audiobooks_jobs.get(f"/api/v1/audiobooks/jobs/{data['job_id']}")
     assert status_resp.status_code == 200
     status_data = status_resp.json()

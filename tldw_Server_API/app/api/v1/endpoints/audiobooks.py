@@ -7,19 +7,24 @@ from pathlib import Path as PathlibPath
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import PlainTextResponse
 from starlette import status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import (
     ArtifactInfo,
+    AudiobookChapterInfo,
+    AudiobookChapterListResponse,
     AudiobookArtifactsResponse,
     AudiobookJobCreateResponse,
     AudiobookJobRequest,
     AudiobookJobStatusResponse,
     AudiobookParseRequest,
     AudiobookParseResponse,
+    AudiobookProjectInfo,
+    AudiobookProjectListResponse,
+    AudiobookProjectResponse,
     ChapterPreview,
     SubtitleExportRequest,
     VoiceProfileCreateRequest,
@@ -41,6 +46,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resol
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.Audiobooks.subtitle_generator import generate_subtitles
+from tldw_Server_API.app.core.Audiobooks.tag_parser import (
+    build_chapters_from_markers,
+    parse_tagged_text,
+)
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
@@ -159,6 +168,95 @@ def _job_project_id(job_row: dict) -> str:
     return f"abk_{job_row.get('id', 0)}"
 
 
+def _safe_json_loads(raw: Optional[str]) -> dict:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
+
+
+def _project_row_to_info(row) -> AudiobookProjectInfo:
+    settings = _safe_json_loads(row.settings_json)
+    source_ref = _safe_json_loads(row.source_ref)
+    project_id_val = None
+    if getattr(row, "project_id", None):
+        project_id_val = str(row.project_id)
+    else:
+        project_id = settings.get("project_id")
+        if isinstance(project_id, str):
+            project_id_val = project_id
+    return AudiobookProjectInfo(
+        project_db_id=int(row.id),
+        project_id=project_id_val,
+        title=row.title,
+        status=row.status,
+        source_ref=source_ref or None,
+        settings=settings or None,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _resolve_project_row(collections_db: CollectionsDatabase, project_ref: str):
+    if project_ref.isdigit():
+        try:
+            return collections_db.get_audiobook_project(int(project_ref))
+        except KeyError:
+            pass
+    try:
+        return collections_db.get_audiobook_project_by_project_id(project_ref)
+    except KeyError:
+        pass
+    offset = 0
+    limit = 200
+    while True:
+        rows = collections_db.list_audiobook_projects(limit=limit, offset=offset)
+        if not rows:
+            break
+        for row in rows:
+            settings = _safe_json_loads(row.settings_json)
+            project_id = settings.get("project_id")
+            if isinstance(project_id, str) and project_id == project_ref:
+                return row
+        offset += limit
+    raise KeyError("audiobook_project_not_found")
+
+
+def _project_row_project_id(row, fallback: str) -> str:
+    if getattr(row, "project_id", None):
+        return str(row.project_id)
+    settings = _safe_json_loads(row.settings_json)
+    project_id = settings.get("project_id")
+    if isinstance(project_id, str) and project_id:
+        return project_id
+    return fallback
+
+
+def _parse_progress_message(message: Optional[str]) -> tuple[str, Optional[int], Optional[int]]:
+    if not message:
+        return "audiobook_job", None, None
+    raw = str(message).strip()
+    if raw.startswith("{") and raw.endswith("}"):
+        parsed = _safe_json_loads(raw)
+        if parsed:
+            stage = parsed.get("stage") or "audiobook_job"
+            try:
+                chapter_index = int(parsed.get("chapter_index")) if parsed.get("chapter_index") is not None else None
+            except Exception:
+                chapter_index = None
+            try:
+                chapters_total = int(parsed.get("chapters_total")) if parsed.get("chapters_total") is not None else None
+            except Exception:
+                chapters_total = None
+            return str(stage), chapter_index, chapters_total
+    return raw, None, None
+
+
 @router.post(
     "/parse",
     response_model=AudiobookParseResponse,
@@ -221,11 +319,15 @@ async def parse_audiobook_source(
         raise HTTPException(status_code=400, detail="no_source_text")
 
     normalized_text = _normalize_subtitles(text, input_type)
+    tag_result = parse_tagged_text(normalized_text)
+    normalized_text = tag_result.clean_text
     if request.max_chars and len(normalized_text) > request.max_chars:
         normalized_text = normalized_text[: request.max_chars]
 
     chapters: list[ChapterPreview] = []
-    if request.detect_chapters:
+    if tag_result.chapter_markers:
+        chapters = build_chapters_from_markers(normalized_text, tag_result.chapter_markers)
+    elif request.detect_chapters:
         try:
             chapters = _detect_chapters(
                 normalized_text,
@@ -235,6 +337,9 @@ async def parse_audiobook_source(
         except Exception as exc:
             logger.warning(f"Chapter detection failed: {exc}")
             raise HTTPException(status_code=400, detail="chapter_detection_failed") from exc
+
+    if tag_result.chapter_markers or tag_result.voice_markers or tag_result.speed_markers or tag_result.ts_markers:
+        metadata["tag_markers"] = tag_result.as_metadata()
 
     project_id = f"abk_{uuid4().hex[:12]}"
     return AudiobookParseResponse(
@@ -270,12 +375,14 @@ async def create_audiobook_job(
     payload["project_id"] = project_id
 
     job_manager = _get_job_manager()
+    batch_group = request.queue.batch_group if request.queue is not None else None
     job = job_manager.create_job(
         domain="audiobooks",
         queue="default",
         job_type="audiobook_generate",
         payload=payload,
         owner_user_id=str(getattr(_current_user, "id", "")),
+        batch_group=batch_group,
         priority=priority,
     )
 
@@ -317,9 +424,12 @@ async def get_audiobook_job_status(
             percent_val = int(percent) if percent is not None else None
         except Exception:
             percent_val = None
+        stage_val, chapter_index, chapters_total = _parse_progress_message(stage)
         progress = {
-            "stage": str(stage or "audiobook_job"),
+            "stage": stage_val,
             "percent": percent_val,
+            "chapter_index": chapter_index,
+            "chapters_total": chapters_total,
         }
 
     return AudiobookJobStatusResponse(
@@ -385,6 +495,142 @@ async def get_audiobook_job_artifacts(
     return AudiobookArtifactsResponse(project_id=project_id, artifacts=artifacts)
 
 
+@router.get(
+    "/projects",
+    response_model=AudiobookProjectListResponse,
+    summary="List audiobook projects",
+)
+async def list_audiobook_projects(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _current_user: User = Depends(get_request_user),
+) -> AudiobookProjectListResponse:
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    collections_db = CollectionsDatabase(user_id)
+    try:
+        rows = collections_db.list_audiobook_projects(limit=limit, offset=offset)
+    except Exception as exc:
+        logger.exception("Failed to list audiobook projects")
+        raise HTTPException(status_code=500, detail="audiobook_project_list_failed") from exc
+    projects = [_project_row_to_info(row) for row in rows]
+    return AudiobookProjectListResponse(projects=projects)
+
+
+@router.get(
+    "/projects/{project_ref}",
+    response_model=AudiobookProjectResponse,
+    summary="Get audiobook project",
+)
+async def get_audiobook_project(
+    project_ref: str = Path(..., min_length=1, description="Project id or database id"),
+    _current_user: User = Depends(get_request_user),
+) -> AudiobookProjectResponse:
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    collections_db = CollectionsDatabase(user_id)
+    try:
+        row = _resolve_project_row(collections_db, project_ref)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="audiobook_project_not_found") from exc
+    except Exception as exc:
+        logger.exception("Failed to fetch audiobook project")
+        raise HTTPException(status_code=500, detail="audiobook_project_fetch_failed") from exc
+    return AudiobookProjectResponse(project=_project_row_to_info(row))
+
+
+@router.get(
+    "/projects/{project_ref}/chapters",
+    response_model=AudiobookChapterListResponse,
+    summary="List audiobook project chapters",
+)
+async def list_audiobook_project_chapters(
+    project_ref: str = Path(..., min_length=1, description="Project id or database id"),
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    _current_user: User = Depends(get_request_user),
+) -> AudiobookChapterListResponse:
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    collections_db = CollectionsDatabase(user_id)
+    try:
+        project_row = _resolve_project_row(collections_db, project_ref)
+        chapter_rows = collections_db.list_audiobook_chapters(
+            project_id=int(project_row.id),
+            limit=limit,
+            offset=offset,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="audiobook_project_not_found") from exc
+    except Exception as exc:
+        logger.exception("Failed to list audiobook chapters")
+        raise HTTPException(status_code=500, detail="audiobook_chapters_list_failed") from exc
+    chapters: list[AudiobookChapterInfo] = []
+    for row in chapter_rows:
+        metadata = _safe_json_loads(row.metadata_json)
+        chapters.append(
+            AudiobookChapterInfo(
+                id=int(row.id),
+                chapter_index=int(row.chapter_index),
+                title=row.title,
+                start_offset=row.start_offset,
+                end_offset=row.end_offset,
+                voice_profile_id=row.voice_profile_id,
+                speed=float(row.speed) if row.speed is not None else None,
+                metadata=metadata,
+            )
+        )
+    project_id = _project_row_project_id(project_row, project_ref)
+    return AudiobookChapterListResponse(project_id=project_id, chapters=chapters)
+
+
+@router.get(
+    "/projects/{project_ref}/artifacts",
+    response_model=AudiobookArtifactsResponse,
+    summary="List audiobook project artifacts",
+)
+async def list_audiobook_project_artifacts(
+    project_ref: str = Path(..., min_length=1, description="Project id or database id"),
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    _current_user: User = Depends(get_request_user),
+) -> AudiobookArtifactsResponse:
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    collections_db = CollectionsDatabase(user_id)
+    try:
+        project_row = _resolve_project_row(collections_db, project_ref)
+        artifact_rows = collections_db.list_audiobook_artifacts(
+            project_id=int(project_row.id),
+            limit=limit,
+            offset=offset,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="audiobook_project_not_found") from exc
+    except Exception as exc:
+        logger.exception("Failed to list audiobook artifacts")
+        raise HTTPException(status_code=500, detail="audiobook_artifacts_list_failed") from exc
+    artifacts: list[ArtifactInfo] = []
+    for row in artifact_rows:
+        metadata = _safe_json_loads(row.metadata_json)
+        artifacts.append(
+            ArtifactInfo(
+                artifact_type=str(row.artifact_type),
+                format=row.format,
+                scope=metadata.get("scope"),
+                chapter_id=metadata.get("chapter_id"),
+                output_id=int(row.output_id),
+                download_url=f"/api/v1/outputs/{int(row.output_id)}/download",
+            )
+        )
+    project_id = _project_row_project_id(project_row, project_ref)
+    return AudiobookArtifactsResponse(project_id=project_id, artifacts=artifacts)
+
+
 @router.post(
     "/voices/profiles",
     response_model=VoiceProfileResponse,
@@ -394,7 +640,31 @@ async def create_voice_profile(
     request: VoiceProfileCreateRequest,
     _current_user: User = Depends(get_request_user),
 ) -> VoiceProfileResponse:
-    _not_implemented("audiobook_voice_profile_create_not_implemented")
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    profile_id = f"vp_{uuid4().hex[:12]}"
+    overrides = [override.model_dump() for override in (request.chapter_overrides or [])]
+    overrides_json = json.dumps(overrides) if overrides else None
+    collections_db = CollectionsDatabase(user_id)
+    try:
+        row = collections_db.create_voice_profile(
+            profile_id=profile_id,
+            name=request.name,
+            default_voice=request.default_voice,
+            default_speed=request.default_speed,
+            chapter_overrides_json=overrides_json,
+        )
+    except Exception as exc:
+        logger.exception("Failed to create audiobook voice profile")
+        raise HTTPException(status_code=500, detail="voice_profile_create_failed") from exc
+    return VoiceProfileResponse(
+        profile_id=row.profile_id,
+        name=row.name,
+        default_voice=row.default_voice,
+        default_speed=float(row.default_speed),
+        chapter_overrides=overrides,
+    )
 
 
 @router.get(
@@ -405,7 +675,33 @@ async def create_voice_profile(
 async def list_voice_profiles(
     _current_user: User = Depends(get_request_user),
 ) -> VoiceProfileListResponse:
-    _not_implemented("audiobook_voice_profile_list_not_implemented")
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    collections_db = CollectionsDatabase(user_id)
+    try:
+        rows = collections_db.list_voice_profiles()
+    except Exception as exc:
+        logger.exception("Failed to list audiobook voice profiles")
+        raise HTTPException(status_code=500, detail="voice_profile_list_failed") from exc
+    profiles: list[VoiceProfileResponse] = []
+    for row in rows:
+        overrides = []
+        if row.chapter_overrides_json:
+            try:
+                overrides = json.loads(row.chapter_overrides_json)
+            except Exception:
+                overrides = []
+        profiles.append(
+            VoiceProfileResponse(
+                profile_id=row.profile_id,
+                name=row.name,
+                default_voice=row.default_voice,
+                default_speed=float(row.default_speed),
+                chapter_overrides=overrides,
+            )
+        )
+    return VoiceProfileListResponse(profiles=profiles)
 
 
 @router.delete(
@@ -417,7 +713,18 @@ async def delete_voice_profile(
     profile_id: str = Path(..., min_length=1, description="Voice profile id"),
     _current_user: User = Depends(get_request_user),
 ) -> VoiceProfileDeleteResponse:
-    _not_implemented("audiobook_voice_profile_delete_not_implemented")
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    collections_db = CollectionsDatabase(user_id)
+    try:
+        collections_db.delete_voice_profile(profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="voice_profile_not_found") from exc
+    except Exception as exc:
+        logger.exception("Failed to delete audiobook voice profile")
+        raise HTTPException(status_code=500, detail="voice_profile_delete_failed") from exc
+    return VoiceProfileDeleteResponse(profile_id=profile_id, deleted=True)
 
 
 @router.post(

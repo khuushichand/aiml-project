@@ -118,7 +118,10 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
         "max_size_mb": 20,
     },
     "document": {  # Generic documents (JSON supported as document)
-        "allowed_extensions": {'.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.txt', '.md', '.rtf', '.json'},
+        "allowed_extensions": {
+            '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
+            '.txt', '.md', '.rtf', '.json', '.srt', '.vtt', '.ass',
+        },
         "allowed_mimetypes": {
             'application/pdf', 'application/msword',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -127,6 +130,7 @@ DEFAULT_MEDIA_TYPE_CONFIG = {
             'application/vnd.ms-excel',
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'text/plain', 'text/markdown', 'text/rtf', 'application/rtf', 'application/x-rtf', 'application/json',
+            'text/vtt', 'application/x-subrip', 'text/x-ssa', 'text/x-ass', 'application/x-ass',
         },
         "max_size_mb": media_config.get('max_document_file_size_mb', 50),
     },

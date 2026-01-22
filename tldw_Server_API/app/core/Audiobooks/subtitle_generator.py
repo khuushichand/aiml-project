@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+import os
 from typing import Iterable, List, Optional, Sequence
 
+from loguru import logger
+
+from tldw_Server_API.app.core.Utils.common import parse_boolean
+from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import (
     AlignmentPayload,
     AlignmentWord,
@@ -28,6 +34,8 @@ def generate_subtitles(
     format: SubtitleFormat,
     mode: SubtitleMode,
     variant: SubtitleVariant,
+    source_text: Optional[str] = None,
+    enable_spacy: Optional[bool] = None,
     words_per_cue: Optional[int] = None,
     max_chars: Optional[int] = None,
     max_lines: Optional[int] = None,
@@ -44,7 +52,7 @@ def generate_subtitles(
 
     effective_max_chars = _resolve_max_chars(max_chars, variant)
     if mode == "sentence":
-        cues = _chunk_sentences(words)
+        cues = _chunk_sentences(words, source_text=source_text, enable_spacy=enable_spacy)
         duration_limit = max_duration_ms if max_duration_ms is not None else 6000
         if _should_fallback_sentence(cues, effective_max_chars, duration_limit):
             cues = _chunk_words(words, effective_words_per_cue)
@@ -102,7 +110,7 @@ def _build_cues(
     if mode == "word_count":
         return _chunk_words(words, words_per_cue)
     if mode == "sentence":
-        return _chunk_sentences(words)
+        return _chunk_sentences(words, source_text=None, enable_spacy=None)
     return _chunk_lines(words)
 
 
@@ -113,7 +121,16 @@ def _chunk_words(words: Sequence[AlignmentWord], words_per_cue: int) -> List[Lis
     return cues
 
 
-def _chunk_sentences(words: Sequence[AlignmentWord]) -> List[List[AlignmentWord]]:
+def _chunk_sentences(
+    words: Sequence[AlignmentWord],
+    *,
+    source_text: Optional[str],
+    enable_spacy: Optional[bool],
+) -> List[List[AlignmentWord]]:
+    if source_text and _should_use_spacy(enable_spacy):
+        spacy_cues = _chunk_sentences_spacy(words, source_text)
+        if spacy_cues:
+            return spacy_cues
     cues: List[List[AlignmentWord]] = []
     current: List[AlignmentWord] = []
     for word in words:
@@ -124,6 +141,69 @@ def _chunk_sentences(words: Sequence[AlignmentWord]) -> List[List[AlignmentWord]
     if current:
         cues.append(current)
     return cues
+
+
+def _chunk_sentences_spacy(
+    words: Sequence[AlignmentWord],
+    source_text: str,
+) -> Optional[List[List[AlignmentWord]]]:
+    nlp = _load_spacy_model()
+    if nlp is None:
+        return None
+    try:
+        doc = nlp(source_text)
+    except Exception as exc:
+        logger.warning("spaCy sentence parsing failed: %s", exc)
+        return None
+    sentences = list(getattr(doc, "sents", []) or [])
+    if not sentences:
+        return None
+
+    cues: List[List[AlignmentWord]] = []
+    current: List[AlignmentWord] = []
+    sent_idx = 0
+    current_end = sentences[0].end_char
+    for word in words:
+        if word.char_start is not None:
+            while sent_idx < len(sentences) and word.char_start >= current_end:
+                if current:
+                    cues.append(current)
+                    current = []
+                sent_idx += 1
+                if sent_idx < len(sentences):
+                    current_end = sentences[sent_idx].end_char
+        current.append(word)
+    if current:
+        cues.append(current)
+    return cues if cues else None
+
+
+def _should_use_spacy(enable_spacy: Optional[bool]) -> bool:
+    if enable_spacy is not None:
+        return enable_spacy
+    env_value = os.getenv("AUDIOBOOK_ENABLE_SPACY")
+    if env_value is not None:
+        return parse_boolean(env_value, default=False)
+    cfg_value = get_config_value("Audiobooks", "enable_spacy_sentence_splitting")
+    return parse_boolean(cfg_value, default=False)
+
+
+@lru_cache(maxsize=1)
+def _load_spacy_model():
+    try:
+        import spacy  # type: ignore
+    except Exception as exc:
+        logger.warning("spaCy unavailable: %s", exc)
+        return None
+
+    model_name = os.getenv("AUDIOBOOK_SPACY_MODEL") or get_config_value(
+        "Audiobooks", "spacy_model", "en_core_web_sm"
+    )
+    try:
+        return spacy.load(model_name)
+    except Exception as exc:
+        logger.warning("Failed to load spaCy model '%s': %s", model_name, exc)
+        return None
 
 
 def _chunk_lines(words: Sequence[AlignmentWord]) -> List[List[AlignmentWord]]:

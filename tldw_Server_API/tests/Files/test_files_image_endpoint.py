@@ -32,6 +32,20 @@ class MockImageAdapter:
         return ImageGenResult(content=self.content, content_type=content_type, bytes_len=len(self.content))
 
 
+class MockSwarmUIImageAdapter:
+    name = "swarmui"
+    supported_formats = {"png", "jpg"}
+    content: bytes = b"swarm-image"
+
+    def generate(self, request):
+        fmt = request.format
+        content_type = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+        }[fmt]
+        return ImageGenResult(content=self.content, content_type=content_type, bytes_len=len(self.content))
+
+
 @pytest.fixture()
 def mock_image_registry(monkeypatch):
     registry = image_registry.ImageAdapterRegistry(
@@ -41,6 +55,20 @@ def mock_image_registry(monkeypatch):
         }
     )
     registry.register_adapter("stable_diffusion_cpp", MockImageAdapter)
+    monkeypatch.setattr(image_registry, "_registry", registry)
+    yield registry
+    image_registry.reset_registry()
+
+
+@pytest.fixture()
+def mock_swarmui_registry(monkeypatch):
+    registry = image_registry.ImageAdapterRegistry(
+        config_override={
+            "default_backend": "swarmui",
+            "enabled_backends": ["swarmui"],
+        }
+    )
+    registry.register_adapter("swarmui", MockSwarmUIImageAdapter)
     monkeypatch.setattr(image_registry, "_registry", registry)
     yield registry
     image_registry.reset_registry()
@@ -105,6 +133,30 @@ def test_create_image_inline_export(client_with_user, mock_image_registry):
     assert export["content_type"] == "image/png"
     assert export["content_b64"]
     assert base64.b64decode(export["content_b64"]) == MockImageAdapter.content
+
+
+def test_create_image_inline_export_swarmui(client_with_user, mock_swarmui_registry):
+    MockSwarmUIImageAdapter.content = b"swarm-bytes"
+    payload = {
+        "file_type": "image",
+        "title": "Swarm",
+        "payload": {
+            "backend": "swarmui",
+            "prompt": "A test image",
+        },
+        "export": {"format": "jpg", "mode": "inline", "async_mode": "sync"},
+        "options": BASE_OPTIONS,
+    }
+    response = client_with_user.post("/api/v1/files/create", json=payload)
+    assert response.status_code == 200, response.text
+    artifact = response.json()["artifact"]
+    assert artifact["file_type"] == "image"
+    export = artifact["export"]
+    assert export["status"] == "none"
+    assert export["format"] == "jpg"
+    assert export["content_type"] == "image/jpeg"
+    assert export["content_b64"]
+    assert base64.b64decode(export["content_b64"]) == MockSwarmUIImageAdapter.content
 
 
 def test_image_export_mode_url_rejected(client_with_user, mock_image_registry):
