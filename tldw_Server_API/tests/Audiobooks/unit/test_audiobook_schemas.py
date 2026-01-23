@@ -56,10 +56,66 @@ def test_job_request_requires_output_and_subtitles_for_single_source():
         AudiobookJobRequest(project_title="Test", source=_valid_source(), chapters=_valid_chapters())
 
 
+def test_job_request_allows_missing_subtitles_for_non_kokoro_provider():
+    req = AudiobookJobRequest(
+        project_title="Test",
+        source=_valid_source(),
+        chapters=_valid_chapters(),
+        output=_valid_output(),
+        tts_provider="openai",
+    )
+    assert req.tts_provider == "openai"
+
+
+def test_job_request_rejects_subtitles_for_non_kokoro_provider():
+    with pytest.raises(ValidationError):
+        AudiobookJobRequest(
+            project_title="Test",
+            source=_valid_source(),
+            chapters=_valid_chapters(),
+            output=_valid_output(),
+            subtitles=_valid_subtitles(),
+            tts_provider="openai",
+        )
+
+
 def test_job_request_batch_requires_defaults_or_item_overrides():
     item = AudiobookJobItem(source=_valid_source(), chapters=_valid_chapters())
     with pytest.raises(ValidationError):
         AudiobookJobRequest(project_title="Batch", items=[item])
+
+
+def test_job_request_batch_allows_missing_subtitles_for_non_kokoro_items():
+    item = AudiobookJobItem(source=_valid_source(), chapters=_valid_chapters(), tts_provider="openai")
+    req = AudiobookJobRequest(project_title="Batch", items=[item], output=_valid_output())
+    assert req.items
+
+
+def test_job_request_batch_rejects_non_kokoro_items_with_default_subtitles():
+    item = AudiobookJobItem(source=_valid_source(), chapters=_valid_chapters(), tts_provider="openai")
+    with pytest.raises(ValidationError):
+        AudiobookJobRequest(
+            project_title="Batch",
+            items=[item],
+            output=_valid_output(),
+            subtitles=_valid_subtitles(),
+        )
+
+
+def test_job_request_batch_allows_explicit_null_subtitles_for_non_kokoro_items():
+    item = AudiobookJobItem(
+        source=_valid_source(),
+        chapters=_valid_chapters(),
+        tts_provider="openai",
+        subtitles=None,
+    )
+    req = AudiobookJobRequest(
+        project_title="Batch",
+        items=[item],
+        output=_valid_output(),
+        subtitles=_valid_subtitles(),
+    )
+    assert req.items
 
 
 def test_output_formats_must_not_be_empty():

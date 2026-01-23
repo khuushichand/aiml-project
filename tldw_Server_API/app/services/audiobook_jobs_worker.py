@@ -12,6 +12,7 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import AlignmentPayload, ChapterPreview
+from tldw_Server_API.app.core.Audiobooks.subtitle_parser import normalize_subtitle_source
 from tldw_Server_API.app.core.Audiobooks.subtitle_generator import generate_subtitles
 from tldw_Server_API.app.core.Audiobooks.alignment_utils import (
     AlignmentAnchor,
@@ -39,6 +40,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resol
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.TTS.audio_converter import AudioConverter
+from tldw_Server_API.app.core.TTS.adapter_registry import TTSProvider
 from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
 from tldw_Server_API.app.core.Usage.audio_quota import can_start_job, finish_job, increment_jobs_started
@@ -51,13 +53,6 @@ OUTPUT_TYPE_AUDIO = "audiobook_audio"
 OUTPUT_TYPE_SUBTITLE = "audiobook_subtitle"
 OUTPUT_TYPE_ALIGNMENT = "audiobook_alignment"
 OUTPUT_TYPE_PACKAGE = "audiobook_package"
-
-AUDIOBOOK_OUTPUT_TYPES = (
-    OUTPUT_TYPE_AUDIO,
-    OUTPUT_TYPE_SUBTITLE,
-    OUTPUT_TYPE_ALIGNMENT,
-    OUTPUT_TYPE_PACKAGE,
-)
 
 OUTPUT_TO_ARTIFACT_TYPE = {
     OUTPUT_TYPE_AUDIO: "audio",
@@ -121,6 +116,71 @@ class AudiobookJobError(Exception):
         self.retryable = retryable
 
 
+def _normalize_tts_provider(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    provider = str(value).strip().lower()
+    if not provider:
+        return None
+    try:
+        TTSProvider(provider)
+    except ValueError as exc:
+        raise AudiobookJobError(f"unknown_tts_provider:{provider}", retryable=False) from exc
+    return provider
+
+
+def _is_kokoro_request(provider: Optional[str], model: Optional[str]) -> bool:
+    if provider:
+        return str(provider).strip().lower() == "kokoro"
+    if model:
+        return str(model).strip().lower().startswith("kokoro")
+    return True
+
+
+def _resolve_tts_model(provider: Optional[str], model: Optional[str]) -> str:
+    if model is not None:
+        return str(model)
+    provider_norm = str(provider).strip().lower() if provider else ""
+    if provider_norm == "openai":
+        return "tts-1"
+    if provider_norm in {"", "kokoro"}:
+        return "kokoro"
+    return ""
+
+
+def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
+    if not model:
+        return None
+    m = str(model).strip().lower()
+    if m in {"tts-1", "tts-1-hd"}:
+        return "openai"
+    if m.startswith("kokoro"):
+        return "kokoro"
+    if m.startswith("higgs"):
+        return "higgs"
+    if m.startswith("dia"):
+        return "dia"
+    if m.startswith("chatterbox"):
+        return "chatterbox"
+    if m.startswith("vibevoice"):
+        return "vibevoice"
+    if m.startswith("neutts"):
+        return "neutts"
+    if m.startswith("eleven"):
+        return "elevenlabs"
+    if m.startswith("index_tts") or m.startswith("indextts"):
+        return "index_tts"
+    if m.startswith("supertonic2") or m.startswith("supertonic-2") or m.startswith("tts-supertonic2"):
+        return "supertonic2"
+    if m.startswith("supertonic") or m.startswith("tts-supertonic"):
+        return "supertonic"
+    if m.startswith("pocket"):
+        return "pocket_tts"
+    if m.startswith("echo-tts") or m.startswith("echo_tts") or m.startswith("jordand/echo-tts"):
+        return "echo_tts"
+    return None
+
+
 def _sanitize_filename(value: str) -> str:
     cleaned = value.replace("\x00", "").strip()
     cleaned = cleaned.replace(os.sep, "_")
@@ -153,67 +213,22 @@ def _resolve_audiobook_artifact_quota_bytes() -> Optional[int]:
     return int(mb_val * 1024 * 1024)
 
 
-def _extract_metadata_byte_size(metadata_json: Optional[str]) -> Optional[int]:
-    if not metadata_json:
-        return None
-    try:
-        payload = json.loads(metadata_json)
-    except Exception:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    raw = payload.get("byte_size")
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return value if value >= 0 else None
+def _should_recompute_audiobook_usage() -> bool:
+    env_val = os.getenv("AUDIOBOOK_QUOTA_RECOMPUTE")
+    cfg_val = get_config_value("Audiobooks", "artifact_quota_recompute")
+    raw = env_val if env_val not in (None, "") else cfg_val
+    if raw is None:
+        return False
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _resolve_output_size_bytes(row: CollectionsDatabase.OutputArtifactRow, outputs_dir: Path) -> Optional[int]:
-    cached = _extract_metadata_byte_size(row.metadata_json)
-    if cached is not None:
-        return cached
-    try:
-        return (outputs_dir / row.storage_path).stat().st_size
-    except FileNotFoundError:
-        logger.warning("audiobook_quota: missing output file for %s", row.storage_path)
-    except OSError as exc:
-        logger.warning("audiobook_quota: failed to stat %s: %s", row.storage_path, exc)
-    return None
-
-
-def _sum_existing_audiobook_output_bytes(
-    collections_db: CollectionsDatabase,
-    outputs_dir: Path,
-) -> int:
-    total_bytes = 0
-    offset = 0
-    limit = 200
-    while True:
-        rows, total = collections_db.list_output_artifacts_by_types(
-            types=list(AUDIOBOOK_OUTPUT_TYPES),
-            limit=limit,
-            offset=offset,
-        )
-        for row in rows:
-            size = _resolve_output_size_bytes(row, outputs_dir)
-            if size:
-                total_bytes += size
-        offset += len(rows)
-        if offset >= total or not rows:
-            break
-    return total_bytes
-
-
-def _init_audiobook_quota(
-    collections_db: CollectionsDatabase,
-    outputs_dir: Path,
-) -> Optional[AudiobookArtifactQuota]:
+def _init_audiobook_quota(collections_db: CollectionsDatabase) -> Optional[AudiobookArtifactQuota]:
     limit_bytes = _resolve_audiobook_artifact_quota_bytes()
     if limit_bytes is None:
         return None
-    used_bytes = _sum_existing_audiobook_output_bytes(collections_db, outputs_dir)
+    used_bytes = collections_db.get_audiobook_output_usage()
+    if used_bytes is None or _should_recompute_audiobook_usage():
+        used_bytes = collections_db.recompute_audiobook_output_usage()
     logger.debug(
         "audiobook_quota: user=%s used=%s limit=%s",
         collections_db.user_id,
@@ -273,6 +288,8 @@ def _resolve_item_requests(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     default_subtitles = payload.get("subtitles") or {}
     default_metadata = payload.get("metadata") or {}
     default_voice_profile_id = payload.get("voice_profile_id")
+    default_tts_provider = _normalize_tts_provider(payload.get("tts_provider"))
+    default_tts_model = payload.get("tts_model")
 
     if items is None:
         source = payload.get("source") or {}
@@ -280,7 +297,7 @@ def _resolve_item_requests(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
             raise AudiobookJobError("missing_source", retryable=False)
         if not default_output:
             raise AudiobookJobError("missing_output", retryable=False)
-        if not default_subtitles:
+        if _is_kokoro_request(default_tts_provider, default_tts_model) and not default_subtitles:
             raise AudiobookJobError("missing_subtitles", retryable=False)
         return [
             {
@@ -290,6 +307,8 @@ def _resolve_item_requests(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "chapters": payload.get("chapters"),
                 "voice_profile_id": default_voice_profile_id,
                 "metadata": default_metadata,
+                "tts_provider": default_tts_provider,
+                "tts_model": default_tts_model,
             }
         ]
 
@@ -303,11 +322,16 @@ def _resolve_item_requests(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         source = item.get("source") or {}
         if not source:
             raise AudiobookJobError("missing_item_source", retryable=False)
+        tts_provider = _normalize_tts_provider(item.get("tts_provider") or default_tts_provider)
+        tts_model = item.get("tts_model") or default_tts_model
         output_cfg = item.get("output") or default_output
-        subtitle_cfg = item.get("subtitles") or default_subtitles
+        if "subtitles" in item:
+            subtitle_cfg = item.get("subtitles")
+        else:
+            subtitle_cfg = default_subtitles
         if not output_cfg:
             raise AudiobookJobError("missing_item_output", retryable=False)
-        if not subtitle_cfg:
+        if _is_kokoro_request(tts_provider, tts_model) and not subtitle_cfg:
             raise AudiobookJobError("missing_item_subtitles", retryable=False)
         item_metadata = {}
         if default_metadata:
@@ -324,6 +348,8 @@ def _resolve_item_requests(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "voice_profile_id": item.get("voice_profile_id") or default_voice_profile_id,
                 "metadata": item_metadata,
                 "item_index": idx,
+                "tts_provider": tts_provider,
+                "tts_model": tts_model,
             }
         )
     return resolved
@@ -365,6 +391,9 @@ def _progress_message(
 def _get_chapter_chunk_max_chars() -> Optional[int]:
     env_val = os.getenv("AUDIOBOOK_CHAPTER_MAX_CHARS")
     cfg_val = get_config_value("Audiobooks", "chapter_max_chars")
+    if env_val is None and cfg_val is None:
+        env_val = os.getenv("AUDIOBOOK_MAX_CHARS")
+        cfg_val = get_config_value("Audiobooks", "max_chars")
     raw = env_val if env_val is not None else cfg_val
     if raw is None:
         return None
@@ -452,43 +481,8 @@ def _resolve_upload_path(upload_id: str, user_id: int) -> Optional[Path]:
     return safe_path
 
 
-def _strip_srt_vtt(text: str) -> str:
-    cleaned: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.lower().startswith("webvtt"):
-            continue
-        if stripped.isdigit():
-            continue
-        if "-->" in stripped:
-            continue
-        cleaned.append(stripped)
-    return "\n".join(cleaned).strip()
-
-
-def _strip_ass(text: str) -> str:
-    cleaned: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.lower().startswith("dialogue:") or stripped.lower().startswith("comment:"):
-            parts = stripped.split(",", 9)
-            if len(parts) >= 10:
-                cleaned.append(parts[9].strip())
-            else:
-                cleaned.append(stripped)
-    return "\n".join(cleaned).strip()
-
-
 def _normalize_subtitles(text: str, input_type: str) -> str:
-    if input_type in {"srt", "vtt"}:
-        return _strip_srt_vtt(text)
-    if input_type == "ass":
-        return _strip_ass(text)
-    return text
+    return normalize_subtitle_source(text, input_type)
 
 
 def _detect_chapters(
@@ -612,6 +606,13 @@ def _build_chapter_plan(
 
     selected: List[Dict[str, Any]]
     if chapter_specs:
+        invalid_ids = [
+            str(spec.get("chapter_id"))
+            for spec in chapter_specs
+            if spec.get("chapter_id") not in chapter_map
+        ]
+        if invalid_ids:
+            raise AudiobookJobError(f"unknown_chapter_id:{invalid_ids[0]}", retryable=False)
         selected = [spec for spec in chapter_specs if spec.get("include") is not False]
     else:
         selected = [
@@ -822,6 +823,11 @@ def _create_output_and_link(
     )
     if quota_tracker is not None and size_bytes is not None:
         quota_tracker.apply_add(size_bytes)
+    if size_bytes is not None and output_type.startswith("audiobook_"):
+        try:
+            collections_db.update_audiobook_output_usage(size_bytes)
+        except Exception as exc:
+            logger.warning("audiobook_quota: failed to increment usage: %s", exc)
     if project_db_id is None:
         return row
     artifact_type = OUTPUT_TO_ARTIFACT_TYPE.get(output_type)
@@ -908,9 +914,10 @@ def _resolve_output_formats(output_cfg: Dict[str, Any]) -> Tuple[List[str], bool
     return resolved, wants_m4b
 
 
-def _validate_text(text: str) -> str:
+def _validate_text(text: str, *, provider: Optional[str], model: Optional[str]) -> str:
     validator = TTSInputValidator({"strict_validation": True})
-    sanitized = validator.sanitize_text(text, provider="kokoro")
+    provider_hint = provider or _infer_tts_provider_from_model(model) or "kokoro"
+    sanitized = validator.sanitize_text(text, provider=provider_hint)
     if not sanitized or not sanitized.strip():
         raise AudiobookJobError("empty_text_after_sanitization", retryable=False)
     return sanitized
@@ -920,13 +927,15 @@ async def _generate_tts_audio(
     *,
     text: str,
     model: Optional[str],
+    provider: Optional[str],
     voice: Optional[str],
     speed: Optional[float],
     response_format: str,
     user_id: Optional[int],
 ) -> Tuple[bytes, Optional[dict]]:
+    resolved_model = _resolve_tts_model(provider, model)
     request = OpenAISpeechRequest(
-        model=model or "kokoro",
+        model=resolved_model,
         input=text,
         voice=voice or "af_heart",
         response_format=response_format,
@@ -936,7 +945,7 @@ async def _generate_tts_audio(
     tts_service = await get_tts_service_v2()
     audio_iter = tts_service.generate_speech(
         request,
-        provider=None,
+        provider=provider,
         fallback=True,
         user_id=user_id,
     )
@@ -1026,12 +1035,27 @@ async def process_audiobook_job(
     outputs_dir.mkdir(parents=True, exist_ok=True)
     temp_outputs_dir = DatabasePaths.get_user_temp_outputs_dir(user_id)
     temp_outputs_dir.mkdir(parents=True, exist_ok=True)
-    quota_tracker = _init_audiobook_quota(collections_db, outputs_dir)
+    quota_tracker = _init_audiobook_quota(collections_db)
 
     outputs: List[Dict[str, Any]] = []
     project_db_id: Optional[int] = None
     try:
         project_source_ref = _build_project_source_ref(item_requests)
+        queue_settings: Dict[str, Any] = {}
+        try:
+            job_priority = job.get("priority")
+            if job_priority is not None:
+                queue_settings["priority"] = int(job_priority)
+        except Exception:
+            pass
+        batch_group = job.get("batch_group")
+        if batch_group:
+            queue_settings["batch_group"] = str(batch_group)
+        if not queue_settings:
+            queue_payload = payload.get("queue")
+            if isinstance(queue_payload, dict):
+                queue_settings = {k: v for k, v in queue_payload.items() if v is not None}
+
         project_settings = {
             "project_id": project_id,
             "project_title": project_title,
@@ -1042,7 +1066,11 @@ async def process_audiobook_job(
             "items_count": total_items,
             "metadata": payload.get("metadata") or {},
             "voice_profile_id": payload.get("voice_profile_id"),
+            "tts_provider": payload.get("tts_provider"),
+            "tts_model": payload.get("tts_model"),
         }
+        if queue_settings:
+            project_settings["queue"] = queue_settings
         project_row = collections_db.create_audiobook_project(
             project_id=project_id,
             title=project_title,
@@ -1062,9 +1090,12 @@ async def process_audiobook_job(
             item_index = int(item.get("item_index", item_pos))
             item_source = item.get("source") or {}
             item_output_cfg = item.get("output") or {}
-            item_subtitle_cfg = item.get("subtitles") or {}
+            item_subtitle_cfg_raw = item.get("subtitles")
+            item_subtitle_cfg = item_subtitle_cfg_raw or {}
             item_chapter_specs = item.get("chapters")
             item_voice_profile_id = item.get("voice_profile_id")
+            item_tts_provider = item.get("tts_provider")
+            item_tts_model = item.get("tts_model")
             item_metadata = item.get("metadata") or {}
 
             jm.update_job_progress(
@@ -1077,7 +1108,7 @@ async def process_audiobook_job(
                 progress_percent=_progress_percent(item_index, total_items, 0, 1, 0.0),
             )
             text, source_metadata, tag_result = _load_source_text(item_source, user_id)
-            normalized_text = _validate_text(text)
+            normalized_text = _validate_text(text, provider=item_tts_provider, model=item_tts_model)
             voice_profile = _load_voice_profile(collections_db, item_voice_profile_id)
             chapter_plan = _build_chapter_plan(
                 normalized_text,
@@ -1112,6 +1143,9 @@ async def process_audiobook_job(
                 raise AudiobookJobError("no_supported_output_formats", retryable=False)
 
             subtitle_formats = [str(fmt).lower() for fmt in (item_subtitle_cfg.get("formats") or [])]
+            alignment_supported = _is_kokoro_request(item_tts_provider, item_tts_model)
+            if subtitle_formats and not alignment_supported:
+                raise AudiobookJobError("subtitles_not_supported_for_provider", retryable=False)
             chapter_audio_paths: List[Path] = []
             chapter_titles: List[str] = []
 
@@ -1128,6 +1162,8 @@ async def process_audiobook_job(
                     "voice": chapter.voice,
                     "speed": chapter.speed,
                     "voice_profile_id": chapter.voice_profile_id,
+                    "tts_provider": item_tts_provider,
+                    "tts_model": item_tts_model,
                 }
                 collections_db.create_audiobook_chapter(
                     project_id=project_db_id,
@@ -1186,12 +1222,15 @@ async def process_audiobook_job(
                         raise AudiobookJobError("unsupported_base_format", retryable=False)
                     seg_audio_bytes, seg_alignment = await _generate_tts_audio(
                         text=segment.text,
-                        model=str(item_metadata.get("tts_model") or "kokoro"),
+                        model=item_tts_model,
+                        provider=item_tts_provider,
                         voice=chapter_voice,
                         speed=tts_speed,
                         response_format=base_format,
                         user_id=user_id,
                     )
+                    if not alignment_supported:
+                        seg_alignment = None
                     if len(segments) == 1:
                         segment_path = base_path
                     else:
@@ -1243,6 +1282,8 @@ async def process_audiobook_job(
                         chapter.alignment_anchors,
                     )
                     alignment_payload = alignment_model.model_dump()
+                if not alignment_supported:
+                    alignment_payload = None
 
                 chapter_audio_paths.append(base_path)
 
@@ -1298,6 +1339,8 @@ async def process_audiobook_job(
                         "item_index": item_index,
                         "item_tag": item_tag,
                         "item_title": item_title,
+                        "tts_provider": item_tts_provider,
+                        "tts_model": item_tts_model,
                     }
                     base_row = await asyncio.to_thread(
                         _create_output_and_link,
@@ -1366,6 +1409,8 @@ async def process_audiobook_job(
                             "item_index": item_index,
                             "item_tag": item_tag,
                             "item_title": item_title,
+                            "tts_provider": item_tts_provider,
+                            "tts_model": item_tts_model,
                         }
                         row = await asyncio.to_thread(
                             _create_output_and_link,
@@ -1424,6 +1469,8 @@ async def process_audiobook_job(
                         "item_index": item_index,
                         "item_tag": item_tag,
                         "item_title": item_title,
+                        "tts_provider": item_tts_provider,
+                        "tts_model": item_tts_model,
                     }
                     align_row = await asyncio.to_thread(
                         _create_output_and_link,
@@ -1494,6 +1541,8 @@ async def process_audiobook_job(
                                 "item_index": item_index,
                                 "item_tag": item_tag,
                                 "item_title": item_title,
+                                "tts_provider": item_tts_provider,
+                                "tts_model": item_tts_model,
                             }
                             subtitle_row = await asyncio.to_thread(
                                 _create_output_and_link,
@@ -1560,6 +1609,8 @@ async def process_audiobook_job(
                         "item_index": item_index,
                         "item_tag": item_tag,
                         "item_title": item_title,
+                        "tts_provider": item_tts_provider,
+                        "tts_model": item_tts_model,
                     }
                     merged_row = await asyncio.to_thread(
                         _create_output_and_link,
@@ -1604,6 +1655,8 @@ async def process_audiobook_job(
                             "item_index": item_index,
                             "item_tag": item_tag,
                             "item_title": item_title,
+                            "tts_provider": item_tts_provider,
+                            "tts_model": item_tts_model,
                         }
                         merged_row = await asyncio.to_thread(
                             _create_output_and_link,
@@ -1641,7 +1694,7 @@ async def process_audiobook_job(
                         metadata=m4b_metadata,
                     )
                     if not ok_m4b:
-                        logger.warning("audiobook worker: m4b packaging failed for %s", item_tag)
+                        raise AudiobookJobError("m4b_packaging_failed", retryable=False)
                     else:
                         m4b_meta = {
                             "project_id": project_id,
@@ -1651,6 +1704,8 @@ async def process_audiobook_job(
                             "item_index": item_index,
                             "item_tag": item_tag,
                             "item_title": item_title,
+                            "tts_provider": item_tts_provider,
+                            "tts_model": item_tts_model,
                         }
                         m4b_row = await asyncio.to_thread(
                             _create_output_and_link,

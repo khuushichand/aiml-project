@@ -5,7 +5,7 @@ Owner: Core Maintainers
 Target Release: TBD
 
 ## 1) Summary
-Provide an API-first audiobook creation pipeline that ingests book-like files, detects chapters, applies per-chapter voice settings, generates Kokoro TTS audio, produces aligned subtitles, and packages outputs in common audio formats (including M4B with chapters). The API will be suitable for client integrations; WebUI authoring and drag-and-drop UX are deferred to a later PRD.
+Provide an API-first audiobook creation pipeline that ingests book-like files, detects chapters, applies per-chapter voice settings, generates TTS audio, produces aligned subtitles (Kokoro only), and packages outputs in common audio formats (including M4B with chapters). The API will be suitable for client integrations; WebUI authoring and drag-and-drop UX are deferred to a later PRD.
 
 ## 2) Problem Statement
 Clients want to turn documents into audiobooks with chapter control, voice tuning, and reliable subtitles. The current stack has robust ingestion, chunking, and TTS, but lacks a dedicated audiobook orchestration layer, TTS alignment outputs, subtitle generation, and chaptered packaging.
@@ -23,7 +23,7 @@ Clients want to turn documents into audiobooks with chapter control, voice tunin
 
 ### Non-Goals (initial)
 - WebUI editor, drag-and-drop UX, and markdown preview.
-- Multi-provider TTS selection (Kokoro is the required engine for this PRD).
+- Multi-provider TTS selection with alignment parity (Kokoro alignment remains required for subtitles).
 - Automatic audio mastering, loudness normalization, or advanced post-production effects.
 - Full DAW-style editing or timeline-based UI.
 
@@ -42,10 +42,10 @@ Clients want to turn documents into audiobooks with chapter control, voice tunin
 ### In-Scope
 - Ingestion and normalization of supported inputs:
   - EPUB/PDF/TXT/MD via existing ingestion.
-  - SRT/VTT/ASS as text sources (timings ignored in MVP; used as segmentation hints only).
+  - SRT/VTT/ASS as text sources (timings ignored in MVP; cue boundaries preserved as segmentation hints).
 - Upload validation updates for `.srt`, `.vtt`, `.ass` in `tldw_Server_API/app/core/Ingestion_Media_Processing/Upload_Sink.py`.
 - Chapter detection for EPUB/PDF and custom chapter pattern support.
-- Per-chapter voice and speed settings using Kokoro voices.
+- Per-chapter voice and speed settings using Kokoro voices (default) or optional provider overrides for audio-only output.
 - TTS alignment output and subtitle generation.
 - Packaging: per-chapter files or merged audiobook; M4B with chapters.
 - Batch queue processing using existing Jobs system.
@@ -142,6 +142,8 @@ Schema (draft):
 ### 9.2 Create Audiobook Job
 `POST /api/v1/audiobooks/jobs`
 - Input: source reference (upload id, media id, or raw text) or `items[]`, chapter selection, per-chapter settings, output formats, subtitle modes, queue options.
+- `tts_provider`/`tts_model` may be provided to override the TTS engine. Alignment + subtitle generation is supported only for Kokoro; when using a non-Kokoro provider, omit `subtitles` or the job will fail.
+- `chapter_id` values must match the chapter ids returned by `/api/v1/audiobooks/parse`; unknown ids are rejected.
 - Batch defaults: when `items[]` is provided, top-level `output` and `subtitles` act as defaults; each item may override or omit them to inherit defaults. Each item must resolve to effective `output` and `subtitles` (either per-item or inherited). Do not mix single-source fields with `items[]`.
 - Output: job id and initial status.
 
@@ -223,6 +225,8 @@ Schema (draft):
       "type": "array",
       "items": { "$ref": "#/definitions/AudiobookJobItem" }
     },
+    "tts_provider": { "type": ["string", "null"] },
+    "tts_model": { "type": ["string", "null"] },
     "chapters": {
       "type": "array",
       "items": { "$ref": "#/definitions/ChapterSelection" }
@@ -441,8 +445,8 @@ Schema (draft):
 
 ### 9.5 Subtitle Export (Optional Direct)
 `POST /api/v1/audiobooks/subtitles`
-- Input: alignment payload + segmentation mode + style variant.
-- Output: subtitle file content (SRT/VTT/ASS).
+- Input: alignment payload or stored alignment output id + segmentation mode + style variant.
+- Output: subtitle file content (SRT/VTT/ASS). When caching is enabled, response includes headers with output id/download URL.
 
 Example request:
 ```json
@@ -450,6 +454,8 @@ Example request:
   "format": "srt",
   "mode": "sentence",
   "variant": "wide",
+  "alignment_output_id": 1234,
+  "persist": true,
   "alignment": {
     "words": [
       { "word": "Hello", "start_ms": 0, "end_ms": 420 },
@@ -472,12 +478,15 @@ Schema (draft):
 ```json
 {
   "type": "object",
-  "required": ["format", "mode", "variant", "alignment"],
+  "required": ["format", "mode", "variant"],
   "properties": {
     "format": { "type": "string", "enum": ["srt", "vtt", "ass"] },
     "mode": { "type": "string", "enum": ["line", "sentence", "word_count", "highlight"] },
     "variant": { "type": "string", "enum": ["wide", "narrow", "centered"] },
     "alignment": { "$ref": "#/definitions/AlignmentPayload" },
+    "alignment_output_id": { "type": ["integer", "null"] },
+    "persist": { "type": ["boolean", "null"], "description": "Persist subtitle output (cache)" },
+    "cache_ttl_hours": { "type": ["integer", "null"], "minimum": 1 },
     "words_per_cue": { "type": ["integer", "null"], "minimum": 1 },
     "max_chars": { "type": ["integer", "null"], "minimum": 10 },
     "max_lines": { "type": ["integer", "null"], "minimum": 1 }
@@ -537,7 +546,7 @@ Schema (draft):
     "QueueOptions": {
       "type": "object",
       "properties": {
-        "priority": { "type": "integer", "minimum": 0, "maximum": 10, "default": 5 },
+        "priority": { "type": "integer", "minimum": 1, "maximum": 10, "default": 5 },
         "batch_group": { "type": ["string", "null"], "maxLength": 100 }
       }
     },
@@ -546,6 +555,8 @@ Schema (draft):
       "required": ["source"],
       "properties": {
         "source": { "$ref": "#/definitions/SourceRef" },
+        "tts_provider": { "type": ["string", "null"] },
+        "tts_model": { "type": ["string", "null"] },
         "chapters": { "type": "array", "items": { "$ref": "#/definitions/ChapterSelection" } },
         "output": { "$ref": "#/definitions/OutputOptions" },
         "subtitles": { "$ref": "#/definitions/SubtitleOptions" },
@@ -625,7 +636,8 @@ Audio, subtitle, and alignment files are stored as Collections outputs (existing
 
 ## 11) TTS Alignment and Subtitle Generation
 ### 11.1 Alignment Source
-- Use Kokoro timestamped ONNX assets and extend `kokoro_adapter.py` to emit word-level alignment in `TTSResponse.metadata`.
+- Use Kokoro timestamped assets and extend `kokoro_adapter.py` to emit word-level alignment in `TTSResponse.metadata`.
+- Alignment/subtitles are only supported for Kokoro. Other providers are audio-only.
 - Alignment metadata schema:
   - `alignment.words`: list of { word, start_ms, end_ms, char_start, char_end }
   - `alignment.sample_rate`: int
@@ -676,7 +688,7 @@ Supported outputs:
 Implementation notes:
 - Extend `audio_converter.py` to include M4B packaging.
 - Embed chapter markers in M4B metadata.
-- Return per-chapter files and/or merged audiobook based on request.
+- Return per-chapter files and/or merged audiobook based on request. If M4B packaging fails when requested, the job fails (no fallback).
 
 ## 13) Queue and Batch Processing
 Use Jobs system with a new domain `audiobook`:
@@ -692,8 +704,10 @@ Add configuration keys (examples):
 - `AUDIOBOOK_DEFAULT_SPEED=1.0`
 - `AUDIOBOOK_ALLOW_M4B=1`
 - `AUDIOBOOK_MAX_CHARS=200000`
+- `AUDIOBOOK_CHAPTER_MAX_CHARS=12000` (optional chunk size for long chapters)
 - `AUDIOBOOK_TIME_STRETCH_MAX_RATIO=1.1` (enable ffmpeg atempo when requested speed is within `[1/max_ratio, max_ratio]`)
 - `AUDIOBOOK_SUBTITLES_PERSIST=0/1` (default 0; on-demand generation)
+- `AUDIOBOOK_SUBTITLES_CACHE_TTL_HOURS=24` (optional subtitle cache TTL when persisted)
 - `AUDIOBOOK_ARTIFACT_QUOTA_MB=1024` (per-user cap for audiobook outputs)
 
 ## 15) Security and Compliance
@@ -722,7 +736,7 @@ Add configuration keys (examples):
 
 ## 18) Risks and Mitigations
 - Kokoro alignment not exposed: add adapter metadata with strict tests.
-- M4B packaging variability: keep fallback to MP3/OPUS and return warnings.
+- M4B packaging variability: fail the job with a clear error when M4B is requested and packaging fails.
 - Subtitle drift for long chapters: enforce chunking + alignment stitching.
 - spaCy dependency bloat: optional flag with graceful fallback to regex splits.
 
@@ -787,7 +801,7 @@ This staged plan matches the project guidelines (small, testable increments).
 **Tests**:
 - Unit tests for alignment schema and subtitle generation invariants.
 - Property-based tests for cue ordering and duration constraints.
-**Status**: In Progress
+**Status**: Complete
 
 ### Stage 3: Job Orchestration + Outputs
 **Goal**: Create asynchronous audiobook jobs and persist artifacts.
@@ -800,7 +814,7 @@ This staged plan matches the project guidelines (small, testable increments).
 - Job status exposes stage + per-chapter progress.
 **Tests**:
 - Integration test covering job create + poll + artifact retrieval.
-**Status**: Not Started
+**Status**: Complete
 
 ### Stage 4: Packaging + M4B
 **Goal**: Support merged outputs and chaptered M4B packaging.
@@ -809,10 +823,10 @@ This staged plan matches the project guidelines (small, testable increments).
 - Embed chapter markers and title metadata.
 **Success Criteria**:
 - Merged audiobook files include correct chapter boundaries.
-- Fallback to MP3/OPUS when M4B packaging fails (with warnings).
+- M4B packaging failures surface as job failures when requested.
 **Tests**:
-- Unit tests for M4B packaging path and error fallback.
-**Status**: Not Started
+- Unit tests for M4B packaging path and error failure.
+**Status**: Complete
 
 ### Stage 5: Voice Profiles + Batch Queue Enhancements
 **Goal**: Add voice profile API and batch processing overrides.
@@ -824,4 +838,4 @@ This staged plan matches the project guidelines (small, testable increments).
 - Batch queue processes multiple items with unique outputs.
 **Tests**:
 - Integration tests for profiles and batch queue behavior.
-**Status**: Not Started
+**Status**: Complete

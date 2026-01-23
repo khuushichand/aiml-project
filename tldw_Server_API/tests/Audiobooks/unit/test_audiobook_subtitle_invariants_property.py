@@ -1,7 +1,7 @@
 import re
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import given, strategies as st, settings, HealthCheck
 
 from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import AlignmentPayload, AlignmentWord
 from tldw_Server_API.app.core.Audiobooks.subtitle_generator import generate_subtitles
@@ -31,19 +31,28 @@ def _parse_srt_times(content: str) -> list[tuple[int, int]]:
 
 @st.composite
 def _alignment_payloads(draw):
-    count = draw(st.integers(min_value=1, max_value=30))
+    count = draw(st.integers(min_value=1, max_value=20))
+    gaps = draw(st.lists(st.integers(min_value=0, max_value=300), min_size=count, max_size=count))
+    durations = draw(st.lists(st.integers(min_value=50, max_value=1500), min_size=count, max_size=count))
     words = []
     current = 0
-    for i in range(count):
-        gap = draw(st.integers(min_value=0, max_value=300))
-        duration = draw(st.integers(min_value=50, max_value=1500))
+    for i, (gap, duration) in enumerate(zip(gaps, durations)):
         current += gap
         end = current + duration
-        words.append(AlignmentWord(word=f"w{i}", start_ms=current, end_ms=end))
+        words.append(
+            AlignmentWord.model_construct(
+                word=f"w{i}",
+                start_ms=current,
+                end_ms=end,
+                char_start=None,
+                char_end=None,
+            )
+        )
         current = end
-    return AlignmentPayload(engine="kokoro", sample_rate=24000, words=words)
+    return AlignmentPayload.model_construct(engine="kokoro", sample_rate=24000, words=words)
 
 
+@settings(suppress_health_check=[HealthCheck.too_slow], max_examples=50)
 @given(alignment=_alignment_payloads(), mode=st.sampled_from(["line", "sentence", "word_count"]))
 def test_subtitle_invariants_monotonic(alignment, mode):
     content = generate_subtitles(

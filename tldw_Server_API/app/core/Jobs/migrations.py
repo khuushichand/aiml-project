@@ -118,7 +118,6 @@ CREATE TABLE IF NOT EXISTS jobs_archive (
   quarantined_at TEXT,
   progress_percent REAL,
   progress_message TEXT,
-  batch_group TEXT,
   request_id TEXT,
   trace_id TEXT,
   failure_timeline TEXT,

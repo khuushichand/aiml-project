@@ -467,6 +467,8 @@ def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
         return "supertonic2"
     if m.startswith("supertonic") or m.startswith("tts-supertonic"):
         return "supertonic"
+    if m.startswith("echo-tts") or m.startswith("echo_tts") or m.startswith("jordand/echo-tts"):
+        return "echo_tts"
     return None
 
 
@@ -544,6 +546,7 @@ from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2, TTSS
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSError,
     TTSValidationError,
+    TTSInvalidVoiceReferenceError,
     TTSProviderNotConfiguredError,
     TTSAuthenticationError,
     TTSRateLimitError,
@@ -559,6 +562,12 @@ async def get_tts_service() -> TTSServiceV2:
     return await get_tts_service_v2()
 
 def _raise_for_tts_error(exc: Exception, request_id: Optional[str]) -> None:
+    if isinstance(exc, TTSInvalidVoiceReferenceError):
+        logger.warning(f"TTS voice reference error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_http_error_detail("TTS voice reference invalid", request_id, exc=exc),
+        )
     if isinstance(exc, TTSValidationError):
         logger.warning(f"TTS validation error: {exc}", exc_info=True)
         raise HTTPException(

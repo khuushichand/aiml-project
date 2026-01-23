@@ -49,6 +49,46 @@ def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
 
 
+def _extract_output_byte_size(metadata_json: Optional[str]) -> Optional[int]:
+    if not metadata_json:
+        return None
+    try:
+        payload = json.loads(metadata_json)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("byte_size")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _is_audiobook_output_type(type_value: Optional[str]) -> bool:
+    if not type_value:
+        return False
+    return str(type_value).startswith("audiobook_")
+
+
+def _resolve_output_size_bytes(user_id: str, storage_path: Optional[str]) -> Optional[int]:
+    if not storage_path:
+        return None
+    try:
+        user_int = int(user_id)
+    except (TypeError, ValueError):
+        logger.warning("audiobook_quota: invalid user id for output size: %s", user_id)
+        return None
+    try:
+        outputs_dir = DatabasePaths.get_user_outputs_dir(user_int)
+        return (outputs_dir / storage_path).stat().st_size
+    except FileNotFoundError:
+        logger.warning("audiobook_quota: missing output file %s", storage_path)
+    except OSError as exc:
+        logger.warning("audiobook_quota: failed to stat %s: %s", storage_path, exc)
+    return None
+
 _SQLITE_PRAGMA_TABLES = {
     "audiobook_artifacts",
     "audiobook_chapters",
@@ -529,6 +569,12 @@ class CollectionsDatabase:
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_audiobook_voice_profiles_user ON audiobook_voice_profiles(user_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_output_usage (
+                user_id TEXT PRIMARY KEY,
+                used_bytes BIGINT NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             """
         else:
             ddl = """
@@ -689,6 +735,12 @@ class CollectionsDatabase:
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_audiobook_voice_profiles_user ON audiobook_voice_profiles(user_id);
+
+            CREATE TABLE IF NOT EXISTS audiobook_output_usage (
+                user_id TEXT PRIMARY KEY,
+                used_bytes INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             """
         try:
             self.backend.create_tables(ddl)
@@ -2497,13 +2549,36 @@ class CollectionsDatabase:
         return CollectionsDatabase.OutputArtifactRow(**row)
 
     def delete_output_artifact(self, output_id: int, *, hard: bool = False) -> bool:
+        row = self.backend.execute(
+            "SELECT id, type, metadata_json, storage_path, deleted FROM outputs WHERE id = ? AND user_id = ?",
+            (output_id, self.user_id),
+        ).first
+        if not row:
+            return False
+        deleted_flag = int(row["deleted"] if isinstance(row, dict) else row[4] or 0)
+        output_type = row["type"] if isinstance(row, dict) else row[1]
+        metadata_json = row["metadata_json"] if isinstance(row, dict) else row[2]
+        storage_path = row["storage_path"] if isinstance(row, dict) else row[3]
+        should_decrement = deleted_flag == 0 and _is_audiobook_output_type(output_type)
+        size_bytes = None
+        if should_decrement:
+            size_bytes = _extract_output_byte_size(metadata_json)
+            if size_bytes is None:
+                size_bytes = _resolve_output_size_bytes(self.user_id, storage_path)
+
         if hard:
             q = "DELETE FROM outputs WHERE id = ? AND user_id = ?"
             res = self.backend.execute(q, (output_id, self.user_id))
-            return res.rowcount > 0
-        q = "UPDATE outputs SET deleted = 1, deleted_at = ? WHERE id = ? AND user_id = ? AND deleted = 0"
-        res = self.backend.execute(q, (_utcnow_iso(), output_id, self.user_id))
-        return res.rowcount > 0
+        else:
+            q = "UPDATE outputs SET deleted = 1, deleted_at = ? WHERE id = ? AND user_id = ? AND deleted = 0"
+            res = self.backend.execute(q, (_utcnow_iso(), output_id, self.user_id))
+        ok = res.rowcount > 0
+        if ok and should_decrement and size_bytes:
+            try:
+                self.update_audiobook_output_usage(-size_bytes)
+            except Exception as exc:
+                logger.warning("audiobook_quota: failed to decrement usage: %s", exc)
+        return ok
 
     def get_output_artifact_by_title(self, title: str, format_: Optional[str] = None, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
         where = ["user_id = ?", "title = ?"]
@@ -2585,6 +2660,111 @@ class CollectionsDatabase:
         )
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
         return [CollectionsDatabase.OutputArtifactRow(**row) for row in rows], total
+
+    def get_audiobook_output_usage(self) -> Optional[int]:
+        row = self.backend.execute(
+            "SELECT used_bytes FROM audiobook_output_usage WHERE user_id = ?",
+            (self.user_id,),
+        ).first
+        if not row:
+            return None
+        value = row["used_bytes"] if isinstance(row, dict) else row[0]
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return None
+
+    def set_audiobook_output_usage(self, used_bytes: int) -> int:
+        value = max(0, int(used_bytes))
+        now = _utcnow_iso()
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            row = self.backend.execute(
+                """
+                INSERT INTO audiobook_output_usage (user_id, used_bytes, updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE
+                SET used_bytes = EXCLUDED.used_bytes, updated_at = EXCLUDED.updated_at
+                RETURNING used_bytes
+                """,
+                (self.user_id, value, now),
+            ).first
+            if row:
+                return int(row["used_bytes"] if isinstance(row, dict) else row[0] or 0)
+            return value
+        self.backend.execute(
+            """
+            INSERT INTO audiobook_output_usage (user_id, used_bytes, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE
+            SET used_bytes = excluded.used_bytes, updated_at = excluded.updated_at
+            """,
+            (self.user_id, value, now),
+        )
+        return value
+
+    def update_audiobook_output_usage(self, delta_bytes: int) -> int:
+        delta = int(delta_bytes or 0)
+        now = _utcnow_iso()
+        initial = max(0, delta)
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            row = self.backend.execute(
+                """
+                INSERT INTO audiobook_output_usage (user_id, used_bytes, updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE
+                SET used_bytes = GREATEST(0, audiobook_output_usage.used_bytes + %s),
+                    updated_at = EXCLUDED.updated_at
+                RETURNING used_bytes
+                """,
+                (self.user_id, initial, now, delta),
+            ).first
+            if row:
+                return int(row["used_bytes"] if isinstance(row, dict) else row[0] or 0)
+            return initial
+        self.backend.execute(
+            """
+            INSERT INTO audiobook_output_usage (user_id, used_bytes, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE
+            SET used_bytes = MAX(0, audiobook_output_usage.used_bytes + ?),
+                updated_at = excluded.updated_at
+            """,
+            (self.user_id, initial, now, delta),
+        )
+        row = self.backend.execute(
+            "SELECT used_bytes FROM audiobook_output_usage WHERE user_id = ?",
+            (self.user_id,),
+        ).first
+        if not row:
+            return initial
+        return int(row["used_bytes"] if isinstance(row, dict) else row[0] or 0)
+
+    def recompute_audiobook_output_usage(self) -> int:
+        try:
+            user_int = int(self.user_id)
+        except (TypeError, ValueError):
+            logger.warning("audiobook_quota: invalid user id for recompute: %s", self.user_id)
+            return 0
+        outputs_dir = DatabasePaths.get_user_outputs_dir(user_int)
+        total_bytes = 0
+        offset = 0
+        limit = 200
+        while True:
+            rows, total = self.list_output_artifacts_by_types(
+                types=["audiobook_audio", "audiobook_subtitle", "audiobook_alignment", "audiobook_package"],
+                limit=limit,
+                offset=offset,
+            )
+            for row in rows:
+                size = _extract_output_byte_size(row.metadata_json)
+                if size is None:
+                    size = _resolve_output_size_bytes(self.user_id, row.storage_path)
+                if size:
+                    total_bytes += size
+            offset += len(rows)
+            if offset >= total or not rows:
+                break
+        return self.set_audiobook_output_usage(total_bytes)
 
     def rename_output_artifact(self, output_id: int, new_title: str, new_storage_path: Optional[str] = None) -> "CollectionsDatabase.OutputArtifactRow":
         fields = ["title = ?"]

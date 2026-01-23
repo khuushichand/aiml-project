@@ -471,6 +471,7 @@ The unified pipeline supports multiple reranking strategies. Choose via `reranki
 
 - Transformers Cross-Encoder
   - Use `reranking_strategy: "cross_encoder"` and set `reranking_model` to an HF model id (e.g., `BAAI/bge-reranker-v2-m3`)
+  - Mixedbread rerankers like `mixedbread-ai/mxbai-rerank-large-v2` are supported; `mxbai-rerank*` auto-enables `trust_remote_code`
   - Pipeline loads via sentence-transformers CrossEncoder if available, otherwise raw Transformers
   - Set default via config: `RAG_TRANSFORMERS_RERANKER_MODEL`
   - Typical models: BGE (BAAI/bge-reranker-*), Jina rerankers

@@ -367,6 +367,15 @@ TTS_vibevoice = [
   # git clone https://github.com/vibevoice-community/VibeVoice.git && cd VibeVoice && pip install -e .
 ]
 
+TTS_echo_tts = [
+  "torch>=2.0.0",
+  "torchaudio>=2.0.0",
+  "torchcodec>=0.8.1",
+  "huggingface_hub>=0.23.0",
+  "safetensors>=0.4.2",
+  "einops>=0.8.0"
+]
+
 TTS_chatterbox = [
   # Core compute
   "torch>=2.0.0",

@@ -138,6 +138,7 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 - Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; metadata extraction; configurable chunking.
 - Custom-built Chunking library, tldw_Chunker, supporting token, word, sentence, paragraph, semantic, hierarchical and template chunking approaches.
 - Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; TTS: OpenAI-compatible TTS supporting ElevenLabs, OpenAI and locally: kokoro, Higgs, Dia, VibeVoice.
+- Audiobooks: parse + chapter detection, per-chapter voice settings, optional TTS provider overrides (alignment/subtitles Kokoro-only), and M4B packaging (API-only).
 - Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings. 50+ optional parameters available for tuning.
 - Chat & providers: `/api/v1/chat/completions` (OpenAI-compatible), 16+ providers (commercial + self-hosted), character chat, budgets/allowlists.
 - Knowledge management: notes, prompt library, character cards, soft-delete with recovery, Chatbooks import/export. (Support for import/edit/export of .apkg files - anki)
@@ -426,6 +427,9 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription ([docs](Docs/API-related/Audio_Transcription_API.md))
 - Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming) ([docs](Docs/API-related/TTS_API.md))
 - TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers ([docs](Docs/API-related/TTS_API.md))
+- Audiobooks Parse: `POST /api/v1/audiobooks/parse` - parse + chapter preview ([docs](Docs/Product/Completed/Audiobook_Creation_PRD.md))
+- Audiobooks Jobs: `POST /api/v1/audiobooks/jobs` - create audiobook job; `GET /api/v1/audiobooks/jobs/{job_id}` - status ([docs](Docs/Product/Completed/Audiobook_Creation_PRD.md))
+- Audiobooks Subtitles: `POST /api/v1/audiobooks/subtitles` - render subtitle export ([docs](Docs/Product/Completed/Audiobook_Creation_PRD.md))
 - Vector Stores: `POST /api/v1/vector_stores` - create; `POST /api/v1/vector_stores/{id}/query` - query ([docs](Docs/API-related/Vector_Stores_Admin_and_Query.md))
 - OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers ([docs](Docs/API-related/OCR_API_Documentation.md))
 - VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers ([docs](Docs/Code_Documentation/VLM_Backends.md))

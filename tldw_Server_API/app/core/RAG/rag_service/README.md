@@ -242,6 +242,13 @@ reranker = HybridReranker(weights={"flashrank": 0.6, "cross_encoder": 0.4})
 reranked = await reranker.rerank(documents, query)
 ```
 
+Notes:
+- Transformers cross-encoder reranking supports Mixedbread models like
+  `mixedbread-ai/mxbai-rerank-large-v2` (set via `reranking_model` or
+  `RAG_TRANSFORMERS_RERANKER_MODEL`).
+- `mxbai-rerank*` automatically enables `trust_remote_code` in the reranker
+  loader, so no extra config is required.
+
 ## Performance Monitoring
 
 Built-in performance tracking:

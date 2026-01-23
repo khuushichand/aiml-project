@@ -57,7 +57,7 @@ def generate_subtitles(
         if _should_fallback_sentence(cues, effective_max_chars, duration_limit):
             cues = _chunk_words(words, effective_words_per_cue)
     else:
-        cues = _build_cues(words, mode, effective_words_per_cue)
+        cues = _build_cues(words, mode, effective_words_per_cue, source_text=source_text)
     line_sep = "\\N" if format == "ass" else "\n"
 
     rendered: List[SubtitleCue] = []
@@ -104,6 +104,8 @@ def _build_cues(
     words: Sequence[AlignmentWord],
     mode: SubtitleMode,
     words_per_cue: int,
+    *,
+    source_text: Optional[str],
 ) -> List[List[AlignmentWord]]:
     if mode == "highlight":
         return [[word] for word in words]
@@ -111,7 +113,7 @@ def _build_cues(
         return _chunk_words(words, words_per_cue)
     if mode == "sentence":
         return _chunk_sentences(words, source_text=None, enable_spacy=None)
-    return _chunk_lines(words)
+    return _chunk_lines(words, source_text=source_text)
 
 
 def _chunk_words(words: Sequence[AlignmentWord], words_per_cue: int) -> List[List[AlignmentWord]]:
@@ -206,12 +208,50 @@ def _load_spacy_model():
         return None
 
 
-def _chunk_lines(words: Sequence[AlignmentWord]) -> List[List[AlignmentWord]]:
+def _chunk_lines(
+    words: Sequence[AlignmentWord],
+    *,
+    source_text: Optional[str],
+) -> List[List[AlignmentWord]]:
+    if source_text and all(word.char_start is not None for word in words):
+        return _chunk_lines_from_source(words, source_text)
     cues: List[List[AlignmentWord]] = []
     current: List[AlignmentWord] = []
     for word in words:
         current.append(word)
         if "\n" in word.word:
+            cues.append(current)
+            current = []
+    if current:
+        cues.append(current)
+    return cues
+
+
+def _chunk_lines_from_source(
+    words: Sequence[AlignmentWord],
+    source_text: str,
+) -> List[List[AlignmentWord]]:
+    cues: List[List[AlignmentWord]] = []
+    current: List[AlignmentWord] = []
+    text_len = len(source_text)
+    for idx, word in enumerate(words):
+        current.append(word)
+        if idx + 1 >= len(words):
+            break
+        next_word = words[idx + 1]
+        if word.char_start is None or next_word.char_start is None:
+            continue
+        start = word.char_end if word.char_end is not None else word.char_start
+        end = next_word.char_start
+        if start < 0 or end < 0:
+            continue
+        if start > text_len:
+            continue
+        if end > text_len:
+            end = text_len
+        if end < start:
+            continue
+        if "\n" in source_text[start:end]:
             cues.append(current)
             current = []
     if current:

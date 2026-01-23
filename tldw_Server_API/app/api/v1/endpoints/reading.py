@@ -64,6 +64,7 @@ from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSAuthenticationError,
     TTSError,
+    TTSInvalidVoiceReferenceError,
     TTSProviderNotConfiguredError,
     TTSQuotaExceededError,
     TTSRateLimitError,
@@ -211,6 +212,8 @@ def _tts_content_type(response_format: str) -> Optional[str]:
 
 
 def _raise_for_tts_error(exc: Exception) -> None:
+    if isinstance(exc, TTSInvalidVoiceReferenceError):
+        raise HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, TTSValidationError):
         raise HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, TTSProviderNotConfiguredError):

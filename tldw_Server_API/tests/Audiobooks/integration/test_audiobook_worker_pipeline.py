@@ -182,6 +182,55 @@ def test_audiobook_worker_creates_outputs(user_base_dir, jobs_db_path, fake_tts)
             assert payload.get("engine") == "kokoro"
 
 
+def test_audiobook_output_usage_decrements_on_delete(user_base_dir, jobs_db_path, fake_tts):
+    user_id = 1
+    project_id = "abk_quota_usage"
+    payload = _build_job_payload(project_id)
+
+    job_manager = JobManager()
+    job = job_manager.create_job(
+        domain="audiobooks",
+        queue="default",
+        job_type="audiobook_generate",
+        payload=payload,
+        owner_user_id=str(user_id),
+        priority=5,
+    )
+
+    acquired = job_manager.acquire_next_job(
+        domain="audiobooks",
+        queue="default",
+        lease_seconds=60,
+        worker_id="test-worker",
+    )
+    assert acquired is not None
+
+    asyncio.run(
+        audiobook_jobs_worker.process_audiobook_job(
+            acquired,
+            job_manager=job_manager,
+            worker_id="test-worker",
+        )
+    )
+
+    collections_db = CollectionsDatabase(user_id)
+    used_before = collections_db.get_audiobook_output_usage()
+    assert used_before is not None
+    outputs, _total = collections_db.list_output_artifacts(job_id=int(job["id"]), limit=50, offset=0)
+    assert outputs
+    first = outputs[0]
+    meta = json.loads(first.metadata_json or "{}")
+    size_bytes = int(meta.get("byte_size") or 0)
+    assert size_bytes > 0
+
+    ok = collections_db.delete_output_artifact(first.id, hard=True)
+    assert ok is True
+
+    used_after = collections_db.get_audiobook_output_usage()
+    assert used_after is not None
+    assert used_after == max(0, used_before - size_bytes)
+
+
 def test_audiobook_worker_processes_batch_items(user_base_dir, jobs_db_path, fake_tts):
     user_id = 1
     project_id = "abk_batch01"
@@ -285,7 +334,110 @@ def test_audiobook_worker_enforces_artifact_quota(user_base_dir, jobs_db_path, m
     job_row = job_manager.get_job(int(job["id"]))
     assert job_row is not None
     assert job_row.get("status") == "failed"
-    assert "audiobook_artifact_quota_exceeded" in (job_row.get("error") or "")
+    error_text = " ".join(
+        str(job_row.get(key) or "")
+        for key in ("error_message", "last_error", "error_code", "error")
+    )
+    assert "audiobook_artifact_quota_exceeded" in error_text
+
+
+def test_audiobook_worker_rejects_subtitles_for_non_kokoro(
+    user_base_dir,
+    jobs_db_path,
+    fake_tts,
+):
+    user_id = 1
+    project_id = "abk_non_kokoro_subtitles"
+    payload = _build_job_payload(project_id)
+    payload["tts_provider"] = "openai"
+    payload["tts_model"] = "tts-1"
+
+    job_manager = JobManager()
+    job = job_manager.create_job(
+        domain="audiobooks",
+        queue="default",
+        job_type="audiobook_generate",
+        payload=payload,
+        owner_user_id=str(user_id),
+        priority=5,
+    )
+
+    acquired = job_manager.acquire_next_job(
+        domain="audiobooks",
+        queue="default",
+        lease_seconds=60,
+        worker_id="test-worker",
+    )
+    assert acquired is not None
+
+    asyncio.run(
+        audiobook_jobs_worker.process_audiobook_job(
+            acquired,
+            job_manager=job_manager,
+            worker_id="test-worker",
+        )
+    )
+
+    job_row = job_manager.get_job(int(job["id"]))
+    assert job_row is not None
+    assert job_row.get("status") == "failed"
+    error_text = " ".join(
+        str(job_row.get(key) or "")
+        for key in ("error_message", "last_error", "error_code", "error")
+    )
+    assert "subtitles_not_supported_for_provider" in error_text
+
+
+def test_audiobook_worker_allows_non_kokoro_item_with_null_subtitles(
+    user_base_dir,
+    jobs_db_path,
+    fake_tts,
+):
+    user_id = 1
+    project_id = "abk_batch_non_kokoro_null_subs"
+    payload = _build_batch_payload(project_id)
+    payload["items"][1]["tts_provider"] = "openai"
+    payload["items"][1]["tts_model"] = "tts-1"
+    payload["items"][1]["subtitles"] = None
+
+    job_manager = JobManager()
+    job = job_manager.create_job(
+        domain="audiobooks",
+        queue="default",
+        job_type="audiobook_generate",
+        payload=payload,
+        owner_user_id=str(user_id),
+        priority=5,
+    )
+
+    acquired = job_manager.acquire_next_job(
+        domain="audiobooks",
+        queue="default",
+        lease_seconds=60,
+        worker_id="test-worker",
+    )
+    assert acquired is not None
+
+    asyncio.run(
+        audiobook_jobs_worker.process_audiobook_job(
+            acquired,
+            job_manager=job_manager,
+            worker_id="test-worker",
+        )
+    )
+
+    job_row = job_manager.get_job(int(job["id"]))
+    assert job_row is not None
+    assert job_row.get("status") == "completed"
+
+    collections_db = CollectionsDatabase(user_id)
+    outputs, _total = collections_db.list_output_artifacts(job_id=int(job["id"]), limit=50, offset=0)
+    openai_subtitles = []
+    for row in outputs:
+        meta = json.loads(row.metadata_json or "{}")
+        if meta.get("tts_provider") == "openai" and row.type in {"audiobook_subtitle", "audiobook_alignment"}:
+            openai_subtitles.append(row)
+    assert not openai_subtitles
 
 
 @pytest.fixture()
@@ -396,6 +548,60 @@ def test_audiobook_job_status_includes_chapter_progress(
     progress = status_resp.json().get("progress") or {}
     assert progress.get("chapter_index") is not None
     assert progress.get("chapters_total") is not None
+
+
+def test_audiobook_job_status_includes_batch_item_progress(
+    client_user_only,
+    jobs_db_path,
+    fake_tts,
+):
+    create_payload = {
+        "project_title": "Batch Book",
+        "items": [
+            {
+                "source": {"input_type": "txt", "raw_text": "Hello world."},
+                "chapters": [
+                    {"chapter_id": "ch_001", "include": True, "voice": "af_heart", "speed": 1.0}
+                ],
+                "metadata": {"title": "Item One"},
+            },
+            {
+                "source": {"input_type": "txt", "raw_text": "Goodbye world."},
+                "chapters": [
+                    {"chapter_id": "ch_001", "include": True, "voice": "am_adam", "speed": 0.98}
+                ],
+                "metadata": {"title": "Item Two"},
+            },
+        ],
+        "output": {"merge": False, "per_chapter": True, "formats": ["mp3"]},
+        "subtitles": {"formats": ["srt"], "mode": "sentence", "variant": "wide"},
+    }
+    resp = client_user_only.post("/api/v1/audiobooks/jobs", json=create_payload)
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+
+    job_manager = JobManager()
+    acquired = job_manager.acquire_next_job(
+        domain="audiobooks",
+        queue="default",
+        lease_seconds=60,
+        worker_id="test-worker",
+    )
+    assert acquired is not None
+
+    asyncio.run(
+        audiobook_jobs_worker.process_audiobook_job(
+            acquired,
+            job_manager=job_manager,
+            worker_id="test-worker",
+        )
+    )
+
+    status_resp = client_user_only.get(f"/api/v1/audiobooks/jobs/{job_id}")
+    assert status_resp.status_code == 200
+    progress = status_resp.json().get("progress") or {}
+    assert progress.get("item_index") == 1
+    assert progress.get("items_total") == 2
 
 
 def test_audiobook_worker_chunks_large_chapters(
@@ -528,6 +734,98 @@ def test_audiobook_worker_applies_voice_profile(
     assert captured.get("speed") == 0.9
 
 
+def test_audiobook_worker_applies_item_voice_profile_overrides(
+    user_base_dir,
+    jobs_db_path,
+    monkeypatch,
+):
+    captured: list[dict] = []
+
+    async def _fake_generate(*_args, **_kwargs):
+        captured.append(
+            {
+                "voice": _kwargs.get("voice"),
+                "speed": _kwargs.get("speed"),
+            }
+        )
+        text = _kwargs.get("text") or ""
+        return b"FAKEAUDIO", _alignment_payload_for(text)
+
+    monkeypatch.setattr(audiobook_jobs_worker, "_generate_tts_audio", _fake_generate)
+
+    user_id = 1
+    collections_db = CollectionsDatabase(user_id)
+    default_profile = collections_db.create_voice_profile(
+        profile_id="vp_default",
+        name="Default Profile",
+        default_voice="af_heart",
+        default_speed=1.0,
+        chapter_overrides_json=None,
+    )
+    item_profile = collections_db.create_voice_profile(
+        profile_id="vp_item",
+        name="Item Profile",
+        default_voice="am_adam",
+        default_speed=0.9,
+        chapter_overrides_json=None,
+    )
+
+    project_id = "abk_voice_batch01"
+    payload = {
+        "project_title": "Batch Voices",
+        "project_id": project_id,
+        "voice_profile_id": default_profile.profile_id,
+        "items": [
+            {
+                "source": {"input_type": "txt", "raw_text": "Hello world."},
+                "chapters": [{"chapter_id": "ch_001", "include": True}],
+                "metadata": {"title": "Item One"},
+            },
+            {
+                "source": {"input_type": "txt", "raw_text": "Goodbye world."},
+                "chapters": [{"chapter_id": "ch_001", "include": True}],
+                "voice_profile_id": item_profile.profile_id,
+                "metadata": {"title": "Item Two"},
+            },
+        ],
+        "output": {"merge": False, "per_chapter": True, "formats": ["mp3"]},
+        "subtitles": {"formats": ["srt"], "mode": "sentence", "variant": "wide"},
+        "metadata": {"tts_model": "kokoro"},
+    }
+
+    job_manager = JobManager()
+    job = job_manager.create_job(
+        domain="audiobooks",
+        queue="default",
+        job_type="audiobook_generate",
+        payload=payload,
+        owner_user_id=str(user_id),
+        priority=5,
+    )
+
+    acquired = job_manager.acquire_next_job(
+        domain="audiobooks",
+        queue="default",
+        lease_seconds=60,
+        worker_id="test-worker",
+    )
+    assert acquired is not None
+
+    asyncio.run(
+        audiobook_jobs_worker.process_audiobook_job(
+            acquired,
+            job_manager=job_manager,
+            worker_id="test-worker",
+        )
+    )
+
+    assert len(captured) == 2
+    assert captured[0]["voice"] == "af_heart"
+    assert captured[0]["speed"] == 1.0
+    assert captured[1]["voice"] == "am_adam"
+    assert captured[1]["speed"] == 0.9
+
+
 def test_audiobook_project_endpoints(
     client_user_only,
     jobs_db_path,
@@ -541,6 +839,7 @@ def test_audiobook_project_endpoints(
         ],
         "output": {"merge": False, "per_chapter": True, "formats": ["mp3"]},
         "subtitles": {"formats": ["srt"], "mode": "sentence", "variant": "wide"},
+        "queue": {"priority": 4, "batch_group": "batch_project_01"},
     }
     resp = client_user_only.post("/api/v1/audiobooks/jobs", json=create_payload)
     assert resp.status_code == 200
@@ -575,6 +874,10 @@ def test_audiobook_project_endpoints(
     project = detail_resp.json()["project"]
     assert project["project_id"] == project_id
     assert project["status"] == "completed"
+    settings = project.get("settings") or {}
+    queue_settings = settings.get("queue") or {}
+    assert queue_settings.get("priority") == 4
+    assert queue_settings.get("batch_group") == "batch_project_01"
 
     chapters_resp = client_user_only.get(f"/api/v1/audiobooks/projects/{project_id}/chapters")
     assert chapters_resp.status_code == 200
@@ -847,6 +1150,67 @@ def test_audiobook_worker_creates_merged_and_m4b(
     packaged = [row for row in outputs if row.type == "audiobook_package"]
     assert merged_audio
     assert packaged
+
+
+def test_audiobook_worker_fails_on_m4b_packaging_error(
+    user_base_dir,
+    jobs_db_path,
+    fake_tts,
+    monkeypatch,
+):
+    async def _fake_m4b(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        audiobook_jobs_worker.AudioConverter,
+        "package_m4b_with_chapters",
+        staticmethod(_fake_m4b),
+    )
+
+    user_id = 1
+    project_id = "abk_m4b_fail"
+    payload = _build_job_payload(project_id)
+    payload["output"] = {"merge": True, "per_chapter": False, "formats": ["m4b"]}
+
+    job_manager = JobManager()
+    job = job_manager.create_job(
+        domain="audiobooks",
+        queue="default",
+        job_type="audiobook_generate",
+        payload=payload,
+        owner_user_id=str(user_id),
+        priority=5,
+    )
+
+    acquired = job_manager.acquire_next_job(
+        domain="audiobooks",
+        queue="default",
+        lease_seconds=60,
+        worker_id="test-worker",
+    )
+    assert acquired is not None
+
+    asyncio.run(
+        audiobook_jobs_worker.process_audiobook_job(
+            acquired,
+            job_manager=job_manager,
+            worker_id="test-worker",
+        )
+    )
+
+    job_row = job_manager.get_job(int(job["id"]))
+    assert job_row is not None
+    assert job_row.get("status") == "failed"
+    error_text = " ".join(
+        str(job_row.get(key) or "")
+        for key in ("error_message", "last_error", "error_code", "error")
+    )
+    assert "m4b_packaging_failed" in error_text
+
+    collections_db = CollectionsDatabase(user_id)
+    projects = collections_db.list_audiobook_projects(limit=10, offset=0)
+    assert projects
+    assert projects[0].status == "failed"
 
 
 def test_audiobook_worker_time_stretch_scales_alignment(

@@ -63,6 +63,41 @@ Dialogue: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,Spoken line
     assert "Spoken line" in normalized
 
 
+def test_normalize_subtitles_vtt_strips_cue_ids_and_blocks():
+    vtt_text = """WEBVTT
+
+NOTE This is a note block
+This should be ignored.
+
+intro-1
+00:00:00.000 --> 00:00:01.000
+Hello world
+
+STYLE
+::cue { color: lime; }
+
+00:00:01.000 --> 00:00:02.000
+Second line
+"""
+    normalized = _normalize_subtitles(vtt_text, "vtt")
+    assert "Hello world" in normalized
+    assert "Second line" in normalized
+    assert "intro-1" not in normalized
+    assert "NOTE" not in normalized
+    assert "This should be ignored." not in normalized
+    assert "STYLE" not in normalized
+    assert "::cue" not in normalized
+
+
+def test_normalize_subtitles_numeric_text_preserved_when_not_index():
+    srt_text = """1984
+Line without timing
+"""
+    normalized = _normalize_subtitles(srt_text, "srt")
+    assert "1984" in normalized
+    assert "Line without timing" in normalized
+
+
 def test_detect_chapters_fallback_when_no_markers():
     text = "This is a plain paragraph with no chapter markers."
     chapters = _detect_chapters(text)

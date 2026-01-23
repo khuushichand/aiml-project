@@ -893,6 +893,29 @@ TTS_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
         PipRequirement(package='soundfile>=0.12.1', import_name='soundfile'),
         PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],
+    'pocket_tts': [
+        PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
+        PipRequirement(package='soundfile>=0.12.1', import_name='soundfile'),
+        PipRequirement(package='sentencepiece>=0.1.99', import_name='sentencepiece'),
+        PipRequirement(package='scipy>=1.10.0', import_name='scipy'),
+        PipRequirement(package='huggingface_hub>=0.21.0', import_name='huggingface_hub'),
+    ],
+    'neutts': [
+        PipRequirement(package='neucodec>=0.0.4', import_name='neucodec'),
+        PipRequirement(package='librosa>=0.10.0', import_name='librosa'),
+        PipRequirement(package='phonemizer>=3.2.1', import_name='phonemizer'),
+        PipRequirement(package='transformers>=4.41.0', import_name='transformers'),
+        PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
+        PipRequirement(package='soundfile>=0.12.1', import_name='soundfile'),
+    ],
+    'echo_tts': [
+        PipRequirement(package='torch>=2.2.0', import_name='torch'),
+        PipRequirement(package='torchaudio>=2.2.0', import_name='torchaudio'),
+        PipRequirement(package='torchcodec>=0.8.1', import_name='torchcodec'),
+        PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
+        PipRequirement(package='safetensors>=0.4.2', import_name='safetensors'),
+        PipRequirement(package='einops>=0.8.0', import_name='einops'),
+    ],
 }
 
 EMBEDDING_DEPENDENCIES: Dict[str, List[PipRequirement]] = {

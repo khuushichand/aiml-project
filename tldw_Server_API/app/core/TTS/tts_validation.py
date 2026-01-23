@@ -208,7 +208,18 @@ class TTSInputValidator:
         "supertonic": 15000,
         "supertonic2": 15000,
         "pocket_tts": 5000,
+        "echo_tts": 768,
         "default": 5000,
+    }
+
+    # Maximum UTF-8 byte length per provider (excluding BOS token).
+    MAX_TEXT_BYTES = {
+        "echo_tts": 767,
+    }
+
+    # Providers that require a voice reference audio input
+    REQUIRES_VOICE_REFERENCE = {
+        "echo_tts",
     }
 
     # Supported languages by provider
@@ -225,6 +236,7 @@ class TTSInputValidator:
         "supertonic": {"en"},
         "supertonic2": {"en", "ko", "es", "pt", "fr"},
         "pocket_tts": {"en"},
+        "echo_tts": {"en"},
     }
 
     # Supported audio formats by provider
@@ -241,6 +253,7 @@ class TTSInputValidator:
         "supertonic": {AudioFormat.MP3, AudioFormat.WAV},
         "supertonic2": {AudioFormat.MP3, AudioFormat.WAV},
         "pocket_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM, AudioFormat.AAC},
+        "echo_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
     }
 
     # Voice reference file validation
@@ -402,6 +415,13 @@ class TTSInputValidator:
             # Validate parameters (provider-aware)
             self._validate_parameters(request, provider)
 
+            # Validate voice reference if required
+            if provider in self.REQUIRES_VOICE_REFERENCE and not request.voice_reference:
+                raise TTSInvalidVoiceReferenceError(
+                    "Voice reference is required for this provider",
+                    provider=provider,
+                )
+
             # Validate voice reference if provided
             if request.voice_reference:
                 self._validate_voice_reference(request.voice_reference)
@@ -419,7 +439,7 @@ class TTSInputValidator:
         if not text or not text.strip():
             raise TTSInvalidInputError("Text cannot be empty")
 
-        # Check length limits
+        # Check length limits (characters)
         max_length = self.max_text_length_override or self.MAX_TEXT_LENGTHS.get(provider, self.MAX_TEXT_LENGTHS["default"])
 
         if len(text) > max_length:
@@ -428,6 +448,17 @@ class TTSInputValidator:
                 provider=provider,
                 details={"text_length": len(text), "max_length": max_length}
             )
+
+        # Provider-specific UTF-8 byte cap (exclude BOS)
+        if provider in self.MAX_TEXT_BYTES:
+            byte_len = len(text.encode("utf-8"))
+            max_bytes = self.MAX_TEXT_BYTES[provider]
+            if byte_len > max_bytes:
+                raise TTSTextTooLongError(
+                    f"Text byte length ({byte_len}) exceeds maximum of {max_bytes} bytes",
+                    provider=provider,
+                    details={"text_byte_length": byte_len, "max_bytes": max_bytes}
+                )
 
         # Check for excessive repetition (potential abuse)
         if self._has_excessive_repetition(text):

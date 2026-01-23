@@ -114,7 +114,7 @@ class SubtitleOptions(BaseModel):
 class QueueOptions(BaseModel):
     """Job scheduling hints."""
 
-    priority: int = Field(5, ge=0, le=10, description="Queue priority (0-10)")
+    priority: int = Field(5, ge=1, le=10, description="Queue priority (1-10)")
     batch_group: Optional[str] = Field(None, max_length=100, description="Optional batch group id")
 
 
@@ -122,6 +122,8 @@ class AudiobookJobItem(BaseModel):
     """Per-item override for batch jobs."""
 
     source: SourceRef = Field(..., description="Source reference for this item")
+    tts_provider: Optional[str] = Field(None, description="TTS provider override")
+    tts_model: Optional[str] = Field(None, description="TTS model override")
     voice_profile_id: Optional[str] = Field(None, description="Voice profile id override")
     chapters: Optional[List[ChapterSelection]] = Field(None, description="Per-item chapter selection")
     output: Optional[OutputOptions] = Field(None, description="Per-item output options")
@@ -230,6 +232,8 @@ class AudiobookJobRequest(BaseModel):
     project_title: str = Field(..., min_length=1, max_length=200, description="Project title")
     source: Optional[SourceRef] = Field(None, description="Single source reference")
     items: Optional[List[AudiobookJobItem]] = Field(None, description="Batch items")
+    tts_provider: Optional[str] = Field(None, description="TTS provider override")
+    tts_model: Optional[str] = Field(None, description="TTS model override")
     voice_profile_id: Optional[str] = Field(None, description="Voice profile id to apply")
     chapters: Optional[List[ChapterSelection]] = Field(None, description="Chapter selection")
     output: Optional[OutputOptions] = Field(None, description="Output options")
@@ -256,6 +260,13 @@ class AudiobookJobRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_shape(self) -> "AudiobookJobRequest":
+        def _requires_subtitles(provider: Optional[str], model: Optional[str]) -> bool:
+            if provider:
+                return str(provider).strip().lower() == "kokoro"
+            if model:
+                return str(model).strip().lower().startswith("kokoro")
+            return True
+
         has_items = self.items is not None
         has_source = self.source is not None
         if has_items and has_source:
@@ -274,15 +285,31 @@ class AudiobookJobRequest(BaseModel):
                         raise ValueError("output required for each item or at top level")
             if self.subtitles is None:
                 for item in self.items:
-                    if item.subtitles is None:
+                    provider = item.tts_provider or self.tts_provider
+                    model = item.tts_model or self.tts_model
+                    if _requires_subtitles(provider, model) and item.subtitles is None:
                         raise ValueError("subtitles required for each item or at top level")
+            for item in self.items:
+                provider = item.tts_provider or self.tts_provider
+                model = item.tts_model or self.tts_model
+                requires_subtitles = _requires_subtitles(provider, model)
+                if requires_subtitles:
+                    if "subtitles" in item.model_fields_set and item.subtitles is None:
+                        raise ValueError("subtitles cannot be null for kokoro items")
+                    continue
+                if item.subtitles is not None:
+                    raise ValueError("subtitles are only supported for kokoro providers")
+                if self.subtitles is not None and "subtitles" not in item.model_fields_set:
+                    raise ValueError("subtitles must be null for non-kokoro items when defaults are set")
         else:
             if not self.chapters:
                 raise ValueError("chapters must be provided for single-source jobs")
             if self.output is None:
                 raise ValueError("output is required for single-source jobs")
-            if self.subtitles is None:
+            if _requires_subtitles(self.tts_provider, self.tts_model) and self.subtitles is None:
                 raise ValueError("subtitles are required for single-source jobs")
+            if not _requires_subtitles(self.tts_provider, self.tts_model) and self.subtitles is not None:
+                raise ValueError("subtitles are only supported for kokoro providers")
         return self
 
 
@@ -304,6 +331,8 @@ class JobProgress(BaseModel):
     stage: str = Field(..., description="Current pipeline stage")
     chapter_index: Optional[int] = Field(None, ge=0, description="Zero-based chapter index")
     chapters_total: Optional[int] = Field(None, ge=0, description="Total chapters")
+    item_index: Optional[int] = Field(None, ge=0, description="Zero-based item index (batch jobs)")
+    items_total: Optional[int] = Field(None, ge=0, description="Total items (batch jobs)")
     percent: Optional[int] = Field(None, ge=0, le=100, description="Percent complete")
 
 
@@ -326,6 +355,8 @@ class AudiobookJobStatusResponse(BaseModel):
                     "stage": "audiobook_tts",
                     "chapter_index": 2,
                     "chapters_total": 10,
+                    "item_index": 0,
+                    "items_total": 1,
                     "percent": 45,
                 },
                 "errors": [],
@@ -581,10 +612,24 @@ class SubtitleExportRequest(BaseModel):
     format: SubtitleFormat = Field(..., description="Subtitle format")
     mode: SubtitleMode = Field(..., description="Segmentation mode")
     variant: SubtitleVariant = Field(..., description="Styling variant")
-    alignment: AlignmentPayload = Field(..., description="Alignment payload")
+    alignment: Optional[AlignmentPayload] = Field(None, description="Alignment payload")
+    alignment_output_id: Optional[int] = Field(None, ge=1, description="Output id for stored alignment JSON")
+    persist: Optional[bool] = Field(None, description="Persist the generated subtitle output")
+    cache_ttl_hours: Optional[int] = Field(None, ge=1, description="Cache TTL (hours) when persisting")
+    project_id: Optional[str] = Field(None, description="External audiobook project id")
+    chapter_id: Optional[str] = Field(None, description="Chapter id for metadata linking")
+    chapter_index: Optional[int] = Field(None, ge=0, description="Chapter index for metadata linking")
+    item_index: Optional[int] = Field(None, ge=0, description="Item index for batch metadata")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata to persist")
     words_per_cue: Optional[int] = Field(12, ge=1, description="Words per cue for word_count mode")
     max_chars: Optional[int] = Field(None, ge=10, description="Maximum characters per cue")
     max_lines: Optional[int] = Field(None, ge=1, description="Maximum lines per cue")
+
+    @model_validator(mode="after")
+    def _validate_alignment_source(self) -> "SubtitleExportRequest":
+        if self.alignment is None and self.alignment_output_id is None:
+            raise ValueError("alignment or alignment_output_id is required")
+        return self
 
     model_config = {
         "json_schema_extra": {
@@ -600,6 +645,7 @@ class SubtitleExportRequest(BaseModel):
                     "engine": "kokoro",
                     "sample_rate": 24000,
                 },
+                "persist": False,
             }
         }
     }

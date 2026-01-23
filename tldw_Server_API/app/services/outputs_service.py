@@ -44,6 +44,63 @@ def _normalize_template_syntax(template_str: str) -> str:
     return out
 
 
+def _extract_output_byte_size(metadata_json: Optional[str]) -> Optional[int]:
+    if not metadata_json:
+        return None
+    try:
+        payload = json.loads(metadata_json)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("byte_size")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _sum_audiobook_output_bytes_for_ids(cdb, user_id: int, ids: List[int]) -> int:
+    if not ids:
+        return 0
+    placeholders = ",".join(["?"] * len(ids))
+    total_bytes = 0
+    try:
+        rows = cdb.backend.execute(
+            f"SELECT id, type, metadata_json, storage_path, deleted FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
+            tuple([user_id] + list(ids)),
+        ).rows
+    except Exception as exc:
+        logger.warning("outputs_service: audiobook quota lookup failed: %s", exc)
+        return 0
+    outputs_dir = _outputs_dir_for_user(user_id)
+    for row in rows:
+        record = row if isinstance(row, dict) else {
+            "type": row[1],
+            "metadata_json": row[2],
+            "storage_path": row[3],
+            "deleted": row[4],
+        }
+        if int(record.get("deleted") or 0) != 0:
+            continue
+        type_value = record.get("type") or ""
+        if not str(type_value).startswith("audiobook_"):
+            continue
+        size_bytes = _extract_output_byte_size(record.get("metadata_json"))
+        if size_bytes is None:
+            try:
+                size_bytes = (outputs_dir / str(record.get("storage_path") or "")).stat().st_size
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                logger.warning("outputs_service: failed to stat output for quota: %s", exc)
+                continue
+        if size_bytes:
+            total_bytes += size_bytes
+    return total_bytes
+
+
 def render_output_template(template_str: str, context: Dict[str, Any]) -> str:
     """Render output templates with a shared sandbox and normalization."""
     try:
@@ -417,11 +474,17 @@ def delete_outputs_by_ids(cdb, user_id: int, ids: List[int]) -> int:
     if not ids:
         return 0
     placeholders = ",".join(["?"] * len(ids))
+    audiobook_bytes = _sum_audiobook_output_bytes_for_ids(cdb, user_id, ids)
     try:
         cdb.backend.execute(
             f"DELETE FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
             tuple([user_id] + list(ids)),
         )
+        if audiobook_bytes:
+            try:
+                cdb.update_audiobook_output_usage(-audiobook_bytes)
+            except Exception as exc:
+                logger.warning("outputs_service: failed to decrement audiobook usage: %s", exc)
         return len(ids)
     except Exception as e:
         logger.error(f"outputs_service.purge: delete failed: {e}")

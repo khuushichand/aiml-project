@@ -231,6 +231,27 @@ def test_generate_line_mode_splits_on_newlines():
     assert "Next line" in blocks[1]
 
 
+def test_generate_line_mode_uses_source_text_newlines():
+    words = [
+        AlignmentWord(word="Hello", start_ms=0, end_ms=200, char_start=0, char_end=5),
+        AlignmentWord(word="world", start_ms=220, end_ms=400, char_start=6, char_end=11),
+        AlignmentWord(word="Next", start_ms=500, end_ms=700, char_start=12, char_end=16),
+        AlignmentWord(word="line", start_ms=720, end_ms=900, char_start=17, char_end=21),
+    ]
+    alignment = AlignmentPayload(engine="kokoro", sample_rate=24000, words=words)
+    content = generate_subtitles(
+        alignment,
+        format="srt",
+        mode="line",
+        variant="wide",
+        source_text="Hello world\nNext line",
+    )
+    blocks = [block for block in content.strip().split("\n\n") if block]
+    assert len(blocks) == 2
+    assert "Hello world" in blocks[0]
+    assert "Next line" in blocks[1]
+
+
 def test_generate_line_mode_respects_max_lines():
     words = [
         AlignmentWord(word="Line", start_ms=0, end_ms=200),

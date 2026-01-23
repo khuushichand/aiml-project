@@ -50,6 +50,7 @@ class TTSProvider(Enum):
     SUPERTONIC = "supertonic"
     SUPERTONIC2 = "supertonic2"
     POCKET_TTS = "pocket_tts"
+    ECHO_TTS = "echo_tts"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -75,6 +76,7 @@ class TTSAdapterRegistry:
         TTSProvider.SUPERTONIC: "tldw_Server_API.app.core.TTS.adapters.supertonic_adapter.SupertonicOnnxAdapter",
         TTSProvider.SUPERTONIC2: "tldw_Server_API.app.core.TTS.adapters.supertonic2_adapter.Supertonic2OnnxAdapter",
         TTSProvider.POCKET_TTS: "tldw_Server_API.app.core.TTS.adapters.pocket_tts_adapter.PocketTTSOnnxAdapter",
+        TTSProvider.ECHO_TTS: "tldw_Server_API.app.core.TTS.adapters.echo_tts_adapter.EchoTTSAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -512,6 +514,17 @@ class TTSAdapterRegistry:
                     alias('stream_first_chunk_frames', 'pocket_tts_stream_first_chunk_frames')
                     alias('stream_target_buffer_sec', 'pocket_tts_stream_target_buffer_sec')
                     alias('stream_max_chunk_frames', 'pocket_tts_stream_max_chunk_frames')
+                elif p == 'echo_tts':
+                    alias('model', 'echo_tts_model')
+                    alias('model_path', 'echo_tts_model_path')
+                    alias('device', 'echo_tts_device')
+                    alias('module_path', 'echo_tts_module_path')
+                    alias('sample_rate', 'echo_tts_sample_rate')
+                    alias('cache_size', 'echo_tts_cache_size')
+                    alias('cache_ttl_sec', 'echo_tts_cache_ttl_sec')
+                    alias('cache_on_device', 'echo_tts_cache_on_device')
+                    alias('fish_ae_repo', 'echo_tts_fish_ae_repo')
+                    alias('pca_state_file', 'echo_tts_pca_state_file')
 
                 # Generic target latency for local providers
                 if p == 'chatterbox':
@@ -859,6 +872,11 @@ class TTSAdapterFactory:
         "pockettts": TTSProvider.POCKET_TTS,
         "pockettts-onnx": TTSProvider.POCKET_TTS,
         "kevinahm/pocket-tts-onnx": TTSProvider.POCKET_TTS,
+
+        # Echo-TTS models
+        "echo-tts": TTSProvider.ECHO_TTS,
+        "echo_tts": TTSProvider.ECHO_TTS,
+        "jordand/echo-tts-base": TTSProvider.ECHO_TTS,
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

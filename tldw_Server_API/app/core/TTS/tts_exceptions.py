@@ -313,7 +313,7 @@ ERROR_STATUS_CODES = {
     TTSUnsupportedLanguageError: 400,
     TTSVoiceNotFoundError: 400,
     TTSTextTooLongError: 400,
-    TTSInvalidVoiceReferenceError: 400,
+    TTSInvalidVoiceReferenceError: 422,
     TTSAuthenticationError: 401,
     TTSModelNotFoundError: 404,
     TTSRateLimitError: 429,

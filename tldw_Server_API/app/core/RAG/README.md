@@ -1589,7 +1589,8 @@ You can rerank retrieved documents using either Transformers cross-encoders or l
   - `hybrid`: Combine multiple strategies
 
 - Transformers Cross-Encoder
-  - Use HF models like `BAAI/bge-reranker-v2-m3` or Jina rerankers
+  - Use HF models like `BAAI/bge-reranker-v2-m3`, Jina rerankers, or Mixedbread rerankers (e.g., `mixedbread-ai/mxbai-rerank-large-v2`)
+  - `mxbai-rerank*` models auto-enable `trust_remote_code` in the reranker loader
   - Set per-request via `reranking_model` or globally via `RAG_TRANSFORMERS_RERANKER_MODEL`
   - GPU recommended for performance; falls back gracefully
 

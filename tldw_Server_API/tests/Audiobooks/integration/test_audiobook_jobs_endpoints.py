@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -54,6 +55,18 @@ def test_create_job_status_and_artifacts(client_audiobooks_jobs, job_payload):
     job = jm.get_job(int(data["job_id"]))
     assert job is not None
     assert job.get("batch_group") == "batch_01"
+    progress_payload = {
+        "stage": "audiobook_tts",
+        "chapter_index": 1,
+        "chapters_total": 3,
+        "item_index": 0,
+        "items_total": 1,
+    }
+    jm.update_job_progress(
+        int(data["job_id"]),
+        progress_percent=33,
+        progress_message=json.dumps(progress_payload),
+    )
 
     status_resp = client_audiobooks_jobs.get(f"/api/v1/audiobooks/jobs/{data['job_id']}")
     assert status_resp.status_code == 200
@@ -61,6 +74,11 @@ def test_create_job_status_and_artifacts(client_audiobooks_jobs, job_payload):
     assert status_data["job_id"] == data["job_id"]
     assert status_data["project_id"] == data["project_id"]
     assert status_data["status"] in {"queued", "processing", "completed", "failed", "canceled"}
+    progress = status_data.get("progress") or {}
+    assert progress.get("chapter_index") == 1
+    assert progress.get("chapters_total") == 3
+    assert progress.get("item_index") == 0
+    assert progress.get("items_total") == 1
 
     artifacts_resp = client_audiobooks_jobs.get(f"/api/v1/audiobooks/jobs/{data['job_id']}/artifacts")
     assert artifacts_resp.status_code == 200

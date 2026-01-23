@@ -12,7 +12,8 @@ This module provides sophisticated reranking capabilities including:
 import asyncio
 import time
 import os
-from typing import List, Dict, Any, Optional, Tuple, Callable
+from fnmatch import fnmatch
+from typing import List, Dict, Any, Optional, Tuple, Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from abc import ABC, abstractmethod
@@ -36,6 +37,42 @@ class RerankingStrategy(Enum):
     HYBRID = "hybrid"                # Combine strategies
     LLAMA_CPP = "llama_cpp"          # Embedding-based rerank via llama.cpp GGUF
     TWO_TIER = "two_tier"            # Cross-encoder prefilter then LLM rerank
+
+
+_RERANKER_TRUST_REMOTE_CODE_PATTERNS = (
+    "mixedbread-ai/mxbai-rerank*",
+)
+
+
+def _normalize_hf_patterns(patterns: Optional[Iterable[Any]]) -> List[str]:
+    if not patterns:
+        return []
+    if isinstance(patterns, str):
+        return [p.strip() for p in patterns.split(",") if p.strip()]
+    out: List[str] = []
+    for p in patterns:
+        if p is None:
+            continue
+        s = str(p).strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def _hf_trusts_remote_code(model_name: str, patterns: Optional[Iterable[Any]]) -> bool:
+    if not model_name:
+        return False
+    pats = _normalize_hf_patterns(patterns)
+    if not pats:
+        return False
+    model_l = str(model_name).lower()
+    for pat in pats:
+        try:
+            if fnmatch(model_name, pat) or fnmatch(model_l, str(pat).lower()):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 @dataclass
@@ -484,6 +521,18 @@ class TransformersCrossEncoderReranker(BaseReranker):
                 model_id = _cfg.get("RAG_TRANSFORMERS_RERANKER_MODEL")
             except Exception:
                 model_id = None
+        # Auto-enable trust_remote_code for known reranker families that require it,
+        # unless explicitly overridden by request config.
+        if model_id and not self._trust_remote_code:
+            try:
+                from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                _cfg = load_and_log_configs() or {}
+                allowlist = _cfg.get("TRUSTED_HF_REMOTE_CODE_MODELS") or []
+            except Exception:
+                allowlist = []
+            allowlist = list(allowlist) + list(_RERANKER_TRUST_REMOTE_CODE_PATTERNS)
+            if _hf_trusts_remote_code(model_id, allowlist):
+                self._trust_remote_code = True
 
         if model_id:
             try:
@@ -1511,4 +1560,3 @@ class TwoTierReranker(BaseReranker):
         }
 
         return out
-

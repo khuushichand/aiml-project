@@ -48,6 +48,12 @@ class AudioProcessor:
             'max_duration': 60.0,
             'preferred_sample_rate': 24000,
             'formats': {'.wav', '.mp3', '.flac', '.ogg', '.m4a'}
+        },
+        'echo_tts': {
+            'min_duration': 1.0,
+            'max_duration': 300.0,
+            'preferred_sample_rate': 44100,
+            'formats': {'.wav', '.mp3', '.flac', '.ogg', '.m4a'}
         }
     }
 

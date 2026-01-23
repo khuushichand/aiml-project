@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path as PathlibPath
 from typing import Optional
 from uuid import uuid4
@@ -13,6 +16,7 @@ from starlette import status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import (
+    AlignmentPayload,
     ArtifactInfo,
     AudiobookChapterInfo,
     AudiobookChapterListResponse,
@@ -46,11 +50,13 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resol
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.Audiobooks.subtitle_generator import generate_subtitles
+from tldw_Server_API.app.core.Audiobooks.subtitle_parser import normalize_subtitle_source
 from tldw_Server_API.app.core.Audiobooks.tag_parser import (
     build_chapters_from_markers,
     parse_tagged_text,
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.config import get_config_value
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
 
@@ -59,43 +65,115 @@ def _not_implemented(detail: str) -> None:
     raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=detail)
 
 
-def _strip_srt_vtt(text: str) -> str:
-    cleaned: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.lower().startswith("webvtt"):
-            continue
-        if stripped.isdigit():
-            continue
-        if "-->" in stripped:
-            continue
-        cleaned.append(stripped)
-    return "\n".join(cleaned).strip()
-
-
-def _strip_ass(text: str) -> str:
-    cleaned: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.lower().startswith("dialogue:") or stripped.lower().startswith("comment:"):
-            parts = stripped.split(",", 9)
-            if len(parts) >= 10:
-                cleaned.append(parts[9].strip())
-            else:
-                cleaned.append(stripped)
-    return "\n".join(cleaned).strip()
-
-
 def _normalize_subtitles(text: str, input_type: str) -> str:
-    if input_type in {"srt", "vtt"}:
-        return _strip_srt_vtt(text)
-    if input_type == "ass":
-        return _strip_ass(text)
-    return text
+    return normalize_subtitle_source(text, input_type)
+
+
+def _parse_bool(value: Optional[str | bool]) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _resolve_subtitle_persist(request: SubtitleExportRequest) -> bool:
+    if request.persist is not None:
+        return bool(request.persist)
+    env_val = os.getenv("AUDIOBOOK_SUBTITLES_PERSIST")
+    cfg_val = get_config_value("Audiobooks", "subtitles_persist")
+    raw = env_val if env_val not in (None, "") else cfg_val
+    resolved = _parse_bool(raw)
+    return bool(resolved) if resolved is not None else False
+
+
+def _resolve_subtitle_ttl_hours(request: SubtitleExportRequest) -> Optional[int]:
+    if request.cache_ttl_hours is not None:
+        return int(request.cache_ttl_hours)
+    env_val = os.getenv("AUDIOBOOK_SUBTITLES_CACHE_TTL_HOURS")
+    cfg_val = get_config_value("Audiobooks", "subtitles_cache_ttl_hours")
+    raw = env_val if env_val not in (None, "") else cfg_val
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _subtitle_cache_key(
+    *,
+    alignment: AlignmentPayload,
+    alignment_output_id: Optional[int],
+    request: SubtitleExportRequest,
+) -> str:
+    base: dict[str, object] = {
+        "alignment_output_id": alignment_output_id,
+        "format": request.format,
+        "mode": request.mode,
+        "variant": request.variant,
+        "words_per_cue": request.words_per_cue,
+        "max_chars": request.max_chars,
+        "max_lines": request.max_lines,
+    }
+    if alignment_output_id is None:
+        try:
+            alignment_dump = alignment.model_dump(mode="json")
+        except Exception:
+            alignment_dump = alignment.dict() if hasattr(alignment, "dict") else alignment
+        alignment_hash = hashlib.sha256(
+            json.dumps(alignment_dump, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        base["alignment_hash"] = alignment_hash
+    digest = hashlib.sha256(
+        json.dumps(base, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return digest[:16]
+
+
+def _subtitle_cache_title(cache_key: str) -> str:
+    return f"audiobook_subtitle_{cache_key}"
+
+
+def _subtitle_storage_filename(cache_key: str, fmt: str) -> str:
+    return f"subtitle_{cache_key}.{fmt}"
+
+
+def _load_alignment_from_output(
+    collections_db: CollectionsDatabase,
+    *,
+    output_id: int,
+    user_id: int,
+) -> tuple[AlignmentPayload, dict[str, object], str]:
+    try:
+        row = collections_db.get_output_artifact(output_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="alignment_output_not_found") from exc
+    if row.type != "audiobook_alignment":
+        raise HTTPException(status_code=400, detail="invalid_alignment_output")
+    outputs_dir = DatabasePaths.get_user_outputs_dir(user_id)
+    alignment_path = outputs_dir / row.storage_path
+    if not alignment_path.exists():
+        raise HTTPException(status_code=404, detail="alignment_file_not_found")
+    try:
+        raw = alignment_path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="alignment_parse_failed") from exc
+    try:
+        alignment = AlignmentPayload(**payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="alignment_invalid") from exc
+    meta: dict[str, object] = {}
+    if row.metadata_json:
+        try:
+            parsed = json.loads(row.metadata_json)
+            if isinstance(parsed, dict):
+                meta = parsed
+        except Exception:
+            meta = {}
+    return alignment, meta, row.storage_path
 
 
 def _resolve_upload_path(upload_id: str, user_id: int) -> Optional[PathlibPath]:
@@ -237,9 +315,11 @@ def _project_row_project_id(row, fallback: str) -> str:
     return fallback
 
 
-def _parse_progress_message(message: Optional[str]) -> tuple[str, Optional[int], Optional[int]]:
+def _parse_progress_message(
+    message: Optional[str],
+) -> tuple[str, Optional[int], Optional[int], Optional[int], Optional[int]]:
     if not message:
-        return "audiobook_job", None, None
+        return "audiobook_job", None, None, None, None
     raw = str(message).strip()
     if raw.startswith("{") and raw.endswith("}"):
         parsed = _safe_json_loads(raw)
@@ -253,8 +333,16 @@ def _parse_progress_message(message: Optional[str]) -> tuple[str, Optional[int],
                 chapters_total = int(parsed.get("chapters_total")) if parsed.get("chapters_total") is not None else None
             except Exception:
                 chapters_total = None
-            return str(stage), chapter_index, chapters_total
-    return raw, None, None
+            try:
+                item_index = int(parsed.get("item_index")) if parsed.get("item_index") is not None else None
+            except Exception:
+                item_index = None
+            try:
+                items_total = int(parsed.get("items_total")) if parsed.get("items_total") is not None else None
+            except Exception:
+                items_total = None
+            return str(stage), chapter_index, chapters_total, item_index, items_total
+    return raw, None, None, None, None
 
 
 @router.post(
@@ -373,6 +461,15 @@ async def create_audiobook_job(
 
     payload = request.model_dump()
     payload["project_id"] = project_id
+    if request.items:
+        # Preserve per-item subtitle overrides only when explicitly set.
+        for idx, item in enumerate(request.items):
+            if item.subtitles is None and "subtitles" not in item.model_fields_set:
+                try:
+                    if isinstance(payload.get("items"), list):
+                        payload["items"][idx].pop("subtitles", None)
+                except Exception:
+                    pass
 
     job_manager = _get_job_manager()
     batch_group = request.queue.batch_group if request.queue is not None else None
@@ -424,12 +521,14 @@ async def get_audiobook_job_status(
             percent_val = int(percent) if percent is not None else None
         except Exception:
             percent_val = None
-        stage_val, chapter_index, chapters_total = _parse_progress_message(stage)
+        stage_val, chapter_index, chapters_total, item_index, items_total = _parse_progress_message(stage)
         progress = {
             "stage": stage_val,
             "percent": percent_val,
             "chapter_index": chapter_index,
             "chapters_total": chapters_total,
+            "item_index": item_index,
+            "items_total": items_total,
         }
 
     return AudiobookJobStatusResponse(
@@ -745,9 +844,64 @@ async def export_subtitles(
     request: SubtitleExportRequest,
     _current_user: User = Depends(get_request_user),
 ) -> PlainTextResponse:
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    collections_db = CollectionsDatabase(user_id)
+
+    alignment_meta: dict[str, object] = {}
+    alignment_output_id = request.alignment_output_id
+    if alignment_output_id is not None:
+        alignment, alignment_meta, _storage_path = _load_alignment_from_output(
+            collections_db,
+            output_id=int(alignment_output_id),
+            user_id=int(user_id),
+        )
+    else:
+        if request.alignment is None:
+            raise HTTPException(status_code=400, detail="alignment_required")
+        alignment = request.alignment
+
+    persist = _resolve_subtitle_persist(request)
+    ttl_hours = _resolve_subtitle_ttl_hours(request)
+    cache_key = _subtitle_cache_key(
+        alignment=alignment,
+        alignment_output_id=alignment_output_id,
+        request=request,
+    )
+    cache_title = _subtitle_cache_title(cache_key)
+
+    outputs_dir = DatabasePaths.get_user_outputs_dir(int(user_id))
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    cached_row = None
+    if persist:
+        try:
+            cached_row = collections_db.get_output_artifact_by_title(
+                cache_title,
+                format_=request.format,
+                include_deleted=False,
+            )
+        except KeyError:
+            cached_row = None
+        if cached_row is not None:
+            cached_path = outputs_dir / cached_row.storage_path
+            if cached_path.exists():
+                content = cached_path.read_text(encoding="utf-8")
+                response = PlainTextResponse(content)
+                response.headers["X-Subtitle-Output-Id"] = str(cached_row.id)
+                response.headers["X-Subtitle-Download-Url"] = f"/api/v1/outputs/{cached_row.id}/download"
+                response.headers["X-Subtitle-Cache-Key"] = cache_key
+                response.headers["X-Subtitle-Cache-Hit"] = "1"
+                return response
+            try:
+                collections_db.delete_output_artifact(cached_row.id, hard=True)
+            except Exception as exc:
+                logger.warning("audiobook subtitles: failed to prune missing cache output: %s", exc)
+
     try:
         content = generate_subtitles(
-            request.alignment,
+            alignment,
             format=request.format,
             mode=request.mode,
             variant=request.variant,
@@ -757,4 +911,75 @@ async def export_subtitles(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return PlainTextResponse(content)
+
+    if not persist:
+        return PlainTextResponse(content)
+
+    storage_filename = _subtitle_storage_filename(cache_key, request.format)
+    subtitle_path = outputs_dir / storage_filename
+    subtitle_path.write_text(content, encoding="utf-8")
+    size_bytes = subtitle_path.stat().st_size
+    retention_until = None
+    if ttl_hours is not None:
+        retention_until = (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).isoformat()
+
+    metadata: dict[str, object] = {}
+    if alignment_meta:
+        metadata.update(alignment_meta)
+    if request.metadata:
+        metadata.update(request.metadata)
+    if request.project_id and "project_id" not in metadata:
+        metadata["project_id"] = request.project_id
+    if request.chapter_id and "chapter_id" not in metadata:
+        metadata["chapter_id"] = request.chapter_id
+    if request.chapter_index is not None and "chapter_index" not in metadata:
+        metadata["chapter_index"] = request.chapter_index
+    if request.item_index is not None and "item_index" not in metadata:
+        metadata["item_index"] = request.item_index
+    metadata.update(
+        {
+            "artifact_type": "subtitle",
+            "format": request.format,
+            "subtitle_mode": request.mode,
+            "subtitle_variant": request.variant,
+            "alignment_output_id": alignment_output_id,
+            "cache_key": cache_key,
+            "byte_size": size_bytes,
+        }
+    )
+
+    row = collections_db.create_output_artifact(
+        type_="audiobook_subtitle",
+        title=cache_title,
+        format_=request.format,
+        storage_path=storage_filename,
+        metadata_json=json.dumps(metadata),
+        retention_until=retention_until,
+    )
+    try:
+        collections_db.update_audiobook_output_usage(size_bytes)
+    except Exception as exc:
+        logger.warning("audiobook_quota: failed to increment subtitle usage: %s", exc)
+
+    project_id = metadata.get("project_id")
+    if project_id:
+        try:
+            project_row = collections_db.get_audiobook_project_by_project_id(str(project_id))
+            collections_db.create_audiobook_artifact(
+                project_id=int(project_row.id),
+                artifact_type="subtitle",
+                format_=request.format,
+                output_id=int(row.id),
+                metadata_json=json.dumps(metadata),
+            )
+        except KeyError:
+            pass
+        except Exception as exc:
+            logger.warning("audiobook subtitles: failed to link artifact: %s", exc)
+
+    response = PlainTextResponse(content)
+    response.headers["X-Subtitle-Output-Id"] = str(row.id)
+    response.headers["X-Subtitle-Download-Url"] = f"/api/v1/outputs/{row.id}/download"
+    response.headers["X-Subtitle-Cache-Key"] = cache_key
+    response.headers["X-Subtitle-Cache-Hit"] = "0"
+    return response

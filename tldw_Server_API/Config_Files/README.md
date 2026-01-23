@@ -221,6 +221,8 @@ For each type in `chunking_types` (`article|audio|book|document|mediawiki_articl
 - `semantic_cache_enabled` (bool) & `cache_similarity_threshold` (float)
 - `enable_reranking` (bool) & `rerank_top_k` (int)
 - Rerankers: `llm_reranker_*`, `llama_reranker_*`, `transformers_reranker_model` (str)
+  - Transformers reranker examples: `BAAI/bge-reranker-v2-m3`,
+    `mixedbread-ai/mxbai-rerank-large-v2` (auto-enables `trust_remote_code`)
 - Feature flags (phased rollout):
   - `enable_structure_index` (bool)
   - `strict_extractive` (bool)

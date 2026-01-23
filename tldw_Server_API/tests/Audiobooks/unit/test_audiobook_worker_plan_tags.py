@@ -1,7 +1,7 @@
 import pytest
 
 from tldw_Server_API.app.core.Audiobooks.tag_parser import parse_tagged_text
-from tldw_Server_API.app.services.audiobook_jobs_worker import _build_chapter_plan
+from tldw_Server_API.app.services.audiobook_jobs_worker import AudiobookJobError, _build_chapter_plan
 
 pytestmark = pytest.mark.unit
 
@@ -40,3 +40,16 @@ def test_build_chapter_plan_extracts_alignment_anchors():
     assert len(anchors) == 1
     assert anchors[0].time_ms == 5000
     assert anchors[0].offset == tag_result.clean_text.index("Again.")
+
+
+def test_build_chapter_plan_rejects_unknown_chapter_id():
+    raw = (
+        "[[chapter:id=ch_001]]\n"
+        "First text.\n"
+        "[[chapter:id=ch_002]]\n"
+        "Second text.\n"
+    )
+    tag_result = parse_tagged_text(raw)
+    chapter_specs = [{"chapter_id": "ch_999", "include": True}]
+    with pytest.raises(AudiobookJobError):
+        _build_chapter_plan(tag_result.clean_text, chapter_specs, tag_result=tag_result)
