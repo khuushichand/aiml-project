@@ -2899,6 +2899,7 @@ async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> Dict[st
     response_model_exclude_none=True,
 )
 async def admin_list_user_profiles(
+    http_request: Request,
     sections: Optional[str] = Query(
         None, description="Comma-separated list of sections to include"
     ),
@@ -2921,7 +2922,6 @@ async def admin_list_user_profiles(
     search: Optional[str] = None,
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=100),
-    http_request: Request = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     session_manager=Depends(get_session_manager_dep),
 ) -> UserProfileBatchResponse:
@@ -3111,6 +3111,7 @@ async def get_user_details(
 )
 async def admin_get_user_profile(
     user_id: int,
+    http_request: Request,
     sections: Optional[str] = Query(
         None, description="Comma-separated list of sections to include"
     ),
@@ -3123,7 +3124,6 @@ async def admin_get_user_profile(
     mask_secrets: bool = Query(
         True, description="Mask secret values in the response"
     ),
-    http_request: Request = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     session_manager=Depends(get_session_manager_dep),
 ) -> UserProfileResponse:
@@ -3200,7 +3200,7 @@ async def admin_get_user_profile(
 async def admin_update_user_profile(
     user_id: int,
     payload: UserProfileUpdateRequest,
-    http_request: Request = None,
+    http_request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> UserProfileUpdateResponse:

@@ -182,9 +182,9 @@ class McpAuthContext:
 # Dependency functions
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Security(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-    request: Request = None,
 ) -> Optional[TokenData]:
     """Get current user (AuthNZ JWT, MCP JWT, or API key).
 
@@ -365,9 +365,9 @@ async def get_current_user(
 
 
 async def get_mcp_auth_context(
+    request: Request,
     user: Optional[TokenData] = Depends(get_current_user),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-    request: Request = None,
 ) -> McpAuthContext:
     """Resolve MCP auth context (user + API key metadata) for HTTP endpoints.
 
@@ -442,7 +442,11 @@ async def _attach_api_key_metadata(
                 metadata["api_key_scopes"] = sorted(scopes)
                 metadata["auth_via"] = "api_key"
         except Exception:
-            pass
+            logger.debug(
+                "MCP unified {} API key scope normalization failed",
+                log_prefix,
+                exc_info=True,
+            )
 
     _attach_rg_ingress_metadata(metadata, http_request)
     return metadata
@@ -466,9 +470,9 @@ def _attach_rg_ingress_metadata(metadata: Dict[str, Any], http_request: Optional
 
 
 async def require_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Security(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-    request: Request = None,
 ) -> TokenData:
     """Require authenticated user"""
     if not credentials and not x_api_key:
@@ -478,7 +482,7 @@ async def require_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     # Reuse get_current_user to resolve any auth form, including client IP / API-key metadata
-    user = await get_current_user(credentials, x_api_key, request)
+    user = await get_current_user(request=request, credentials=credentials, x_api_key=x_api_key)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
     return user
@@ -536,13 +540,13 @@ async def websocket_endpoint(
 @router.post("/request", response_model=MCPResponse)
 async def mcp_request(
     request: MCPRequest,
+    http_request: Request,
     client_id: Optional[str] = Query(None, description="Client identifier"),
     auth: McpAuthContext = Depends(get_mcp_auth_context),
     mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
     _guard: None = Depends(enforce_http_security),
-    http_request: Request = None,
 ):
     """
     Process an MCP request via HTTP.
@@ -585,7 +589,7 @@ async def mcp_request(
             if response is not None:
                 response.headers["mcp-session-id"] = mcp_session_id
     except Exception:
-        pass
+        logger.debug("Failed to generate session ID for initialize request", exc_info=True)
 
     if auth.user:
         if auth.user.roles:
@@ -627,13 +631,13 @@ async def mcp_request(
 @router.post("/request/batch", response_model=list[MCPResponse])
 async def mcp_request_batch(
     requests: list[MCPRequest],
+    http_request: Request,
     client_id: Optional[str] = Query(None, description="Client identifier"),
     auth: McpAuthContext = Depends(get_mcp_auth_context),
     mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
     _guard: None = Depends(enforce_http_security),
-    http_request: Request = None,
 ):
     """
     Process a batch of MCP requests via HTTP.
@@ -677,7 +681,7 @@ async def mcp_request_batch(
             if response is not None:
                 response.headers["mcp-session-id"] = mcp_session_id
     except Exception:
-        pass
+        logger.debug("Failed to generate session ID for batch initialize", exc_info=True)
 
     # Build metadata for batch processing
     if auth.user:
@@ -784,12 +788,12 @@ async def get_prometheus_metrics(
     ),
 )
 async def list_tools(
+    http_request: Request,
     module: Optional[str] = Query(None, description="Filter by module"),
     catalog: Optional[str] = Query(None, description="Filter by tool catalog name"),
     catalog_id: Optional[int] = Query(None, description="Filter by tool catalog id"),
     auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
-    http_request: Request = None,
 ):
     """
     List available MCP tools.
@@ -841,9 +845,9 @@ async def list_tools(
 @router.post("/tools/execute", response_model=ToolExecutionResponse)
 async def execute_tool(
     request: ToolExecutionRequest,
+    http_request: Request,
     auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
-    http_request: Request = None,
 ):
     """
     Execute a specific tool (requires authentication).
@@ -940,9 +944,9 @@ async def execute_tool(
 
 @router.get("/modules")
 async def list_modules(
+    http_request: Request,
     auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
-    http_request: Request = None,
 ):
     """
     List registered MCP modules.
@@ -985,9 +989,9 @@ async def list_modules(
 
 @router.get("/modules/health")
 async def get_modules_health(
+    http_request: Request,
     principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
-    http_request: Request = None,
 ):
     """
     Get detailed health status of all modules; requires `system.logs` permission (or admin).
@@ -1022,9 +1026,9 @@ async def get_modules_health(
 
 @router.get("/resources")
 async def list_resources(
+    http_request: Request,
     auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
-    http_request: Request = None,
 ):
     """
     List available MCP resources.
@@ -1067,9 +1071,9 @@ async def list_resources(
 
 @router.get("/prompts")
 async def list_prompts(
+    http_request: Request,
     auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
-    http_request: Request = None,
 ):
     """
     List available MCP prompts.

@@ -58,7 +58,11 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, InputError
-from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
+from tldw_Server_API.app.core.exceptions import (
+    FileArtifactsError,
+    FileArtifactsValidationError,
+    file_artifacts_http_status,
+)
 from tldw_Server_API.app.core.File_Artifacts.adapters.data_table_adapter import DataTableAdapter
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import (
     DEFAULT_MAX_BYTES,
@@ -75,31 +79,10 @@ MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 _job_manager_lock = threading.Lock()
 
-_FILE_ARTIFACTS_ERROR_STATUS = {
-    "unsupported_file_type": status.HTTP_400_BAD_REQUEST,
-    "persist_required": status.HTTP_400_BAD_REQUEST,
-    "image_backend_unavailable": status.HTTP_400_BAD_REQUEST,
-    "unsupported_export_format": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "invalid_export_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "invalid_async_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "export_size_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "row_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "cell_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "export_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
-    "export_job_enqueue_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
-    "image_generation_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
-}
-
-
 def _file_artifacts_http_exception(exc: FileArtifactsError) -> HTTPException:
     """Translate file artifact errors into HTTP exceptions with status codes."""
     detail = exc.detail if exc.detail is not None else exc.code
-    status_code = _FILE_ARTIFACTS_ERROR_STATUS.get(exc.code)
-    if status_code is None:
-        if isinstance(exc, FileArtifactsValidationError):
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        else:
-            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    status_code = file_artifacts_http_status(exc)
     return HTTPException(status_code=status_code, detail=detail)
 
 
@@ -409,13 +392,13 @@ def _build_table_detail_response(
 async def generate_data_table(
     req: DataTableGenerateRequest,
     response: Response,
+    request: Request,
     wait_for_completion: bool = Query(False, description="Wait for job completion"),
     wait_timeout_seconds: int = Query(300, ge=1, le=1800),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
-    request: Request = None,
 ) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
     """Queue a data table generation job and optionally wait for completion."""
     rid = ensure_request_id(request) if request is not None else None
@@ -537,8 +520,11 @@ async def generate_data_table(
                     last_error=str(exc),
                     owner_user_id=owner_user_id,
                 )
-            except Exception:
-                logger.debug("data_tables.generate: failed to mark table as failed")
+            except Exception as update_exc:
+                logger.debug(
+                    "data_tables.generate: failed to mark table as failed: {}",
+                    update_exc,
+                )
         raise HTTPException(status_code=500, detail="Failed to submit data table job") from exc
 
 
@@ -662,7 +648,7 @@ async def get_data_table(
 async def export_data_table(
     table_uuid: str,
     response: Response,
-    request: Request = None,
+    request: Request,
     format: DataTableExportFormat = Query(..., description="Export format (csv|json|xlsx)"),
     async_mode: AsyncMode = Query("auto", description="auto defers large exports; async forces 202"),
     mode: ExportMode = Query("url", description="url returns a download link; inline returns base64 content"),
@@ -972,13 +958,13 @@ async def regenerate_data_table(
     table_uuid: str,
     req: DataTableRegenerateRequest,
     response: Response,
+    request: Request,
     wait_for_completion: bool = Query(False, description="Wait for job completion"),
     wait_timeout_seconds: int = Query(300, ge=1, le=1800),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
-    request: Request = None,
 ) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
     """Queue a data table regeneration job."""
     rid = ensure_request_id(request) if request is not None else None

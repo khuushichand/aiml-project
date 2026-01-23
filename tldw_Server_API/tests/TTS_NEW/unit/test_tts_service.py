@@ -15,6 +15,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
     TTSResponse,
     AudioFormat
 )
+from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSProviderNotConfiguredError,
     TTSGenerationError,
@@ -438,6 +439,21 @@ async def test_custom_voice_resolution_injects_reference(tts_service, monkeypatc
     assert tts_request.voice_reference == b"audio-bytes"
     assert tts_request.extra_params.get("ref_codes") == [1, 2, 3]
     assert tts_request.extra_params.get("reference_text") == "stored text"
+
+
+@pytest.mark.unit
+async def test_convert_request_language_override(tts_service):
+    req = OpenAISpeechRequest(
+        model="kokoro",
+        input="hello",
+        voice="af_heart",
+        response_format="mp3",
+        stream=False,
+        lang_code="en",
+        extra_params={"language": "ja"},
+    )
+    tts_request = tts_service._convert_request(req)
+    assert tts_request.language == "ja"
 
 # ========================================================================
 # Caching Tests

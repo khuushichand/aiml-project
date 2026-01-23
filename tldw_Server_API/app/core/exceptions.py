@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from loguru import logger
 from typing import Any, Optional
@@ -153,6 +153,32 @@ class FileArtifactsError(Exception):
 
 class FileArtifactsValidationError(FileArtifactsError):
     """Raised when file artifacts payload validation fails."""
+
+
+FILE_ARTIFACTS_ERROR_STATUS: dict[str, int] = {
+    "unsupported_file_type": status.HTTP_400_BAD_REQUEST,
+    "persist_required": status.HTTP_400_BAD_REQUEST,
+    "image_backend_unavailable": status.HTTP_400_BAD_REQUEST,
+    "unsupported_export_format": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "invalid_export_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "invalid_async_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "export_size_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "row_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "cell_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "export_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+    "export_job_enqueue_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+    "image_generation_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+def file_artifacts_http_status(exc: FileArtifactsError) -> int:
+    """Resolve HTTP status code for file artifact errors."""
+    status_code = FILE_ARTIFACTS_ERROR_STATUS.get(exc.code)
+    if status_code is None:
+        if isinstance(exc, FileArtifactsValidationError):
+            return status.HTTP_422_UNPROCESSABLE_ENTITY
+        return status.HTTP_500_INTERNAL_SERVER_ERROR
+    return status_code
 
 
 class AdapterInitializationError(FileArtifactsError):

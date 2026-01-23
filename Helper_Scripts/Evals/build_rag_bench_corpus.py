@@ -6,12 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 @dataclass(frozen=True)
 class ManifestEntry:
@@ -71,6 +71,12 @@ def build_corpus(entries: Iterable[ManifestEntry], corpus_root: Path, overwrite:
         if not entry.source.exists():
             raise FileNotFoundError(f"Source not found: {entry.source}")
         dest_path = corpus_root / entry.dest
+        resolved_root = corpus_root.resolve(strict=False)
+        resolved_dest = dest_path.resolve(strict=False)
+        try:
+            resolved_dest.relative_to(resolved_root)
+        except ValueError as exc:
+            raise ValueError(f"Invalid dest path outside corpus root: {entry.dest}") from exc
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         if dest_path.exists() and not overwrite:
             skipped += 1
@@ -85,14 +91,13 @@ def _load_media_title_map(db_path: Path) -> Dict[str, List[str]]:
     if not db_path.exists():
         raise FileNotFoundError(f"Media DB not found: {db_path}")
 
-    conn = sqlite3.connect(str(db_path))
-    try:
-        rows = conn.execute("SELECT id, title FROM Media WHERE deleted = 0").fetchall()
-    finally:
-        conn.close()
-
     title_map: Dict[str, List[str]] = {}
-    for media_id, title in rows:
+    db = MediaDatabase(db_path=str(db_path), client_id="rag_bench_corpus")
+    with db.transaction():
+        rows = db.execute_query("SELECT id, title FROM Media WHERE deleted = 0").fetchall()
+    for row in rows:
+        media_id = row.get("id")
+        title = row.get("title")
         if not title:
             continue
         key = _normalize_title(str(title))

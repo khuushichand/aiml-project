@@ -4,7 +4,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path as PathlibPath
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from loguru import logger
 from starlette.background import BackgroundTask
 from starlette.responses import FileResponse
@@ -21,7 +21,7 @@ from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
+from tldw_Server_API.app.core.exceptions import FileArtifactsError, file_artifacts_http_status
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
 
 
@@ -39,30 +39,9 @@ _EXPORT_MIME_TYPES = {
     "webp": "image/webp",
 }
 
-_FILE_ARTIFACTS_ERROR_STATUS = {
-    "unsupported_file_type": status.HTTP_400_BAD_REQUEST,
-    "persist_required": status.HTTP_400_BAD_REQUEST,
-    "image_backend_unavailable": status.HTTP_400_BAD_REQUEST,
-    "unsupported_export_format": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "invalid_export_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "invalid_async_mode": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "export_size_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "row_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "cell_limit_exceeded": status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "export_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
-    "export_job_enqueue_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
-    "image_generation_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
-}
-
-
 def _file_artifacts_http_exception(exc: FileArtifactsError) -> HTTPException:
     detail = exc.detail if exc.detail is not None else exc.code
-    status_code = _FILE_ARTIFACTS_ERROR_STATUS.get(exc.code)
-    if status_code is None:
-        if isinstance(exc, FileArtifactsValidationError):
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        else:
-            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    status_code = file_artifacts_http_status(exc)
     return HTTPException(status_code=status_code, detail=detail)
 
 

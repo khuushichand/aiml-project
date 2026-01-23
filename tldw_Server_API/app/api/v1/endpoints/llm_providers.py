@@ -1444,7 +1444,7 @@ async def get_all_models(
             ):
                 continue
             model_id = entry.get("id") or f"image/{entry.get('name') or ''}"
-            if model_id:
+            if model_id and model_id != "image/":
                 models.append(str(model_id))
         logger.info(f"Found {len(models)} total models across all providers")
         return models

@@ -15,7 +15,7 @@ def test_pricing_catalog_loads_from_config_file(monkeypatch):
     in_per_1k, out_per_1k, estimated = catalog.get_rates('openai', 'gpt-4o')
 
     # Values set in Config_Files/model_pricing.json
-    assert round(in_per_1k, 6) == 0.005
-    assert round(out_per_1k, 6) == 0.015
+    assert round(in_per_1k, 6) == 0.0025
+    assert round(out_per_1k, 6) == 0.01
     # File override yields exact match, not estimated
     assert estimated is False

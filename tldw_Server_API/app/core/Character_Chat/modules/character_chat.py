@@ -736,6 +736,7 @@ def start_new_chat_session(
     original_alternate_greetings: Optional[List[str]] = None
 
     def _normalize_alt_greeting(value: Any) -> Optional[str]:
+        """Normalize value (Any) to UTF-8 text or None (Optional[str]); bytes/memoryview are decoded with errors replaced."""
         if isinstance(value, str):
             return value
         if isinstance(value, memoryview):

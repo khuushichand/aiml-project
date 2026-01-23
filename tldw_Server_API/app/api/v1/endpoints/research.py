@@ -283,9 +283,9 @@ from typing import Union
 )
 async def websearch_endpoint(
     payload: WebSearchRequest,
+    request: Request,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-    request: Request = None,
 ):
     """
     Runs the websearch pipeline: optional subqueries + provider search. If aggregate=True,

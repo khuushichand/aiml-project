@@ -12,10 +12,22 @@ class ModerationUserOverride(BaseModel):
     input_action: Optional[Literal['block', 'redact', 'warn']] = Field(None, description="Action for input violations")
     output_action: Optional[Literal['block', 'redact', 'warn']] = Field(None, description="Action for output violations")
     redact_replacement: Optional[str] = Field(None, description="Replacement text for redaction")
-    categories_enabled: Optional[List[str] | str] = Field(
+    categories_enabled: Optional[List[str]] = Field(
         None,
         description="Categories to enable for this user (comma-separated string or list, e.g., 'pii,confidential')",
     )
+
+    @field_validator("categories_enabled", mode="before")
+    @classmethod
+    def _normalize_categories_enabled(cls, v: Any) -> Optional[List[str]]:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            tokens = [token.strip() for token in v.split(",")]
+            return [token for token in tokens if token]
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return v
 
     @field_validator('redact_replacement')
     @classmethod

@@ -886,8 +886,8 @@ async def login(
 
 @router.post("/logout", response_model=MessageResponse)
 async def logout(
+    request: Request,
     data: Optional[LogoutRequest] = None,
-    request: Request = None,
     current_user: Dict[str, Any] = Depends(get_current_user),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
@@ -1498,10 +1498,10 @@ async def forgot_password(
 @router.post("/reset-password", status_code=status.HTTP_200_OK)
 async def reset_password(
     data: ResetPasswordRequest,
+    request: Request,
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     password_service: PasswordService = Depends(get_password_service_dep),
-    request: Request = None,
     rate_limiter=Depends(get_rate_limiter_dep),
 ) -> Dict[str, str]:
     """

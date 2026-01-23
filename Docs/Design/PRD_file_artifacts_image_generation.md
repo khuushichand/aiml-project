@@ -29,7 +29,7 @@ Extend the File Artifacts API to support image generation via a backend adapter 
 5. Provide deterministic output via seed controls where supported.
 6. Enforce strict size, resolution, and runtime limits to prevent resource exhaustion.
 7. Enforce an allowlist for `extra_params` keys per backend (deny by default).
-8. Persist must be forced to `false` for images; image bytes are never stored.
+8. Persist remains required to create the artifact, but image bytes are never stored.
 
 ## API Contract
 
@@ -64,7 +64,7 @@ Request:
     "async_mode": "sync"
   },
   "options": {
-    "persist": false,
+    "persist": true,
     "max_bytes": 4000000
   }
 }
@@ -92,7 +92,7 @@ Response (inline only):
     },
     "validation": {"ok": true, "warnings": []},
     "export": {
-      "status": "ready",
+      "status": "none",
       "format": "webp",
       "content_type": "image/webp",
       "bytes": 354112,
@@ -167,8 +167,8 @@ Optional:
 - `extra_params` (object): backend-specific knobs; only allowlisted keys are accepted (deny by default).
 
 Defaults should be sourced from config when fields are omitted.
-`options.persist` is ignored and forced to `false` for images.
-`options.max_bytes` is clamped to the configured `image_generation.inline_max_bytes`.
+`options.persist` must be `true` to create the artifact; image bytes are never stored.
+`options.max_bytes` is enforced, and image outputs are additionally capped by `[Image-Generation].inline_max_bytes` (falling back to `Files.inline_max_bytes`).
 
 ## Adapter Architecture
 
@@ -235,7 +235,7 @@ stable-diffusion.cpp specific (same section):
 - No server-side export files written to user temp outputs.
 - Temporary files created by the backend adapter must be deleted immediately after reading.
 - Reject outputs that exceed configured byte limits (return `export_size_exceeded`).
-- Inline responses use `export.status="ready"` with `content_b64` populated.
+- Inline responses use `export.status="none"` with `content_b64` populated.
 - `GET /api/v1/files/{id}` returns the image artifact metadata without export bytes; export fields are present with `export.status="none"`, `content_b64` omitted, and `bytes=null`.
 
 ## Limits and Validation

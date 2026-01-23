@@ -334,10 +334,11 @@ export const ModerationPlayground: React.FC = () => {
   const handleDeleteOverride = async (userId?: string | null) => {
     const targetId = userId || activeUserId
     if (!targetId) return
+    const resolvedTargetId: string = targetId
     try {
-      await deleteUserOverride(targetId)
+      await deleteUserOverride(resolvedTargetId)
       messageApi.success("Override removed")
-      if (targetId === activeUserId) {
+      if (resolvedTargetId === activeUserId) {
         setOverrideDraft({})
         setOverrideLoaded(false)
         await policyQuery.refetch()
@@ -435,7 +436,7 @@ export const ModerationPlayground: React.FC = () => {
       await handleLoadManaged()
       messageApi.success("Line appended")
     } catch (err: any) {
-      messageApi.error(err?.message || "Append failed")
+      messageApi.error(err?.message || "Failed to append or refresh list")
     } finally {
       setManagedLoading(false)
     }

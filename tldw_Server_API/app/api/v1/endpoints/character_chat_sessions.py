@@ -100,6 +100,18 @@ from tldw_Server_API.app.core.Character_Chat.constants import (
 
 THROTTLE_WINDOW_SIZE = 100
 
+def _safe_replace_placeholders(value: Any, char_name: str, user_name: str) -> str:
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    if not text:
+        return ""
+    try:
+        return replace_placeholders(text, char_name, user_name)
+    except Exception as exc:
+        logger.debug("Placeholder replacement failed: {}", exc)
+        return text
+
 def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
     """
     Validate and truncate tool_calls to prevent unbounded storage.
@@ -503,15 +515,12 @@ async def get_chat_context(
                 character.get('name'),
                 default_role="user",
             )
-            content = replace_placeholders(m.get('content') or '', char_name, user_name)
+            content = _safe_replace_placeholders(m.get('content'), char_name, user_name)
             formatted.append({"role": role, "content": content})
 
         # If no messages, include first_message as an initial assistant message (with placeholders resolved)
         if not formatted and character.get('first_message'):
-            try:
-                fm = replace_placeholders(character['first_message'], char_name, user_name)
-            except Exception:
-                fm = character['first_message']
+            fm = _safe_replace_placeholders(character.get('first_message'), char_name, user_name)
             formatted.append({"role": "assistant", "content": fm})
 
         return {"character_name": char_name, "messages": formatted}
@@ -638,6 +647,7 @@ async def prepare_chat_completion(
         character = db.get_character_card_by_id(conversation['character_id']) or {}
         character_name = character.get('name')
         user_name = conversation.get('user_name', 'User')
+        char_label = character_name or "Assistant"
         include_ctx = bool(body.include_character_context)
         # Fields are validated by Pydantic; avoid redundant int() casting
         limit = body.limit
@@ -649,24 +659,13 @@ async def prepare_chat_completion(
         paginated = messages
 
         formatted: List[Dict[str, Any]] = []
-        def _replace_text(value: Any) -> str:
-            if value is None:
-                return ""
-            text = value if isinstance(value, str) else str(value)
-            if not text:
-                return ""
-            try:
-                return replace_placeholders(text, character_name or "Assistant", user_name)
-            except Exception:
-                return text
-
         if include_ctx and character and offset == 0:
             parts = [
-                f"You are {character.get('name', 'Assistant')}.",
-                _replace_text(character.get('description', '')),
-                _replace_text(character.get('personality', '')),
-                _replace_text(character.get('scenario', '')),
-                _replace_text(character.get('system_prompt', '')),
+                f"You are {char_label}.",
+                _safe_replace_placeholders(character.get('description', ''), char_label, user_name),
+                _safe_replace_placeholders(character.get('personality', ''), char_label, user_name),
+                _safe_replace_placeholders(character.get('scenario', ''), char_label, user_name),
+                _safe_replace_placeholders(character.get('system_prompt', ''), char_label, user_name),
             ]
             sys_text = '\n'.join([p for p in parts if p])
             if sys_text.strip():
@@ -679,7 +678,7 @@ async def prepare_chat_completion(
                     character.get('name'),
                     default_role="user",
                 ),
-                "content": _replace_text(msg.get('content'))
+                "content": _safe_replace_placeholders(msg.get('content'), char_label, user_name)
             })
 
         if body.append_user_message:
@@ -744,6 +743,7 @@ async def character_chat_completion(
         # Gather character and context
         character = db.get_character_card_by_id(conversation['character_id']) or {}
         user_name = conversation.get('user_name', 'User')
+        char_label = character.get('name', 'Assistant')
         include_ctx = bool(body.include_character_context)
         limit = body.limit
         offset = body.offset
@@ -762,25 +762,14 @@ async def character_chat_completion(
         messages = [m for m in messages if not m.get('deleted')]
         paginated = messages
 
-        def _replace_text(value: Any) -> str:
-            if value is None:
-                return ""
-            text = value if isinstance(value, str) else str(value)
-            if not text:
-                return ""
-            try:
-                return replace_placeholders(text, character.get('name', 'Assistant'), user_name)
-            except Exception:
-                return text
-
         formatted: List[Dict[str, Any]] = []
         if include_ctx and character and offset == 0:
             parts = [
-                f"You are {character.get('name', 'Assistant')}.",
-                _replace_text(character.get('description', '')),
-                _replace_text(character.get('personality', '')),
-                _replace_text(character.get('scenario', '')),
-                _replace_text(character.get('system_prompt', '')),
+                f"You are {char_label}.",
+                _safe_replace_placeholders(character.get('description', ''), char_label, user_name),
+                _safe_replace_placeholders(character.get('personality', ''), char_label, user_name),
+                _safe_replace_placeholders(character.get('scenario', ''), char_label, user_name),
+                _safe_replace_placeholders(character.get('system_prompt', ''), char_label, user_name),
             ]
             sys_text = '\n'.join([p for p in parts if p])
             if sys_text.strip():
@@ -793,7 +782,7 @@ async def character_chat_completion(
                     character.get('name'),
                     default_role="user",
                 ),
-                "content": _replace_text(msg.get('content'))
+                "content": _safe_replace_placeholders(msg.get('content'), char_label, user_name)
             })
 
         # Optional appended user message
@@ -1286,13 +1275,13 @@ async def character_chat_completion(
         if "exceeds maximum" in msg.lower():
             status_code = status.HTTP_413_CONTENT_TOO_LARGE
         logger.warning(f"Input error in character chat completion for {chat_id}: {e}")
-        raise HTTPException(status_code=status_code, detail=msg)
+        raise HTTPException(status_code=status_code, detail=msg) from e
     except ConflictError as e:
         logger.warning(f"Conflict in character chat completion for {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error in character chat completion for {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error in character chat completion for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during character chat completion")
@@ -1847,8 +1836,14 @@ async def persist_streamed_assistant_message(
                         {"rating": body.chat_rating},
                         conv_for_update.get('version', 1),
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    "Failed to update chat rating for chat_id={} rating={} error={}",
+                    chat_id,
+                    getattr(body, "chat_rating", None),
+                    e,
+                    exc_info=True,
+                )
 
         return CharacterChatStreamPersistResponse(chat_id=chat_id, assistant_message_id=assistant_msg_id, saved=True)
     except HTTPException:
@@ -1859,13 +1854,13 @@ async def persist_streamed_assistant_message(
         if "exceeds maximum" in msg.lower():
             status_code = status.HTTP_413_CONTENT_TOO_LARGE
         logger.warning(f"Input error persisting streamed assistant message for {chat_id}: {e}")
-        raise HTTPException(status_code=status_code, detail=msg)
+        raise HTTPException(status_code=status_code, detail=msg) from e
     except ConflictError as e:
         logger.warning(f"Conflict persisting streamed assistant message for {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error persisting streamed assistant message for {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error persisting streamed assistant message for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist assistant message")

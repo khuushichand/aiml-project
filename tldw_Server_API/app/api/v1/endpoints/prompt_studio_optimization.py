@@ -421,9 +421,9 @@ def _validate_strategy_config(optimizer_type: str, cfg: Dict[str, Any]) -> None:
 @router.post("")
 async def create_optimization_simple(
     payload: OptimizationSimpleCreateRequest,
+    request: Request,  # type: ignore[assignment]
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
-    request: Request = None,  # type: ignore[assignment]
 ) -> Dict[str, Any]:
     # Minimal creation: create a job with provided payload
     prompt_id = int(payload.prompt_id or payload.initial_prompt_id or 0)
@@ -576,12 +576,12 @@ async def _rl_optimizations(
 )
 async def create_optimization(
     optimization_data: OptimizationCreate,
+    request: Request,  # type: ignore[assignment]
     _: bool = Depends(_rl_optimizations),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
     user_context: Dict = Depends(get_prompt_studio_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
-    request: Request = None,  # type: ignore[assignment]
 ) -> StandardResponse:
     """
     Create and start a new optimization.
@@ -907,11 +907,11 @@ async def get_optimization_job_status(
     "responses": {"200": {"description": "Cancelled", "content": {"application/json": {"examples": {"cancelled": {"value": {"success": True, "data": {"message": "Optimization cancelled"}}}}}}}, "400": {"description": "Invalid state"}, "404": {"description": "Not found"}}
 })
 async def cancel_optimization(
+    request: Request,
     optimization_id: int = Path(..., description="Optimization ID"),
     reason: str = Body(None, description="Cancellation reason"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
-    request: Request = None,
 ) -> StandardResponse:
     """
     Cancel a running optimization.
@@ -1356,10 +1356,10 @@ async def list_optimization_iterations(
 )
 async def compare_strategies(
     request: CompareStrategiesRequest,
+    http_request: Request,  # type: ignore[assignment]
     _: bool = Depends(_rl_optimizations),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
-    http_request: Request = None,  # type: ignore[assignment]
 ) -> StandardResponse:
     """
     Compare multiple optimization strategies.

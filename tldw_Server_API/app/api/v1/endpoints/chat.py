@@ -244,7 +244,7 @@ def _cfg_float(key: str, fallback: float) -> float:
     try:
         raw = _chat_config.get(key)
         return float(raw) if raw is not None else fallback
-    except Exception:
+    except (TypeError, ValueError):
         return fallback
 
 RECENCY_HALF_LIFE_DAYS: float = _cfg_float("half_life_days", 14.0)
@@ -699,6 +699,10 @@ async def _process_content_for_db_sync(
                 try:
                     part = part.model_dump(exclude_none=True)
                 except Exception:
+                    logger.debug(
+                        "model_dump failed for part type=%s, falling back to string",
+                        type(part).__name__,
+                    )
                     part = {"type": "text", "text": str(part)}
             else:
                 p_type_attr = getattr(part, "type", None)
@@ -711,6 +715,7 @@ async def _process_content_for_db_sync(
                         try:
                             image_url_obj = image_url_obj.model_dump(exclude_none=True)
                         except Exception:
+                            logger.debug("model_dump failed for image_url_obj, setting to None")
                             image_url_obj = None
                     if not isinstance(image_url_obj, dict):
                         image_url_obj = {"url": getattr(image_url_obj, "url", "") if image_url_obj is not None else ""}
@@ -1169,13 +1174,13 @@ async def _persist_system_message_if_needed(
     ]
 )
 async def create_chat_completion(
+    request: Request,  # Optional Request object for audit logging and rate limiting
     request_data: ChatCompletionRequest = Body(...),
     chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
     Authorization: str = Header(None, alias="Authorization", description="Bearer token for authentication."),
     Token: str = Header(None, alias="Token", description="Alternate bearer token header for backward compatibility."),
     X_API_KEY: str = Header(None, alias="X-API-KEY", description="Direct API key header for single-user mode."),
-    request: Request = None,  # Optional Request object for audit logging and rate limiting
     audit_service=Depends(get_audit_service_for_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse

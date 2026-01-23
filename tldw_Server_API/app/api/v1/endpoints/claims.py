@@ -369,11 +369,11 @@ def get_review_queue(
 async def review_claim(
     claim_id: int,
     payload: ClaimReviewRequest,
+    request: Request,
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-    request: Request = None,
 ) -> Dict[str, Any]:
     """Update claim review status and notes."""
     return await claims_service.review_claim(
@@ -408,11 +408,11 @@ def get_claim_review_history(
 @router.post("/review/bulk")
 def bulk_review_claims(
     payload: ClaimReviewBulkRequest,
+    request: Request,
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-    request: Request = None,
 ) -> Dict[str, Any]:
     """Bulk review update (admin only)."""
     return claims_service.bulk_review_claims(
@@ -822,6 +822,7 @@ def search_claims(
 @router.get("/{media_id}")
 def list_claims(
     media_id: int,
+    request: Request,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0, le=100000),
     envelope: bool = Query(False),
@@ -829,7 +830,6 @@ def list_claims(
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-    request: Request = None,
 ) -> Any:
     """List claims for a media item."""
     return claims_service.list_claims_by_media(

@@ -122,10 +122,8 @@ export const createLenientRegex = (value: string) => {
 export const prefixMatchLength = (left: string, right: string) => {
   if (left === "" || right === "") return 0
   for (let len = left.length; len > 0; len--) {
-    for (let i = 0; i <= left.length - len; i++) {
-      const sub = left.substring(i, i + len)
-      if (right.startsWith(sub)) return len
-    }
+    const sub = left.substring(left.length - len)
+    if (right.startsWith(sub)) return len
   }
   return 0
 }
@@ -305,7 +303,7 @@ export const assembleWorldInfo = (
     const searchPromptLower = searchPrompt.toLowerCase()
     return entry.keys.some((key) => {
       if (!searchPromptLower.length) return false
-      if (!key) return false
+      if (typeof key !== "string" || !key) return false
       return searchPromptLower.includes(key.toLowerCase())
     })
   })

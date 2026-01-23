@@ -85,3 +85,20 @@ def test_create_job_status_and_artifacts(client_audiobooks_jobs, job_payload):
     artifacts = artifacts_resp.json()
     assert artifacts["project_id"] == data["project_id"]
     assert isinstance(artifacts["artifacts"], list)
+
+
+def test_job_access_denied_for_other_user(client_audiobooks_jobs, job_payload):
+    create_resp = client_audiobooks_jobs.post("/api/v1/audiobooks/jobs", json=job_payload)
+    assert create_resp.status_code == 200
+    data = create_resp.json()
+
+    async def override_other_user():
+        return User(id=2, username="other", email="o@e.com", is_active=True, is_admin=False)
+
+    client_audiobooks_jobs.app.dependency_overrides[get_request_user] = override_other_user
+
+    status_resp = client_audiobooks_jobs.get(f"/api/v1/audiobooks/jobs/{data['job_id']}")
+    assert status_resp.status_code == 404
+
+    artifacts_resp = client_audiobooks_jobs.get(f"/api/v1/audiobooks/jobs/{data['job_id']}/artifacts")
+    assert artifacts_resp.status_code == 404

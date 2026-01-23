@@ -13,6 +13,7 @@ provider_priority:
   - dia         # Dialogue specialist
   - higgs       # Advanced multi-lingual
   - index_tts   # IndexTTS2 (local, expressive zero-shot)
+  - qwen3_tts   # Qwen3-TTS (local, multilingual; disabled by default)
 
 # Provider-specific configurations
 providers:
@@ -61,7 +62,7 @@ providers:
 
   # PocketTTS ONNX Configuration (local; voice cloning)
   pocket_tts:
-    enabled: true  # Enabled by default; ensure assets are installed
+    enabled: false  # Disabled by default; enable after installing assets
     model_path: "models/pocket_tts_onnx/onnx"  # Directory with ONNX files
     tokenizer_path: "models/pocket_tts_onnx/tokenizer.model"
     module_path: "models/pocket_tts_onnx"  # Directory containing pocket_tts_onnx.py or package
@@ -156,7 +157,7 @@ providers:
 
   # Supertonic2 ONNX Configuration (local; user-supplied models)
   supertonic2:
-    enabled: true              # Disabled by default; enable after installing assets
+    enabled: false              # Disabled by default; enable after installing assets
     model_path: "models/supertonic2/onnx"        # ONNX directory
     sample_rate: 24000
     device: "cpu"                # Placeholder for future GPU support
@@ -185,7 +186,7 @@ providers:
 
   # NeuTTS Air (Neuphonic) Configuration
   neutts:
-    enabled: true  # Enabled by default; ensure NeuTTS dependencies are installed
+    enabled: false  # Disabled by default; enable after installing assets
     # Backbone options:
     #  - "neuphonic/neutts-nano" (HF transformers)
     #  - "neuphonic/neutts-air" (HF transformers)
@@ -212,6 +213,25 @@ providers:
     sample_rate: 24000
     interval_silence: 200  # Silence in ms between segments
     max_text_tokens_per_segment: 120
+
+  # Qwen3-TTS Configuration
+  qwen3_tts:
+    enabled: false  # Disabled by default (requires model download)
+    model: "auto"
+    model_path: null
+    tokenizer_model: "Qwen/Qwen3-TTS-Tokenizer-12Hz"
+    device: "cpu"  # "cpu" | "cuda" | "mps"
+    dtype: "float16"  # "float16" | "bfloat16" | "float32"
+    attn_implementation: "default"  # "flash_attention_2" | "default"
+    auto_download: false
+    max_concurrent_generations: 1
+    stream_chunk_size_ms: 200
+    auto_min_vram_gb: 12
+    max_text_length: 5000
+    tokenizer_max_audio_seconds: 300
+    tokenizer_max_tokens: 20000
+    tokenizer_max_payload_mb: 20
+    voice_clone_prompt_max_kb: 256
 
 # Voice mappings for cross-provider compatibility
 # NOTE: Providers like index_tts rely on uploaded reference audio; the

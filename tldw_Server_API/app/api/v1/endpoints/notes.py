@@ -246,6 +246,7 @@ def _keyword_text_from_row(row: Any) -> Optional[str]:
 
 
 def _get_or_create_keyword_row(db: CharactersRAGDB, keyword_text: Any) -> Optional[Dict[str, Any]]:
+    """Return existing keyword row or create one, handling concurrent creation."""
     text = _normalize_keyword_text(keyword_text)
     if not text:
         return None
@@ -254,12 +255,12 @@ def _get_or_create_keyword_row(db: CharactersRAGDB, keyword_text: Any) -> Option
         return kw_row
     try:
         kw_id = db.add_keyword(text)
-    except ConflictError as err:
+    except ConflictError:
         # Keyword may have been created concurrently; refetch and return if present.
         kw_row = db.get_keyword_by_text(text)
         if kw_row:
             return kw_row
-        raise err
+        raise
     if kw_id is None:
         return None
     return db.get_keyword_by_id(kw_id)
@@ -1006,8 +1007,18 @@ async def update_note(
                 )
         if conversation_supplied or message_supplied:
             current_note = _get_current_note()
-            effective_conversation_id = update_data.get("conversation_id") if conversation_supplied else current_note.get("conversation_id")
-            effective_message_id = update_data.get("message_id") if message_supplied else current_note.get("message_id")
+            current_conversation_id = current_note.get("conversation_id")
+            effective_conversation_id = update_data.get("conversation_id") if conversation_supplied else current_conversation_id
+            conversation_changed = (
+                conversation_supplied
+                and _normalize_optional_id(effective_conversation_id) != _normalize_optional_id(current_conversation_id)
+            )
+            if message_supplied:
+                effective_message_id = update_data.get("message_id")
+            elif conversation_changed:
+                effective_message_id = None
+            else:
+                effective_message_id = current_note.get("message_id")
             validated_conversation_id, validated_message_id = _validate_note_links(
                 db,
                 effective_conversation_id,
@@ -1017,6 +1028,8 @@ async def update_note(
                 update_data["conversation_id"] = validated_conversation_id
             if message_supplied:
                 update_data["message_id"] = validated_message_id
+            elif conversation_changed:
+                update_data["message_id"] = None
         data_keys = list(update_data.keys())
         if keywords_supplied:
             data_keys.append("keywords")
@@ -1150,8 +1163,18 @@ async def patch_note(
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
         if conversation_supplied or message_supplied:
             current = _get_current_note()
-            effective_conversation_id = update_data.get("conversation_id") if conversation_supplied else current.get("conversation_id")
-            effective_message_id = update_data.get("message_id") if message_supplied else current.get("message_id")
+            current_conversation_id = current.get("conversation_id")
+            effective_conversation_id = update_data.get("conversation_id") if conversation_supplied else current_conversation_id
+            conversation_changed = (
+                conversation_supplied
+                and _normalize_optional_id(effective_conversation_id) != _normalize_optional_id(current_conversation_id)
+            )
+            if message_supplied:
+                effective_message_id = update_data.get("message_id")
+            elif conversation_changed:
+                effective_message_id = None
+            else:
+                effective_message_id = current.get("message_id")
             validated_conversation_id, validated_message_id = _validate_note_links(
                 db,
                 effective_conversation_id,
@@ -1161,6 +1184,8 @@ async def patch_note(
                 update_data["conversation_id"] = validated_conversation_id
             if message_supplied:
                 update_data["message_id"] = validated_message_id
+            elif conversation_changed:
+                update_data["message_id"] = None
         data_keys = list(update_data.keys())
         if keywords_supplied:
             data_keys.append("keywords")

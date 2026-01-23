@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from loguru import logger
@@ -23,7 +23,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import NOTES_GRAPH_READ, NOTES_
 router = APIRouter()
 
 
-def _normalize_note_id(raw_id: str) -> str:
+def _normalize_note_id(raw_id: Optional[str]) -> str:
     if raw_id is None:
         raise HTTPException(status_code=400, detail="note_id is required")
     text = str(raw_id).strip()
@@ -37,7 +37,7 @@ def _normalize_note_id(raw_id: str) -> str:
     return text
 
 
-def _normalize_edge_id(raw_id: str) -> str:
+def _normalize_edge_id(raw_id: Optional[str]) -> str:
     if raw_id is None:
         raise HTTPException(status_code=400, detail="edge_id is required")
     text = str(raw_id).strip()
@@ -146,7 +146,8 @@ async def get_notes_graph(
     try:
         # Normalize typed IDs if provided (e.g., note:<uuid>)
         if getattr(req, "center_note_id", None):
-            _normalize_note_id(req.center_note_id)
+            normalized_center = _normalize_note_id(req.center_note_id)
+            req.center_note_id = normalized_center
         limits = GraphLimits(max_nodes=300, max_edges=1200, max_degree=40)
         return NoteGraphResponse(
             nodes=[],
@@ -194,7 +195,8 @@ async def get_note_neighbors(
     """
     Stub neighbors endpoint; enforces RBAC and token scope.
     """
-    _normalize_note_id(note_id)
+    normalized_note_id = _normalize_note_id(note_id)
+    # TODO: use normalized_note_id for neighbor lookup
     limits = GraphLimits(max_nodes=300, max_edges=1200, max_degree=40)
     return NoteGraphResponse(
         nodes=[],

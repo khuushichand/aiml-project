@@ -239,10 +239,10 @@ async def sandbox_health_public() -> dict:
 
 @router.post("/sessions", response_model=SandboxSession, summary="Create a short-lived sandbox session")
 async def create_session(
+    request: Request,
     payload: SandboxSessionCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    request: Request = None,
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxSession:
     # Default execution timeout from settings (fallback handled in schema)
@@ -389,10 +389,10 @@ async def delete_session(
 
 @router.post("/sessions/{session_id}/files", response_model=SandboxFileUploadResponse, summary="Upload files to a session workspace")
 async def upload_files(
+    request: Request,
     session_id: str = Path(..., min_length=1),
     files: list[UploadFile] = File(...),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxFileUploadResponse:
     ws_root = _service.get_session_workspace_path(session_id)
@@ -518,10 +518,10 @@ async def upload_files(
 
 @router.post("/runs", response_model=SandboxRunStatus, summary="Start a sandbox run (one-shot or for a session)")
 async def start_run(
+    request: Request,
     payload: SandboxRunCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    request: Request = None,
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxRunStatus:
     """
@@ -868,9 +868,9 @@ async def get_run_status(
 
 @router.get("/runs/{run_id}/artifacts", response_model=ArtifactListResponse, summary="List captured artifacts")
 async def list_artifacts(
+    request: Request,
     run_id: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
 ) -> ArtifactListResponse:
     # If a traversal attempt like `/artifacts/../x` was normalized to this route,
     # detect it via the raw ASGI path and reject with 400 to satisfy security tests.
@@ -939,11 +939,11 @@ async def reject_artifact_traversal(
 
 @router.get("/runs/{run_id}/artifacts/{path:path}", summary="Download an artifact")
 async def download_artifact(
+    request: Request,
     run_id: str = Path(..., min_length=1),
     path: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
     range_header: Optional[str] = Header(None, alias="Range"),
-    request: Request = None,
 ):
     # Basic path normalization checks (orchestrator also normalizes on FS)
     # Reject absolute or traversal attempts early (defense in depth). When the ASGI router
@@ -1453,9 +1453,9 @@ async def admin_get_run_details(
 # Fallback guard: catch normalized traversal paths that bypass artifacts route
 @router.get("/runs/{run_id}/{rest:path}", include_in_schema=False)
 async def sandbox_runs_fallback_guard(
+    request: Request,
     run_id: str = Path(..., min_length=1),
     rest: str = Path(..., min_length=1),
-    request: Request = None,
 ):
     try:
         # Collect multiple candidates for the original request path across ASGI implementations

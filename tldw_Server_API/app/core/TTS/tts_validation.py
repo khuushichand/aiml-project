@@ -111,6 +111,13 @@ class ProviderLimits:
             "valid_formats": {"mp3", "wav", "opus", "flac", "pcm", "aac"},
             "min_speed": 0.25,
             "max_speed": 4.0
+        },
+        "qwen3_tts": {
+            "max_text_length": 5000,
+            "languages": ["auto", "zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"],
+            "valid_formats": {"mp3", "opus", "aac", "wav", "pcm"},
+            "min_speed": 0.25,
+            "max_speed": 4.0
         }
     }
 
@@ -209,6 +216,7 @@ class TTSInputValidator:
         "supertonic2": 15000,
         "pocket_tts": 5000,
         "echo_tts": 768,
+        "qwen3_tts": 5000,
         "default": 5000,
     }
 
@@ -237,6 +245,7 @@ class TTSInputValidator:
         "supertonic2": {"en", "ko", "es", "pt", "fr"},
         "pocket_tts": {"en"},
         "echo_tts": {"en"},
+        "qwen3_tts": {"auto", "zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"},
     }
 
     # Supported audio formats by provider
@@ -254,6 +263,7 @@ class TTSInputValidator:
         "supertonic2": {AudioFormat.MP3, AudioFormat.WAV},
         "pocket_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM, AudioFormat.AAC},
         "echo_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
+        "qwen3_tts": {AudioFormat.MP3, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.WAV, AudioFormat.PCM},
     }
 
     # Voice reference file validation
@@ -265,6 +275,7 @@ class TTSInputValidator:
         "audio/opus", "audio/ogg", "audio/mp4", "audio/x-m4a"
     }
     EMO_REF_MAX_SIZE = 20 * 1024 * 1024  # 20MB limit for emotion references
+    VOICE_CLONE_PROMPT_MAX_KB_DEFAULT = 256
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
@@ -277,6 +288,71 @@ class TTSInputValidator:
         self.strict_mode = self.config.get("strict_validation", True)
         self.max_text_length_override = self.config.get("max_text_length")
         logger.debug(f"TTSInputValidator initialized (strict_mode={self.strict_mode})")
+
+    def _get_provider_setting(self, provider: Optional[str], key: str) -> Optional[Any]:
+        if not provider or not isinstance(self.config, dict):
+            return None
+        providers_cfg = self.config.get("providers")
+        if isinstance(providers_cfg, dict):
+            provider_cfg = providers_cfg.get(provider)
+            if isinstance(provider_cfg, dict) and key in provider_cfg:
+                return provider_cfg.get(key)
+        # Legacy/flat config key fallback
+        legacy_key = f"{provider}_{key}"
+        if legacy_key in self.config:
+            return self.config.get(legacy_key)
+        return None
+
+    def _coerce_int(self, value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced
+
+    def _decode_base64_payload(self, payload: str) -> bytes:
+        """Decode base64 payload with optional data URL prefix."""
+        if "," in payload:
+            payload = payload.split(",", 1)[1]
+        try:
+            return base64.b64decode(payload, validate=True)
+        except Exception as exc:
+            raise TTSInvalidInputError("voice_clone_prompt must be valid base64") from exc
+
+    def _validate_voice_clone_prompt(self, payload: Any, provider: Optional[str]) -> None:
+        if payload is None:
+            return
+        max_kb = self._coerce_int(self._get_provider_setting(provider, "voice_clone_prompt_max_kb"))
+        if max_kb is None or max_kb <= 0:
+            max_kb = self.VOICE_CLONE_PROMPT_MAX_KB_DEFAULT
+        max_bytes = max_kb * 1024
+
+        decoded: Optional[bytes] = None
+        if isinstance(payload, (bytes, bytearray)):
+            decoded = bytes(payload)
+        elif isinstance(payload, str):
+            decoded = self._decode_base64_payload(payload)
+        elif isinstance(payload, dict):
+            fmt = payload.get("format")
+            data_b64 = payload.get("data_b64")
+            if fmt and fmt != "qwen3_tts_prompt_v1":
+                raise TTSInvalidInputError("voice_clone_prompt format must be 'qwen3_tts_prompt_v1'")
+            if not isinstance(data_b64, str) or not data_b64.strip():
+                raise TTSInvalidInputError("voice_clone_prompt must include data_b64")
+            decoded = self._decode_base64_payload(data_b64)
+        else:
+            raise TTSInvalidInputError(
+                "voice_clone_prompt must be base64 string or {format,data_b64} object"
+            )
+
+        if decoded is None:
+            raise TTSInvalidInputError("voice_clone_prompt payload could not be decoded")
+        if max_bytes and len(decoded) > max_bytes:
+            raise TTSInvalidInputError(
+                f"voice_clone_prompt too large: {len(decoded)} bytes (max {max_bytes})"
+            )
 
     def sanitize_text(self, text: str, provider: Optional[str] = None) -> str:
         """
@@ -404,9 +480,15 @@ class TTSInputValidator:
             if request.format:
                 self._validate_format(request.format, provider)
 
-            # Validate language
-            if request.language:
-                self._validate_language(request.language, provider)
+            # Validate language (allow extra_params.language override)
+            language = request.language
+            extras = request.extra_params or {}
+            if not language and isinstance(extras, dict):
+                extra_language = extras.get("language")
+                if isinstance(extra_language, str) and extra_language.strip():
+                    language = extra_language.strip()
+            if language:
+                self._validate_language(language, provider)
 
             # Validate voice
             if request.voice:
@@ -441,6 +523,9 @@ class TTSInputValidator:
 
         # Check length limits (characters)
         max_length = self.max_text_length_override or self.MAX_TEXT_LENGTHS.get(provider, self.MAX_TEXT_LENGTHS["default"])
+        provider_max_length = self._coerce_int(self._get_provider_setting(provider, "max_text_length"))
+        if provider_max_length and provider_max_length > 0:
+            max_length = provider_max_length
 
         if len(text) > max_length:
             raise TTSTextTooLongError(
@@ -633,6 +718,10 @@ class TTSInputValidator:
                     raise TTSInvalidInputError("max_text_tokens_per_segment must be an integer") from exc
                 if max_tokens_value <= 0:
                     raise TTSInvalidInputError("max_text_tokens_per_segment must be greater than zero")
+
+            voice_clone_prompt = extras.get("voice_clone_prompt")
+            if voice_clone_prompt is not None:
+                self._validate_voice_clone_prompt(voice_clone_prompt, provider)
 
     def _validate_voice_reference(self, voice_ref_data: bytes):
         """Validate voice reference audio for cloning"""

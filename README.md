@@ -187,14 +187,19 @@ cat > .env << 'EOF'
 AUTH_MODE=single_user
 SINGLE_USER_API_KEY=CHANGE_ME_TO_SECURE_API_KEY
 DATABASE_URL=sqlite:///./Databases/users.db
-# MCP Unified secrets (required in production; initializer can generate if missing)
+# MCP Unified secrets (required in production; initializer can generate if missing for quickstart only)
 # MCP_JWT_SECRET=change-me-to-secure-mcp-jwt-secret
 # MCP_API_KEY_SALT=change-me-to-secure-mcp-salt
 EOF
 
 # First-time initialization (validates config, sets up DBs)
 python -m tldw_Server_API.app.core.AuthNZ.initialize
-# This will also generate MCP_JWT_SECRET and MCP_API_KEY_SALT if they are missing.
+# This will also generate MCP_JWT_SECRET and MCP_API_KEY_SALT if they are missing, using
+# Python's secrets.token_urlsafe(32) for quickstart-only defaults.
+# Replace these auto-generated values before production: set your own strong secrets,
+# rotate regularly, and store them in a secret manager (e.g., Vault, AWS Secrets Manager).
+# Example: set MCP_JWT_SECRET and MCP_API_KEY_SALT to your own values and manage them
+# following your organization's secure secret-management practices.
 # Add provider API keys in .env or tldw_Server_API/Config_Files/config.txt
 ```
 3) Run the API

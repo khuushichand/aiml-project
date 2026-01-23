@@ -150,6 +150,21 @@ class TTSServiceV2:
         self.metrics = get_metrics_registry()
         self._register_tts_metrics()
 
+    def _get_validation_config(self) -> Optional[Dict[str, Any]]:
+        """Return config dictionary for validation (best-effort)."""
+        try:
+            registry = None
+            if self.factory:
+                registry = getattr(self.factory, "registry", None)
+            if registry is None and getattr(self, "_factory", None) is not None:
+                registry = getattr(self._factory, "registry", None)
+            cfg = getattr(registry, "config", None) if registry else None
+            if isinstance(cfg, dict):
+                return cfg
+        except Exception:
+            return None
+        return None
+
     # ---------------------------------------------------------------------------------
     # Backwards-compatibility methods expected by older unit tests
     # ---------------------------------------------------------------------------------
@@ -541,7 +556,7 @@ class TTSServiceV2:
 
         # Validate the request first
         try:
-            validate_tts_request(tts_request, provider=provider_hint)
+            validate_tts_request(tts_request, provider=provider_hint, config=self._get_validation_config())
         except TTSValidationError as e:
             logger.error(f"TTS request validation failed: {e}")
             if self._stream_errors_as_audio:
@@ -597,7 +612,7 @@ class TTSServiceV2:
         try:
             request_for_provider = tts_request
             request_for_provider = self._maybe_sanitize_request(tts_request, provider_key)
-            validate_tts_request(request_for_provider, provider=provider_key)
+            validate_tts_request(request_for_provider, provider=provider_key, config=self._get_validation_config())
         except TTSValidationError as e:
             logger.error(f"TTS request validation failed for provider {provider_key}: {e}")
             if self._stream_errors_as_audio:
@@ -837,7 +852,7 @@ class TTSServiceV2:
         # Ensure the request is valid for the concrete adapter/provider.
         try:
             request_for_provider = self._maybe_sanitize_request(request, provider_key)
-            validate_tts_request(request_for_provider, provider=provider_key)
+            validate_tts_request(request_for_provider, provider=provider_key, config=self._get_validation_config())
         except TTSValidationError as e:
             logger.error(f"TTS request validation failed for provider {provider_key}: {e}")
             if self._stream_errors_as_audio:
@@ -967,7 +982,7 @@ class TTSServiceV2:
             request.response_format.lower(),
             AudioFormat.MP3
         )
-        # Optional language code mapping
+        # Optional language code mapping (lang_code primary; extra_params.language override)
         language = getattr(request, 'lang_code', None)
         # Optional voice reference decoding (base64)
         voice_ref_bytes = None
@@ -981,6 +996,18 @@ class TTSServiceV2:
                 ) from exc
         # Provider-specific extras passthrough
         extras = getattr(request, 'extra_params', None) or {}
+        if isinstance(extras, dict):
+            extra_language = extras.get("language")
+            if isinstance(extra_language, str):
+                if extra_language.strip():
+                    language = extra_language.strip()
+            elif extra_language is not None:
+                try:
+                    coerced_language = str(extra_language)
+                except Exception:
+                    coerced_language = None
+                if coerced_language:
+                    language = coerced_language
 
         tts_request = TTSRequest(
             text=request.input,

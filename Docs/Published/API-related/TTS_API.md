@@ -87,8 +87,8 @@ Streaming variant (Python):
   - Use try/except HTTPError to catch non-2xx responses.
   - Only treat body as audio when the request succeeds (no exception).
   - On non‑200, parse JSON and surface detail to the caller.
-  - Alignment metadata (if available) is returned via `X-TTS-Alignment` (base64url JSON) on non-streaming responses.
-  - For streaming alignment, call `POST /api/v1/audio/speech/metadata` with the same payload.
+- Alignment metadata (if available) is returned via `X-TTS-Alignment` (base64url JSON) on non-streaming responses.
+- For streaming alignment, call `POST /api/v1/audio/speech/metadata` with the same payload.
 
   ———
 
@@ -196,7 +196,7 @@ Streaming variant (Python):
   - Check resp.ok first.
   - If ok, read resp.body as a stream (e.g., into a MediaSource or buffer it).
   - If not ok, read JSON/text as above and treat as an error.
-  - For streaming alignment, call `POST /api/v1/audio/speech/metadata` with the same payload and parse the JSON response.
+- For streaming alignment, call `POST /api/v1/audio/speech/metadata` with the same payload and parse the JSON response.
 
 
 

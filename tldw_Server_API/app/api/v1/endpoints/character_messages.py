@@ -221,8 +221,14 @@ async def send_message(
             await rate_limiter.check_message_limit(chat_id, msg_count + 1)
         except HTTPException:
             raise
-        except Exception:
-            logger.debug("Non-fatal: message cap check skipped")
+        except Exception as e:
+            logger.warning(
+                "count_messages_for_conversation failed for chat_id={} include_deleted={} error={}",
+                chat_id,
+                False,
+                e,
+                exc_info=True,
+            )
 
         # Validate parent message if provided
         if message_data.parent_message_id:
@@ -265,12 +271,19 @@ async def send_message(
                             detail="Invalid image data. Empty base64 payload."
                         )
                     raw_b64 = raw_b64 + ("=" * (-len(raw_b64) % 4))
-                img_data = base64.b64decode(raw_b64, validate=True)
-                # Preflight size check before DB layer
+                # Preflight size check before decoding/DB layer
                 try:
                     _max_img_bytes = int(settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
                 except Exception:
                     _max_img_bytes = 5 * 1024 * 1024
+                if isinstance(raw_b64, (str, bytes, bytearray)):
+                    max_b64_len = ((_max_img_bytes + 2) // 3) * 4
+                    if len(raw_b64) > max_b64_len:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                            detail=f"Image too large. Max {_max_img_bytes} bytes allowed."
+                        )
+                img_data = base64.b64decode(raw_b64, validate=True)
                 if isinstance(img_data, (bytes, bytearray)) and len(img_data) > _max_img_bytes:
                     raise HTTPException(
                         status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -399,7 +412,14 @@ async def get_chat_messages(
         # Compute total message count for pagination metadata
         try:
             total_count = db.count_messages_for_conversation(chat_id, include_deleted=include_deleted)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "count_messages_for_conversation failed for chat_id={} include_deleted={} error={}",
+                chat_id,
+                include_deleted,
+                e,
+                exc_info=True,
+            )
             total_count = len(messages)
 
         # If character context or completions format requested
@@ -754,8 +774,13 @@ async def edit_message(
         if conv:
             try:
                 db.update_conversation(message['conversation_id'], {}, conv.get('version', 1))
-            except (ConflictError, CharactersRAGDBError):
-                logger.debug(f"Non-fatal: failed to bump conversation metadata for {message['conversation_id']}")
+            except (ConflictError, CharactersRAGDBError) as e:
+                logger.warning(
+                    "Non-fatal: failed to bump conversation metadata for {}: {}",
+                    message["conversation_id"],
+                    e,
+                    exc_info=True,
+                )
 
         # Get character details for placeholders
         conversation = db.get_conversation_by_id(message['conversation_id'])
@@ -841,8 +866,13 @@ async def delete_message(
         if conv:
             try:
                 db.update_conversation(message['conversation_id'], {}, conv.get('version', 1))
-            except (ConflictError, CharactersRAGDBError):
-                logger.debug(f"Non-fatal: failed to bump conversation metadata for {message['conversation_id']}")
+            except (ConflictError, CharactersRAGDBError) as e:
+                logger.warning(
+                    "Non-fatal: failed to bump conversation metadata for {}: {}",
+                    message["conversation_id"],
+                    e,
+                    exc_info=True,
+                )
 
         logger.info(f"Soft deleted message {message_id} by user {current_user.id}")
         return Response(status_code=status.HTTP_204_NO_CONTENT)

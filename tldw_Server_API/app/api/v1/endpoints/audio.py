@@ -2304,6 +2304,8 @@ async def _audio_ws_authenticate(
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
                 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
                 from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_api_key_quota
+                from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+                from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 
                 api_mgr = await get_api_key_manager()
                 client_ip = resolve_client_ip(websocket, get_settings())
@@ -4011,8 +4013,8 @@ async def streaming_status():
 
 @router.get("/stream/limits", summary="Get user's streaming quota and usage")
 async def streaming_limits(
+    request: Request,
     current_user: User = Depends(get_request_user),
-    request: Request = None,
 ):
     """
     Return the current user's streaming quota and usage summary.

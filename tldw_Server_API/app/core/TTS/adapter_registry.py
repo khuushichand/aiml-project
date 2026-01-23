@@ -51,6 +51,7 @@ class TTSProvider(Enum):
     SUPERTONIC2 = "supertonic2"
     POCKET_TTS = "pocket_tts"
     ECHO_TTS = "echo_tts"
+    QWEN3_TTS = "qwen3_tts"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -77,6 +78,7 @@ class TTSAdapterRegistry:
         TTSProvider.SUPERTONIC2: "tldw_Server_API.app.core.TTS.adapters.supertonic2_adapter.Supertonic2OnnxAdapter",
         TTSProvider.POCKET_TTS: "tldw_Server_API.app.core.TTS.adapters.pocket_tts_adapter.PocketTTSOnnxAdapter",
         TTSProvider.ECHO_TTS: "tldw_Server_API.app.core.TTS.adapters.echo_tts_adapter.EchoTTSAdapter",
+        TTSProvider.QWEN3_TTS: "tldw_Server_API.app.core.TTS.adapters.qwen3_tts_adapter.Qwen3TTSAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -595,7 +597,7 @@ class TTSAdapterRegistry:
             # Skip local model providers in testing unless explicitly enabled
             if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
                            TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.SUPERTONIC,
-                           TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS]:
+                           TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS, TTSProvider.QWEN3_TTS]:
                 if enabled_flag is not True:
                     continue
 
@@ -877,6 +879,15 @@ class TTSAdapterFactory:
         "echo-tts": TTSProvider.ECHO_TTS,
         "echo_tts": TTSProvider.ECHO_TTS,
         "jordand/echo-tts-base": TTSProvider.ECHO_TTS,
+
+        # Qwen3-TTS models
+        "qwen3-tts": TTSProvider.QWEN3_TTS,
+        "qwen3_tts": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-1.7b-customvoice": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-0.6b-customvoice": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-1.7b-voicedesign": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-1.7b-base": TTSProvider.QWEN3_TTS,
+        "qwen/qwen3-tts-12hz-0.6b-base": TTSProvider.QWEN3_TTS,
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

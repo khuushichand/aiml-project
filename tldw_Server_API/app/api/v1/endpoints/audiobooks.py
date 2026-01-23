@@ -1,15 +1,22 @@
-"""API endpoints for audiobook creation."""
+"""Audiobook API endpoints.
+
+Provides parsing, job management, project and voice profile CRUD, and subtitle export.
+All endpoints require authentication and operate on per-user collections data.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import hashlib
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path as PathlibPath
 from typing import Optional
 from uuid import uuid4
 
+from cachetools import LRUCache
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import PlainTextResponse
 from starlette import status
@@ -36,7 +43,9 @@ from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import (
     VoiceProfileListResponse,
     VoiceProfileResponse,
 )
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Chunking.strategies.ebook_chapters import EbookChapterChunkingStrategy
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import (
@@ -49,6 +58,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Audiobooks.subtitle_generator import generate_subtitles
 from tldw_Server_API.app.core.Audiobooks.subtitle_parser import normalize_subtitle_source
 from tldw_Server_API.app.core.Audiobooks.tag_parser import (
@@ -59,6 +69,14 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.config import get_config_value
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
+
+MAX_CACHED_JOB_MANAGER_INSTANCES = 4
+_job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
+_job_manager_lock = threading.Lock()
+MAX_CACHED_PROJECT_LOOKUPS = 512
+_project_lookup_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_PROJECT_LOOKUPS)
+_project_lookup_lock = threading.Lock()
+_PROJECT_CACHE_MISS = object()
 
 
 def _not_implemented(detail: str) -> None:
@@ -223,13 +241,27 @@ def _detect_chapters(
 
 
 def _get_job_manager() -> JobManager:
-    return JobManager()
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    cache_key = db_url or "default"
+    with _job_manager_lock:
+        cached = _job_manager_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        if not db_url:
+            job_manager = JobManager()
+        else:
+            backend = "postgres" if db_url.startswith("postgres") else None
+            job_manager = JobManager(backend=backend, db_url=db_url)
+
+        _job_manager_cache[cache_key] = job_manager
+        return job_manager
 
 
-def _normalize_job_status(status: Optional[str]) -> str:
-    if not status:
+def _normalize_job_status(job_status: Optional[str]) -> str:
+    if not job_status:
         return "queued"
-    norm = status.lower()
+    norm = job_status.lower()
     if norm == "cancelled":
         return "canceled"
     if norm == "quarantined":
@@ -290,6 +322,14 @@ def _resolve_project_row(collections_db: CollectionsDatabase, project_ref: str):
         return collections_db.get_audiobook_project_by_project_id(project_ref)
     except KeyError:
         pass
+    cache_key = (str(getattr(collections_db, "user_id", "")), project_ref)
+    with _project_lookup_lock:
+        cached = _project_lookup_cache.get(cache_key, _PROJECT_CACHE_MISS)
+    if cached is not _PROJECT_CACHE_MISS:
+        if cached is None:
+            raise KeyError("audiobook_project_not_found")
+        return cached
+    # Legacy fallback: scan settings_json for pre-backfill entries; cache results to avoid repeated O(n) scans.
     offset = 0
     limit = 200
     while True:
@@ -300,8 +340,12 @@ def _resolve_project_row(collections_db: CollectionsDatabase, project_ref: str):
             settings = _safe_json_loads(row.settings_json)
             project_id = settings.get("project_id")
             if isinstance(project_id, str) and project_id == project_ref:
+                with _project_lookup_lock:
+                    _project_lookup_cache[cache_key] = row
                 return row
         offset += limit
+    with _project_lookup_lock:
+        _project_lookup_cache[cache_key] = None
     raise KeyError("audiobook_project_not_found")
 
 
@@ -349,11 +393,12 @@ def _parse_progress_message(
     "/parse",
     response_model=AudiobookParseResponse,
     summary="Parse audiobook source and detect chapters",
+    dependencies=[Depends(check_rate_limit)],
 )
 async def parse_audiobook_source(
     request: AudiobookParseRequest,
     _current_user: User = Depends(get_request_user),
-    media_db=Depends(get_media_db_for_user),
+    media_db: MediaDatabase = Depends(get_media_db_for_user),
 ) -> AudiobookParseResponse:
     source = request.source
     input_type = source.input_type
@@ -385,7 +430,9 @@ async def parse_audiobook_source(
             raise HTTPException(status_code=404, detail="upload_not_found")
         try:
             if input_type == "epub":
-                result = process_epub(str(upload_path), perform_chunking=False)
+                result = await asyncio.to_thread(
+                    process_epub, str(upload_path), perform_chunking=False
+                )
                 text = result.get("content") or ""
                 if result.get("metadata"):
                     meta = result["metadata"]
@@ -394,9 +441,13 @@ async def parse_audiobook_source(
                     if meta.get("author"):
                         metadata["author"] = meta.get("author")
             elif input_type == "pdf":
-                text = extract_text_and_format_from_pdf(str(upload_path))
+                text = await asyncio.to_thread(
+                    extract_text_and_format_from_pdf, str(upload_path)
+                )
             else:
-                text = upload_path.read_text(encoding="utf-8", errors="ignore")
+                text = await asyncio.to_thread(
+                    upload_path.read_text, encoding="utf-8", errors="ignore"
+                )
         except HTTPException:
             raise
         except Exception as exc:
@@ -423,7 +474,7 @@ async def parse_audiobook_source(
                 custom_pattern=request.custom_chapter_pattern,
             )
         except Exception as exc:
-            logger.warning(f"Chapter detection failed: {exc}")
+            logger.warning("Chapter detection failed: {}", exc)
             raise HTTPException(status_code=400, detail="chapter_detection_failed") from exc
 
     if tag_result.chapter_markers or tag_result.voice_markers or tag_result.speed_markers or tag_result.ts_markers:
@@ -442,6 +493,7 @@ async def parse_audiobook_source(
     "/jobs",
     response_model=AudiobookJobCreateResponse,
     summary="Create an audiobook generation job",
+    dependencies=[Depends(check_rate_limit)],
 )
 async def create_audiobook_job(
     request: AudiobookJobRequest,
@@ -452,7 +504,7 @@ async def create_audiobook_job(
     if request.queue is not None:
         try:
             priority = int(request.queue.priority)
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             priority = 5
     if priority < 1:
         priority = 1
@@ -468,8 +520,8 @@ async def create_audiobook_job(
                 try:
                     if isinstance(payload.get("items"), list):
                         payload["items"][idx].pop("subtitles", None)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to remove subtitle override at index {}: {}", idx, exc)
 
     job_manager = _get_job_manager()
     batch_group = request.queue.batch_group if request.queue is not None else None
@@ -486,7 +538,7 @@ async def create_audiobook_job(
     return AudiobookJobCreateResponse(
         job_id=int(job["id"]),
         project_id=project_id,
-        status=_normalize_job_status(job.get("status")),
+        status=_normalize_job_status(job_status=job.get("status")),
     )
 
 
@@ -503,8 +555,14 @@ async def get_audiobook_job_status(
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job_not_found")
+    owner_user_id = job.get("owner_user_id") if isinstance(job, dict) else getattr(job, "owner_user_id", None)
+    user_id = getattr(_current_user, "id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if not owner_user_id or str(owner_user_id) != str(user_id):
+        raise HTTPException(status_code=404, detail="job_not_found")
 
-    status = _normalize_job_status(job.get("status"))
+    job_status = _normalize_job_status(job_status=job.get("status"))
     project_id = _job_project_id(job)
 
     errors: list[str] = []
@@ -534,7 +592,7 @@ async def get_audiobook_job_status(
     return AudiobookJobStatusResponse(
         job_id=int(job["id"]),
         project_id=project_id,
-        status=status,
+        status=job_status,
         progress=progress,
         errors=errors,
     )
@@ -548,17 +606,20 @@ async def get_audiobook_job_status(
 async def get_audiobook_job_artifacts(
     job_id: int = Path(..., ge=1, description="Audiobook job id"),
     _current_user: User = Depends(get_request_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> AudiobookArtifactsResponse:
     job_manager = _get_job_manager()
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job_not_found")
     project_id = _job_project_id(job)
-    user_id = getattr(_current_user, "id", None)
-    if user_id is None:
-        return AudiobookArtifactsResponse(project_id=project_id, artifacts=[])
+    owner_user_id = job.get("owner_user_id") if isinstance(job, dict) else getattr(job, "owner_user_id", None)
+    current_user_id = getattr(_current_user, "id", None)
+    if current_user_id is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if not owner_user_id or str(owner_user_id) != str(current_user_id):
+        raise HTTPException(status_code=404, detail="job_not_found")
 
-    collections_db = CollectionsDatabase(user_id)
     rows, _total = collections_db.list_output_artifacts(job_id=int(job_id), limit=200, offset=0)
     artifacts: list[ArtifactInfo] = []
     type_map = {
@@ -603,11 +664,8 @@ async def list_audiobook_projects(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     _current_user: User = Depends(get_request_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> AudiobookProjectListResponse:
-    user_id = getattr(_current_user, "id", None)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="unauthorized")
-    collections_db = CollectionsDatabase(user_id)
     try:
         rows = collections_db.list_audiobook_projects(limit=limit, offset=offset)
     except Exception as exc:
@@ -625,11 +683,8 @@ async def list_audiobook_projects(
 async def get_audiobook_project(
     project_ref: str = Path(..., min_length=1, description="Project id or database id"),
     _current_user: User = Depends(get_request_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> AudiobookProjectResponse:
-    user_id = getattr(_current_user, "id", None)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="unauthorized")
-    collections_db = CollectionsDatabase(user_id)
     try:
         row = _resolve_project_row(collections_db, project_ref)
     except KeyError as exc:
@@ -650,11 +705,8 @@ async def list_audiobook_project_chapters(
     limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     _current_user: User = Depends(get_request_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> AudiobookChapterListResponse:
-    user_id = getattr(_current_user, "id", None)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="unauthorized")
-    collections_db = CollectionsDatabase(user_id)
     try:
         project_row = _resolve_project_row(collections_db, project_ref)
         chapter_rows = collections_db.list_audiobook_chapters(
@@ -696,11 +748,8 @@ async def list_audiobook_project_artifacts(
     limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     _current_user: User = Depends(get_request_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> AudiobookArtifactsResponse:
-    user_id = getattr(_current_user, "id", None)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="unauthorized")
-    collections_db = CollectionsDatabase(user_id)
     try:
         project_row = _resolve_project_row(collections_db, project_ref)
         artifact_rows = collections_db.list_audiobook_artifacts(
@@ -738,14 +787,11 @@ async def list_audiobook_project_artifacts(
 async def create_voice_profile(
     request: VoiceProfileCreateRequest,
     _current_user: User = Depends(get_request_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> VoiceProfileResponse:
-    user_id = getattr(_current_user, "id", None)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="unauthorized")
     profile_id = f"vp_{uuid4().hex[:12]}"
     overrides = [override.model_dump() for override in (request.chapter_overrides or [])]
     overrides_json = json.dumps(overrides) if overrides else None
-    collections_db = CollectionsDatabase(user_id)
     try:
         row = collections_db.create_voice_profile(
             profile_id=profile_id,
@@ -773,11 +819,8 @@ async def create_voice_profile(
 )
 async def list_voice_profiles(
     _current_user: User = Depends(get_request_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> VoiceProfileListResponse:
-    user_id = getattr(_current_user, "id", None)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="unauthorized")
-    collections_db = CollectionsDatabase(user_id)
     try:
         rows = collections_db.list_voice_profiles()
     except Exception as exc:
@@ -811,11 +854,8 @@ async def list_voice_profiles(
 async def delete_voice_profile(
     profile_id: str = Path(..., min_length=1, description="Voice profile id"),
     _current_user: User = Depends(get_request_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> VoiceProfileDeleteResponse:
-    user_id = getattr(_current_user, "id", None)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="unauthorized")
-    collections_db = CollectionsDatabase(user_id)
     try:
         collections_db.delete_voice_profile(profile_id)
     except KeyError as exc:
@@ -830,6 +870,7 @@ async def delete_voice_profile(
     "/subtitles",
     response_class=PlainTextResponse,
     summary="Render subtitles from alignment data",
+    dependencies=[Depends(check_rate_limit)],
     responses={
         200: {
             "content": {
@@ -843,11 +884,11 @@ async def delete_voice_profile(
 async def export_subtitles(
     request: SubtitleExportRequest,
     _current_user: User = Depends(get_request_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> PlainTextResponse:
     user_id = getattr(_current_user, "id", None)
     if user_id is None:
         raise HTTPException(status_code=401, detail="unauthorized")
-    collections_db = CollectionsDatabase(user_id)
 
     alignment_meta: dict[str, object] = {}
     alignment_output_id = request.alignment_output_id

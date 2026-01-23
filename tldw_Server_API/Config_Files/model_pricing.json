@@ -1,16 +1,74 @@
 {
   "openai": {
-    "gpt-4o": { "prompt": 0.005, "completion": 0.015 },
-    "gpt-4o-mini": { "prompt": 0.001, "completion": 0.002 },
-    "gpt-4.1": { "prompt": 0.010, "completion": 0.030 },
-    "o3-mini": { "prompt": 0.001, "completion": 0.002 },
+    "gpt-5.2": { "prompt": 0.00175, "completion": 0.014 },
+    "gpt-5.1": { "prompt": 0.00125, "completion": 0.01 },
+    "gpt-5": { "prompt": 0.00125, "completion": 0.01 },
+    "gpt-5-mini": { "prompt": 0.00025, "completion": 0.002 },
+    "gpt-5-nano": { "prompt": 0.00005, "completion": 0.0004 },
+
+    "gpt-5.2-chat-latest": { "prompt": 0.00175, "completion": 0.014 },
+    "gpt-5.1-chat-latest": { "prompt": 0.00125, "completion": 0.01 },
+    "gpt-5-chat-latest": { "prompt": 0.00125, "completion": 0.01 },
+
+    "gpt-5.2-codex": { "prompt": 0.00175, "completion": 0.014 },
+    "gpt-5.1-codex-max": { "prompt": 0.00125, "completion": 0.01 },
+    "gpt-5.1-codex": { "prompt": 0.00125, "completion": 0.01 },
+    "gpt-5-codex": { "prompt": 0.00125, "completion": 0.01 },
+    "gpt-5.1-codex-mini": { "prompt": 0.00025, "completion": 0.002 },
+    "codex-mini-latest": { "prompt": 0.0015, "completion": 0.006 },
+
+    "gpt-5.2-pro": { "prompt": 0.021, "completion": 0.168 },
+    "gpt-5-pro": { "prompt": 0.015, "completion": 0.12 },
+
+    "gpt-4.1": { "prompt": 0.002, "completion": 0.008 },
+    "gpt-4.1-mini": { "prompt": 0.0004, "completion": 0.0016 },
+    "gpt-4.1-nano": { "prompt": 0.0001, "completion": 0.0004 },
+
+    "gpt-4o": { "prompt": 0.0025, "completion": 0.01 },
+    "gpt-4o-2024-05-13": { "prompt": 0.005, "completion": 0.015 },
+    "gpt-4o-mini": { "prompt": 0.00015, "completion": 0.0006 },
+
+    "gpt-realtime": { "prompt": 0.004, "completion": 0.016 },
+    "gpt-realtime-mini": { "prompt": 0.0006, "completion": 0.0024 },
+    "gpt-4o-realtime-preview": { "prompt": 0.005, "completion": 0.02 },
+    "gpt-4o-mini-realtime-preview": { "prompt": 0.0006, "completion": 0.0024 },
+
+    "gpt-audio": { "prompt": 0.0025, "completion": 0.01 },
+    "gpt-audio-mini": { "prompt": 0.0006, "completion": 0.0024 },
+    "gpt-4o-audio-preview": { "prompt": 0.0025, "completion": 0.01 },
+    "gpt-4o-mini-audio-preview": { "prompt": 0.00015, "completion": 0.0006 },
+
+    "o1": { "prompt": 0.015, "completion": 0.06 },
+    "o1-pro": { "prompt": 0.15, "completion": 0.6 },
+    "o1-mini": { "prompt": 0.0011, "completion": 0.0044 },
+    "o3-pro": { "prompt": 0.02, "completion": 0.08 },
+    "o3": { "prompt": 0.002, "completion": 0.008 },
+    "o3-deep-research": { "prompt": 0.01, "completion": 0.04 },
+    "o4-mini": { "prompt": 0.0011, "completion": 0.0044 },
+    "o4-mini-deep-research": { "prompt": 0.002, "completion": 0.008 },
+    "o3-mini": { "prompt": 0.0011, "completion": 0.0044 },
+
+    "gpt-5-search-api": { "prompt": 0.00125, "completion": 0.01 },
+    "gpt-4o-search-preview": { "prompt": 0.0025, "completion": 0.01 },
+    "gpt-4o-mini-search-preview": { "prompt": 0.00015, "completion": 0.0006 },
+    "computer-use-preview": { "prompt": 0.003, "completion": 0.012 },
+
+    "gpt-image-1.5": { "prompt": 0.005, "completion": 0.01 },
+    "chatgpt-image-latest": { "prompt": 0.005, "completion": 0.01 },
+    "gpt-image-1": { "prompt": 0.005, "completion": 0.0 },
+    "gpt-image-1-mini": { "prompt": 0.002, "completion": 0.0 },
     "text-embedding-3-small": { "prompt": 0.00002, "completion": 0.00002 },
     "text-embedding-3-large": { "prompt": 0.00013, "completion": 0.00013 }
   },
   "anthropic": {
-    "claude-sonnet-4.5": { "prompt": 0.003, "completion": 0.015 },
-    "claude-haiku-4.5": { "prompt": 0.001, "completion": 0.005 },
+    "claude-opus-4.5": { "prompt": 0.005, "completion": 0.025 },
     "claude-opus-4.1": { "prompt": 0.015, "completion": 0.075 },
+    "claude-opus-4": { "prompt": 0.015, "completion": 0.075 },
+    "claude-sonnet-4.5": { "prompt": 0.003, "completion": 0.015 },
+    "claude-sonnet-4": { "prompt": 0.003, "completion": 0.015 },
+    "claude-sonnet-3.7": { "prompt": 0.003, "completion": 0.015 },
+    "claude-haiku-4.5": { "prompt": 0.001, "completion": 0.005 },
+    "claude-haiku-3.5": { "prompt": 0.0008, "completion": 0.004 },
 
     "claude-3-5-sonnet-latest": { "prompt": 0.003, "completion": 0.015 },
     "claude-3-opus-20240229": { "prompt": 0.015, "completion": 0.075 },

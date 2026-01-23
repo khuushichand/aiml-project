@@ -125,7 +125,7 @@ async def submit_audio_job(
     req: SubmitAudioJobRequest,
     current_user: Annotated[User, Depends(get_request_user)],
     jm: Annotated[JobManager, Depends(get_job_manager)],
-    request: Request = None,
+    request: Request,
 ):
     """
     Create an audio job in the Jobs queue. First stage is determined by input:
@@ -362,7 +362,7 @@ class OwnerProcessingSummary(BaseModel):
 async def owner_processing_summary(
     owner_user_id: int,
     jm: Annotated[JobManager, Depends(get_job_manager)],
-    request: Request = None,
+    request: Request,
 ):
     try:
         logger.info(

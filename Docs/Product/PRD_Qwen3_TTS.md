@@ -24,9 +24,9 @@ tldw_server provides a unified TTS system with adapter registry, provider config
 
 - Single provider with multiple model ids: Implement one adapter (qwen3_tts) and dispatch internally by model name. This matches existing registry behavior (MODEL_PROVIDER_MAP) and avoids duplicating adapter logic.
 - Offline first: default to local model paths or pre downloaded weights. If auto download is enabled, it must honor existing egress allowlists.
-- Reuse existing OpenAI compatible request schema: Use model, voice, language, and extra_params. No new top level API fields.
+- Reuse existing OpenAI compatible request schema: Use model, voice, lang_code, and extra_params. No new top level API fields. Allow extra_params.language as a provider-specific override when needed; lang_code remains the primary field.
 - Voice cloning uses existing voice manager: stored reference audio and optional reference text are resolved via custom:<voice_id>.
-- Default model selection is "auto": choose the best available CustomVoice model at runtime based on GPU capability (prefer 1.7B on capable GPU, otherwise 0.6B).
+- Default model selection is "auto": choose the best available CustomVoice model at runtime based on GPU capability (prefer 1.7B on capable GPU, otherwise 0.6B). "auto" is only valid for CustomVoice requests; VoiceDesign/Base must specify an explicit model id.
 - Language handling uses "auto" when language is omitted; explicit "auto" is accepted in the API and forwarded to the adapter.
 - Tokenizer encode/decode is exposed via new API endpoints under /api/v1/audio/tokenizer/*.
 
@@ -77,6 +77,11 @@ Add a config block in tts_providers_config.yaml:
 - providers.qwen3_tts.max_concurrent_generations (optional throttle)
 - providers.qwen3_tts.stream_chunk_size_ms (optional)
 - providers.qwen3_tts.auto_min_vram_gb (default 12)
+- providers.qwen3_tts.max_text_length (default: conservative; enforce in validation)
+- providers.qwen3_tts.tokenizer_max_audio_seconds (default: conservative)
+- providers.qwen3_tts.tokenizer_max_tokens (default: conservative)
+- providers.qwen3_tts.tokenizer_max_payload_mb (default: conservative)
+- providers.qwen3_tts.voice_clone_prompt_max_kb (default: conservative)
 
 ### 2.1) Auto Model Selection Heuristic
 
@@ -89,6 +94,7 @@ When providers.qwen3_tts.model is "auto", select a CustomVoice model using GPU c
 - If device is "mps": use Qwen3-TTS-12Hz-0.6B-CustomVoice.
 - If device is "cpu": use Qwen3-TTS-12Hz-0.6B-CustomVoice.
 - Log the resolved model and the capability decision (device, VRAM, threshold).
+- If the request targets VoiceDesign or Base, reject "auto" with a validation error and require an explicit model id.
 
 ### 3) Capability Reporting
 
@@ -96,6 +102,7 @@ Expose TTSCapabilities:
 
 - supported_languages: Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian
 - supported_formats: at least wav and pcm; allow mp3/opus/aac via audio_converter
+- supported_streaming_formats: pcm, wav, and mp3/opus/aac when real-time transcoding is enabled
 - supports_streaming: true
 - supports_voice_cloning: true (Base models)
 - supports_emotion_control: true (instruction control)
@@ -107,16 +114,17 @@ Map TTSRequest to Qwen3-TTS calls:
 
 CustomVoice (model ends with CustomVoice):
 - speaker: request.voice (required)
-- language: request.language (if missing, use "auto" or default from config)
+- language: resolve from request.lang_code or request.extra_params.language (if missing, use "auto" or default from config; pass "auto" through to Qwen3-TTS)
 - instruct: request.extra_params.instruct (optional)
 - function: generate_custom_voice(text, language, speaker, instruct)
 
 VoiceDesign (model ends with VoiceDesign):
-- language: request.language
+- language: resolve from request.lang_code or request.extra_params.language
 - instruct: request.extra_params.instruct (required)
 - function: generate_voice_design(text, language, instruct)
 
 Base voice clone (model ends with Base):
+- language: resolve from request.lang_code or request.extra_params.language
 - ref_audio: request.voice_reference OR stored voice (custom:<voice_id>)
 - ref_text: request.extra_params.reference_text OR stored metadata
 - x_vector_only_mode: request.extra_params.x_vector_only_mode (optional, true allows missing ref_text but degrades quality)
@@ -135,14 +143,16 @@ Tokenizer (exposed via API):
 ### 6) Streaming Behavior
 
 - When request.stream is true, use the Qwen3-TTS streaming interface (if exposed) or incremental chunking from decoded audio as a fallback.
-- Default streaming output format: pcm (s16le) at 24kHz mono; allow format conversion for mp3/opus/aac as configured.
-- Fail fast if streaming is requested for a format that cannot be streamed by the current pipeline.
+- Default streaming output format for the adapter is pcm (s16le) at 24kHz mono. If response_format requests mp3/opus/aac and streaming is enabled, attempt real-time transcoding from PCM.
+- Note: the OpenAI speech schema defaults response_format to mp3; treat this as an explicit mp3 request and attempt real-time transcoding when stream=true.
+- Fail fast if streaming is requested for a format that cannot be streamed by the current pipeline (or when real-time transcoding is unavailable).
 
 ### 7) Validation Rules
 
-- Validate speaker names against the 9 CustomVoice speakers for CustomVoice models.
+- Validate speaker names against the 9 CustomVoice speakers for CustomVoice models (case-insensitive; normalize spaces/hyphens to underscores).
 - Validate that Base models have reference audio, unless x_vector_only_mode is true.
 - Enforce max_text_length via provider limits (start with a conservative default, configurable in YAML).
+- Validate voice_clone_prompt type/size (see API contracts).
 - Validate supported language set (or allow "auto").
 
 ### 8) Error Handling
@@ -151,6 +161,7 @@ Tokenizer (exposed via API):
 - Missing reference audio: TTSInvalidVoiceReferenceError
 - Model load or path issues: TTSModelNotFoundError / TTSModelLoadError
 - Dependency errors (missing qwen-tts, torch, flash-attn): TTSProviderInitializationError
+- Invalid voice_clone_prompt payload: TTSValidationError
 
 ### 9) Observability
 
@@ -160,12 +171,21 @@ Tokenizer (exposed via API):
 ## API and Data Contracts
 
 - Use existing POST /api/v1/audio/speech schema.
+- Language should be provided via lang_code; optional request.extra_params.language may override for Qwen3-TTS.
 - Use request.extra_params for Qwen3-TTS specific fields:
   - instruct (string)
   - reference_text (string)
   - x_vector_only_mode (bool)
-  - voice_clone_prompt (opaque serialized object)
+  - voice_clone_prompt (opaque payload; see validation)
   - language (optional override)
+
+voice_clone_prompt payload contract:
+- Accept either a base64 string (raw prompt bytes) or an object: {format: "qwen3_tts_prompt_v1", data_b64: "<base64>", sha256: "<optional hex>"}.
+- Enforce providers.qwen3_tts.voice_clone_prompt_max_kb and reject unknown formats.
+- Treat payload as opaque bytes; never deserialize into executable objects.
+
+AuthNZ:
+- Register an audio.tokenizer scope and map it to appropriate roles. In single-user mode, API key access should include tokenizer endpoints by default.
 
 Tokenizer API endpoints:
 
@@ -173,17 +193,19 @@ Tokenizer API endpoints:
    - Input: audio file (multipart) or base64 audio in JSON.
    - Parameters: tokenizer_model (default Qwen3-TTS-Tokenizer-12Hz), sample_rate (optional; if omitted, detect or require).
    - Output: tokens (list[int] or base64 encoded), sample_rate, frame_rate, tokenizer_model, duration_seconds.
-   - Auth: dedicated audio.tokenizer scope.
+   - Auth: dedicated audio.tokenizer scope (single-user mode should treat API key as full audio scope).
+   - Limits: enforce tokenizer_max_audio_seconds, tokenizer_max_payload_mb, tokenizer_max_tokens.
 
 2) POST /api/v1/audio/tokenizer/decode
    - Input: tokens (list[int] or base64), tokenizer_model (default Qwen3-TTS-Tokenizer-12Hz), response_format (wav or pcm).
    - Output: audio bytes in response_format, sample_rate, duration_seconds.
-   - Auth: dedicated audio.tokenizer scope.
+   - Auth: dedicated audio.tokenizer scope (single-user mode should treat API key as full audio scope).
+   - Limits: enforce tokenizer_max_tokens, tokenizer_max_payload_mb.
 
 ## Storage and Data
 
 - Store reference audio and metadata under user voices path.
-- Metadata fields for Qwen3-TTS: reference_text, voice_clone_prompt (optional).
+- Metadata fields for Qwen3-TTS: reference_text, voice_clone_prompt (optional), voice_clone_prompt_format.
 
 ## Dependencies
 
@@ -197,6 +219,7 @@ Tokenizer API endpoints:
 - Performance: Streaming should produce first audio chunk with low latency when supported by Qwen3-TTS.
 - Reliability: Adapter should reuse model instances across requests and obey concurrency limits.
 - Security: Never log reference audio or text content.
+- Security: voice_clone_prompt must be treated as untrusted input; validate size and accept only base64 (or {format, data_b64}) payloads. Never deserialize into executable objects.
 - Offline by default: no auto download unless explicitly enabled.
 
 ## UX / UI

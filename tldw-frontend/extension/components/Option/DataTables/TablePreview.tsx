@@ -3,9 +3,9 @@ import {
   DragDropProvider,
   KeyboardSensor,
   PointerSensor,
-  useSortable,
-  type DragEndEvent
+  type DragDropEvents
 } from "@dnd-kit/react"
+import { useSortable } from "@dnd-kit/react/sortable"
 import {
   Alert,
   Button,
@@ -40,6 +40,8 @@ import type {
 } from "@/types/data-tables"
 import { EditableCell } from "./EditableCell"
 import { AddColumnModal } from "./AddColumnModal"
+
+type DragEndEvent = Parameters<DragDropEvents["dragend"]>[0]
 
 // Sortable column header for preview
 const SortablePreviewHeader: React.FC<{

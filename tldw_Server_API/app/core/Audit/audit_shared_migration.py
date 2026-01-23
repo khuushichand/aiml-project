@@ -163,8 +163,13 @@ async def _ensure_checkpoint_table(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE audit_migration_checkpoints ADD COLUMN last_timestamp TEXT"
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "duplicate column" in msg:
+            logger.debug("audit_migration_checkpoints already has last_timestamp column")
+        else:
+            logger.exception("Failed adding last_timestamp column: {}", exc)
+            raise
 
 
 async def _load_checkpoint(
@@ -176,7 +181,9 @@ async def _load_checkpoint(
             (str(source_path),),
         ) as cur:
             row = await cur.fetchone()
-    except Exception:
+    except Exception as exc:
+        if "no such column" not in str(exc).lower():
+            raise
         # Older schema without last_timestamp
         async with db.execute(
             "SELECT last_rowid, last_event_id FROM audit_migration_checkpoints WHERE source_path = ?",
@@ -324,7 +331,7 @@ def _parse_timestamp_to_date(value: Any) -> Optional[date]:
         if dt_val.tzinfo is None:
             dt_val = dt_val.replace(tzinfo=timezone.utc)
         return dt_val.astimezone(timezone.utc).date()
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -475,8 +482,13 @@ def _safe_int(value: Any, default: int = 0) -> int:
     try:
         if value is None or isinstance(value, bool):
             return default
-        return int(str(value).strip())
-    except Exception:
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip()
+        if not text:
+            return default
+        return int(float(text))
+    except (TypeError, ValueError):
         return default
 
 
@@ -485,11 +497,12 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         if value is None or isinstance(value, bool):
             return default
         return float(str(value).strip())
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
 def _normalize_result(value: Any) -> str:
+    """Normalize result strings for stats; missing/invalid values become empty string."""
     try:
         if value is None:
             return ""
@@ -612,12 +625,12 @@ async def _migrate_source(
                 if row:
                     try:
                         last_timestamp = str(row["timestamp"]) if row["timestamp"] else None
-                    except Exception:
+                    except (KeyError, TypeError):
                         last_timestamp = None
                     if last_event_id is None:
                         try:
                             last_event_id = str(row["event_id"]) if row["event_id"] else None
-                        except Exception:
+                        except (KeyError, TypeError):
                             last_event_id = None
                 else:
                     # If the rowid no longer exists, reset to full scan; dedupe by event_id protects us.

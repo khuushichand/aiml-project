@@ -355,15 +355,29 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
         return ModerationTestResponse(flagged=False, action='pass', sample=None, redacted_text=None, effective=eff.to_dict())
     if hasattr(svc, 'evaluate_action_with_match'):
         eval_res = svc.evaluate_action_with_match(payload.text, eff, payload.phase)
-        match_span = None
+        action = None
+        redacted = None
         matched_pattern = None
-        if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-            action, redacted, matched_pattern = eval_res[0], eval_res[1], eval_res[2]
-            category = eval_res[3] if len(eval_res) >= 4 else None
-            match_span = eval_res[4] if len(eval_res) >= 5 else None
+        category = None
+        match_span = None
+        if isinstance(eval_res, (tuple, list)):
+            if len(eval_res) >= 1:
+                action = eval_res[0]
+            if len(eval_res) >= 2:
+                redacted = eval_res[1]
+            if len(eval_res) >= 3:
+                matched_pattern = eval_res[2]
+            if len(eval_res) >= 4:
+                category = eval_res[3]
+            if len(eval_res) >= 5:
+                match_span = eval_res[4]
         else:
-            action, redacted, matched_pattern = eval_res  # type: ignore
-            category = None
+            try:
+                action, redacted, matched_pattern = eval_res  # type: ignore
+            except ValueError:
+                action = None
+                redacted = None
+                matched_pattern = None
         flagged = (action != 'pass')
         sanitized_sample = None
         if flagged:

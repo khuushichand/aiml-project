@@ -420,7 +420,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       group: "server",
       labelToken: "option:moderationPlayground.nav",
       icon: ShieldCheck,
-      order: 10
+      order: 12
     }
   },
   { kind: "options", path: "/chatbooks", element: <OptionChatbooksPlayground /> },

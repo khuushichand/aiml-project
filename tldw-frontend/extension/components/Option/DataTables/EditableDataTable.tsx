@@ -3,9 +3,9 @@ import {
   DragDropProvider,
   KeyboardSensor,
   PointerSensor,
-  useSortable,
-  type DragEndEvent
+  type DragDropEvents
 } from "@dnd-kit/react"
+import { useSortable } from "@dnd-kit/react/sortable"
 import {
   Button,
   Empty,
@@ -36,6 +36,8 @@ interface EditableDataTableProps {
   onSaveSuccess?: (table: DataTable) => void
   readOnly?: boolean
 }
+
+type DragEndEvent = Parameters<DragDropEvents["dragend"]>[0]
 
 // Sortable column header component
 const SortableColumnHeader: React.FC<{

@@ -30,6 +30,16 @@ from . import character_validation as _character_validation
 from .character_db import create_new_character_from_data
 
 
+class DatabaseCountError(CharactersRAGDBError):
+    """Raised when counting messages for a conversation fails."""
+
+    def __init__(self, conversation_id: Union[str, int, None], original_exception: Exception) -> None:
+        message = f"Failed to count messages for conversation {conversation_id}: {original_exception}"
+        super().__init__(message)
+        self.conversation_id = conversation_id
+        self.original_exception = original_exception
+
+
 def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]) -> Optional[str]:
     """Extracts 'chara' metadata (Base64 encoded JSON) from an image file.
 
@@ -742,6 +752,9 @@ def load_chat_history_from_file_and_save_to_db(
 
     Returns:
         Tuple of (conversation_id, character_id) on success, otherwise (None, None).
+
+    Raises:
+        DatabaseCountError: If the message count lookup fails during import.
     """
     try:
         # Load content from path or provided string
@@ -983,8 +996,14 @@ def load_chat_history_from_file_and_save_to_db(
             messages_added = 0
             try:
                 current_message_count = db.count_messages_for_conversation(conversation_id)
-            except Exception:
-                current_message_count = 0
+            except Exception as exc:
+                logger.error(
+                    "Failed to count messages for conversation {}: {}",
+                    conversation_id,
+                    exc,
+                    exc_info=True,
+                )
+                raise DatabaseCountError(conversation_id, exc) from exc
 
             limits = get_character_limits()
             max_messages_per_chat = getattr(limits, "max_messages_per_chat", 0) or 0
@@ -1070,6 +1089,8 @@ def load_chat_history_from_file_and_save_to_db(
             _cleanup_failed_import()
             raise
 
+    except DatabaseCountError:
+        raise
     except Exception as exc:
         logger.error("Error loading chat history: {}", exc, exc_info=True)
         return None, None

@@ -191,11 +191,11 @@ def _job_to_status(job: Dict[str, Any]) -> MediaIngestJobStatus:
     ],
 )
 async def submit_media_ingest_jobs(
+    request: Request,
     form_data: AddMediaForm = Depends(get_add_media_form),
     files: Optional[List[UploadFile]] = File(None, description="Optional media uploads"),
     current_user: User = Depends(get_request_user),
     jm: JobManager = Depends(get_job_manager),
-    request: Request = None,
 ) -> SubmitMediaIngestJobsResponse:
     rid = ensure_request_id(request) if request is not None else None
     tp = ensure_traceparent(request) if request is not None else ""

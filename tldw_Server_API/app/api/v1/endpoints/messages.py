@@ -56,8 +56,10 @@ logger.debug(
 
 
 def _config_default_llm_provider() -> Optional[str]:
+    """Return the default LLM provider from loaded config sections."""
     cfg = loaded_config_data
     def _extract(section: str) -> Optional[str]:
+        """Extract default_api from a config section if present."""
         try:
             data = cfg.get(section)
         except (AttributeError, TypeError, KeyError):
@@ -73,6 +75,7 @@ def _config_default_llm_provider() -> Optional[str]:
 
 
 def _get_default_provider() -> str:
+    """Resolve the default provider using config, env, and test fallbacks."""
     cfg_default = _config_default_llm_provider()
     if cfg_default:
         return cfg_default
@@ -85,6 +88,7 @@ def _get_default_provider() -> str:
 
 
 def _resolve_messages_base_url(provider: str, app_config: Optional[Dict[str, Any]]) -> str:
+    """Resolve the base URL for a messages-native provider."""
     cfg = app_config or loaded_config_data
     if provider == "anthropic":
         base = None
@@ -121,6 +125,7 @@ def _resolve_messages_base_url(provider: str, app_config: Optional[Dict[str, Any
 
 
 def _join_messages_endpoint(base_url: str, suffix: str) -> str:
+    """Join a base URL with a Messages endpoint suffix."""
     base = base_url.rstrip("/")
     if base.endswith("/v1"):
         return f"{base}{suffix}"
@@ -128,6 +133,7 @@ def _join_messages_endpoint(base_url: str, suffix: str) -> str:
 
 
 def _normalize_llamacpp_base_url(base_url: str) -> str:
+    """Strip known completion suffixes from a llama.cpp base URL."""
     normalized = base_url.strip().rstrip("/")
     lowered = normalized.lower()
     for suffix in ("/v1/chat/completions", "/v1/completions", "/chat/completions", "/completions", "/completion"):
@@ -138,6 +144,7 @@ def _normalize_llamacpp_base_url(base_url: str) -> str:
 
 
 def _resolve_provider_and_model_for_request(request_data: Any) -> Tuple[str, str]:
+    """Resolve provider/model pair from the request payload."""
     _, metrics_model, selected_provider, selected_model, _debug = resolve_provider_and_model(
         request_data=request_data,
         metrics_default_provider=DEFAULT_LLM_PROVIDER,
@@ -149,6 +156,7 @@ def _resolve_provider_and_model_for_request(request_data: Any) -> Tuple[str, str
 
 
 def _fallback_resolver(name: str) -> Optional[str]:
+    """Fallback API key resolver for BYOK lookups."""
     key_val, _ = resolve_provider_api_key(name, prefer_module_keys_in_tests=True)
     return key_val
 
@@ -159,6 +167,7 @@ def _apply_override_credentials(
     *,
     uses_byok: bool,
 ) -> Optional[Dict[str, Any]]:
+    """Apply provider override credentials to a config payload."""
     override_creds = get_override_credentials(provider)
     if not override_creds or not override_creds.get("credential_fields") or uses_byok:
         return app_config_override
@@ -192,7 +201,9 @@ def _apply_override_credentials(
 
 
 def _resolve_llamacpp_api_key(app_config: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Resolve the llama.cpp API key from app config fallbacks."""
     def _from_cfg(cfg: Any) -> Optional[str]:
+        """Extract the llama.cpp API key from a config mapping."""
         try:
             llama = cfg.get("llama_api")
         except (AttributeError, TypeError, KeyError):
@@ -212,6 +223,7 @@ def _resolve_llamacpp_api_key(app_config: Optional[Dict[str, Any]]) -> Optional[
 
 
 def _resolve_native_timeout(provider: str, app_config: Optional[Dict[str, Any]]) -> Optional[float]:
+    """Resolve timeout values for native Messages providers."""
     cfg = app_config or loaded_config_data
     section = "anthropic_api" if provider == "anthropic" else "llama_api"
     default_timeout = 60.0 if provider == "anthropic" else 120.0
@@ -235,6 +247,7 @@ def _build_native_headers(
     anthropic_version: Optional[str],
     anthropic_beta: Optional[str],
 ) -> Dict[str, str]:
+    """Build headers for native Messages provider calls."""
     headers = {"Content-Type": "application/json"}
     if provider == "anthropic":
         if api_key:
@@ -255,6 +268,7 @@ def _build_native_headers(
 
 
 def _extract_stream_flag(raw: Any) -> bool:
+    """Normalize a stream flag from user-provided values."""
     if raw is None:
         return False
     if isinstance(raw, bool):
@@ -272,6 +286,7 @@ def _build_openai_call_params(
     app_config: Optional[Dict[str, Any]],
     api_key: Optional[str],
 ) -> Dict[str, Any]:
+    """Build OpenAI-compatible call parameters from Messages input."""
     messages_payload, system_message = anthropic_messages_to_openai(
         [m.model_dump(exclude_none=True) for m in request_data.messages],
         request_data.system,
@@ -301,6 +316,7 @@ def _build_openai_call_params(
 
 
 def _prepare_native_payload(request_data: Any, *, model: str) -> Dict[str, Any]:
+    """Prepare payload for native Messages providers."""
     payload = request_data.model_dump(exclude_none=True)
     payload.pop("api_provider", None)
     payload["model"] = model
@@ -314,6 +330,7 @@ async def _proxy_native_stream(
     *,
     timeout: Optional[float] = None,
 ) -> AsyncIterator[bytes]:
+    """Proxy streaming responses from native Messages providers."""
     async with async_http_client_factory(timeout=timeout) as client:
         async with client.stream("POST", url, headers=headers, json=payload) as resp:
             resp.raise_for_status()
@@ -329,6 +346,7 @@ async def _resolve_credentials_for_request(
     *,
     operation: str,
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Resolve API key and config overrides for a Messages request."""
     user_id_int = getattr(current_user, "id_int", None)
     if user_id_int is None:
         try:
@@ -372,6 +390,7 @@ async def _handle_messages(
     anthropic_version: Optional[str],
     anthropic_beta: Optional[str],
 ) -> JSONResponse | StreamingResponse:
+    """Handle an Anthropic-compatible Messages request."""
     provider, model = _resolve_provider_and_model_for_request(request_data)
     override_error = validate_provider_override(provider, model)
     if override_error:
@@ -438,6 +457,7 @@ async def _handle_count_tokens(
     anthropic_version: Optional[str],
     anthropic_beta: Optional[str],
 ) -> JSONResponse:
+    """Handle an Anthropic-compatible count_tokens request."""
     provider, model = _resolve_provider_and_model_for_request(request_data)
     override_error = validate_provider_override(provider, model)
     if override_error:
@@ -479,12 +499,13 @@ async def _handle_count_tokens(
     dependencies=[Depends(check_rate_limit)],
 )
 async def create_messages(
+    request: Request,
     request_data: AnthropicMessagesRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
     anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
     anthropic_beta: Optional[str] = Header(None, alias="anthropic-beta"),
 ):
+    """Create an Anthropic-compatible Messages response."""
     return await _handle_messages(
         request_data,
         current_user=current_user,
@@ -500,12 +521,13 @@ async def create_messages(
     dependencies=[Depends(check_rate_limit)],
 )
 async def create_messages_public(
+    request: Request,
     request_data: AnthropicMessagesRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
     anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
     anthropic_beta: Optional[str] = Header(None, alias="anthropic-beta"),
 ):
+    """Public endpoint for Anthropic-compatible Messages."""
     return await _handle_messages(
         request_data,
         current_user=current_user,
@@ -521,12 +543,13 @@ async def create_messages_public(
     dependencies=[Depends(check_rate_limit)],
 )
 async def count_tokens(
+    request: Request,
     request_data: AnthropicCountTokensRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
     anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
     anthropic_beta: Optional[str] = Header(None, alias="anthropic-beta"),
 ):
+    """Return token counts for Messages inputs."""
     return await _handle_count_tokens(
         request_data,
         current_user=current_user,
@@ -542,12 +565,13 @@ async def count_tokens(
     dependencies=[Depends(check_rate_limit)],
 )
 async def count_tokens_public(
+    request: Request,
     request_data: AnthropicCountTokensRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
     anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
     anthropic_beta: Optional[str] = Header(None, alias="anthropic-beta"),
 ):
+    """Public endpoint for Anthropic-compatible count_tokens."""
     return await _handle_count_tokens(
         request_data,
         current_user=current_user,

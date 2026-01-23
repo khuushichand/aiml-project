@@ -15,10 +15,9 @@ import {
   DragOverlay,
   KeyboardSensor,
   PointerSensor,
-  useSortable,
-  type DragStartEvent,
-  type DragEndEvent
+  type DragDropEvents
 } from "@dnd-kit/react"
+import { useSortable } from "@dnd-kit/react/sortable"
 
 import {
   createList,
@@ -41,6 +40,7 @@ import type {
   Card,
   CardUpdate
 } from "@/types/kanban"
+import { useSensor, useSensors } from "@/utils/dnd-kit-sensors"
 
 import { CardDetailPanel } from "./CardDetailPanel"
 
@@ -60,6 +60,9 @@ const arrayMove = <T,>(items: T[], from: number, to: number): T[] => {
   }
   return nextItems
 }
+
+type DragStartEvent = Parameters<DragDropEvents["dragstart"]>[0]
+type DragEndEvent = Parameters<DragDropEvents["dragend"]>[0]
 
 export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
   const queryClient = useQueryClient()
@@ -89,7 +92,7 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
   }, [board.id, board.name])
 
   // DnD sensors
-  const sensors = [PointerSensor, KeyboardSensor]
+  const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor))
 
   // Mutations
   const createListMutation = useMutation({

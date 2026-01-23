@@ -135,7 +135,7 @@ def _mark_service_used(service: UnifiedAuditService) -> None:
     try:
         service._last_used_ts = time.monotonic()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        logger.debug("Failed to mark service used timestamp")
 
 
 def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedAuditService, reason: str) -> None:
@@ -618,7 +618,7 @@ async def get_or_create_audit_service_for_user_id_optional(
             return await _get_or_create_audit_service_for_key(str(user_id))
         msg = f"Invalid non-numeric user_id {user_id!r} for audit service"
         logger.error(msg)
-        raise ServiceInitializationError(msg)
+        raise ServiceInitializationError(msg) from None
 
 # --- Main Dependency Function ---
 

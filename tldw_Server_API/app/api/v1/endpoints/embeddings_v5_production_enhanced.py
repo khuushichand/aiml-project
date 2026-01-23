@@ -13,13 +13,12 @@ Key enhancements over v5:
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import base64
 import hashlib
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Union, Optional, Dict, Any, Tuple
 from enum import Enum
 import numpy as np
@@ -2087,16 +2086,16 @@ async def create_embedding_endpoint(
                     texts_to_embed, provided_token_count, token_lengths = tokens_to_texts(embedding_request.input, model)
                     provided_token_arrays = True
                     embedding_token_inputs_total.labels(mode="single").inc()
-                except Exception:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input")
+                except Exception as e:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input") from e
             elif all(isinstance(item, list) for item in embedding_request.input):
                 # Batch of token arrays
                 try:
                     texts_to_embed, provided_token_count, token_lengths = tokens_to_texts(embedding_request.input, model)
                     provided_token_arrays = True
                     embedding_token_inputs_total.labels(mode="batch").inc()
-                except Exception:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input")
+                except Exception as e:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input") from e
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid input type")
         else:
@@ -2594,8 +2593,8 @@ class EmbeddingsBatchResponse(BaseModel):
 )
 async def create_embeddings_batch_endpoint(
     payload: EmbeddingsBatchRequest,
+    request: Request,
     current_user: User = Depends(get_request_user),
-    request: Request = None,
     response: Response = None
 ) -> EmbeddingsBatchResponse:
     texts = payload.texts or []
@@ -2738,9 +2737,9 @@ async def list_embedding_models():
 @router.get("/embeddings/models/{model_id:path}", summary="Get embedding model metadata")
 async def get_embedding_model_info(
     model_id: str,
+    request: Request,
     provider: Optional[str] = Query(None, description="Provider override"),
     current_user: User = Depends(get_request_user),
-    request: Request = None,
 ):
     model = model_id
     resolved_provider = guess_provider_for_model(model, provider)
@@ -4030,8 +4029,8 @@ class ReembedScheduleResponse(BaseModel):
 )
 async def schedule_reembed(
     req: ReembedScheduleRequest,
+    request: Request,
     current_user: User = Depends(get_request_user),
-    request: Request = None,
 ):
     """Create a media embeddings Jobs row to re-embed content.
 

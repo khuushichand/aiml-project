@@ -243,6 +243,35 @@ class JobManager:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @staticmethod
+    def _sqlite_missing_column_error(exc: Exception, column: str) -> bool:
+        if not isinstance(exc, sqlite3.OperationalError):
+            return False
+        return f"no column named {column}" in str(exc).lower()
+
+    def _sqlite_ensure_batch_group(self, conn: sqlite3.Connection) -> bool:
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+            if "batch_group" not in cols:
+                conn.execute("ALTER TABLE jobs ADD COLUMN batch_group TEXT")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_batch_group ON jobs(batch_group)")
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs_archive'"
+            ).fetchone()
+            if row:
+                cols_arch = {r[1] for r in conn.execute("PRAGMA table_info(jobs_archive)").fetchall()}
+                if "batch_group" not in cols_arch:
+                    conn.execute("ALTER TABLE jobs_archive ADD COLUMN batch_group TEXT")
+            conn.commit()
+            return True
+        except sqlite3.Error as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.warning(f"Jobs schema backfill for batch_group failed: {exc}")
+            return False
+
     def _pg_cursor(self, conn):
         from psycopg.rows import dict_row  # type: ignore
 
@@ -1359,74 +1388,198 @@ class JobManager:
                             pass
                         return d
             else:
-                with conn:
-                    # Domain/user quotas (SQLite)
+                for attempt in range(2):
                     try:
-                        max_q = self._quota_get("JOBS_QUOTA_MAX_QUEUED", domain, owner_user_id)
-                        if max_q and owner_user_id:
-                            rowq = conn.execute(
-                                "SELECT COUNT(*) FROM jobs WHERE domain=? AND owner_user_id=? AND status='queued'",
-                                (domain, owner_user_id),
-                            ).fetchone()
-                            if int(rowq[0] or 0) >= max_q:
-                                raise ValueError("Quota exceeded: max queued per user/domain")
-                        spm = self._quota_get("JOBS_QUOTA_SUBMITS_PER_MIN", domain, owner_user_id)
-                        if spm and owner_user_id:
-                            now_str = _now_dt.astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
-                            rowm = conn.execute(
-                                "SELECT COUNT(*) FROM jobs WHERE domain=? AND owner_user_id=? AND created_at >= DATETIME(?, '-60 seconds')",
-                                (domain, owner_user_id, now_str),
-                            ).fetchone()
-                            if int(rowm[0] or 0) >= spm:
-                                raise ValueError("Quota exceeded: submits per minute")
-                    except sqlite3.Error:
-                        pass
-                    if idempotency_key:
-                        # Idempotent create: attempt INSERT OR IGNORE, then SELECT by key
-                        conn.execute(
-                            """
-                            INSERT OR IGNORE INTO jobs (
-                              uuid, domain, queue, job_type, owner_user_id, project_id, batch_group,
-                              idempotency_key, payload, result, status, priority, max_retries,
-                              retry_count, available_at, created_at, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'queued', ?, ?, 0, ?, ?, ?)
-                            """,
-                            (
-                                uuid_val,
-                                domain,
-                                queue,
-                                job_type,
-                                owner_user_id,
-                                project_id,
-                                batch_group,
-                                idempotency_key,
-                                payload_json,
-                                priority,
-                                max_retries,
-                                (available_at.strftime("%Y-%m-%d %H:%M:%S") if available_at else None),
-                                now,
-                                now,
-                            ),
-                        )
-                        inserted = bool(getattr(conn, "total_changes", 0))
-                        row = conn.execute(
-                            "SELECT * FROM jobs WHERE domain = ? AND queue = ? AND job_type = ? AND idempotency_key = ?",
-                            (domain, queue, job_type, idempotency_key),
-                        ).fetchone()
-                        if row:
-                            d = dict(row)
+                        with conn:
+                            # Domain/user quotas (SQLite)
+                            try:
+                                max_q = self._quota_get("JOBS_QUOTA_MAX_QUEUED", domain, owner_user_id)
+                                if max_q and owner_user_id:
+                                    rowq = conn.execute(
+                                        "SELECT COUNT(*) FROM jobs WHERE domain=? AND owner_user_id=? AND status='queued'",
+                                        (domain, owner_user_id),
+                                    ).fetchone()
+                                    if int(rowq[0] or 0) >= max_q:
+                                        raise ValueError("Quota exceeded: max queued per user/domain")
+                                spm = self._quota_get("JOBS_QUOTA_SUBMITS_PER_MIN", domain, owner_user_id)
+                                if spm and owner_user_id:
+                                    now_str = _now_dt.astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+                                    rowm = conn.execute(
+                                        "SELECT COUNT(*) FROM jobs WHERE domain=? AND owner_user_id=? AND created_at >= DATETIME(?, '-60 seconds')",
+                                        (domain, owner_user_id, now_str),
+                                    ).fetchone()
+                                    if int(rowm[0] or 0) >= spm:
+                                        raise ValueError("Quota exceeded: submits per minute")
+                            except sqlite3.Error:
+                                pass
+                            if idempotency_key:
+                                # Idempotent create: attempt INSERT OR IGNORE, then SELECT by key
+                                conn.execute(
+                                    """
+                                    INSERT OR IGNORE INTO jobs (
+                                      uuid, domain, queue, job_type, owner_user_id, project_id, batch_group,
+                                      idempotency_key, payload, result, status, priority, max_retries,
+                                      retry_count, available_at, created_at, updated_at
+                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'queued', ?, ?, 0, ?, ?, ?)
+                                    """,
+                                    (
+                                        uuid_val,
+                                        domain,
+                                        queue,
+                                        job_type,
+                                        owner_user_id,
+                                        project_id,
+                                        batch_group,
+                                        idempotency_key,
+                                        payload_json,
+                                        priority,
+                                        max_retries,
+                                        (available_at.strftime("%Y-%m-%d %H:%M:%S") if available_at else None),
+                                        now,
+                                        now,
+                                    ),
+                                )
+                                inserted = bool(getattr(conn, "total_changes", 0))
+                                row = conn.execute(
+                                    "SELECT * FROM jobs WHERE domain = ? AND queue = ? AND job_type = ? AND idempotency_key = ?",
+                                    (domain, queue, job_type, idempotency_key),
+                                ).fetchone()
+                                if row:
+                                    d = dict(row)
+                                    try:
+                                        self._update_gauges(domain=domain, queue=queue, job_type=job_type)
+                                        if inserted:
+                                            increment_created({"domain": domain, "queue": queue, "job_type": job_type})
+                                    except Exception:
+                                        pass
+                                    try:
+                                        emit_job_event(
+                                            "job.created",
+                                            job=d,
+                                            attrs={
+                                                "idempotent": (not inserted),
+                                                "owner_user_id": d.get("owner_user_id"),
+                                                "retry_count": int(d.get("retry_count") or 0),
+                                            },
+                                        )
+                                    except Exception:
+                                        pass
+                                    return d
+                            # Non-idempotent (or no existing row on IGNORE path): normal insert
+                            conn.execute(
+                                """
+                                INSERT INTO jobs (
+                                  uuid, domain, queue, job_type, owner_user_id, project_id, batch_group,
+                                  idempotency_key, payload, result, status, priority, max_retries,
+                                  retry_count, available_at, created_at, updated_at, request_id, trace_id
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'queued', ?, ?, 0, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    uuid_val,
+                                    domain,
+                                    queue,
+                                    job_type,
+                                    owner_user_id,
+                                    project_id,
+                                    batch_group,
+                                    idempotency_key,
+                                    json.dumps(payload),
+                                    priority,
+                                    max_retries,
+                                    (available_at.strftime("%Y-%m-%d %H:%M:%S") if available_at else None),
+                                    now,
+                                    now,
+                                    request_id,
+                                    trace_id,
+                                ),
+                            )
+                            job_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                            d = (
+                                dict(row)
+                                if row
+                                else {
+                                    "id": job_id,
+                                    "uuid": uuid_val,
+                                    "status": "queued",
+                                    "domain": domain,
+                                    "queue": queue,
+                                    "job_type": job_type,
+                                }
+                            )
                             try:
                                 self._update_gauges(domain=domain, queue=queue, job_type=job_type)
-                                if inserted:
-                                    increment_created({"domain": domain, "queue": queue, "job_type": job_type})
+                                increment_created({"domain": domain, "queue": queue, "job_type": job_type})
                             except Exception:
                                 pass
                             try:
-                                emit_job_event(
+                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                                    is_sched = bool(available_at)
+                                    # Upsert counters: initialize ready/scheduled appropriately, then increment on conflict
+                                    conn.execute(
+                                        (
+                                            "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,?,0,0) "
+                                            "ON CONFLICT(domain,queue,job_type) DO UPDATE SET ready_count = ready_count + ?, scheduled_count = scheduled_count + ?, updated_at = DATETIME('now')"
+                                        ),
+                                        (
+                                            domain,
+                                            queue,
+                                            job_type,
+                                            0 if is_sched else 1,
+                                            1 if is_sched else 0,
+                                            0 if is_sched else 1,
+                                            1 if is_sched else 0,
+                                        ),
+                                    )
+                            except Exception:
+                                pass
+                            try:
+                                attrs_json = json.dumps(
+                                    {
+                                        "idempotent": False,
+                                        "owner_user_id": d.get("owner_user_id"),
+                                        "retry_count": int(d.get("retry_count") or 0),
+                                    }
+                                )
+                                conn.execute(
+                                    (
+                                        "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
+                                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, DATETIME('now'))"
+                                    ),
+                                    (
+                                        int(d.get("id")),
+                                        d.get("domain"),
+                                        d.get("queue"),
+                                        d.get("job_type"),
+                                        "job.created",
+                                        attrs_json,
+                                        d.get("owner_user_id"),
+                                        request_id,
+                                        trace_id,
+                                    ),
+                                )
+                            except Exception:
+                                pass
+                            # Emit event for in-process listeners when outbox is disabled
+                            try:
+                                if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1", "true", "yes", "y", "on"}:
+                                    emit_job_event(
+                                        "job.created",
+                                        job={**d, "request_id": request_id, "trace_id": trace_id},
+                                        attrs={
+                                            "idempotent": False,
+                                            "owner_user_id": d.get("owner_user_id"),
+                                            "retry_count": int(d.get("retry_count") or 0),
+                                        },
+                                    )
+                            except Exception:
+                                pass
+                            try:
+                                submit_job_audit_event(
                                     "job.created",
-                                    job=d,
+                                    job={**d, "request_id": request_id, "trace_id": trace_id},
                                     attrs={
-                                        "idempotent": (not inserted),
+                                        "idempotent": False,
                                         "owner_user_id": d.get("owner_user_id"),
                                         "retry_count": int(d.get("retry_count") or 0),
                                     },
@@ -1434,128 +1587,11 @@ class JobManager:
                             except Exception:
                                 pass
                             return d
-                    # Non-idempotent (or no existing row on IGNORE path): normal insert
-                    conn.execute(
-                        """
-                        INSERT INTO jobs (
-                          uuid, domain, queue, job_type, owner_user_id, project_id, batch_group,
-                          idempotency_key, payload, result, status, priority, max_retries,
-                          retry_count, available_at, created_at, updated_at, request_id, trace_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'queued', ?, ?, 0, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            uuid_val,
-                            domain,
-                            queue,
-                            job_type,
-                            owner_user_id,
-                            project_id,
-                            batch_group,
-                            idempotency_key,
-                            json.dumps(payload),
-                            priority,
-                            max_retries,
-                            (available_at.strftime("%Y-%m-%d %H:%M:%S") if available_at else None),
-                            now,
-                            now,
-                            request_id,
-                            trace_id,
-                        ),
-                    )
-                    job_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                    row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-                    d = (
-                        dict(row)
-                        if row
-                        else {
-                            "id": job_id,
-                            "uuid": uuid_val,
-                            "status": "queued",
-                            "domain": domain,
-                            "queue": queue,
-                            "job_type": job_type,
-                        }
-                    )
-                    try:
-                        self._update_gauges(domain=domain, queue=queue, job_type=job_type)
-                        increment_created({"domain": domain, "queue": queue, "job_type": job_type})
-                    except Exception:
-                        pass
-                    try:
-                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
-                            is_sched = bool(available_at)
-                            # Upsert counters: initialize ready/scheduled appropriately, then increment on conflict
-                            conn.execute(
-                                (
-                                    "INSERT INTO job_counters(domain,queue,job_type,ready_count,scheduled_count,processing_count,quarantined_count) VALUES(?,?,?,?,?,0,0) "
-                                    "ON CONFLICT(domain,queue,job_type) DO UPDATE SET ready_count = ready_count + ?, scheduled_count = scheduled_count + ?, updated_at = DATETIME('now')"
-                                ),
-                                (
-                                    domain,
-                                    queue,
-                                    job_type,
-                                    0 if is_sched else 1,
-                                    1 if is_sched else 0,
-                                    0 if is_sched else 1,
-                                    1 if is_sched else 0,
-                                ),
-                            )
-                    except Exception:
-                        pass
-                    try:
-                        attrs_json = json.dumps(
-                            {
-                                "idempotent": False,
-                                "owner_user_id": d.get("owner_user_id"),
-                                "retry_count": int(d.get("retry_count") or 0),
-                            }
-                        )
-                        conn.execute(
-                            (
-                                "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
-                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, DATETIME('now'))"
-                            ),
-                            (
-                                int(d.get("id")),
-                                d.get("domain"),
-                                d.get("queue"),
-                                d.get("job_type"),
-                                "job.created",
-                                attrs_json,
-                                d.get("owner_user_id"),
-                                request_id,
-                                trace_id,
-                            ),
-                        )
-                    except Exception:
-                        pass
-                    # Emit event for in-process listeners when outbox is disabled
-                    try:
-                        if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1", "true", "yes", "y", "on"}:
-                            emit_job_event(
-                                "job.created",
-                                job={**d, "request_id": request_id, "trace_id": trace_id},
-                                attrs={
-                                    "idempotent": False,
-                                    "owner_user_id": d.get("owner_user_id"),
-                                    "retry_count": int(d.get("retry_count") or 0),
-                                },
-                            )
-                    except Exception:
-                        pass
-                    try:
-                        submit_job_audit_event(
-                            "job.created",
-                            job={**d, "request_id": request_id, "trace_id": trace_id},
-                            attrs={
-                                "idempotent": False,
-                                "owner_user_id": d.get("owner_user_id"),
-                                "retry_count": int(d.get("retry_count") or 0),
-                            },
-                        )
-                    except Exception:
-                        pass
-                    return d
+                    except sqlite3.OperationalError as exc:
+                        if attempt == 0 and self._sqlite_missing_column_error(exc, "batch_group"):
+                            if self._sqlite_ensure_batch_group(conn):
+                                continue
+                        raise
         finally:
             conn.close()
 
