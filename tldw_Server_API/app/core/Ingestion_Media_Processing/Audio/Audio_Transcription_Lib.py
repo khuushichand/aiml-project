@@ -119,6 +119,12 @@ def _coerce_float(val):
         return None
 
 
+def _looks_like_error_text(text: Any) -> bool:
+    if not isinstance(text, str):
+        return False
+    return text.strip().startswith("[Error:")
+
+
 # Conservative defaults to prevent unbounded cache growth unless explicitly
 # disabled via `disable_transcript_cache_pruning` or environment variables.
 DEFAULT_CACHE_MAX_FILES_PER_SOURCE = 32
@@ -2451,8 +2457,67 @@ def speech_to_text_parakeet(
                     logging.warning("MLX not available on this platform, falling back to standard Parakeet")
                     variant = "standard"
                 else:
-                    # MLX implementation expects file path directly
-                    text = transcribe_with_parakeet_mlx(audio_file_path)
+                    stt_cfg = get_stt_config() or {}
+                    raw_chunk_duration = stt_cfg.get("mlx_chunk_duration")
+                    raw_overlap_duration = stt_cfg.get("mlx_overlap_duration")
+
+                    chunk_duration = _coerce_float(raw_chunk_duration)
+                    if chunk_duration is None:
+                        chunk_duration = 30.0
+
+                    overlap_duration = _coerce_float(raw_overlap_duration)
+                    if overlap_duration is None:
+                        overlap_duration = 5.0
+
+                    if chunk_duration <= 0:
+                        text = transcribe_with_parakeet_mlx(
+                            audio_file_path,
+                            chunk_duration=None,
+                            overlap_duration=15.0,
+                        )
+                    else:
+                        use_buffered = audio_duration is None or audio_duration > chunk_duration
+                        if use_buffered:
+                            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
+                                transcribe_long_audio, MergeAlgorithm
+                            )
+
+                            merge_algo = stt_cfg.get("buffered_merge_algo", "middle")
+                            try:
+                                MergeAlgorithm(merge_algo)
+                            except Exception:
+                                merge_algo = "middle"
+
+                            total_buffer = None
+                            if "buffered_total_buffer" in stt_cfg:
+                                total_buffer = _coerce_float(stt_cfg.get("buffered_total_buffer"))
+                                if total_buffer is not None and (
+                                    total_buffer <= chunk_duration or total_buffer >= 3.0 * chunk_duration
+                                ):
+                                    total_buffer = None
+                            else:
+                                total_buffer = chunk_duration + (2.0 * overlap_duration)
+                                if total_buffer <= chunk_duration or total_buffer >= 3.0 * chunk_duration:
+                                    total_buffer = None
+
+                            text = transcribe_long_audio(
+                                audio_file_path,
+                                model_name="parakeet",
+                                variant="mlx",
+                                chunk_duration=chunk_duration,
+                                total_buffer=total_buffer,
+                                merge_algo=merge_algo,
+                            )
+                        else:
+                            text = transcribe_with_parakeet_mlx(
+                                audio_file_path,
+                                chunk_duration=chunk_duration,
+                                overlap_duration=overlap_duration,
+                            )
+
+                    if _looks_like_error_text(text):
+                        raise RuntimeError(text)
+
                     # Default to sentence-level segmentation
                     return create_segments_from_text(text, audio_duration, segmentation="sentence")
 

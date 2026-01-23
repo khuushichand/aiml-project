@@ -18,6 +18,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import time
 import wave
 from pathlib import Path
 from typing import Dict
@@ -51,22 +52,38 @@ def _load_voice_reference(path: Path) -> str:
     return base64.b64encode(voice_bytes).decode("utf-8")
 
 
-def _write_audio(output_path: Path, stream: bool, response) -> int:
+def _write_audio(output_path: Path, stream: bool, response, start_time: float) -> Dict[str, float]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     total = 0
+    chunk_sizes = []
+    first_chunk_ms = None
     with output_path.open("wb") as fh:
         if stream:
             while True:
                 chunk = response.read(64 * 1024)
                 if not chunk:
                     break
+                if first_chunk_ms is None:
+                    first_chunk_ms = (time.monotonic() - start_time) * 1000.0
                 fh.write(chunk)
                 total += len(chunk)
+                chunk_sizes.append(len(chunk))
         else:
             data = response.read()
             fh.write(data)
             total = len(data)
-    return total
+            if total:
+                chunk_sizes.append(total)
+                first_chunk_ms = (time.monotonic() - start_time) * 1000.0
+    stats: Dict[str, float] = {"total": float(total), "chunks": float(len(chunk_sizes))}
+    if chunk_sizes:
+        stats["min"] = float(min(chunk_sizes))
+        stats["max"] = float(max(chunk_sizes))
+        stats["avg"] = float(total) / float(len(chunk_sizes))
+    if first_chunk_ms is not None:
+        stats["first_chunk_ms"] = float(first_chunk_ms)
+    stats["total_ms"] = float((time.monotonic() - start_time) * 1000.0)
+    return stats
 
 
 def _describe_wav(path: Path) -> str:
@@ -136,15 +153,33 @@ def main() -> int:
         req.add_header(key, value)
 
     try:
+        request_start = time.monotonic()
         with urllib.request.urlopen(req, timeout=args.timeout) as resp:
-            total = _write_audio(args.output, args.stream, resp)
+            headers_ms = (time.monotonic() - request_start) * 1000.0
+            stats = _write_audio(args.output, args.stream, resp, request_start)
+            total = int(stats.get("total", 0))
             if total <= 0:
                 print("Error: received empty audio payload", file=sys.stderr)
                 return 3
             extra = ""
             if args.response_format == "wav":
                 extra = f" ({_describe_wav(args.output)})"
-            print(f"OK: wrote {total} bytes to {args.output}{extra}")
+            msg = f"OK: wrote {total} bytes to {args.output}{extra}"
+            first_chunk_ms = stats.get("first_chunk_ms")
+            total_ms = stats.get("total_ms")
+            msg += f" | timing headers={int(headers_ms)}ms"
+            if first_chunk_ms is not None:
+                msg += f" first_chunk={int(first_chunk_ms)}ms"
+            if total_ms is not None:
+                msg += f" total={int(total_ms)}ms"
+            if args.stream:
+                chunks = int(stats.get("chunks", 0))
+                if chunks:
+                    avg = int(stats.get("avg", 0))
+                    min_size = int(stats.get("min", 0))
+                    max_size = int(stats.get("max", 0))
+                    msg += f" | stream chunks={chunks} avg={avg} min={min_size} max={max_size}"
+            print(msg)
             return 0
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")

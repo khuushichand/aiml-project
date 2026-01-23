@@ -135,6 +135,8 @@ conversation_creation_max_retries = 3
 db_transaction_max_retries = 3
 rate_limit_per_minute = 60
 rate_limit_per_conversation_per_minute = 20
+# Per-user token budget (legacy limiter). Default is 10000 if omitted.
+rate_limit_tokens_per_minute = 100000
 # Controls how much historical context is loaded for each chat request.
 # Accepts 1-500; values outside range are clamped. Default: 20.
 history_messages_limit = 20
