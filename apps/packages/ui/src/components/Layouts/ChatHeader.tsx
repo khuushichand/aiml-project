@@ -51,6 +51,7 @@ export function ChatHeader({
   onToggleShortcuts,
   commandKeyLabel
 }: ChatHeaderProps) {
+  const logoSrc = typeof logoImage === "string" ? logoImage : logoImage.src
   const showSidebarToggle = Boolean(onToggleSidebar)
   const sidebarLabel = sidebarCollapsed
     ? t("common:chatSidebar.expand", "Expand sidebar")
@@ -85,7 +86,7 @@ export function ChatHeader({
           <ConnectionStatus showLabel={false} className="px-2 py-1" />
           <div className="flex items-center gap-2 text-text">
             <img
-              src={logoImage}
+              src={logoSrc}
               alt={t("common:pageAssist", "tldw Assistant")}
               className="h-5 w-auto"
             />

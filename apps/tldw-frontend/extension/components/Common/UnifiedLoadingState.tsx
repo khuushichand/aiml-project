@@ -62,7 +62,6 @@ export function UnifiedLoadingState({
       .filter((source) => !source.label?.trim())
       .map((source) => source.key)
     if (missingLabels.length > 0) {
-      // eslint-disable-next-line no-console
       console.warn(
         "[UnifiedLoadingState] Missing labels for loading sources:",
         missingLabels

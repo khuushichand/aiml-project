@@ -1,5 +1,6 @@
 import { marked } from "marked"
-import markedKatexExtension from "./marked/katex"
+import type { MarkedExtension } from "marked"
+import markedKatexExtension, { type KatexOptions } from "./marked/katex"
 import { removeReasoning, replaceThinkTagToEM } from "@/libs/reasoning"
 import { isRemoveReasoningTagFromCopy } from "@/services/app"
 
@@ -18,11 +19,11 @@ export const copyToClipboard = async ({
 
   if (formatted) {
     try {
-      const options: any = {
+      const options: KatexOptions = {
         throwOnError: false
       }
 
-      marked.use(markedKatexExtension(options) as any)
+      marked.use(markedKatexExtension(options) as MarkedExtension)
 
       const html = marked.parse(replaceThinkTagToEM(text))
       const styledHtml = `

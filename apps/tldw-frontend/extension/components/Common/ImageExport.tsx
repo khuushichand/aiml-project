@@ -40,7 +40,7 @@ export const ImageExportWrapper = ({ messages }: { messages: Message[] }) => {
                 {msg.isBot
                   ? removeModelSuffix(
                       `${msg.modelName || msg.name}`.replaceAll(
-                        /accounts\/[^\/]+\/models\//g,
+                        /accounts\/[^/]+\/models\//g,
                         ""
                       )
                     )
@@ -61,6 +61,7 @@ export const ImageExportWrapper = ({ messages }: { messages: Message[] }) => {
                   msg.images.filter((img) => img.length > 0).length > 0 && (
                     <div className="flex flex-wrap gap-2">
                       {msg.images.map((img, index) => (
+                        // eslint-disable-next-line @next/next/no-img-element
                         <img
                           key={index}
                           src={img}

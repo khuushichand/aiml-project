@@ -124,7 +124,7 @@ export function CommandPalette({
         category: "navigation",
         keywords: ["playground", "conversation"],
       },
-      ...(!isSidepanel ? [
+      ...(!isSidepanel ? ([
         {
           id: "nav-media",
           label: t("common:commandPalette.goToMedia", "Go to Media"),
@@ -161,7 +161,7 @@ export function CommandPalette({
           category: "navigation" as const,
           keywords: ["docs", "documentation", "guide", "help", "reference"],
         },
-      ] : []),
+      ] as CommandItem[]) : []),
       {
         id: "nav-settings",
         label: t("common:commandPalette.goToSettings", "Go to Settings"),
@@ -171,7 +171,7 @@ export function CommandPalette({
         category: "navigation",
         keywords: ["preferences", "config", "options"],
       },
-      ...(!isSidepanel ? [
+      ...(!isSidepanel ? ([
         {
           id: "nav-health",
           label: t("common:commandPalette.goToHealth", "Health & Diagnostics"),
@@ -180,10 +180,10 @@ export function CommandPalette({
           category: "navigation" as const,
           keywords: ["status", "connection", "diagnostic"],
         }
-      ] : []),
+      ] as CommandItem[]) : []),
       // Actions
       ...(onNewChat
-        ? [
+        ? ([
             {
               id: "action-new-chat",
               label: t("common:commandPalette.newChat", "New Chat"),
@@ -196,10 +196,10 @@ export function CommandPalette({
               category: "action",
               keywords: ["create", "start", "conversation"],
             }
-          ]
+          ] as CommandItem[])
         : []),
       ...(onToggleRag
-        ? [
+        ? ([
             {
               id: "action-toggle-rag",
               label: t(
@@ -219,10 +219,10 @@ export function CommandPalette({
               category: "action",
               keywords: ["search", "knowledge", "retrieve", "rag"],
             }
-          ]
+          ] as CommandItem[])
         : []),
       ...(onToggleWebSearch
-        ? [
+        ? ([
             {
               id: "action-toggle-web",
               label: t(
@@ -242,10 +242,10 @@ export function CommandPalette({
               category: "action",
               keywords: ["internet", "online", "browse"],
             }
-          ]
+          ] as CommandItem[])
         : []),
       ...(onIngestPage
-        ? [
+        ? ([
             {
               id: "action-ingest",
               label: t("common:commandPalette.ingestPage", "Ingest Current Page"),
@@ -262,10 +262,10 @@ export function CommandPalette({
               category: "action",
               keywords: ["save", "import", "add", "upload"],
             }
-          ]
+          ] as CommandItem[])
         : []),
       ...(onSwitchModel
-        ? [
+        ? ([
             {
               id: "action-switch-model",
               label: t("common:commandPalette.switchModel", "Switch Model"),
@@ -278,10 +278,10 @@ export function CommandPalette({
               category: "action",
               keywords: ["model", "ai", "llm", "change"],
             }
-          ]
+          ] as CommandItem[])
         : []),
       ...(onToggleSidebar
-        ? [
+        ? ([
             {
               id: "action-toggle-sidebar",
               label: t("common:commandPalette.toggleSidebar", "Toggle Sidebar"),
@@ -298,10 +298,10 @@ export function CommandPalette({
               category: "action",
               keywords: ["sidebar", "layout", "panel"],
             }
-          ]
+          ] as CommandItem[])
         : []),
       ...(isSidepanel && onSearchHistory
-        ? [
+        ? ([
             {
               id: "action-search-history",
               label: t(
@@ -320,7 +320,7 @@ export function CommandPalette({
               category: "action" as const,
               keywords: ["history", "search", "chats", "sidebar"]
             }
-          ]
+          ] as CommandItem[])
         : []),
       ...(isSidepanel && onSwitchChat && sidepanelChats?.length
         ? sidepanelChats.slice(0, 15).map((chat) => ({

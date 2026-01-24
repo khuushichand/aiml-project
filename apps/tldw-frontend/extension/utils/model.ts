@@ -1,5 +1,4 @@
 import { getModelInfo, isCustomModel } from "@/db/dexie/models"
-import { Storage } from "@plasmohq/storage"
 import { createSafeStorage } from "@/utils/safe-storage"
 
 const storage = createSafeStorage()

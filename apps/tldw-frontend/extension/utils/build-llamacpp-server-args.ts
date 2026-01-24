@@ -4,7 +4,7 @@ export interface LlamacppServerArgsInput {
   threads?: number
   batchSize?: number
   mlock: boolean
-  customArgs?: Record<string, any>
+  customArgs?: Record<string, unknown>
 }
 
 export interface LlamacppServerArgs {
@@ -13,7 +13,7 @@ export interface LlamacppServerArgs {
   threads?: number
   n_batch?: number
   mlock?: boolean
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export const buildLlamacppServerArgs = ({

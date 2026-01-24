@@ -58,7 +58,7 @@ interface LocalChatListProps {
 // Relative time helper
 const formatRelativeTime = (
   timestamp: number,
-  t: (key: string, options?: any) => string
+  t: (key: string, options?: Record<string, unknown>) => string
 ) => {
   const now = Date.now()
   const diff = now - timestamp
@@ -91,7 +91,7 @@ const formatRelativeTime = (
 // Message preview helper
 const truncateMessage = (content: string, maxLength: number = 60) => {
   if (!content) return ""
-  const cleaned = content.replace(/[#*_`~\[\]]/g, "").trim()
+  const cleaned = content.replace(/[#*_`~[\]]/g, "").trim()
   if (cleaned.length <= maxLength) return cleaned
   return cleaned.substring(0, maxLength).trim() + "..."
 }
@@ -209,7 +209,6 @@ export function LocalChatList({
           totalCount: result.totalCount
         }
       } catch (error) {
-        // eslint-disable-next-line no-console
         console.error("Failed to fetch chat histories:", error)
         setDexiePrivateWindowError(isDatabaseClosedError(error))
         return {
@@ -537,7 +536,6 @@ export function LocalChatList({
                     className="flex-1 overflow-hidden text-start w-full min-w-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-1 rounded"
                     onClick={() => {
                       loadLocalConversation(chat.id).catch((error) => {
-                        // eslint-disable-next-line no-console
                         console.error("Failed to load conversation:", error)
                         message.error(t("common:chatSidebar.loadError", "Failed to load chat"))
                       })

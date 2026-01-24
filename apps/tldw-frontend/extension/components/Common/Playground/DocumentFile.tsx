@@ -1,5 +1,5 @@
 import React from "react"
-import { FileIcon, Globe } from "lucide-react"
+import { FileIcon } from "lucide-react"
 
 interface DocumentFileProps {
   document: {

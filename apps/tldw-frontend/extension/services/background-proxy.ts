@@ -623,8 +623,10 @@ export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M e
     form.append(key, String(value))
   })
   if (file) {
-    const data = Array.isArray(file.data) ? new Uint8Array(file.data) : file.data
-    const blob = new Blob([data], {
+    const buffer = file.data instanceof ArrayBuffer
+      ? file.data
+      : (new Uint8Array(file.data as ArrayBuffer | ArrayLike<number>).buffer as ArrayBuffer)
+    const blob = new Blob([buffer], {
       type: file.type || "application/octet-stream"
     })
     form.append(fileFieldName || "file", blob, file.name || "upload")

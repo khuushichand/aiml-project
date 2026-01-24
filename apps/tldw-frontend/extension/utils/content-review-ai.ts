@@ -52,11 +52,11 @@ const whitespaceAllowanceForHeadings =
   "Whitespace-only changes (adding/removing blank lines) are allowed only as needed to place headings cleanly.";
 
 // Optional: if you adopt explicit verbatim markers in ingestion, enable this everywhere.
-const verbatimSpanRule =
+const _verbatimSpanRule =
   "If you see spans delimited by <<<VERBATIM>>> and <<<END_VERBATIM>>>, copy the text inside exactly with zero changes (including whitespace).";
 
 // Optional: reduces bad 'corrections' of proper nouns/tech terms.
-const uncertaintyRule =
+const _uncertaintyRule =
   "Do not guess spellings of names/brands/technical terms. If the transcript is ambiguous, leave the original token unchanged.";
 
 export const AI_CORRECTION_PROMPT = {

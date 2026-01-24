@@ -4,13 +4,17 @@ type SourceIds = {
   corpus?: string
 }
 
+type SourceLike = {
+  metadata?: Record<string, unknown>
+} & Record<string, unknown>
+
 const normalizeId = (value: unknown): string | null => {
   if (value == null) return null
   const asString = String(value).trim()
   return asString.length > 0 ? asString : null
 }
 
-export const extractSourceFeedbackIds = (source: any): SourceIds => {
+export const extractSourceFeedbackIds = (source: SourceLike | null | undefined): SourceIds => {
   const metadata = source?.metadata || {}
   const docId =
     normalizeId(metadata.document_id) ||
@@ -42,7 +46,7 @@ export const extractSourceFeedbackIds = (source: any): SourceIds => {
 }
 
 export const getSourceImpressionId = (
-  source: any,
+  source: SourceLike | null | undefined,
   index?: number
 ): string => {
   const { documentIds, chunkIds } = extractSourceFeedbackIds(source)
@@ -55,13 +59,16 @@ export const getSourceImpressionId = (
   return typeof index === "number" ? `index:${index}` : "unknown"
 }
 
-export const getSourceFeedbackKey = (source: any, index?: number): string => {
+export const getSourceFeedbackKey = (
+  source: SourceLike | null | undefined,
+  index?: number
+): string => {
   const { documentIds, chunkIds } = extractSourceFeedbackIds(source)
   if (chunkIds.length > 0) return `chunk:${chunkIds[0]}`
   if (documentIds.length > 0) return `doc:${documentIds[0]}`
   return getSourceImpressionId(source, index)
 }
 
-export const collectImpressionList = (sources: any[] = []): string[] => {
+export const collectImpressionList = (sources: SourceLike[] = []): string[] => {
   return sources.map((source, index) => getSourceImpressionId(source, index))
 }

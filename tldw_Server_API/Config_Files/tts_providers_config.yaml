@@ -157,6 +157,19 @@ providers:
     stream_chunk_size: 0.25      # seconds
     stream_buffer_size: 4096
 
+  # VibeVoice Realtime Configuration
+  # Low-latency single-speaker streaming TTS.
+  # NOTE: Disabled by default and auto_download is false to prevent unsolicited model downloads.
+  vibevoice_realtime:
+    enabled: false               # Explicit opt-in required
+    auto_download: false         # Do not download models unless allowed
+    model_path: "microsoft/VibeVoice-Realtime-0.5B"  # HF repo id or local path
+    model_dir: "models/vibevoice_realtime"
+    cache_dir: "cache/vibevoice_realtime"
+    device: "cpu"                # "cuda" | "mps" | "cpu"
+    sample_rate: 24000
+    stream_chunk_ms: 40          # Target chunk size in milliseconds
+
   # Supertonic ONNX Configuration (local; user-supplied models)
   supertonic:
     enabled: false              # Disabled by default; enable after installing assets

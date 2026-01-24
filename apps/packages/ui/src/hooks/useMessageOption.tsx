@@ -146,7 +146,10 @@ export const useMessageOption = (
   } = useCompareMode({ historyId, forceEnabled: opts.forceCompareEnabled })
 
   const currentChatModelSettings = useStoreChatModelSettings()
-  const [selectedModel, setSelectedModel] = useStorage("selectedModel")
+  const [selectedModel, setSelectedModel] = useStorage<string | null>(
+    "selectedModel",
+    null
+  )
   const [selectedCharacter, setSelectedCharacter] =
     useSelectedCharacter<Character | null>(null)
   const [defaultInternetSearchOn] = useStorage("defaultInternetSearchOn", false)

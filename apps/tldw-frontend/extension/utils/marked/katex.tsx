@@ -14,7 +14,7 @@ type KatexTrustContext = {
 
 type KatexTrustFunction = (context: KatexTrustContext) => boolean
 
-interface KatexOptions {
+export interface KatexOptions {
   displayMode?: boolean
   throwOnError?: boolean
   errorColor?: string
@@ -41,7 +41,7 @@ interface KatexToken {
 interface MarkedToken {
   type: string
   raw: string
-  [key: string]: any
+  [key: string]: unknown
 }
 
 interface TokenizerThis {
@@ -73,9 +73,9 @@ interface KatexMarkedExtension {
 type RendererFunction = (token: KatexToken) => string
 
 const inlineRule =
-  /^(\${1,2})(?!\$)((?:\\.|[^\\\n])*?(?:\\.|[^\\\n\$]))\1(?=[\s?!\.,:？！。，：]|$)/
+  /^(\${1,2})(?!\$)((?:\\.|[^\\\n])*?(?:\\.|[^\\\n$]))\1(?=[\s?!.,:？！。，：]|$)/
 const inlineRuleNonStandard =
-  /^(\${1,2})(?!\$)((?:\\.|[^\\\n])*?(?:\\.|[^\\\n\$]))\1/ // Non-standard, even if there are no spaces before and after $ or $, try to parse
+  /^(\${1,2})(?!\$)((?:\\.|[^\\\n])*?(?:\\.|[^\\\n$]))\1/ // Non-standard, even if there are no spaces before and after $ or $, try to parse
 
 const blockRule = /^(\${1,2})\n((?:\\[^]|[^\\])+?)\n\1(?:\n|$)/
 
@@ -88,7 +88,7 @@ export default function markedKatexExtension(options: KatexOptions = {}): KatexM
   }
 }
 
-function createRenderer(options: any, newlineAfter: boolean): RendererFunction {
+function createRenderer(options: KatexOptions, newlineAfter: boolean): RendererFunction {
   return (token: KatexToken): string => {
     try {
       return (
@@ -140,7 +140,7 @@ function inlineKatex(
     tokenizer(
       this: TokenizerThis,
       src: string,
-      tokens: MarkedToken[]
+      _tokens: MarkedToken[]
     ): KatexToken | void {
       const match = src.match(ruleReg)
       if (match) {
@@ -166,7 +166,7 @@ function blockKatex(
     tokenizer(
       this: TokenizerThis,
       src: string,
-      tokens: MarkedToken[]
+      _tokens: MarkedToken[]
     ): KatexToken | void {
       const match = src.match(blockRule)
       if (match) {

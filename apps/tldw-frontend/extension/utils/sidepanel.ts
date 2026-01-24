@@ -1,13 +1,18 @@
 import { browser } from "wxt/browser"
 
 type ChromeGlobal = typeof globalThis & { chrome?: typeof chrome }
+type SidebarAction = {
+  open?: () => Promise<void> | void
+  toggle?: () => Promise<void> | void
+}
 
 const getChrome = () => (globalThis as ChromeGlobal).chrome
 
 export const isSidepanelSupported = (): boolean => {
   const chromeGlobal = getChrome()
   if (chromeGlobal?.sidePanel?.open) return true
-  const sidebar: any = (browser as any)?.sidebarAction
+  const sidebar =
+    (browser as unknown as { sidebarAction?: SidebarAction }).sidebarAction
   return Boolean(sidebar?.open || sidebar?.toggle)
 }
 
@@ -54,7 +59,8 @@ export const openSidepanel = async (tabId?: number): Promise<void> => {
       }
     }
 
-    const sidebar: any = (browser as any)?.sidebarAction
+    const sidebar =
+      (browser as unknown as { sidebarAction?: SidebarAction }).sidebarAction
     if (sidebar?.open) {
       await sidebar.open()
       return

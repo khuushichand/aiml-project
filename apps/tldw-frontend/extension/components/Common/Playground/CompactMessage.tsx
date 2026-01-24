@@ -24,7 +24,7 @@ import { copyToClipboard } from "@/utils/clipboard"
 import { removeModelSuffix } from "@/db/dexie/models"
 import { parseReasoning } from "@/libs/reasoning"
 import { humanizeMilliseconds } from "@/utils/humanize-milliseconds"
-import { decodeChatErrorPayload, type ChatErrorPayload } from "@/utils/chat-error-message"
+import { decodeChatErrorPayload } from "@/utils/chat-error-message"
 import { highlightText } from "@/utils/text-highlight"
 import { createImageDataUrl } from "@/utils/image-utils"
 import { cn } from "@/libs/utils"
@@ -83,16 +83,16 @@ export function CompactMessage({
   modelName,
   modelImage,
   images,
-  currentMessageIndex,
-  totalMessages,
+  currentMessageIndex: _currentMessageIndex,
+  totalMessages: _totalMessages,
   onRegenerate,
   onEditFormSubmit,
-  isProcessing,
+  isProcessing: _isProcessing,
   isStreaming,
   sources,
   onSourceClick,
   isTTSEnabled,
-  generationInfo,
+  generationInfo: _generationInfo,
   reasoningTimeTaken,
   openReasoning,
   onNewBranch,
@@ -309,7 +309,6 @@ export function CompactMessage({
       setSaveError(null)
       setEditMode(false)
     } catch (error) {
-      // eslint-disable-next-line no-console
       console.error("Failed to save edited message:", error)
       const errorMessage =
         error instanceof Error
@@ -404,6 +403,7 @@ export function CompactMessage({
           {images && images.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2">
               {images.map((img, idx) => (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   key={idx}
                   src={img}

@@ -1,14 +1,5 @@
 import React from "react"
-import {
-  Divider,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Select,
-  Switch,
-  Tooltip
-} from "antd"
+import { Divider, Form, Input, InputNumber, Modal, Select, Tooltip } from "antd"
 import type { FormInstance } from "antd"
 import { X } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -30,6 +21,7 @@ const Markdown = React.lazy(() => import("@/components/Common/Markdown"))
 import { applyActorPresetById } from "@/data/actor-presets"
 import type { ActorPresetId } from "@/data/actor-presets"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
+import type { Character } from "@/types/character"
 
 const parseWorldBookEntryOptions = (content: string): string[] => {
   const text = (content || "").trim()
@@ -91,7 +83,7 @@ export const ActorEditor: React.FC<Props> = ({
 
   // Currently active assistant/character (from CharacterSelect).
   // Used to label per-character defaults and profiles.
-  const [selectedCharacter] = useSelectedCharacter<any>(null)
+  const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
 
   React.useEffect(() => {
     if (!settings) return
@@ -573,6 +565,7 @@ export const ActorEditor: React.FC<Props> = ({
       entriesByWorldBook,
       entriesLoading,
       form,
+      handleRemoveAspect,
       loadEntriesForWorldBook,
       loreWarnings,
       onRecompute,
@@ -823,7 +816,7 @@ export const ActorEditor: React.FC<Props> = ({
                   const base = settings ?? createDefaultActorSettings()
                   const next = applyActorPresetById(base, selectedPreset)
                   setSettings(next)
-                  const fieldValues: Record<string, any> = {
+      const fieldValues: Record<string, unknown> = {
                     actorNotes: next.notes ?? ""
                   }
                   for (const aspect of next.aspects || []) {
@@ -841,7 +834,7 @@ export const ActorEditor: React.FC<Props> = ({
                 onClick={() => {
                   const base = createDefaultActorSettings()
                   setSettings(base)
-                  const fieldValues: Record<string, any> = {
+      const fieldValues: Record<string, unknown> = {
                     actorNotes: base.notes ?? "",
                     actorChatPosition: base.chatPosition,
                     actorChatDepth: base.chatDepth,
@@ -892,7 +885,7 @@ export const ActorEditor: React.FC<Props> = ({
                   const profile = await getActorProfileForCharacter(characterId)
                   if (!profile) return
                   setSettings(profile)
-                  const fieldValues: Record<string, any> = {
+      const fieldValues: Record<string, unknown> = {
                     actorNotes: profile.notes ?? "",
                     actorChatPosition: profile.chatPosition,
                     actorChatDepth: profile.chatDepth,

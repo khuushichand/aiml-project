@@ -1,5 +1,5 @@
 import { Form, Input, InputNumber, Select, Switch } from "antd"
-import type { FormInstance } from "antd"
+import type { FormInstance, SelectProps } from "antd"
 import { useTranslation } from "react-i18next"
 
 type GroupedModelOption = {
@@ -9,6 +9,12 @@ type GroupedModelOption = {
     value: string
     searchLabel: string
   }>
+}
+
+type ModelOptionMeta = {
+  label?: React.ReactNode
+  value?: string
+  searchLabel?: string
 }
 
 interface ModelBasicsTabProps {
@@ -64,7 +70,7 @@ export function ModelBasicsTab({
           value={selectedModel || undefined}
           onChange={(value) => onModelChange(value)}
           placeholder={t("playground:composer.modelPlaceholder", "API / model")}
-          options={modelOptions as any}
+          options={modelOptions as SelectProps["options"]}
           loading={modelsLoading}
           allowClear
           optionLabelProp="label"
@@ -81,7 +87,7 @@ export function ModelBasicsTab({
           filterOption={(input, option) => {
             const normalizedInput = input.toLowerCase()
             const rawSearchLabel =
-              (option as any)?.searchLabel ??
+              (option as ModelOptionMeta | undefined)?.searchLabel ??
               (typeof option?.label === "string" ? option.label : "")
             const normalizedLabel = String(rawSearchLabel).toLowerCase()
             return normalizedLabel.includes(normalizedInput)

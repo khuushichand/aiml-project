@@ -45,6 +45,7 @@ class TTSProvider(Enum):
     CHATTERBOX = "chatterbox"
     ELEVENLABS = "elevenlabs"
     VIBEVOICE = "vibevoice"
+    VIBEVOICE_REALTIME = "vibevoice_realtime"
     NEUTTS = "neutts"
     INDEX_TTS = "index_tts"
     SUPERTONIC = "supertonic"
@@ -73,6 +74,7 @@ class TTSAdapterRegistry:
         TTSProvider.CHATTERBOX: "tldw_Server_API.app.core.TTS.adapters.chatterbox_adapter.ChatterboxAdapter",
         TTSProvider.ELEVENLABS: "tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.ElevenLabsTTSAdapter",
         TTSProvider.VIBEVOICE: "tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter.VibeVoiceAdapter",
+        TTSProvider.VIBEVOICE_REALTIME: "tldw_Server_API.app.core.TTS.adapters.vibevoice_realtime_adapter.VibeVoiceRealtimeAdapter",
         TTSProvider.NEUTTS: "tldw_Server_API.app.core.TTS.adapters.neutts_adapter.NeuTTSAdapter",
         TTSProvider.INDEX_TTS: "tldw_Server_API.app.core.TTS.adapters.index_tts_adapter.IndexTTS2Adapter",
         TTSProvider.SUPERTONIC: "tldw_Server_API.app.core.TTS.adapters.supertonic_adapter.SupertonicOnnxAdapter",
@@ -598,8 +600,9 @@ class TTSAdapterRegistry:
             # Only try to get adapters that are likely to work quickly
             # Skip local model providers in testing unless explicitly enabled
             if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
-                           TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.SUPERTONIC,
-                           TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS, TTSProvider.QWEN3_TTS]:
+                           TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.VIBEVOICE_REALTIME,
+                           TTSProvider.SUPERTONIC, TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS,
+                           TTSProvider.QWEN3_TTS]:
                 if enabled_flag is not True:
                     continue
 
@@ -843,6 +846,11 @@ class TTSAdapterFactory:
         "vibevoice/vibevoice-7b": TTSProvider.VIBEVOICE,
         # Community 8-bit quantized 7B variant
         "fabiosarracino/vibevoice-large-q8": TTSProvider.VIBEVOICE,
+        # VibeVoice Realtime models
+        "vibevoice_realtime": TTSProvider.VIBEVOICE_REALTIME,
+        "vibevoice-realtime": TTSProvider.VIBEVOICE_REALTIME,
+        "vibevoice-realtime-0.5b": TTSProvider.VIBEVOICE_REALTIME,
+        "microsoft/vibevoice-realtime-0.5b": TTSProvider.VIBEVOICE_REALTIME,
 
         # NeuTTS models
         "neutts": TTSProvider.NEUTTS,

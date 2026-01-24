@@ -7,19 +7,22 @@ import {
   type SensorOptions
 } from "@dnd-kit/abstract"
 
-export const useSensor = <T extends SensorConstructor<any>>(
+export const useSensor = <T extends SensorConstructor<unknown>>(
   sensor: T,
   options?: SensorOptions
-): SensorDescriptor<any> =>
+): SensorDescriptor<unknown> =>
   useMemo(
     () => (options ? configure(sensor, options) : descriptor(sensor)),
     [sensor, options]
   )
 
 export const useSensors = (
-  ...sensors: Array<SensorDescriptor<any> | null | undefined>
-): SensorDescriptor<any>[] =>
+  ...sensors: Array<SensorDescriptor<unknown> | null | undefined>
+): SensorDescriptor<unknown>[] =>
   useMemo(
-    () => sensors.filter(Boolean) as SensorDescriptor<any>[],
-    sensors
+    () =>
+      sensors.filter(
+        (sensor): sensor is SensorDescriptor<unknown> => Boolean(sensor)
+      ),
+    [sensors]
   )

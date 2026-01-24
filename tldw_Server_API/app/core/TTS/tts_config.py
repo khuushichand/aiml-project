@@ -231,7 +231,16 @@ class TTSConfigManager:
                     if 'providers' not in config_dict:
                         config_dict['providers'] = {}
 
-                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice', 'neutts', 'lux_tts']:
+                    for provider in [
+                        'kokoro',
+                        'higgs',
+                        'dia',
+                        'chatterbox',
+                        'vibevoice',
+                        'vibevoice_realtime',
+                        'neutts',
+                        'lux_tts',
+                    ]:
                         if provider not in config_dict['providers']:
                             config_dict['providers'][provider] = {}
                         config_dict['providers'][provider]['device'] = tts_section['local_tts_device']
@@ -242,7 +251,16 @@ class TTSConfigManager:
                     auto_dl = val in ("1", "true", "yes", "on")
                     if 'providers' not in config_dict:
                         config_dict['providers'] = {}
-                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice', 'neutts', 'lux_tts']:
+                    for provider in [
+                        'kokoro',
+                        'higgs',
+                        'dia',
+                        'chatterbox',
+                        'vibevoice',
+                        'vibevoice_realtime',
+                        'neutts',
+                        'lux_tts',
+                    ]:
                         config_dict['providers'].setdefault(provider, {})['auto_download'] = auto_dl
 
                 # Provider-specific auto-download toggles
@@ -254,6 +272,7 @@ class TTSConfigManager:
 
                 for prov, key in (
                     ('vibevoice', 'vibevoice_auto_download'),
+                    ('vibevoice_realtime', 'vibevoice_realtime_auto_download'),
                     ('kokoro', 'kokoro_auto_download'),
                     ('dia', 'dia_auto_download'),
                     ('higgs', 'higgs_auto_download'),

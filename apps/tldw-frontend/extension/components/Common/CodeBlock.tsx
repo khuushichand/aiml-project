@@ -25,6 +25,12 @@ interface Props {
   blockIndex?: number
 }
 
+type CodeBlockWindow = Window & {
+  __codeBlockPreviewState?: Map<string, boolean>
+  __codeBlockCollapsedState?: Map<string, boolean>
+  __artifactAutoOpenState?: Map<string, boolean>
+}
+
 const MAX_CODEBLOCK_STATE_ENTRIES = 200
 
 const setBoundedStateEntry = (
@@ -66,7 +72,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     ? t("view", "View")
     : t("artifactsView", "View code")
   
-  const computeKey = () => {
+  const computeKey = useCallback(() => {
     const base =
       typeof blockIndex === "number"
         ? `${normalizedLanguage}::${blockIndex}`
@@ -76,7 +82,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
       hash = (hash * 31 + base.charCodeAt(i)) >>> 0
     }
     return hash.toString(36)
-  }
+  }, [blockIndex, normalizedLanguage, value])
   const keyRef = useRef<string>(computeKey())
   const artifactId = computeKey()
   const previewMapRef = useRef<Map<string, boolean> | null>(null)
@@ -85,7 +91,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
 
   if (!previewMapRef.current) {
     if (typeof window !== "undefined") {
-      const win = window as any
+      const win = window as CodeBlockWindow
       if (!win.__codeBlockPreviewState) {
         win.__codeBlockPreviewState = new Map<string, boolean>()
       }
@@ -98,7 +104,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
 
   if (!collapsedMapRef.current) {
     if (typeof window !== "undefined") {
-      const win = window as any
+      const win = window as CodeBlockWindow
       if (!win.__codeBlockCollapsedState) {
         win.__codeBlockCollapsedState = new Map<string, boolean>()
       }
@@ -111,7 +117,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
 
   if (!autoOpenMapRef.current) {
     if (typeof window !== "undefined") {
-      const win = window as any
+      const win = window as CodeBlockWindow
       if (!win.__artifactAutoOpenState) {
         win.__artifactAutoOpenState = new Map<string, boolean>()
       }
@@ -222,11 +228,18 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
         if (prevCollapsed !== collapsed) setCollapsed(prevCollapsed)
       }
     }
-  }, [normalizedLanguage, value, blockIndex, previewStateMap, collapsedStateMap])
+  }, [
+    blockIndex,
+    collapsed,
+    collapsedStateMap,
+    computeKey,
+    previewStateMap,
+    showPreview
+  ])
 
   useEffect(() => {
     if (!isPreviewable && showPreview) setShowPreview(false)
-  }, [isPreviewable])
+  }, [isPreviewable, showPreview])
 
   useEffect(() => {
     if (!isProMode) {
@@ -259,6 +272,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   }, [
     artifactId,
     artifactAutoThreshold,
+    artifactKind,
     autoOpenStateMap,
     isDiagramLanguage,
     isPinned,

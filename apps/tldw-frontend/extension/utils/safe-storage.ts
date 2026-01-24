@@ -11,7 +11,7 @@ import type { SerdeOptions, StorageOptions } from "@plasmohq/storage"
  */
 export const safeStorageSerde: SerdeOptions = {
   serializer: JSON.stringify,
-  deserializer: (value: any) => {
+  deserializer: (value: unknown) => {
     if (typeof value === "string") {
       try {
         return JSON.parse(value)

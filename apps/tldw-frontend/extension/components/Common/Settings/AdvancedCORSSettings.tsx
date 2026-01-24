@@ -20,7 +20,7 @@ export const AdvancedCORSSettings = () => {
   const watchUrlRewriteEnabled = Form.useWatch("urlRewriteEnabled", form)
   const { t } = useTranslation("settings")
 
-  const fetchAdvancedData = async () => {
+  const fetchAdvancedData = React.useCallback(async () => {
     try {
       const [urlRewriteEnabled, rewriteUrl, headers, autoCORSFix] =
         await Promise.all([
@@ -38,11 +38,11 @@ export const AdvancedCORSSettings = () => {
     } catch (e) {
       console.error(e)
     }
-  }
+  }, [form])
 
   React.useEffect(() => {
-    fetchAdvancedData()
-  }, [])
+    void fetchAdvancedData()
+  }, [fetchAdvancedData])
 
   return (
     <Form
@@ -98,7 +98,7 @@ export const AdvancedCORSSettings = () => {
                 {t("ollamaSettings.settings.advanced.headers.add")}
               </button>
             </div>
-            {fields.map((field, index) => (
+            {fields.map((field) => (
               <div key={field.key} className="flex items-center   w-full">
                 <div className="flex-grow flex mt-3 space-x-4">
                   <Form.Item

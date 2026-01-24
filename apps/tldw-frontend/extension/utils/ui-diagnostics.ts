@@ -12,7 +12,7 @@ import i18n from "@/i18n"
 
 type MessageLike = {
   message?: string
-  sources?: any[]
+  sources?: Array<Record<string, unknown>>
   images?: string[]
   variants?: Array<{ message?: string }>
 }
@@ -20,7 +20,7 @@ type MessageLike = {
 const sumString = (value: unknown): number =>
   typeof value === "string" ? value.length : 0
 
-const sumSourceText = (source: any): number => {
+const sumSourceText = (source: Record<string, unknown> | null): number => {
   if (!source || typeof source !== "object") return 0
   return (
     sumString(source.text) +
@@ -210,8 +210,17 @@ const summarizeMessageOptionStore = () => {
   }
 }
 
+type PerformanceMemory = {
+  usedJSHeapSize: number
+  totalJSHeapSize: number
+  jsHeapSizeLimit: number
+}
+
+type PerformanceWithMemory = Performance & { memory?: PerformanceMemory }
+
 const getJsHeap = () => {
-  const memory = (globalThis as any)?.performance?.memory
+  const memory = (globalThis as unknown as { performance?: PerformanceWithMemory })
+    ?.performance?.memory
   if (!memory || typeof memory.usedJSHeapSize !== "number") return null
   return {
     usedJSHeapSize: memory.usedJSHeapSize,
@@ -333,10 +342,13 @@ const summarizeQueryCache = () => {
   }
 }
 
+type I18nStore = { data?: Record<string, unknown> }
+
 const summarizeI18n = () => {
+  const store = (i18n as unknown as { store?: I18nStore }).store
   const data =
-    (i18n as any)?.store?.data && typeof (i18n as any).store.data === "object"
-      ? (i18n as any).store.data
+    store?.data && typeof store.data === "object"
+      ? store.data
       : {}
   const { bytes, truncated } = estimateValueSize(
     data,
@@ -356,7 +368,7 @@ export const registerUiDiagnostics = (
 ) => {
   if (typeof window === "undefined") return
   const root = window as Window & {
-    __tldwDiagnostics?: Record<string, any>
+    __tldwDiagnostics?: Record<string, unknown>
   }
   if (!root.__tldwDiagnostics) {
     root.__tldwDiagnostics = {}

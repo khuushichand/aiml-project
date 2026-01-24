@@ -6,7 +6,15 @@ export type SectionStrategy =
   | "paragraphs"
   | "timestamps"
 
-type SegmentInput = Record<string, any>
+type SegmentInput = {
+  text?: string
+  content?: string
+  segment?: string
+  utterance?: string
+  start?: number
+  end?: number
+  speaker?: string | number
+} & Record<string, unknown>
 
 const headingRegex = /^(#{1,6})\s+(.+)$/
 const timestampRegex = /^\s*(?:\d{1,2}:)?\d{1,2}:\d{2}(?:\.\d+)?/

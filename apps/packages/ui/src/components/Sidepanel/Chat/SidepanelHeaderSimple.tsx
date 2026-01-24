@@ -45,6 +45,7 @@ export const SidepanelHeaderSimple = ({
   const sidebarOpen = isControlled
     ? (propSidebarOpen as boolean)
     : localSidebarOpen
+  const logoSrc = typeof logoImage === "string" ? logoImage : logoImage.src
   const sidebarToggleLabel = sidebarOpen
     ? t("common:chatSidebar.collapse", "Collapse sidebar")
     : t("common:chatSidebar.expand", "Expand sidebar")
@@ -138,7 +139,7 @@ export const SidepanelHeaderSimple = ({
         <div className="flex items-center text-text">
           <img
             className="h-5 w-auto"
-            src={logoImage}
+            src={logoSrc}
             alt={t("common:pageAssist")}
           />
           <span className="ml-2 text-sm font-medium">

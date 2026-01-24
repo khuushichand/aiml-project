@@ -57,6 +57,12 @@ from .tts_exceptions import (
 from .tts_validation import validate_tts_request, validate_text_input
 import base64
 from .tts_resource_manager import get_resource_manager
+from .realtime_session import (
+    RealtimeSessionConfig,
+    RealtimeSessionHandle,
+    RealtimeTTSSession,
+    BufferedRealtimeSession,
+)
 #
 #######################################################################################################################
 #
@@ -383,6 +389,77 @@ class TTSServiceV2:
             if voices:
                 voices_by_provider[provider] = voices
         return voices_by_provider
+
+    async def open_realtime_session(
+        self,
+        *,
+        config: RealtimeSessionConfig,
+        provider_hint: Optional[str] = None,
+        route: str = "audio.stream.tts.realtime",
+        user_id: Optional[int] = None,
+    ) -> RealtimeSessionHandle:
+        """
+        Open a realtime TTS session if supported; otherwise return a buffered fallback session.
+
+        Returns a handle containing the session, provider (if known), and optional warning.
+        """
+        factory = await self._ensure_factory()
+        adapter: Optional[TTSAdapter] = None
+        warning: Optional[str] = None
+        provider_used: Optional[str] = None
+        hint = (provider_hint or config.provider or "").strip().lower() or None
+
+        # Try provider hint first
+        if hint:
+            try:
+                adapter = await self._get_adapter(config.model, hint)
+            except Exception:
+                adapter = None
+
+        # Fall back to model-based resolution
+        if adapter is None and config.model:
+            try:
+                adapter = await factory.get_adapter_by_model(config.model)
+            except Exception:
+                adapter = None
+
+        if adapter is not None:
+            provider_used = self._resolve_provider_key(adapter)
+            create_session = getattr(adapter, "create_realtime_session", None)
+            if callable(create_session):
+                try:
+                    maybe_session = create_session(config)
+                    session = await maybe_session if asyncio.iscoroutine(maybe_session) else maybe_session
+                    if isinstance(session, RealtimeTTSSession):
+                        return RealtimeSessionHandle(session=session, provider=provider_used)
+                    # Duck-typed sessions are allowed; skip strict type checks.
+                    return RealtimeSessionHandle(session=session, provider=provider_used)
+                except Exception as exc:
+                    logger.warning(f"Realtime session init failed for {provider_used}: {exc}")
+                    warning = (
+                        f"Realtime provider '{provider_used}' failed to initialize; "
+                        "falling back to buffered synthesis."
+                    )
+            else:
+                warning = (
+                    f"Provider '{provider_used}' does not support realtime sessions; "
+                    "falling back to buffered synthesis."
+                )
+
+        if warning is None and hint:
+            warning = (
+                f"Realtime provider '{hint}' unavailable; "
+                "falling back to buffered synthesis."
+            )
+
+        session = BufferedRealtimeSession(
+            tts_service=self,
+            config=config,
+            provider_hint=provider_used or hint,
+            route=route,
+            user_id=user_id,
+        )
+        return RealtimeSessionHandle(session=session, provider=provider_used or hint, warning=warning)
 
     def _serialize_capabilities(self, caps_obj: Any) -> Dict[str, Any]:
         """

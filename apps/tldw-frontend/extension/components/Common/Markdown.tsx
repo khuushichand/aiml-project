@@ -58,7 +58,7 @@ function Markdown({
           pre({ children }) {
             return children
           },
-          code({ node, className, children, ...props }) {
+          code({ node: _node, className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "")
             const blockIndex = blockIndexRef.current++
             const value = String(children).replace(/\n$/, "")
@@ -127,7 +127,7 @@ function Markdown({
               </code>
             )
           },
-          a({ node, ...props }) {
+          a({ node: _node, ...props }) {
             return (
               <a
                 target="_blank"
@@ -163,6 +163,7 @@ function Markdown({
               )
             }
             return (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={resolvedSrc}
                 alt={alt || ""}

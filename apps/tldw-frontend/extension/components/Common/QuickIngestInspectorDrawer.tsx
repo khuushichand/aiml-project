@@ -24,7 +24,7 @@ type QuickIngestInspectorDrawerProps = {
   onClose: () => void
   showIntro: boolean
   onDismissIntro: () => void
-  qi: (key: string, defaultValue: string, options?: Record<string, any>) => string
+  qi: (key: string, defaultValue: string, options?: Record<string, unknown>) => string
   selectedRow: QuickIngestRow | null
   selectedFile: FileLike | null
   selectedFileAttached?: boolean

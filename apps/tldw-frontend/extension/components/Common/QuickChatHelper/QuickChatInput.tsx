@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from "react"
 import { Button, Input } from "antd"
+import type { TextAreaRef } from "antd/es/input/TextArea"
 import { Send, Square } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -22,7 +23,7 @@ export const QuickChatInput: React.FC<Props> = ({
 }) => {
   const { t } = useTranslation("option")
   const [value, setValue] = useState("")
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const textareaRef = useRef<TextAreaRef | null>(null)
 
   const handleSend = useCallback(() => {
     if (value.trim() && !isStreaming && !disabled) {
@@ -57,7 +58,7 @@ export const QuickChatInput: React.FC<Props> = ({
   return (
     <div className="flex gap-2 items-end border-t border-border pt-3">
       <TextArea
-        ref={textareaRef as any}
+        ref={textareaRef}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}

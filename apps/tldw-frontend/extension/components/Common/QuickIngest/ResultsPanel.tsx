@@ -46,7 +46,7 @@ type ResultsPanelProps = {
     openHealthDiagnostics: () => void
   }
   i18n: {
-    qi: (key: string, defaultValue: string, options?: Record<string, any>) => string
+    qi: (key: string, defaultValue: string, options?: Record<string, unknown>) => string
     t: TFunction
   }
 }

@@ -8,7 +8,8 @@ https://www.uber.com/en-IN/blog/introducing-the-prompt-engineering-toolkit/
 https://github.com/LouisShark/chatgpt_system_prompt
 https://github.com/microsoft/PromptWizard
 https://github.com/MVPandey/DTS
-
+https://agentset.ai/rag-prompts
+https://medium.com/data-science-collective/youre-using-ai-to-write-code-you-re-not-using-it-to-review-code-728e5ec2576e
 https://github.com/qixucen/atom
 https://gist.githubusercontent.com/transitive-bullshit/487c9cb52c75a9701d312334ed53b20c/raw/d50ae033bbb0bea41026e338e70d7435f651ae5d/claude-code-prompts.js
 https://github.com/x1xhlol/system-prompts-and-models-of-ai-tools

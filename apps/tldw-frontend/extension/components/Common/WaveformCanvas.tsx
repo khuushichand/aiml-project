@@ -8,6 +8,10 @@ type WaveformCanvasProps = {
   height?: number
 }
 
+type LegacyAudioContextWindow = Window & {
+  webkitAudioContext?: typeof AudioContext
+}
+
 const getCanvasSize = (canvas: HTMLCanvasElement) => {
   const { width, height } = canvas.getBoundingClientRect()
   const ratio = window.devicePixelRatio || 1
@@ -121,7 +125,10 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
     }
 
     if (!ctxRef.current) {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext
+      const AudioCtx =
+        window.AudioContext ||
+        (window as LegacyAudioContextWindow).webkitAudioContext
+      if (!AudioCtx) return
       ctxRef.current = new AudioCtx()
     }
 

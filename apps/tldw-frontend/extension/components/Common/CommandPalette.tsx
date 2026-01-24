@@ -15,7 +15,6 @@ import {
   Eye,
   BrainCircuit,
   Activity,
-  X,
   Command,
   ArrowRight,
 } from "lucide-react"
@@ -24,7 +23,7 @@ import {
   formatShortcut,
   type ShortcutModifier
 } from "@/hooks/useKeyboardShortcuts"
-import { searchSettings, type SettingDefinition } from "@/data/settings-index"
+import { searchSettings } from "@/data/settings-index"
 import { cn } from "@/libs/utils"
 
 type CommandShortcut = { key: string; modifiers: ShortcutModifier[] }

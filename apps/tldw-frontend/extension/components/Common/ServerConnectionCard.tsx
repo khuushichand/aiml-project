@@ -284,7 +284,8 @@ export const ServerConnectionCard: React.FC<Props> = ({
     lastError,
     lastStatusCode,
     t,
-    notification
+    notification,
+    canStealFocus
   ])
 
   const isCompact = variant === "compact"

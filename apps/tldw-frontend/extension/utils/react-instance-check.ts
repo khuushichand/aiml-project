@@ -7,6 +7,14 @@ type DevtoolsRenderer = {
   rendererPackageName?: string
 }
 
+type ReactInternals = {
+  ReactCurrentDispatcher?: unknown
+}
+
+type ReactInternalContainer = {
+  __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?: ReactInternals
+}
+
 const getDevtoolsRenderers = (hook: unknown): DevtoolsRenderer[] => {
   if (!hook || typeof hook !== "object") {
     return []
@@ -33,9 +41,12 @@ export const checkReactInstance = (label: string) => {
     return
   }
 
-  const internals = (React as any).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED
+  const internals = (React as unknown as ReactInternalContainer)
+    .__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED
   const dispatcher = internals?.ReactCurrentDispatcher
-  const hook = (globalThis as any).__REACT_DEVTOOLS_GLOBAL_HOOK__
+  const hook = (globalThis as unknown as {
+    __REACT_DEVTOOLS_GLOBAL_HOOK__?: unknown
+  }).__REACT_DEVTOOLS_GLOBAL_HOOK__
   const renderers = getDevtoolsRenderers(hook)
 
   if (!dispatcher) {

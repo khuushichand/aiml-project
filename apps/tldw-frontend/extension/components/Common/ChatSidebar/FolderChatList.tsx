@@ -63,7 +63,7 @@ export function FolderChatList({ className }: FolderChatListProps) {
 
   const { data: serverChatData, isLoading: isServerChatsLoading } =
     useServerChatHistory("")
-  const serverChats = serverChatData || []
+  const serverChats = useMemo(() => serverChatData ?? [], [serverChatData])
   const serverChatById = useMemo(
     () => new Map(serverChats.map((chat) => [chat.id, chat])),
     [serverChats]

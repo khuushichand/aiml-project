@@ -10,12 +10,22 @@ interface ImportMetaEnv {
 
 interface ImportMeta {
   readonly env?: ImportMetaEnv
-  glob?: <T = unknown>(
-    pattern: string,
-    options?: {
-      query?: string
-      import?: string
-      eager?: boolean
-    }
-  ) => Record<string, T>
+  glob?: {
+    <T = unknown>(
+      pattern: string,
+      options?: {
+        query?: string
+        import?: string
+        eager?: false
+      }
+    ): Record<string, () => Promise<T>>
+    <T = unknown>(
+      pattern: string,
+      options: {
+        query?: string
+        import?: string
+        eager: true
+      }
+    ): Record<string, T>
+  }
 }

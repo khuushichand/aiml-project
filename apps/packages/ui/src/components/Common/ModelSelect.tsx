@@ -18,6 +18,8 @@ type Props = {
 export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSelectedName = false}) => {
   const { t } = useTranslation("common")
   const { setSelectedModel, selectedModel } = useMessage()
+  const selectedModelValue =
+    typeof selectedModel === "string" ? selectedModel : null
   const [menuDensity] = useStorage("menuDensity", "comfortable")
   const { data } = useQuery({
     queryKey: ["getAllModelsForSelect"],
@@ -86,7 +88,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
         key: d.model,
         label: labelNode,
         onClick: () => {
-          if (selectedModel === d.model) {
+          if (selectedModelValue === d.model) {
             setSelectedModel(null)
           } else {
             setSelectedModel(d.model)
@@ -119,18 +121,18 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
       })
     }
     return items
-  }, [data, selectedModel, setSelectedModel])
+  }, [data, selectedModelValue, setSelectedModel])
 
   // Get display name for selected model
   const selectedModelDisplay = React.useMemo(() => {
-    if (!selectedModel || !data) return null
-    const model = data.find(m => m.model === selectedModel)
-    if (!model) return selectedModel.split('/').pop() || selectedModel
+    if (!selectedModelValue || !data) return null
+    const model = data.find(m => m.model === selectedModelValue)
+    if (!model) return selectedModelValue.split('/').pop() || selectedModelValue
     // Use nickname if available, otherwise extract short name from model ID
     const shortName = model.nickname || model.model.split('/').pop() || model.model
     // Truncate if too long
     return shortName.length > 20 ? shortName.substring(0, 18) + '…' : shortName
-  }, [selectedModel, data])
+  }, [selectedModelValue, data])
 
   return (
     <>
@@ -143,14 +145,14 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
               overflowY: "scroll"
             },
             className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
-            selectedKeys: [selectedModel]
+            selectedKeys: selectedModelValue ? [selectedModelValue] : []
           }}
           placement={"topLeft"}
           trigger={["click"]}>
           <Tooltip
             title={
-              selectedModel
-                ? `${t("modelSelect.tooltip", "Changes model for next message")}: ${selectedModel}`
+              selectedModelValue
+                ? `${t("modelSelect.tooltip", "Changes model for next message")}: ${selectedModelValue}`
                 : t("modelSelect.tooltip", "Changes model for next message")
             }>
             <IconButton

@@ -28,7 +28,7 @@ type Props = {
 export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem, inputId, ariaLabel, ariaLabelledby }) => {
   const { t } = useTranslation(['option'])
   const { historyId } = useMessageOption()
-  const [remote, setRemote] = useStorage('promptSearchIncludeServer', false)
+  const [remote, _setRemote] = useStorage('promptSearchIncludeServer', false)
   const [q, setQ] = React.useState('')
   const [open, setOpen] = React.useState(false)
   const [results, setResults] = React.useState<PromptItem[]>([])
@@ -54,21 +54,24 @@ export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem,
             try {
               await tldwClient.initialize()
               const srv = await tldwClient.searchPrompts(query).catch(() => [])
-              const serverList = Array.isArray(srv) ? srv : (srv?.results || srv?.prompts || [])
-              const norm = (serverList as any[]).map((x) => {
-                const name = x.name || x.title || 'Untitled'
+              const serverList = (
+                Array.isArray(srv) ? srv : (srv?.results || srv?.prompts || [])
+              ) as Array<Record<string, unknown>>
+              const norm = serverList.map((x) => {
+                const record = x as Record<string, unknown>
+                const name = record.name || record.title || 'Untitled'
                 const content =
-                  x.system_prompt ||
-                  x.user_prompt ||
-                  x.content ||
-                  x.prompt ||
+                  record.system_prompt ||
+                  record.user_prompt ||
+                  record.content ||
+                  record.prompt ||
                   ''
                 const isSystem =
-                  typeof x.is_system === 'boolean'
-                    ? x.is_system
-                    : !!(x.system_prompt && !x.user_prompt)
+                  typeof record.is_system === 'boolean'
+                    ? record.is_system
+                    : Boolean(record.system_prompt && !record.user_prompt)
                 return {
-                  id: x.id || x.uuid,
+                  id: record.id || record.uuid,
                   title: String(name),
                   content: String(content),
                   is_system: !!isSystem,
@@ -291,16 +294,11 @@ export const PromptSearch: React.FC<Props> = ({ onInsertMessage, onInsertSystem,
     editContent,
     editIsSystem,
     editTitle,
-    generateID,
     localOverwriteId,
-    message,
     resolveErrorMessage,
     runWithSaving,
-    savePromptFB,
     selected,
-    t,
-    tldwClient,
-    updatePromptFB
+    t
   ])
 
   const modifierKey = React.useMemo(() => {

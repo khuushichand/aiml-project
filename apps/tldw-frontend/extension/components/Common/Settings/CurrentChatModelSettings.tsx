@@ -291,7 +291,7 @@ export const CurrentChatModelSettings = ({
       }
       setActorSettings(actor)
 
-      const actorFields: Record<string, any> = {
+      const actorFields: Record<string, unknown> = {
         actorEnabled: actor.isEnabled,
         actorNotes: actor.notes,
         actorNotesGmOnly: actor.notesGmOnly ?? false,

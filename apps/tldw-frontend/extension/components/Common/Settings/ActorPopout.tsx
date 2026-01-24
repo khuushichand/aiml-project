@@ -54,7 +54,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
       })
       setSettings(actor)
 
-      const baseFields: Record<string, any> = {
+      const baseFields: Record<string, unknown> = {
         actorEnabled: actor.isEnabled,
         actorNotes: actor.notes,
         actorNotesGmOnly: actor.notesGmOnly ?? false,
@@ -77,6 +77,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
   }, [
     form,
     historyId,
+    open,
     selectedCharacter?.id,
     serverChatId,
     setPreviewAndTokens,
@@ -122,7 +123,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
     }
   }, [recompute])
 
-  const handleSave = async (values: any) => {
+  const handleSave = async (values: Record<string, unknown>) => {
     const base = settings ?? createDefaultActorSettings()
     const next: ActorSettings = buildActorSettingsFromForm(base, values)
     setSettings(next)

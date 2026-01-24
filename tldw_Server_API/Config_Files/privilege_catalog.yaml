@@ -318,6 +318,22 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/audio-stream-tts
+  - id: audio.stream.tts.realtime
+    description: Realtime streaming text-to-speech with incremental text input.
+    resource_tags:
+      - audio
+      - tts
+      - websocket
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-stream-tts-realtime
   - id: audio.chat
     description: Non-streaming speech-to-speech chat (STT → LLM → TTS).
     resource_tags:

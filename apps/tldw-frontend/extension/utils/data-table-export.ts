@@ -73,7 +73,7 @@ export async function exportToExcel(table: DataTable): Promise<Blob> {
   const rows = table.rows
 
   // Build worksheet data
-  const wsData: any[][] = []
+  const wsData: Array<Array<unknown>> = []
 
   // Header row
   wsData.push(columns.map((col) => col.name))
@@ -91,7 +91,7 @@ export async function exportToExcel(table: DataTable): Promise<Blob> {
   const ws = XLSX.utils.aoa_to_sheet(wsData)
 
   // Set column widths based on content
-  const colWidths = columns.map((col, i) => {
+  const colWidths = columns.map((col) => {
     let maxWidth = col.name.length
     rows.forEach((row) => {
       const value = row[col.name] ?? row[col.id] ?? ""
@@ -133,7 +133,7 @@ function escapeCSVField(value: string): string {
 /**
  * Format cell value based on column type for display
  */
-function formatCellValue(value: any, column: DataTableColumn): string {
+function formatCellValue(value: unknown, column: DataTableColumn): string {
   if (value === null || value === undefined) return ""
 
   switch (column.type) {
@@ -182,7 +182,10 @@ function formatCellValue(value: any, column: DataTableColumn): string {
 /**
  * Format cell value for Excel (preserves types)
  */
-function formatCellValueForExcel(value: any, column: DataTableColumn): any {
+function formatCellValueForExcel(
+  value: unknown,
+  column: DataTableColumn
+): unknown {
   if (value === null || value === undefined) return ""
 
   switch (column.type) {

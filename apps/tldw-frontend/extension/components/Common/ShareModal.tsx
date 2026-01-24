@@ -1,6 +1,5 @@
-import { Form, Image, Input, Modal, Tooltip } from "antd"
-import { Share } from "lucide-react"
-import React, { useState } from "react"
+import { Form, Image, Input, Modal } from "antd"
+import React from "react"
 import type { Message } from "~/store/option"
 import { useMutation } from "@tanstack/react-query"
 import { getPageShareUrl } from "~/services/tldw-server"
@@ -27,7 +26,7 @@ const reformatMessages = (messages: Message[], username: string) => {
       name: message.isBot
         ? removeModelSuffix(
             `${message?.modelName || message?.name}`?.replaceAll(
-              /accounts\/[^\/]+\/models\//g,
+              /accounts\/[^/]+\/models\//g,
               ""
             )
           )
@@ -62,7 +61,7 @@ export const PlaygroundMessage = (
               {props.isBot
                 ? removeModelSuffix(
                     `${props?.modelName || props?.name}`?.replaceAll(
-                      /accounts\/[^\/]+\/models\//g,
+                      /accounts\/[^/]+\/models\//g,
                       ""
                     )
                   )
@@ -122,7 +121,7 @@ export const ShareModal: React.FC<Props> = ({
         })
       })
     }
-  }, [messages, historyId])
+  }, [form, messages, historyId])
 
   const onSubmit = async (values: { title: string; name: string }) => {
     const owner_id = await getUserId()

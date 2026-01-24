@@ -76,7 +76,7 @@ const toSimpleOptions = (values: readonly string[]) =>
 export const getAdvancedFieldSelectOptions = ({
   fieldName,
   fieldEnum,
-  t,
+  t: _t,
   chatModels,
   embeddingModels
 }: {

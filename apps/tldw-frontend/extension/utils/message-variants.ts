@@ -1,11 +1,14 @@
 import type { Message } from "@/store/option"
 
+type MessageSource = Record<string, unknown>
+type GenerationInfo = Record<string, unknown>
+
 export type MessageVariant = {
   id?: string
   message: string
-  sources?: any[]
+  sources?: MessageSource[]
   images?: string[]
-  generationInfo?: any
+  generationInfo?: GenerationInfo
   reasoning_time_taken?: number
   createdAt?: number
   serverMessageId?: string
@@ -92,9 +95,14 @@ export const updateActiveVariant = (
   const nextVariant: MessageVariant = {
     id: (updates.id as string | undefined) ?? message.id,
     message: (updates.message as string | undefined) ?? message.message,
-    sources: (updates.sources as any[] | undefined) ?? message.sources ?? [],
+    sources:
+      (updates.sources as MessageSource[] | undefined) ??
+      message.sources ??
+      [],
     images: (updates.images as string[] | undefined) ?? message.images ?? [],
-    generationInfo: updates.generationInfo ?? message.generationInfo,
+    generationInfo:
+      (updates.generationInfo as GenerationInfo | undefined) ??
+      message.generationInfo,
     reasoning_time_taken:
       updates.reasoning_time_taken ?? message.reasoning_time_taken,
     createdAt: updates.createdAt ?? message.createdAt,

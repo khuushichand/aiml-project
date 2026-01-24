@@ -63,6 +63,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.TTS.tts_config import get_tts_config_manager
+from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
@@ -4368,6 +4369,324 @@ async def websocket_tts(
             except Exception as close_exc:
                 logger.debug(
                     f"audio.stream.tts websocket close failed after _outer_stream.done error: "
+                    f"outer_error={outer_exc}, close_error={close_exc}"
+                )
+
+
+@ws_router.websocket("/stream/tts/realtime")
+async def websocket_tts_realtime(
+    websocket: WebSocket,
+    token: Optional[str] = Query(None),  # noqa: ARG001 - kept for parity
+):
+    """
+    WebSocket realtime TTS endpoint: accepts streaming text frames and streams audio bytes.
+
+    Client frames:
+      - type=config: set provider/model/voice/format/speed/lang/extra_params/auto_flush_ms/auto_flush_tokens
+      - type=text:   text delta (fields: delta | text | input)
+      - type=commit: flush buffered text to synthesis
+      - type=final:  flush and close session
+
+    Server frames:
+      - JSON status/warning/error frames
+      - Binary audio frames for synthesized audio
+    """
+    await websocket.accept()
+
+    try:
+        _raw_idle = os.getenv("AUDIO_WS_IDLE_TIMEOUT_S") or os.getenv("STREAM_IDLE_TIMEOUT_S")
+        _idle_timeout = float(_raw_idle) if _raw_idle else None
+    except Exception:
+        _idle_timeout = None
+
+    _outer_stream = None
+    try:
+        from tldw_Server_API.app.core.Streaming.streams import WebSocketStream as _WSStream
+
+        _outer_stream = _WSStream(
+            websocket,
+            heartbeat_interval_s=None,
+            compat_error_type=True,
+            close_on_done=True,
+            idle_timeout_s=_idle_timeout,
+            labels={"component": "audio", "endpoint": "audio_tts_realtime_ws"},
+        )
+        await _outer_stream.start()
+    except Exception:
+        _outer_stream = None
+
+    try:
+        _hdrs = websocket.headers or {}
+        request_id = (
+            _hdrs.get("x-request-id")
+            or _hdrs.get("X-Request-Id")
+            or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None)
+            or str(uuid4())
+        )
+    except Exception:
+        request_id = str(uuid4())
+
+    def _policy_close_code() -> int:
+        flag = str(os.getenv("AUDIO_WS_QUOTA_CLOSE_1008", "0")).strip().lower()
+        return 1008 if flag in {"1", "true", "yes", "on"} else 4003
+
+    async def _send_json(payload: Dict[str, Any]) -> None:
+        if _outer_stream:
+            await _outer_stream.send_json(payload)
+        else:
+            await websocket.send_json(payload)
+
+    async def _send_error(code: str, message: str) -> None:
+        if _outer_stream:
+            await _outer_stream.error(code, message, data={"request_id": request_id})
+        else:
+            await websocket.send_json({"type": "error", "code": code, "message": message})
+
+    auth_ok, jwt_user_id = await _audio_ws_authenticate(
+        websocket,
+        _outer_stream,
+        endpoint_id="audio.stream.tts.realtime",
+        ws_path="/api/v1/audio/stream/tts/realtime",
+    )
+    if not auth_ok:
+        return
+
+    if is_multi_user_mode() and jwt_user_id is not None:
+        user_id_for_usage = int(jwt_user_id)
+    else:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+
+        _s = _get_settings()
+        user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
+
+    acquired_stream = False
+    session = None
+    sender_task: Optional[asyncio.Task] = None
+
+    def _coerce_float(val: Any, default: float) -> float:
+        try:
+            return float(val)
+        except Exception:
+            return default
+
+    def _coerce_int(val: Any, default: int) -> int:
+        try:
+            return int(val)
+        except Exception:
+            return default
+
+    try:
+        try:
+            ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
+            if not ok_stream:
+                await _send_error("quota_exceeded", msg_stream or "Concurrent audio streams limit reached")
+                await websocket.close(code=_policy_close_code())
+                return
+            acquired_stream = True
+        except Exception:
+            await _send_error("quota_error", "Unable to evaluate audio stream quota or concurrency")
+            await websocket.close(code=_policy_close_code())
+            return
+
+        # Read initial config or text frame
+        try:
+            raw_msg = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+            first = json.loads(raw_msg)
+        except Exception as exc:
+            logger.debug(f"TTS realtime WS initial frame parse failed: {exc}")
+            await _send_error("bad_request", "Initial config or text frame required")
+            await websocket.close(code=4400)
+            return
+
+        msg_type = (first.get("type") or "").lower()
+        if msg_type not in {"config", "prompt", "text"}:
+            await _send_error("bad_request", "First frame must be type=config, prompt, or text")
+            await websocket.close(code=4400)
+            return
+
+        # Defaults
+        default_provider = "vibevoice_realtime"
+        default_model = "vibevoice-realtime-0.5b"
+        default_voice = "default"
+        default_format = "pcm"
+        default_speed = 1.0
+        default_auto_flush_ms = _coerce_int(os.getenv("TTS_REALTIME_AUTO_FLUSH_MS"), 600)
+        default_auto_flush_tokens = _coerce_int(os.getenv("TTS_REALTIME_AUTO_FLUSH_TOKENS"), 60)
+
+        provider_hint = first.get("provider") or default_provider
+        model = first.get("model") or default_model
+        voice = first.get("voice") or default_voice
+        response_format = first.get("format") or first.get("response_format") or default_format
+        speed = _coerce_float(first.get("speed", default_speed), default_speed)
+        lang_code = first.get("lang") or first.get("lang_code")
+        extra_params = first.get("extra_params")
+        if extra_params is not None and not isinstance(extra_params, dict):
+            extra_params = None
+
+        auto_flush_ms = _coerce_int(first.get("auto_flush_ms", default_auto_flush_ms), default_auto_flush_ms)
+        auto_flush_tokens = _coerce_int(first.get("auto_flush_tokens", default_auto_flush_tokens), default_auto_flush_tokens)
+        if auto_flush_ms < 0:
+            auto_flush_ms = 0
+        if auto_flush_tokens < 0:
+            auto_flush_tokens = 0
+
+        allowed_formats = {"mp3", "opus", "aac", "flac", "wav", "pcm"}
+        if response_format not in allowed_formats:
+            await _send_error("bad_request", f"Unsupported format '{response_format}'")
+            await websocket.close(code=4400)
+            return
+
+        tts_service = await get_tts_service()
+        config = RealtimeSessionConfig(
+            model=str(model),
+            voice=str(voice),
+            response_format=str(response_format),
+            speed=float(speed),
+            lang_code=lang_code,
+            extra_params=extra_params,
+            provider=str(provider_hint) if provider_hint else None,
+        )
+        handle = await tts_service.open_realtime_session(
+            config=config,
+            provider_hint=str(provider_hint) if provider_hint else None,
+            route="audio.stream.tts.realtime",
+            user_id=user_id_for_usage,
+        )
+        session = handle.session
+
+        await _send_json(
+            {
+                "type": "ready",
+                "provider": handle.provider or provider_hint,
+                "format": response_format,
+                "sample_rate": 24000,
+                "request_id": request_id,
+            }
+        )
+        if handle.warning:
+            await _send_json({"type": "warning", "message": handle.warning, "request_id": request_id})
+
+        async def _audio_sender() -> None:
+            try:
+                async for chunk in session.audio_stream():
+                    if not chunk:
+                        continue
+                    await websocket.send_bytes(chunk)
+                    if _outer_stream:
+                        _outer_stream.mark_activity()
+            except Exception as exc:
+                logger.debug(f"TTS realtime audio sender failed: {exc}")
+
+        sender_task = asyncio.create_task(_audio_sender())
+
+        # Handle the initial frame as text if provided
+        initial_text = first.get("delta") or first.get("text") or first.get("input")
+        buffered_tokens = 0
+        buffered_chars = 0
+        last_input_ts: Optional[float] = None
+
+        if isinstance(initial_text, str) and initial_text:
+            await session.push_text(initial_text)
+            buffered_chars += len(initial_text)
+            buffered_tokens += len(initial_text.split())
+            last_input_ts = time.monotonic()
+
+        while True:
+            timeout = None
+            if auto_flush_ms and buffered_chars > 0:
+                now = time.monotonic()
+                elapsed = now - (last_input_ts or now)
+                remaining = (auto_flush_ms / 1000.0) - elapsed
+                timeout = max(0.0, remaining)
+
+            try:
+                raw_msg = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
+            except asyncio.TimeoutError:
+                if buffered_chars > 0:
+                    await session.commit()
+                    buffered_chars = 0
+                    buffered_tokens = 0
+                    last_input_ts = None
+                continue
+
+            try:
+                data = json.loads(raw_msg)
+            except Exception:
+                await _send_error("bad_request", "Invalid JSON frame")
+                await websocket.close(code=4400)
+                return
+
+            msg_type = (data.get("type") or "").lower()
+            if msg_type in {"text", "input"}:
+                delta = data.get("delta") or data.get("text") or data.get("input")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                await session.push_text(delta)
+                buffered_chars += len(delta)
+                buffered_tokens += len(delta.split())
+                last_input_ts = time.monotonic()
+                if auto_flush_tokens and buffered_tokens >= auto_flush_tokens:
+                    await session.commit()
+                    buffered_chars = 0
+                    buffered_tokens = 0
+                    last_input_ts = None
+            elif msg_type == "commit":
+                await session.commit()
+                buffered_chars = 0
+                buffered_tokens = 0
+                last_input_ts = None
+            elif msg_type == "final":
+                await session.finish()
+                break
+            elif msg_type == "config":
+                await _send_json({"type": "warning", "message": "Config updates are ignored after session start."})
+            elif msg_type == "ping":
+                await _send_json({"type": "pong"})
+            else:
+                await _send_json({"type": "warning", "message": f"Unknown message type '{msg_type}'"})
+
+        if sender_task:
+            await sender_task
+        if getattr(session, "error", None):
+            await _send_error("internal_error", "Realtime TTS session failed")
+        await _send_json({"type": "done"})
+    except WebSocketDisconnect:
+        logger.info("TTS realtime WS disconnected")
+    except Exception as exc:
+        logger.error(f"TTS realtime WS error: {exc}", exc_info=True)
+        try:
+            await _send_error("internal_error", "Internal error")
+        except Exception:
+            pass
+    finally:
+        if session is not None:
+            try:
+                await session.finish()
+            except Exception:
+                pass
+        if sender_task and not sender_task.done():
+            sender_task.cancel()
+            try:
+                await sender_task
+            except Exception:
+                pass
+        if acquired_stream:
+            try:
+                await finish_stream(user_id_for_usage)
+            except EXPECTED_DB_EXC as e:
+                logger.debug(
+                    f"Failed to release streaming quota slot (audio.stream.tts.realtime): "
+                    f"user_id={user_id_for_usage}, error={e}"
+                )
+        try:
+            if _outer_stream:
+                await _outer_stream.done()
+        except Exception as outer_exc:
+            try:
+                await websocket.close()
+            except Exception as close_exc:
+                logger.debug(
+                    "audio.stream.tts.realtime websocket close failed after _outer_stream.done error: "
                     f"outer_error={outer_exc}, close_error={close_exc}"
                 )
 

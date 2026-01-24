@@ -204,7 +204,7 @@ export function ServerChatList({
     status,
     isLoading
   } = useServerChatHistory(searchQuery)
-  const serverChats = serverChatData || []
+  const serverChats = React.useMemo(() => serverChatData ?? [], [serverChatData])
   const pinnedChatSet = React.useMemo(
     () => new Set(pinnedChatIds || []),
     [pinnedChatIds]
@@ -585,7 +585,6 @@ export function ServerChatList({
     }
   }, [
     applyBulkTrash,
-    message,
     queryClient,
     selectedConversationIds,
     setPinnedChatIds,

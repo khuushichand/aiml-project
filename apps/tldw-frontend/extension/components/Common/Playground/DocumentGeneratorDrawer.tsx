@@ -286,8 +286,8 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
       })
       const list = extractDocumentList(res)
       setDocuments(list)
-    } catch (err: any) {
-      message.error(err?.message || t("common:somethingWentWrong"))
+    } catch (err: unknown) {
+      message.error((err as { message?: string })?.message || t("common:somethingWentWrong"))
     } finally {
       setDocsLoading(false)
     }
@@ -314,8 +314,8 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
         temperature: res?.temperature ?? 0.7,
         max_tokens: res?.max_tokens ?? 2000
       })
-    } catch (err: any) {
-      message.error(err?.message || t("common:somethingWentWrong"))
+    } catch (err: unknown) {
+      message.error((err as { message?: string })?.message || t("common:somethingWentWrong"))
     } finally {
       setPromptLoading(false)
     }
@@ -432,8 +432,8 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
         )
         void refreshDocuments()
       }
-    } catch (err: any) {
-      message.error(err?.message || t("common:somethingWentWrong"))
+    } catch (err: unknown) {
+      message.error((err as { message?: string })?.message || t("common:somethingWentWrong"))
     } finally {
       setIsGenerating(false)
     }
@@ -455,8 +455,8 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
           await tldwClient.deleteChatDocument(documentId)
           setDocuments((prev) => prev.filter((doc) => doc.id !== documentId))
           message.success(t("common:deleted", "Deleted"))
-        } catch (err: any) {
-          message.error(err?.message || t("common:somethingWentWrong"))
+        } catch (err: unknown) {
+          message.error((err as { message?: string })?.message || t("common:somethingWentWrong"))
         }
       }
     })
@@ -477,8 +477,8 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
           "Job cancelled."
         )
       )
-    } catch (err: any) {
-      message.error(err?.message || t("common:somethingWentWrong"))
+    } catch (err: unknown) {
+      message.error((err as { message?: string })?.message || t("common:somethingWentWrong"))
     }
   }
 
@@ -499,9 +499,9 @@ export const DocumentGeneratorDrawer: React.FC<DocumentGeneratorDrawerProps> = (
           "Prompt preset saved."
         )
       )
-    } catch (err: any) {
-      if (err?.errorFields) return
-      message.error(err?.message || t("common:somethingWentWrong"))
+    } catch (err: unknown) {
+      if ((err as { errorFields?: unknown })?.errorFields) return
+      message.error((err as { message?: string })?.message || t("common:somethingWentWrong"))
     }
   }
 

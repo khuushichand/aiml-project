@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Modal, Button, Input, Select, Space, Switch, Typography, Tag, message, Collapse, InputNumber, Tooltip as AntTooltip, Spin } from 'antd'
 import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from 'react-i18next'
@@ -64,6 +64,9 @@ type TypeDefaults = {
   video?: { captions?: boolean }
 }
 
+type UnknownRecord = Record<string, unknown>
+type AdvancedValue = string | number | boolean | null | undefined
+
 type Entry = {
   id: string
   url: string
@@ -108,21 +111,10 @@ type ProcessingItem = {
   prompt?: string
   custom_prompt?: string
   title?: string
-  metadata?: Record<string, any>
+  metadata?: UnknownRecord
   keywords?: string[] | string
-  segments?: Record<string, any>[]
+  segments?: UnknownRecord[]
 }
-
-type ProcessingResultPayload =
-  | ProcessingItem[]
-  | ProcessingItem
-  | {
-      results?: ProcessingItem[]
-      articles?: ProcessingItem[]
-      result?: ProcessingItem | ProcessingItem[]
-    }
-  | null
-  | undefined
 
 type ResultItem = {
   id: string
@@ -140,7 +132,7 @@ type ProcessingOptions = {
   perform_analysis: boolean
   perform_chunking: boolean
   overwrite_existing: boolean
-  advancedValues: Record<string, any>
+  advancedValues: UnknownRecord
 }
 
 type Props = {
@@ -242,7 +234,6 @@ const isLikelyUrl = (raw: string) => {
   const val = (raw || '').trim()
   if (!val) return false
   try {
-    // eslint-disable-next-line no-new
     new URL(val)
     return true
   } catch {
@@ -411,7 +402,7 @@ const extractProcessingItems = (data: unknown): ProcessingItem[] => {
   return []
 }
 
-const cloneObject = <T extends Record<string, any>>(value: T): T | null => {
+const cloneObject = <T extends UnknownRecord>(value: T): T | null => {
   try {
     return structuredClone(value)
   } catch {
@@ -431,7 +422,7 @@ export const QuickIngestModal: React.FC<Props> = ({
 }) => {
   const { t } = useTranslation(['option', 'settings'])
   const qi = React.useCallback(
-    (key: string, defaultValue: string, options?: Record<string, any>) =>
+    (key: string, defaultValue: string, options?: UnknownRecord) =>
       options
         ? t(`quickIngest.${key}`, { defaultValue, ...options })
         : t(`quickIngest.${key}`, defaultValue),
@@ -507,12 +498,15 @@ export const QuickIngestModal: React.FC<Props> = ({
     perform_chunking: true,
     overwrite_existing: false
   })
-  const resolvedCommon =
-    common ?? {
-      perform_analysis: true,
-      perform_chunking: true,
-      overwrite_existing: false
-    }
+  const resolvedCommon = React.useMemo(
+    () =>
+      common ?? {
+        perform_analysis: true,
+        perform_chunking: true,
+        overwrite_existing: false
+      },
+    [common]
+  )
   const handleSetCommon = React.useCallback(
     (
       value: CommonOptions | ((prev: CommonOptions) => CommonOptions)
@@ -545,12 +539,17 @@ export const QuickIngestModal: React.FC<Props> = ({
   const [results, setResults] = React.useState<ResultItem[]>([])
   const [localFiles, setLocalFiles] = React.useState<File[]>([])
   const [advancedOpen, setAdvancedOpen] = React.useState<boolean>(false)
-  const [advancedValues, setAdvancedValues] = React.useState<Record<string, any>>({})
-  const [advSchema, setAdvSchema] = React.useState<Array<{ name: string; type: string; enum?: any[]; description?: string; title?: string }>>([])
+  const [advancedValues, setAdvancedValues] = React.useState<UnknownRecord>({})
+  const [advSchema, setAdvSchema] = React.useState<
+    Array<{ name: string; type: string; enum?: unknown[]; description?: string; title?: string }>
+  >([])
   const [specSource, setSpecSource] = React.useState<'server' | 'fallback' | 'none'>('none')
   const [fieldDetailsOpen, setFieldDetailsOpen] = React.useState<Record<string, boolean>>({})
   const [advSearch, setAdvSearch] = React.useState<string>('')
-  const [savedAdvValues, setSavedAdvValues] = useStorage<Record<string, any>>('quickIngestAdvancedValues', {})
+  const [savedAdvValues, setSavedAdvValues] = useStorage<UnknownRecord>(
+    'quickIngestAdvancedValues',
+    {}
+  )
   const [uiPrefs, setUiPrefs] = useStorage<{ advancedOpen?: boolean; fieldDetailsOpen?: Record<string, boolean> }>('quickIngestAdvancedUI', {})
   const [specPrefs, setSpecPrefs] = useStorage<{ preferServer?: boolean; lastRemote?: { version?: string; cachedAt?: number } }>('quickIngestSpecPrefs', { preferServer: true })
   const [transcriptionModelOptions, setTranscriptionModelOptions] = React.useState<string[]>([])
@@ -641,7 +640,7 @@ export const QuickIngestModal: React.FC<Props> = ({
       introToast.current = true
     }
   }, [messageApi, qi, setInspectorIntroDismissed])
-  const { phase, isConnected, serverUrl } = useConnectionState()
+  const { phase, isConnected } = useConnectionState()
   const { checkOnce } = useConnectionActions?.() || {}
 
   type IngestConnectionStatus =
@@ -727,10 +726,16 @@ export const QuickIngestModal: React.FC<Props> = ({
 
   // Track if we're currently applying a preset to avoid auto-switch to Custom
   const applyingPresetRef = React.useRef(false)
+  const openedRef = React.useRef(false)
 
   // Initialize options from preset or saved values when modal opens
   React.useEffect(() => {
-    if (!open) return
+    if (!open) {
+      openedRef.current = false
+      return
+    }
+    if (openedRef.current) return
+    openedRef.current = true
     applyingPresetRef.current = true
 
     if (activePreset && activePreset !== "custom") {
@@ -748,7 +753,16 @@ export const QuickIngestModal: React.FC<Props> = ({
     setTimeout(() => {
       applyingPresetRef.current = false
     }, 100)
-  }, [open]) // Only run on modal open
+  }, [
+    activePreset,
+    open,
+    resolvedPresets,
+    setAdvancedValues,
+    setCommon,
+    setReviewBeforeStorage,
+    setStoreRemote,
+    setTypeDefaults
+  ])
 
   // Detect option changes and auto-switch to Custom preset
   React.useEffect(() => {
@@ -768,14 +782,15 @@ export const QuickIngestModal: React.FC<Props> = ({
       setActivePreset("custom")
     }
   }, [
-    common,
-    storeRemote,
-    resolvedReviewBeforeStorage,
-    normalizedTypeDefaults,
     activePreset,
-    open,
     advancedValues,
-    resolvedPresets
+    normalizedTypeDefaults,
+    open,
+    resolvedCommon,
+    resolvedPresets,
+    resolvedReviewBeforeStorage,
+    resolvedStoreRemote,
+    setActivePreset
   ])
 
   // Handler for preset selection
@@ -1268,8 +1283,8 @@ export const QuickIngestModal: React.FC<Props> = ({
   }, [])
 
   const mergeDefaults = React.useCallback(
-    <T extends Record<string, any>>(defaults?: T, overrides?: T): T | undefined => {
-      const next: Record<string, any> = {
+    <T extends UnknownRecord>(defaults?: T, overrides?: T): T | undefined => {
+      const next: UnknownRecord = {
         ...(defaults || {}),
         ...(overrides || {})
       }
@@ -1284,11 +1299,11 @@ export const QuickIngestModal: React.FC<Props> = ({
   )
 
   const hasOverrides = React.useCallback(
-    <T extends Record<string, any>>(overrides?: T, defaults?: T): boolean => {
+    <T extends UnknownRecord>(overrides?: T, defaults?: T): boolean => {
       if (!overrides) return false
       for (const [key, value] of Object.entries(overrides)) {
         if (value === undefined || value === null || value === '') continue
-        const defaultValue = defaults ? (defaults as Record<string, any>)[key] : undefined
+        const defaultValue = defaults ? (defaults as UnknownRecord)[key] : undefined
         if (value !== defaultValue) return true
       }
       return false
@@ -1367,7 +1382,7 @@ export const QuickIngestModal: React.FC<Props> = ({
         })
       )
     },
-    [buildRowEntry, ingestBlocked, messageApi, qi]
+    [buildRowEntry, ingestBlocked, messageApi, qi, setRows]
   )
 
   const clearAllQueues = React.useCallback(() => {
@@ -1441,7 +1456,7 @@ export const QuickIngestModal: React.FC<Props> = ({
     })()
   }, [])
 
-  const queuedFileStubs = queuedFiles || []
+  const queuedFileStubs = React.useMemo(() => queuedFiles ?? [], [queuedFiles])
 
   React.useEffect(() => {
     if (!open) return
@@ -1922,8 +1937,13 @@ export const QuickIngestModal: React.FC<Props> = ({
       // Successful run (even with some item-level failures) clears the global failure flag.
       clearFailure()
       setLastRunError(null)
-    } catch (e: any) {
-      const msg = e?.message || "Quick ingest failed."
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "Quick ingest failed."
       messageApi.error(msg)
       if (unmountedRef.current) {
         return
@@ -2117,76 +2137,108 @@ export const QuickIngestModal: React.FC<Props> = ({
     }
   }
 
-  const parseSpec = React.useCallback((spec: any) => {
-    const getByRef = (ref: string): any => {
-      // Handles refs like '#/components/schemas/MediaIngestRequest'
-      if (!ref || typeof ref !== 'string' || !ref.startsWith('#/')) return null
-      const parts = ref.slice(2).split('/')
-      let cur: any = spec
-      for (const p of parts) {
-        if (cur && typeof cur === 'object' && p in cur) cur = cur[p]
-        else return null
-      }
-      return cur
+  const parseSpec = React.useCallback((spec: unknown) => {
+    const toRecord = (value: unknown): UnknownRecord | null => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null
+      return value as UnknownRecord
     }
 
-    const resolveRef = (schema: any, seen = new Set<string>()): any => {
-      if (!schema) return {}
-      if (schema.$ref) {
-        const ref = String(schema.$ref)
+    const getByRef = (ref: string): UnknownRecord | null => {
+      // Handles refs like '#/components/schemas/MediaIngestRequest'
+      if (!ref || typeof ref !== "string" || !ref.startsWith("#/")) return null
+      const parts = ref.slice(2).split("/")
+      let cur: unknown = spec
+      for (const p of parts) {
+        const record = toRecord(cur)
+        if (record && p in record) {
+          cur = record[p]
+        } else {
+          return null
+        }
+      }
+      return toRecord(cur)
+    }
+
+    const resolveRef = (
+      schema: unknown,
+      seen = new Set<string>()
+    ): UnknownRecord => {
+      const schemaRecord = toRecord(schema)
+      if (!schemaRecord) return {}
+      if ("$ref" in schemaRecord && typeof schemaRecord.$ref === "string") {
+        const ref = String(schemaRecord.$ref)
         if (seen.has(ref)) {
-          return { type: 'string', description: 'Unresolvable schema cycle' }
+          return { type: "string", description: "Unresolvable schema cycle" }
         }
         seen.add(ref)
         const target = getByRef(ref)
         return target ? resolveRef(target, seen) : {}
       }
-      return schema
+      return schemaRecord
     }
 
-    const mergeProps = (schema: any, stack: WeakSet<object>, allowVisited = false): Record<string, any> => {
+    const mergeProps = (
+      schema: unknown,
+      stack: WeakSet<object>,
+      allowVisited = false
+    ): UnknownRecord => {
       const s = resolveRef(schema)
-      let props: Record<string, any> = {}
-      if (!s || typeof s !== 'object' || Array.isArray(s)) return props
+      let props: UnknownRecord = {}
+      const record = toRecord(s)
+      if (!record) return props
 
-      const already = stack.has(s as object)
+      const already = stack.has(record as object)
       if (already && !allowVisited) return props
 
       if (!already) {
-        stack.add(s as object)
+        stack.add(record as object)
       }
 
       try {
         // Merge from compositions
-        for (const key of ['allOf', 'oneOf', 'anyOf'] as const) {
-          if (Array.isArray((s as any)[key])) {
-            for (const sub of (s as any)[key]) {
+        for (const key of ["allOf", "oneOf", "anyOf"] as const) {
+          const maybeArray = record[key]
+          if (Array.isArray(maybeArray)) {
+            for (const sub of maybeArray) {
               props = { ...props, ...mergeProps(sub, stack) }
             }
           }
         }
-        if ((s as any).properties && typeof (s as any).properties === 'object') {
-          for (const [k, v] of Object.entries<any>((s as any).properties)) {
+        const properties = record.properties
+        if (properties && typeof properties === "object" && !Array.isArray(properties)) {
+          for (const [k, v] of Object.entries(properties as UnknownRecord)) {
             props[k] = resolveRef(v)
           }
         }
         return props
       } finally {
         if (!already) {
-          stack.delete(s as object)
+          stack.delete(record as object)
         }
       }
     }
 
-    const flattenProps = (obj: Record<string, any>, parent = '', stack: WeakSet<object>): Array<[string, any]> => {
-      const out: Array<[string, any]> = []
-      for (const [k, v0] of Object.entries<any>(obj || {})) {
+    const flattenProps = (
+      obj: UnknownRecord,
+      parent = "",
+      stack: WeakSet<object>
+    ): Array<[string, UnknownRecord]> => {
+      const out: Array<[string, UnknownRecord]> = []
+      for (const [k, v0] of Object.entries(obj || {})) {
         const v = resolveRef(v0)
         const name = parent ? `${parent}.${k}` : k
-        const isObj = (v?.type === 'object' && v?.properties && typeof v.properties === 'object')
+        const isObj =
+          v?.type === "object" &&
+          v?.properties &&
+          typeof v.properties === "object"
         if (isObj) {
           const node = v as unknown
-          if (!node || typeof node !== 'object' || Array.isArray(node) || stack.has(node as object)) {
+          if (
+            !node ||
+            typeof node !== "object" ||
+            Array.isArray(node) ||
+            stack.has(node as object)
+          ) {
             out.push([name, v])
             continue
           }
@@ -2205,29 +2257,44 @@ export const QuickIngestModal: React.FC<Props> = ({
       return out
     }
 
-    const paths = spec?.paths || {}
-    const mediaAdd = paths['/api/v1/media/add'] || paths['/api/v1/media/add/']
+    const specRecord = toRecord(spec) || {}
+    const paths = toRecord(specRecord.paths) || {}
+    const mediaAdd =
+      (paths["/api/v1/media/add"] ??
+        paths["/api/v1/media/add/"]) as
+        | { post?: { requestBody?: { content?: UnknownRecord } } }
+        | undefined
     const content = mediaAdd?.post?.requestBody?.content || {}
-    const mp = content['multipart/form-data'] || content['application/x-www-form-urlencoded'] || content['application/json'] || {}
+    const mp =
+      (content["multipart/form-data"] ||
+        content["application/x-www-form-urlencoded"] ||
+        content["application/json"] ||
+        {}) as UnknownRecord
     const rootSchema = mp?.schema || {}
     const stack = new WeakSet<object>()
     const rootResolved = resolveRef(rootSchema)
-    if (rootResolved && typeof rootResolved === 'object' && !Array.isArray(rootResolved)) {
+    if (rootResolved && typeof rootResolved === "object" && !Array.isArray(rootResolved)) {
       stack.add(rootResolved)
     }
 
-    let props: Record<string, any> = {}
-    let flat: Array<[string, any]> = []
+    let props: UnknownRecord = {}
+    let flat: Array<[string, UnknownRecord]> = []
     try {
       props = mergeProps(rootSchema, stack, true)
-      flat = flattenProps(props, '', stack)
+      flat = flattenProps(props, "", stack)
     } finally {
-      if (rootResolved && typeof rootResolved === 'object' && !Array.isArray(rootResolved)) {
+      if (rootResolved && typeof rootResolved === "object" && !Array.isArray(rootResolved)) {
         stack.delete(rootResolved)
       }
     }
 
-    const entries: Array<{ name: string; type: string; enum?: any[]; description?: string; title?: string }> = []
+    const entries: Array<{
+      name: string
+      type: string
+      enum?: unknown[]
+      description?: string
+      title?: string
+    }> = []
     // Expose all available ingestion-time options, except input list and media type selector which are handled above
     const exclude = new Set([ 'urls', 'media_type' ])
     for (const [name, def0] of flat) {
@@ -2254,17 +2321,18 @@ export const QuickIngestModal: React.FC<Props> = ({
     ) => {
       const { reportDiff = false, persist = false } = options
       let used: 'server' | 'fallback' | 'none' = 'none'
-      let remote: any | null = null
+      let remote: unknown | null = null
       const prevSchema = reportDiff ? [...advSchema] : null
 
       if (preferServer) {
         try {
           const healthy = await tldwClient.healthCheck()
           if (healthy) remote = await tldwClient.getOpenAPISpec()
-        } catch (e) {
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err)
           console.debug(
             "[QuickIngest] Failed to load OpenAPI spec from server; using bundled fallback.",
-            (e as any)?.message || e
+            errMsg
           )
         }
       }
@@ -2274,7 +2342,8 @@ export const QuickIngestModal: React.FC<Props> = ({
         used = 'server'
 
         try {
-          const rVer = remote?.info?.version
+          const rVer = (remote as { info?: { version?: string } } | null)?.info
+            ?.version
           const prevVersion = specPrefs?.lastRemote?.version
           const prevCachedAt = specPrefs?.lastRemote?.cachedAt
           const now = Date.now()
@@ -2296,23 +2365,24 @@ export const QuickIngestModal: React.FC<Props> = ({
             // Log approximate size of what we persist for debugging quota issues
             try {
               const approxSize = JSON.stringify(payload).length
-              // eslint-disable-next-line no-console
               console.info(
                 "[QuickIngest] Persisting quickIngestSpecPrefs (~%d bytes)",
                 approxSize
               )
-            } catch (e) {
+            } catch (err: unknown) {
+              const errMsg = err instanceof Error ? err.message : String(err)
               console.debug(
                 "[QuickIngest] Failed to estimate quickIngestSpecPrefs size:",
-                (e as any)?.message || e
+                errMsg
               )
             }
             persistSpecPrefs(payload)
           }
-        } catch (e) {
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err)
           console.debug(
             "[QuickIngest] Failed to persist OpenAPI spec metadata:",
-            (e as any)?.message || e
+            errMsg
           )
         }
 
@@ -2328,10 +2398,11 @@ export const QuickIngestModal: React.FC<Props> = ({
             for (const name of beforeNames) {
               if (!afterNames.has(name)) removed += 1
             }
-          } catch (e) {
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err)
             console.debug(
               "[QuickIngest] Failed to compute OpenAPI field diff:",
-              (e as any)?.message || e
+              errMsg
             )
             // Fall back to generic message if diff computation fails
           }
@@ -2407,7 +2478,6 @@ export const QuickIngestModal: React.FC<Props> = ({
         if (!cancelled) setTranscriptionModelOptions(unique)
       } catch (e) {
         if (env.DEV) {
-          // eslint-disable-next-line no-console
           console.warn("Failed to load transcription models for Quick Ingest", e)
         }
       } finally {
@@ -2660,6 +2730,7 @@ export const QuickIngestModal: React.FC<Props> = ({
   }, [running])
 
   const progressMeta = React.useMemo(() => {
+    void progressTick
     const total = liveTotalCount || totalPlanned || 0
     const done = processedCount || results.length || 0
     const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
@@ -2767,7 +2838,7 @@ export const QuickIngestModal: React.FC<Props> = ({
     return String(value)
   }, [advancedValues])
 
-  const setAdvancedValue = React.useCallback((name: string, value: any) => {
+  const setAdvancedValue = React.useCallback((name: string, value: AdvancedValue) => {
     setAdvancedValues((prev) => {
       const next = { ...(prev || {}) }
       if (value === undefined || value === null || value === '') {
@@ -2954,16 +3025,6 @@ export const QuickIngestModal: React.FC<Props> = ({
     ]
   )
 
-  const handleFileDrop = React.useCallback(
-    (ev: React.DragEvent<HTMLDivElement>) => {
-      ev.preventDefault()
-      ev.stopPropagation()
-      const files = Array.from(ev.dataTransfer?.files || [])
-      addLocalFiles(files)
-    },
-    [addLocalFiles]
-  )
-
   const handleModalDragOver = React.useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       event.preventDefault()
@@ -3027,7 +3088,8 @@ export const QuickIngestModal: React.FC<Props> = ({
     qi,
     results,
     rows,
-    setQueuedFiles
+    setQueuedFiles,
+    setRows
   ])
 
   const requeueFailed = React.useCallback(() => {
@@ -3124,7 +3186,8 @@ export const QuickIngestModal: React.FC<Props> = ({
     queuedFileStubs,
     results,
     rows,
-    setQueuedFiles
+    setQueuedFiles,
+    setRows
   ])
 
   const exportFailedList = React.useCallback(() => {
@@ -3251,9 +3314,14 @@ export const QuickIngestModal: React.FC<Props> = ({
 
   // Live progress updates from background batch processor
   React.useEffect(() => {
-    const handler = (message: any) => {
-      if (!message || message.type !== "tldw:quick-ingest-progress") return
-      const payload = message.payload || {}
+    const handler = (incoming: unknown) => {
+      if (!incoming || typeof incoming !== "object") return
+      const message = incoming as { type?: string; payload?: unknown }
+      if (message.type !== "tldw:quick-ingest-progress") return
+      const payload =
+        message.payload && typeof message.payload === "object"
+          ? (message.payload as UnknownRecord)
+          : {}
       const result = payload.result as ResultItem | undefined
       if (typeof payload.processedCount === "number") {
         setProcessedCount(payload.processedCount)
@@ -4234,7 +4302,7 @@ export const QuickIngestModal: React.FC<Props> = ({
                           : grouped[g]
                         ).map((f) => {
                           const v = advancedValues[f.name]
-                          const setV = (nv: any) => setAdvancedValue(f.name, nv)
+                          const setV = (nv: AdvancedValue) => setAdvancedValue(f.name, nv)
                           const isOpen = fieldDetailsOpen[f.name]
                           const setOpen = (open: boolean) =>
                             setFieldDetailsOpen((prev) => ({
@@ -4319,7 +4387,7 @@ export const QuickIngestModal: React.FC<Props> = ({
                                   }
                                   aria-label={ariaLabel}
                                   value={selectValue}
-                                  onChange={setV as any}
+                                  onChange={(value) => setV(value)}
                                   options={resolvedSelectOptions}
                                 />
                                 {canShowDetailsHere && (
@@ -4379,7 +4447,7 @@ export const QuickIngestModal: React.FC<Props> = ({
                                   className="w-40"
                                   aria-label={ariaLabel}
                                   value={v}
-                                  onChange={setV as any}
+                                  onChange={(value) => setV(value)}
                                 />
                                 {canShowDetailsHere && (
                                   <button

@@ -89,12 +89,12 @@ type Props = {
   isProcessing: boolean
   webSearch?: boolean
   isSearchingInternet?: boolean
-  sources?: any[]
+  sources?: Record<string, unknown>[]
   hideEditAndRegenerate?: boolean
   hideContinue?: boolean
-  onSourceClick?: (source: any) => void
+  onSourceClick?: (source: Record<string, unknown>) => void
   isTTSEnabled?: boolean
-  generationInfo?: any
+  generationInfo?: Record<string, unknown>
   isStreaming: boolean
   reasoningTimeTaken?: number
   openReasoning?: boolean
@@ -134,6 +134,7 @@ type Props = {
 }
 
 export const PlaygroundMessage = (props: Props) => {
+  const { onDeleteMessage } = props
   const [isBtnPressed, setIsBtnPressed] = React.useState(false)
   const [editMode, setEditMode] = React.useState(false)
   const [checkWideMode] = useStorage<boolean>("checkWideMode", false)
@@ -419,7 +420,7 @@ export const PlaygroundMessage = (props: Props) => {
     }
   }
 
-  const autoCopyToClipboard = async () => {
+  const autoCopyToClipboard = React.useCallback(async () => {
     if (
       autoCopyResponseToClipboard &&
       props.isBot &&
@@ -439,21 +440,21 @@ export const PlaygroundMessage = (props: Props) => {
         setIsBtnPressed(false)
       }, 2000)
     }
-  }
-
-  useEffect(() => {
-    autoCopyToClipboard()
   }, [
     autoCopyResponseToClipboard,
-    props.isBot,
-    props.currentMessageIndex,
-    props.totalMessages,
-    props.isStreaming,
-    props.isProcessing,
-    props.message,
     copyAsFormattedText,
+    errorPayload,
+    isLastMessage,
+    props.isBot,
+    props.isProcessing,
+    props.isStreaming,
+    props.message,
     trackCopy
   ])
+
+  useEffect(() => {
+    void autoCopyToClipboard()
+  }, [autoCopyToClipboard])
 
   const userTextClass = React.useMemo(
     () =>
@@ -557,7 +558,7 @@ export const PlaygroundMessage = (props: Props) => {
   ])
 
   const handleDelete = React.useCallback(() => {
-    if (!props.onDeleteMessage) return
+    if (!onDeleteMessage) return
 
     Modal.confirm({
       title: t("common:confirmTitle", "Please confirm"),
@@ -567,7 +568,7 @@ export const PlaygroundMessage = (props: Props) => {
       okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          await props.onDeleteMessage?.()
+          await onDeleteMessage?.()
           message.success(t("common:deleted", "Deleted"))
         } catch (err) {
           console.error("Failed to delete message:", err)
@@ -577,7 +578,7 @@ export const PlaygroundMessage = (props: Props) => {
         }
       }
     })
-  }, [props.onDeleteMessage, t])
+  }, [onDeleteMessage, t])
 
   const actionRowVisibility = isProMode
     ? "flex"
@@ -618,6 +619,7 @@ export const PlaygroundMessage = (props: Props) => {
     }
   }, [
     autoPlayTTS,
+    isLastMessage,
     props.isTTSEnabled,
     props.isBot,
     props.currentMessageIndex,
@@ -626,6 +628,7 @@ export const PlaygroundMessage = (props: Props) => {
     props.isProcessing,
     props.message,
     errorPayload,
+    speak,
     ttsActionDisabled
   ])
 
@@ -755,7 +758,7 @@ export const PlaygroundMessage = (props: Props) => {
                     {props.isBot
                       ? removeModelSuffix(
                           `${resolvedModelName || props?.name}`?.replaceAll(
-                            /accounts\/[^\/]+\/models\//g,
+                            /accounts\/[^/]+\/models\//g,
                             ""
                           )
                         )

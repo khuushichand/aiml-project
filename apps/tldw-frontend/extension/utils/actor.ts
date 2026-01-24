@@ -1,5 +1,7 @@
 import type {
   ActorSettings,
+  ActorChatRole,
+  ActorChatPosition,
   ActorTarget,
   ActorTemplateInteractionMode
 } from "@/types/actor"
@@ -13,7 +15,7 @@ import { systemPromptFormatter } from "@/utils/system-message"
 
 export const buildActorSettingsFromForm = (
   base: ActorSettings,
-  values: Record<string, any>
+  values: ActorFormValues
 ): ActorSettings => ({
   ...base,
   isEnabled: !!values.actorEnabled,
@@ -30,9 +32,9 @@ export const buildActorSettingsFromForm = (
     }
     return Math.min(Math.max(0, raw), 999)
   })(),
-  chatRole: (values.actorChatRole as any) || base.chatRole,
+  chatRole: values.actorChatRole || base.chatRole,
   templateMode:
-    (values.actorTemplateMode as any) ||
+    values.actorTemplateMode ||
     base.templateMode ||
     "merge",
   aspects: (base.aspects || []).map((aspect) => ({
@@ -40,6 +42,16 @@ export const buildActorSettingsFromForm = (
     value: values[`actor_${aspect.id}`] ?? ""
   }))
 })
+
+type ActorFormValues = Record<string, unknown> & {
+  actorEnabled?: boolean
+  actorNotes?: string
+  actorNotesGmOnly?: boolean
+  actorChatPosition?: ActorChatPosition
+  actorChatDepth?: number
+  actorChatRole?: ActorChatRole
+  actorTemplateMode?: ActorTemplateInteractionMode
+}
 
 export type ActorDictionaryToken = {
   /**

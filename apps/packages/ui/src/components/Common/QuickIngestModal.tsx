@@ -527,7 +527,7 @@ export const QuickIngestModal: React.FC<Props> = ({
   )
   const [rows, setRows] = useStorage<Entry[]>(
     "quickIngestQueuedRows",
-    () => [createEmptyRow()]
+    [createEmptyRow()]
   )
   const [queuedFiles, setQueuedFiles] = useStorage<QueuedFileStub[]>(
     "quickIngestQueuedFiles",

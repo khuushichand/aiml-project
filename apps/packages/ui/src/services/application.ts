@@ -55,8 +55,14 @@ Response:`
 
 const DEFAULT_CUSTOM_PROMPT = `{text}`
 
+const normalizePrompt = (value: unknown, fallback: string) =>
+    typeof value === "string" ? value : fallback
+
 export const getSummaryPrompt = async () => {
-    return (await storage.get("copilotSummaryPrompt")) || DEFAULT_SUMMARY_PROMPT
+    return normalizePrompt(
+        await storage.get("copilotSummaryPrompt"),
+        DEFAULT_SUMMARY_PROMPT
+    )
 }
 
 export const setSummaryPrompt = async (prompt: string) => {
@@ -64,7 +70,10 @@ export const setSummaryPrompt = async (prompt: string) => {
 }
 
 export const getRephrasePrompt = async () => {
-    return (await storage.get("copilotRephrasePrompt")) || DEFAULT_REPHRASE_PROMPT
+    return normalizePrompt(
+        await storage.get("copilotRephrasePrompt"),
+        DEFAULT_REPHRASE_PROMPT
+    )
 }
 
 export const setRephrasePrompt = async (prompt: string) => {
@@ -72,8 +81,9 @@ export const setRephrasePrompt = async (prompt: string) => {
 }
 
 export const getTranslatePrompt = async () => {
-    return (
-        (await storage.get("copilotTranslatePrompt")) || DEFAULT_TRANSLATE_PROMPT
+    return normalizePrompt(
+        await storage.get("copilotTranslatePrompt"),
+        DEFAULT_TRANSLATE_PROMPT
     )
 }
 
@@ -82,7 +92,10 @@ export const setTranslatePrompt = async (prompt: string) => {
 }
 
 export const getExplainPrompt = async () => {
-    return (await storage.get("copilotExplainPrompt")) || DEFAULT_EXPLAIN_PROMPT
+    return normalizePrompt(
+        await storage.get("copilotExplainPrompt"),
+        DEFAULT_EXPLAIN_PROMPT
+    )
 }
 
 export const setExplainPrompt = async (prompt: string) => {
@@ -90,7 +103,10 @@ export const setExplainPrompt = async (prompt: string) => {
 }
 
 export const getCustomPrompt = async () => {
-    return (await storage.get("copilotCustomPrompt")) || DEFAULT_CUSTOM_PROMPT
+    return normalizePrompt(
+        await storage.get("copilotCustomPrompt"),
+        DEFAULT_CUSTOM_PROMPT
+    )
 }
 
 export const setCustomPrompt = async (prompt: string) => {

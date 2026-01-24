@@ -44,11 +44,11 @@ type Props = {
   isProcessing: boolean
   webSearch?: boolean | Record<string, unknown>
   isSearchingInternet?: boolean
-  sources?: any[]
+  sources?: Record<string, unknown>[]
   hideEditAndRegenerate?: boolean
-  onSourceClick?: (source: any) => void
+  onSourceClick?: (source: Record<string, unknown>) => void
   isTTSEnabled?: boolean
-  generationInfo?: any
+  generationInfo?: Record<string, unknown>
   isStreaming: boolean
   reasoningTimeTaken?: number
   openReasoning?: boolean

@@ -24,7 +24,7 @@ export const humanizeMilliseconds = (milliseconds: number): string => {
         }
 
         return `${Math.floor(duration.asDays())}d`
-    } catch (e) {
+    } catch {
         return `${milliseconds}ms`
     }
 }

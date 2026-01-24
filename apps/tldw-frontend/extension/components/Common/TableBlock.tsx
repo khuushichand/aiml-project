@@ -6,7 +6,7 @@ import {
   TableIcon,
   ExpandIcon
 } from "lucide-react"
-import { FC, useEffect, useRef, useState } from "react"
+import { FC, useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { IconButton } from "./IconButton"
 import { useArtifactsStore, type ArtifactTableData } from "@/store/artifacts"
@@ -21,6 +21,10 @@ interface TableData {
   rows: string[][]
 }
 
+type TableArtifactWindow = Window & {
+  __tableArtifactAutoOpenState?: Map<string, boolean>
+}
+
 export const TableBlock: FC<TableProps> = ({ children }) => {
   const [copyStatus, setCopyStatus] = useState<string>("")
   const { t } = useTranslation("common")
@@ -32,7 +36,7 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
   const autoOpenMapRef = useRef<Map<string, boolean> | null>(null)
   if (!autoOpenMapRef.current) {
     if (typeof window !== "undefined") {
-      const win = window as any
+      const win = window as TableArtifactWindow
       if (!win.__tableArtifactAutoOpenState) {
         win.__tableArtifactAutoOpenState = new Map<string, boolean>()
       }
@@ -44,7 +48,7 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
   }
   const autoOpenStateMap = autoOpenMapRef.current!
 
-  const parseData = () => {
+  const parseData = useCallback(() => {
     // get table from ref
     const table = ref.current
     if (!table) return
@@ -68,9 +72,9 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
     })
 
     return { headers, rows }
-  }
+  }, [ref])
 
-  const convertToCSV = (tableData?: TableData) => {
+  const convertToCSV = useCallback((tableData?: TableData) => {
     const data = tableData ?? parseData()
     if (!data) return
 
@@ -94,7 +98,7 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
     })
 
     return csvRows.join("\n")
-  }
+  }, [parseData])
 
   const handleCopyCSV = () => {
     const csvContent = convertToCSV() || ""
@@ -108,7 +112,7 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
     downloadFile(csvContent, `table-${Date.now()}.csv`, "text/csv")
   }
 
-  const buildArtifactId = (tableData: ArtifactTableData) => {
+  const buildArtifactId = useCallback((tableData: ArtifactTableData) => {
     const previewRow = tableData.rows[0]?.join("|") || ""
     const base = `${tableData.headers.join("|")}::${tableData.rows.length}::${previewRow}`
     let hash = 0
@@ -116,7 +120,7 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
       hash = (hash * 31 + base.charCodeAt(i)) >>> 0
     }
     return `table-${hash.toString(36)}`
-  }
+  }, [])
 
   const handleOpenArtifact = () => {
     const tableData = parseData()
@@ -157,7 +161,16 @@ export const TableBlock: FC<TableProps> = ({ children }) => {
       { auto: true }
     )
     autoOpenStateMap.set(artifactId, true)
-  }, [autoOpenStateMap, isPinned, isProMode, openArtifact, t])
+  }, [
+    autoOpenStateMap,
+    buildArtifactId,
+    convertToCSV,
+    isPinned,
+    isProMode,
+    openArtifact,
+    parseData,
+    t
+  ])
 
   const downloadFile = (
     content: string,

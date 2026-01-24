@@ -92,7 +92,10 @@ export const useMessage = () => {
   const invalidateServerChatHistory = React.useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
   }, [queryClient])
-  const [selectedModel, setSelectedModel] = useStorage("selectedModel")
+  const [selectedModel, setSelectedModel] = useStorage<string | null>(
+    "selectedModel",
+    null
+  )
   const currentChatModelSettings = useStoreChatModelSettings()
   const {
     setIsSearchingInternet,

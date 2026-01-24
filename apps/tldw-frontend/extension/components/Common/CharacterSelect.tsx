@@ -604,6 +604,7 @@ export const CharacterSelect: React.FC<Props> = ({
         label: (
           <div className="w-56 gap-2 text-sm truncate inline-flex items-center leading-5">
             {normalized.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={normalized.avatar_url}
                 alt={displayName || normalized.id || `Character ${menuKey}`}
@@ -835,11 +836,13 @@ export const CharacterSelect: React.FC<Props> = ({
   const renderMenuWithRef = React.useCallback(
     (menuNode: React.ReactNode) => {
       if (!React.isValidElement(menuNode)) return menuNode
-      const menuElement = menuNode as React.ReactElement
-      const originalRef = (menuElement as any).ref as React.Ref<HTMLUListElement> | undefined
+      const menuElement = menuNode as React.ReactElement & {
+        ref?: React.Ref<HTMLUListElement>
+      }
+      const originalRef = menuElement.ref
       return React.cloneElement(menuElement, {
         ref: (node: HTMLUListElement | null) => attachMenuRef(node, originalRef)
-      } as any)
+      })
     },
     [attachMenuRef]
   )
@@ -916,6 +919,7 @@ export const CharacterSelect: React.FC<Props> = ({
               hasPopup="menu"
               className={`h-11 w-11 sm:h-7 sm:w-7 sm:min-w-0 sm:min-h-0 ${className}`}>
               {selectedCharacter?.avatar_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={selectedCharacter.avatar_url}
                   alt={selectedCharacter?.name || "Character avatar"}
@@ -946,6 +950,7 @@ export const CharacterSelect: React.FC<Props> = ({
       {showLabel && selectedCharacter?.name && (
         <div className="hidden items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs font-medium text-text shadow-sm sm:inline-flex">
           {selectedCharacter?.avatar_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
             <img
               src={selectedCharacter.avatar_url}
               alt={selectedCharacter.name || "Character avatar"}

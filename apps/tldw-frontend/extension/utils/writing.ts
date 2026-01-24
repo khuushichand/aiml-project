@@ -403,10 +403,11 @@ const coercePromptChunks = (
         if (record.type && typeof record.content === "string") {
           return record
         }
+        const contentValue = (record as { content?: unknown }).content
         const content =
-          typeof (record as any).content === "string"
-            ? (record as any).content
-            : String((record as any).content ?? "")
+          typeof contentValue === "string"
+            ? contentValue
+            : String(contentValue ?? "")
         return { type: "user", content }
       }
       return null
@@ -424,6 +425,7 @@ export const normalizeSessionPayload = (
   }
   const payload = raw as Record<string, unknown>
   const normalized: WritingSessionPayload = { ...defaults }
+  const normalizedRecord = normalized as Record<string, unknown>
 
   ;(Object.keys(defaults) as Array<keyof WritingSessionPayload>).forEach((key) => {
     const value = payload[key]
@@ -432,40 +434,52 @@ export const normalizeSessionPayload = (
       return
     }
     if (typeof defaultValue === "number") {
-      const numeric = typeof value === "string" ? Number(value) : (value as number)
-      normalized[key] = Number.isFinite(numeric) ? (numeric as any) : defaultValue
+      const numeric =
+        typeof value === "string"
+          ? Number(value)
+          : typeof value === "number"
+            ? value
+            : Number.NaN
+      normalizedRecord[key] = Number.isFinite(numeric) ? numeric : defaultValue
       return
     }
     if (typeof defaultValue === "boolean") {
       if (typeof value === "string") {
-        normalized[key] = (value === "true") as any
+        normalizedRecord[key] = value === "true"
       } else {
-        normalized[key] = Boolean(value) as any
+        normalizedRecord[key] = Boolean(value)
       }
       return
     }
     if (Array.isArray(defaultValue)) {
       if (typeof value === "string") {
         const parsed = parseJsonMaybe(value)
-        normalized[key] = (Array.isArray(parsed) ? parsed : defaultValue) as any
+        normalizedRecord[key] = Array.isArray(parsed) ? parsed : defaultValue
       } else if (Array.isArray(value)) {
-        normalized[key] = value as any
+        normalizedRecord[key] = value
       }
       return
     }
     if (typeof defaultValue === "object" && defaultValue !== null) {
       if (typeof value === "string") {
         const parsed = parseJsonMaybe(value)
-        normalized[key] = (typeof parsed === "object" && parsed
-          ? { ...defaultValue, ...parsed }
-          : defaultValue) as any
+        normalizedRecord[key] =
+          typeof parsed === "object" && parsed
+            ? {
+                ...(defaultValue as Record<string, unknown>),
+                ...(parsed as Record<string, unknown>)
+              }
+            : defaultValue
       } else if (typeof value === "object" && value) {
-        normalized[key] = { ...defaultValue, ...(value as any) }
+        normalizedRecord[key] = {
+          ...(defaultValue as Record<string, unknown>),
+          ...(value as Record<string, unknown>)
+        }
       }
       return
     }
     if (typeof value === "string") {
-      normalized[key] = value as any
+      normalizedRecord[key] = value
     }
   })
 

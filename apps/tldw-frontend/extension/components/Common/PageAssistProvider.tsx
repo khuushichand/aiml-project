@@ -19,7 +19,11 @@ export const PageAssistProvider = ({
     if (typeof window === "undefined") return
     if (process.env.NODE_ENV !== "development") return
 
-    const w = window as any
+    type PageAssistDebug = {
+      setMessages: ReturnType<typeof useStoreMessageOption.getState>["setMessages"]
+      getMessages: () => ReturnType<typeof useStoreMessageOption.getState>["messages"]
+    }
+    const w = window as Window & { __tldw_pageAssist?: PageAssistDebug }
     w.__tldw_pageAssist = {
       setMessages: useStoreMessageOption.getState().setMessages,
       getMessages: () => useStoreMessageOption.getState().messages
