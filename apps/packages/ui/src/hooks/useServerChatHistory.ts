@@ -7,13 +7,17 @@ export type ServerChatHistoryItem = ServerChatSummary & {
   updatedAtMs?: number | null
 }
 
-export const useServerChatHistory = (searchQuery: string) => {
+export const useServerChatHistory = (
+  searchQuery: string,
+  options?: { enabled?: boolean }
+) => {
   const { isConnected } = useConnectionState()
   const normalizedQuery = searchQuery.trim().toLowerCase()
+  const isEnabled = isConnected && (options?.enabled ?? true)
 
   const query = useQuery({
     queryKey: ["serverChatHistory", normalizedQuery],
-    enabled: isConnected,
+    enabled: isEnabled,
     queryFn: async (): Promise<ServerChatHistoryItem[]> => {
       await tldwClient.initialize().catch(() => null)
       try {

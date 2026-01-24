@@ -32,6 +32,19 @@ print("LuxTTS model cached")
 PY
 ```
 
+### Model cache location
+
+By default, Hugging Face caches models under:
+
+- macOS/Linux: `~/.cache/huggingface/hub`
+- Windows: `%USERPROFILE%\\.cache\\huggingface\\hub`
+
+You can override the cache root with `HF_HOME`, e.g.:
+
+```bash
+export HF_HOME=/path/to/hf_cache
+```
+
 ## 3) Enable LuxTTS in config
 
 Edit `tldw_Server_API/Config_Files/tts_providers_config.yaml`:
@@ -83,6 +96,26 @@ curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
   "stream": false
 }
 JSON
+```
+
+### Sample request (raw JSON)
+
+```json
+{
+  "model": "lux_tts",
+  "input": "Hello from LuxTTS.",
+  "voice_reference": "<base64 audio>",
+  "response_format": "wav",
+  "stream": false,
+  "extra_params": {
+    "prompt_duration": 5,
+    "prompt_rms": 0.001,
+    "num_steps": 4,
+    "guidance_scale": 3.0,
+    "t_shift": 0.5,
+    "return_smooth": false
+  }
+}
 ```
 
 ### Streaming example (chunked)

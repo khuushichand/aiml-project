@@ -39,17 +39,18 @@ export const SessionRestoreDialog: FC<SessionRestoreDialogProps> = ({
   const approvalSummary = useMemo(() => {
     if (!session) return null
 
-    const pending = session.pendingApprovals.filter((a) => a.status === "pending")
-    if (pending.length === 0) return null
+    const pending = session.pendingApprovals ?? []
+    const pendingApprovals = pending.filter((a) => a.status === "pending")
+    if (pendingApprovals.length === 0) return null
 
     const fileChangePrefixes = ["fs.write", "fs.apply_patch"]
-    const fileChanges = pending.filter((a) =>
+    const fileChanges = pendingApprovals.filter((a) =>
       fileChangePrefixes.some((prefix) => a.toolName.startsWith(prefix))
     ).length
-    const commands = pending.filter((a) => a.toolName.startsWith("exec.")).length
-    const other = pending.length - fileChanges - commands
+    const commands = pendingApprovals.filter((a) => a.toolName.startsWith("exec.")).length
+    const other = pendingApprovals.length - fileChanges - commands
 
-    return { total: pending.length, fileChanges, commands, other }
+    return { total: pendingApprovals.length, fileChanges, commands, other }
   }, [session])
 
   if (!session) return null
@@ -176,6 +177,7 @@ export const SessionRestoreDialog: FC<SessionRestoreDialogProps> = ({
 
           <Button
             size="large"
+            danger
             icon={<Play className="size-4" />}
             onClick={onStartFresh}
             className="flex-1"

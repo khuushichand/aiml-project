@@ -2,6 +2,7 @@ import React, { useState, useMemo } from "react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { Input, Tooltip, Segmented } from "antd"
+import { useQuery } from "@tanstack/react-query"
 import {
   Plus,
   Search,
@@ -19,12 +20,14 @@ import {
 import { useSetting } from "@/hooks/useSetting"
 
 import { useDebounce } from "@/hooks/useDebounce"
+import { useConnectionState } from "@/hooks/useConnectionState"
 import { useServerChatHistory } from "@/hooks/useServerChatHistory"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
 import { useFolderStore } from "@/store/folder"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { cn } from "@/libs/utils"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { ServerChatList } from "./ChatSidebar/ServerChatList"
 import { FolderChatList } from "./ChatSidebar/FolderChatList"
 import {
@@ -56,6 +59,11 @@ export function ChatSidebar({
   const [searchQuery, setSearchQuery] = useState("")
   const debouncedSearchQuery = useDebounce(searchQuery, 300)
   const [selectionMode, setSelectionMode] = useState(false)
+  const { isConnected } = useConnectionState()
+  const normalizedSearchQuery = useMemo(
+    () => debouncedSearchQuery.trim().toLowerCase(),
+    [debouncedSearchQuery]
+  )
 
   // Tab state persisted in UI settings
   const [currentTab, setCurrentTab] = useSetting(SIDEBAR_ACTIVE_TAB_SETTING)
@@ -77,8 +85,30 @@ export function ChatSidebar({
   )
 
   // Server chat count for tab badge
-  const { data: serverChatData } = useServerChatHistory(debouncedSearchQuery)
-  const serverChats = serverChatData || []
+  const { data: serverChatData } = useServerChatHistory(debouncedSearchQuery, {
+    enabled: normalizedSearchQuery.length > 0
+  })
+  const serverChatCountFromList = serverChatData?.length
+  const { data: serverChatCountFromApi } = useQuery({
+    queryKey: ["serverChatCount", normalizedSearchQuery],
+    enabled:
+      isConnected &&
+      normalizedSearchQuery.length === 0 &&
+      serverChatCountFromList == null,
+    queryFn: async () => {
+      await tldwClient.initialize().catch(() => null)
+      const { chats, total } = await tldwClient.listChatsWithMeta({
+        limit: 1,
+        ordering: "-updated_at"
+      })
+      return total ?? chats.length
+    },
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
+    refetchOnMount: false,
+    retry: 1
+  })
+  const serverChatCount = serverChatCountFromList ?? serverChatCountFromApi ?? 0
 
   const sidebarShortcuts = useMemo(
     () => normalizeSidebarShortcutSelection(shortcutSelection),
@@ -168,7 +198,7 @@ export function ChatSidebar({
   const tabOptions: Array<{ value: SidebarTab; label: string }> = [
     {
       value: "server",
-      label: `${t("common:chatSidebar.tabs.server", "Server")}${serverChats.length > 0 ? ` (${serverChats.length})` : ""}`
+      label: `${t("common:chatSidebar.tabs.server", "Server")}${serverChatCount > 0 ? ` (${serverChatCount})` : ""}`
     },
     {
       value: "folders",
@@ -337,6 +367,9 @@ export function ChatSidebar({
 
       {/* Tabs */}
       <div className="px-3 py-2 border-b border-border">
+        <label id="chat-sidebar-tab-label" className="sr-only">
+          {t("common:chatSidebar.tabsLabel", "Chat view")}
+        </label>
         <Segmented<SidebarTab>
           value={currentTab}
           onChange={(value) => {
@@ -346,6 +379,7 @@ export function ChatSidebar({
           block
           size="small"
           className="w-full"
+          aria-labelledby="chat-sidebar-tab-label"
         />
       </div>
 

@@ -182,70 +182,124 @@ export function CommandPalette({
         }
       ] : []),
       // Actions
-      {
-        id: "action-new-chat",
-        label: t("common:commandPalette.newChat", "New Chat"),
-        icon: <MessageSquare className="size-4" />,
-        shortcut: buildShortcut("u", "ctrl", "shift"),
-        action: () => { onNewChat?.(); setOpen(false) },
-        category: "action",
-        keywords: ["create", "start", "conversation"],
-      },
-      {
-        id: "action-toggle-rag",
-        label: t("common:commandPalette.toggleKnowledgeSearch", "Toggle Search & Context"),
-        description: t("common:commandPalette.toggleKnowledgeSearchDesc", "Search your knowledge base and context"),
-        icon: <Search className="size-4" />,
-        shortcut: buildShortcut("r", "alt"),
-        action: () => { onToggleRag?.(); setOpen(false) },
-        category: "action",
-        keywords: ["search", "knowledge", "retrieve", "rag"],
-      },
-      {
-        id: "action-toggle-web",
-        label: t("common:commandPalette.toggleWebSearch", "Toggle Web Search"),
-        description: t("common:commandPalette.toggleWebDesc", "Search the internet"),
-        icon: <Globe className="size-4" />,
-        shortcut: buildShortcut("w", "alt"),
-        action: () => { onToggleWebSearch?.(); setOpen(false) },
-        category: "action",
-        keywords: ["internet", "online", "browse"],
-      },
-      {
-        id: "action-ingest",
-        label: t("common:commandPalette.ingestPage", "Ingest Current Page"),
-        description: t("common:commandPalette.ingestDesc", "Save this page to your knowledge base"),
-        icon: <UploadCloud className="size-4" />,
-        shortcut: buildShortcut("i", "meta"),
-        action: () => { onIngestPage?.(); setOpen(false) },
-        category: "action",
-        keywords: ["save", "import", "add", "upload"],
-      },
-      {
-        id: "action-switch-model",
-        label: t("common:commandPalette.switchModel", "Switch Model"),
-        icon: <BrainCircuit className="size-4" />,
-        shortcut: buildShortcut("e", "meta"),
-        action: () => { onSwitchModel?.(); setOpen(false) },
-        category: "action",
-        keywords: ["model", "ai", "llm", "change"],
-      },
-      {
-        id: "action-toggle-sidebar",
-        label: t("common:commandPalette.toggleSidebar", "Toggle Sidebar"),
-        description: t(
-          "common:commandPalette.toggleSidebarDesc",
-          "Show or hide the chat sidebar"
-        ),
-        icon: <Eye className="size-4" />,
-        shortcut: buildShortcut("b", "ctrl", "shift"),
-        action: () => {
-          onToggleSidebar?.()
-          setOpen(false)
-        },
-        category: "action",
-        keywords: ["sidebar", "layout", "panel"],
-      },
+      ...(onNewChat
+        ? [
+            {
+              id: "action-new-chat",
+              label: t("common:commandPalette.newChat", "New Chat"),
+              icon: <MessageSquare className="size-4" />,
+              shortcut: buildShortcut("u", "ctrl", "shift"),
+              action: () => {
+                onNewChat()
+                setOpen(false)
+              },
+              category: "action",
+              keywords: ["create", "start", "conversation"],
+            }
+          ]
+        : []),
+      ...(onToggleRag
+        ? [
+            {
+              id: "action-toggle-rag",
+              label: t(
+                "common:commandPalette.toggleKnowledgeSearch",
+                "Toggle Search & Context"
+              ),
+              description: t(
+                "common:commandPalette.toggleKnowledgeSearchDesc",
+                "Search your knowledge base and context"
+              ),
+              icon: <Search className="size-4" />,
+              shortcut: buildShortcut("r", "alt"),
+              action: () => {
+                onToggleRag()
+                setOpen(false)
+              },
+              category: "action",
+              keywords: ["search", "knowledge", "retrieve", "rag"],
+            }
+          ]
+        : []),
+      ...(onToggleWebSearch
+        ? [
+            {
+              id: "action-toggle-web",
+              label: t(
+                "common:commandPalette.toggleWebSearch",
+                "Toggle Web Search"
+              ),
+              description: t(
+                "common:commandPalette.toggleWebDesc",
+                "Search the internet"
+              ),
+              icon: <Globe className="size-4" />,
+              shortcut: buildShortcut("w", "alt"),
+              action: () => {
+                onToggleWebSearch()
+                setOpen(false)
+              },
+              category: "action",
+              keywords: ["internet", "online", "browse"],
+            }
+          ]
+        : []),
+      ...(onIngestPage
+        ? [
+            {
+              id: "action-ingest",
+              label: t("common:commandPalette.ingestPage", "Ingest Current Page"),
+              description: t(
+                "common:commandPalette.ingestDesc",
+                "Save this page to your knowledge base"
+              ),
+              icon: <UploadCloud className="size-4" />,
+              shortcut: buildShortcut("i", "meta"),
+              action: () => {
+                onIngestPage()
+                setOpen(false)
+              },
+              category: "action",
+              keywords: ["save", "import", "add", "upload"],
+            }
+          ]
+        : []),
+      ...(onSwitchModel
+        ? [
+            {
+              id: "action-switch-model",
+              label: t("common:commandPalette.switchModel", "Switch Model"),
+              icon: <BrainCircuit className="size-4" />,
+              shortcut: buildShortcut("e", "meta"),
+              action: () => {
+                onSwitchModel()
+                setOpen(false)
+              },
+              category: "action",
+              keywords: ["model", "ai", "llm", "change"],
+            }
+          ]
+        : []),
+      ...(onToggleSidebar
+        ? [
+            {
+              id: "action-toggle-sidebar",
+              label: t("common:commandPalette.toggleSidebar", "Toggle Sidebar"),
+              description: t(
+                "common:commandPalette.toggleSidebarDesc",
+                "Show or hide the chat sidebar"
+              ),
+              icon: <Eye className="size-4" />,
+              shortcut: buildShortcut("b", "ctrl", "shift"),
+              action: () => {
+                onToggleSidebar()
+                setOpen(false)
+              },
+              category: "action",
+              keywords: ["sidebar", "layout", "panel"],
+            }
+          ]
+        : []),
       ...(isSidepanel && onSearchHistory
         ? [
             {
@@ -340,6 +394,17 @@ export function CommandPalette({
       return labelMatch || descMatch || keywordMatch
     })
   }, [allCommands, query])
+
+  // Clamp selection when filtered commands change
+  useEffect(() => {
+    const clampedIndex =
+      filteredCommands.length === 0
+        ? 0
+        : Math.max(0, Math.min(selectedIndex, filteredCommands.length - 1))
+    if (clampedIndex !== selectedIndex) {
+      setSelectedIndex(clampedIndex)
+    }
+  }, [filteredCommands, selectedIndex])
 
   // Group commands by category
   const groupedCommands = useMemo(() => {

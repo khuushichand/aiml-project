@@ -27,6 +27,7 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
   const [response, setResponse] = React.useState<OmniSearchResponse | null>(null)
   const [open, setOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(false)
+  const [hasError, setHasError] = React.useState(false)
   const [active, setActive] = React.useState<ActivePosition | null>(null)
   const inputRef = React.useRef<HTMLInputElement | null>(null)
   const listboxId = React.useId()
@@ -76,6 +77,7 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
       setResponse(null)
       setOpen(false)
       setLoading(false)
+      setHasError(false)
       setActive(null)
       return
     }
@@ -83,6 +85,7 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
     const run = async () => {
       const requestId = ++latestRequestId.current
       setLoading(true)
+      setHasError(false)
       try {
         const res = await omniSearch(trimmedQuery, deps, {
           limitPerSection: 5,
@@ -107,11 +110,13 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
         } else {
           setActive(null)
         }
-      } catch {
+      } catch (err) {
         if (latestRequestId.current === requestId) {
           setResponse(null)
           setOpen(false)
+          setHasError(true)
           setActive(null)
+          console.error("OmniSearch failed:", err)
         }
       } finally {
         if (latestRequestId.current === requestId) {
@@ -234,8 +239,10 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
     }
   }
 
-  const hasResults =
-    response && response.sections.some((section) => section.results.length > 0)
+  const hasResults = React.useMemo(
+    () => response?.sections.some((section) => section.results.length > 0) ?? false,
+    [response]
+  )
 
   const normalizedQuery = React.useMemo(
     () => trimmedQuery || query.trim(),
@@ -263,6 +270,7 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
           value={query}
           onChange={(event) => {
             setQuery(event.target.value)
+            if (hasError) setHasError(false)
           }}
           onFocus={() => {
             if (hasResults) setOpen(true)
@@ -291,6 +299,13 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
           ) : null}
         </span>
       </div>
+      {hasError && !loading && (
+        <div className="mt-1 text-xs text-red-500" role="alert">
+          {t("option:omniSearch.searchError", {
+            defaultValue: "Search failed. Please try again."
+          })}
+        </div>
+      )}
 
       {open && response && (
         <div

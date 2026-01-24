@@ -99,7 +99,6 @@ export function ServerChatList({
     () => new Set(selectedChatIds),
     [selectedChatIds]
   )
-  const visibleChatIdSetRef = React.useRef<Set<string> | null>(null)
   const [bulkFolderPickerOpen, setBulkFolderPickerOpen] = React.useState(false)
   const [bulkTagPickerOpen, setBulkTagPickerOpen] = React.useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = React.useState(false)
@@ -167,38 +166,20 @@ export function ServerChatList({
     []
   )
 
-  const { mutate: updateChatMetadata } = useMutation<
-    ServerChatSummary,
-    Error,
-    UpdateChatRequestPayload
-  >({
-    mutationFn: updateChatRequest,
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
-    }
-  })
+  const invalidateServerChatHistory = React.useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
+  }, [queryClient])
 
-  const { mutate: renameChat, isPending: renameLoading } = useMutation<
-    ServerChatSummary,
-    Error,
-    UpdateChatRequestPayload
-  >({
-    mutationFn: updateChatRequest,
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
-    }
-  })
+  const useUpdateChatMutation = () =>
+    useMutation<ServerChatSummary, Error, UpdateChatRequestPayload>({
+      mutationFn: updateChatRequest,
+      onSettled: invalidateServerChatHistory
+    })
 
-  const { mutate: updateChatTopic, isPending: topicLoading } = useMutation<
-    ServerChatSummary,
-    Error,
-    UpdateChatRequestPayload
-  >({
-    mutationFn: updateChatRequest,
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
-    }
-  })
+  const { mutate: updateChatMetadata } = useUpdateChatMutation()
+  const { mutate: renameChat, isPending: renameLoading } = useUpdateChatMutation()
+  const { mutate: updateChatTopic, isPending: topicLoading } =
+    useUpdateChatMutation()
 
   const {
     data: serverChatData,
@@ -264,11 +245,8 @@ export function ServerChatList({
   React.useEffect(() => {
     if (!selectionMode) {
       setSelectedChatIds((prev) => (prev.length === 0 ? prev : []))
-      visibleChatIdSetRef.current = visibleChatIdSet
       return
     }
-    if (visibleChatIdSetRef.current === visibleChatIdSet) return
-    visibleChatIdSetRef.current = visibleChatIdSet
     setSelectedChatIds((prev) => {
       const next = prev.filter((id) => visibleChatIdSet.has(id))
       if (next.length === prev.length && next.every((id, idx) => id === prev[idx])) {
@@ -585,7 +563,6 @@ export function ServerChatList({
     }
   }, [
     applyBulkTrash,
-    message,
     queryClient,
     selectedConversationIds,
     setPinnedChatIds,

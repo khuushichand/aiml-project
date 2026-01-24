@@ -1417,6 +1417,47 @@ export class TldwApiClient {
     return list.map((c) => this.normalizeChatSummary(c))
   }
 
+  async listChatsWithMeta(
+    params?: Record<string, any>,
+    options?: { signal?: AbortSignal }
+  ): Promise<{ chats: ServerChatSummary[]; total: number }> {
+    const query = this.buildQuery(params)
+    const data = await bgRequest<any>({
+      path: `/api/v1/chats/${query}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+
+    let list: any[] = []
+    let total: number | null = null
+
+    if (Array.isArray(data)) {
+      list = data
+    } else if (data && typeof data === "object") {
+      const obj: any = data
+      if (typeof obj.total === "number") {
+        total = obj.total
+      } else if (typeof obj.count === "number") {
+        total = obj.count
+      }
+      if (Array.isArray(obj.chats)) {
+        list = obj.chats
+      } else if (Array.isArray(obj.items)) {
+        list = obj.items
+      } else if (Array.isArray(obj.results)) {
+        list = obj.results
+      } else if (Array.isArray(obj.data)) {
+        list = obj.data
+      }
+    }
+
+    const chats = list.map((c) => this.normalizeChatSummary(c))
+    return {
+      chats,
+      total: typeof total === "number" ? total : chats.length
+    }
+  }
+
   async createChat(payload: Record<string, any>): Promise<ServerChatSummary> {
     const res = await bgRequest<any>({
       path: "/api/v1/chats/",

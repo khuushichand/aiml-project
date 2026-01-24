@@ -2,7 +2,7 @@
  * WorkspaceSelector - Select and manage workspace directories
  */
 
-import { FC, useState, useEffect, useRef } from "react"
+import { FC, useState, useEffect, useRef, MouseEvent } from "react"
 import { useTranslation } from "react-i18next"
 import { Dropdown, Modal, Input, message, Divider } from "antd"
 import {
@@ -17,6 +17,7 @@ import {
 import { useStorage } from "@plasmohq/storage/hook"
 import * as nativeClient from "@/services/native/native-client"
 import { useWorkspaceHistory, useAutoSelectWorkspace } from "@/hooks/useWorkspaceHistory"
+import { isDuplicateWorkspacePath } from "./utils/workspace-paths"
 
 export interface Workspace {
   id: string
@@ -114,7 +115,11 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
       setSelectedId(workspace.id)
 
       // Record usage in history
-      await recordUsage(workspace)
+      try {
+        await recordUsage(workspace)
+      } catch (e: unknown) {
+        console.error("[WorkspaceSelector] Failed to record workspace usage:", e)
+      }
     } catch (e: unknown) {
       const err =
         e && typeof e === "object" && "message" in e
@@ -128,25 +133,33 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
 
   // Handle adding new workspace
   const handleAddWorkspace = async () => {
-    if (!newPath.trim()) {
+    const trimmedPath = newPath.trim()
+    if (!trimmedPath) {
       message.error(t("pleaseEnterPath", "Please enter a path"))
+      return
+    }
+    if (isDuplicateWorkspacePath(trimmedPath, workspaces || [])) {
+      message.error(t("workspaceAlreadyAdded", "Workspace already added"))
       return
     }
 
     setIsValidating(true)
     try {
       // Validate path via native agent
-      const result = await nativeClient.setWorkspace(newPath.trim())
+      const result = await nativeClient.setWorkspace(trimmedPath)
       if (!result.ok) {
         message.error(result.error || t("invalidPath", "Invalid path"))
         return
       }
 
+      const pathForName = trimmedPath.replace(/[/\\]+$/, "") || trimmedPath
+      const derivedName = pathForName.split(/[/\\]/).pop() || t("workspace", "Workspace")
+
       // Add to list
       const workspace: Workspace = {
         id: (crypto as any)?.randomUUID?.() || Math.random().toString(36).slice(2),
-        name: newName.trim() || (newPath.split(/[/\\]/).pop() || t("workspace", "Workspace")),
-        path: newPath.trim()
+        name: newName.trim() || derivedName,
+        path: trimmedPath
       }
 
       setWorkspaces(prev => [...(prev || []), workspace])

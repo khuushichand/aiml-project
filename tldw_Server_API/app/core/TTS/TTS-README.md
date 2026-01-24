@@ -578,6 +578,11 @@ The service integrates with the application's metrics system:
 | "Circuit breaker open" | Provider temporarily disabled due to failures, will auto-recover |
 | "Model not found" | Download required model files (see setup guide) |
 | "Out of memory" | Reduce batch size or use smaller model variant |
+| "LuxTTS module not found" | Set `module_path` (or `LUX_TTS_MODULE_PATH`) to your LuxTTS checkout |
+
+Setup guides:
+- General TTS setup: `Docs/STT-TTS/TTS-SETUP-GUIDE.md`
+- LuxTTS quickstart: `Docs/STT-TTS/LUXTTS_TTS_SETUP.md`
 
 ### Debug Mode
 

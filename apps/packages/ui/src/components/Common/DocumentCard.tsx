@@ -19,6 +19,7 @@ export const DocumentCard: React.FC<Props> = ({ name, onRemove, loading }) => {
       aria-disabled={loading}
       aria-label={name}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return
         if (loading) return
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault()

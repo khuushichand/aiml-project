@@ -845,6 +845,8 @@ export const CharacterSelect: React.FC<Props> = ({
     (menuNode: React.ReactNode) => {
       if (!React.isValidElement(menuNode)) return menuNode
       const menuElement = menuNode as React.ReactElement
+      // AntD menu nodes don't expose a typed ref; grab the internal ref so we can
+      // merge it with our own list ref for keyboard focus management.
       const originalRef = (menuElement as any).ref as React.Ref<HTMLUListElement> | undefined
       return React.cloneElement(menuElement, {
         ref: (node: HTMLUListElement | null) => attachMenuRef(node, originalRef)

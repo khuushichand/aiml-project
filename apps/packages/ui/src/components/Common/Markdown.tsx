@@ -21,7 +21,7 @@ function Markdown({
   className = "prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark",
   searchQuery,
   codeBlockVariant = "default",
-  allowExternalImages
+  allowExternalImages,
 }: {
   message: string
   className?: string
@@ -31,23 +31,15 @@ function Markdown({
 }) {
   const [checkWideMode] = useStorage("checkWideMode", false)
   const [codeTheme] = useStorage("codeTheme", "auto")
-  const [allowExternalImagesSetting] = useStorage(
-    "allowExternalImages",
-    DEFAULT_CHAT_SETTINGS.allowExternalImages
-  )
+  const [allowExternalImagesSetting] = useStorage("allowExternalImages", DEFAULT_CHAT_SETTINGS.allowExternalImages)
   const blockIndexRef = React.useRef(0)
   blockIndexRef.current = 0
-  if (checkWideMode) {
-    className += " max-w-none"
-  }
-  const resolvedAllowExternalImages =
-    typeof allowExternalImages === "boolean"
-      ? allowExternalImages
-      : allowExternalImagesSetting
-  const paragraphClass =
-    codeBlockVariant === "plain" || codeBlockVariant === "compact"
-      ? "mb-2 last:mb-0 whitespace-pre-wrap"
-      : "mb-2 last:mb-0"
+  const resolvedClassName = React.useMemo(() => {
+    if (!checkWideMode) return className
+    return `${className} max-w-none`
+  }, [checkWideMode, className])
+  const resolvedAllowExternalImages = typeof allowExternalImages === "boolean" ? allowExternalImages : allowExternalImagesSetting
+  const paragraphClass = codeBlockVariant === "plain" || codeBlockVariant === "compact" ? "mb-2 last:mb-0 whitespace-pre-wrap" : "mb-2 last:mb-0"
   const renderHighlightedChildren = React.useCallback(
     (children: React.ReactNode): React.ReactNode => {
       if (!searchQuery) return children
@@ -63,21 +55,19 @@ function Markdown({
         return child
       })
     },
-    [searchQuery]
+    [searchQuery],
   )
-  message = preprocessLaTeX(message)
+  const processedMessage = React.useMemo(() => preprocessLaTeX(message), [message])
   return (
     <React.Fragment>
       <ReactMarkdown
-        className={className}
+        className={resolvedClassName}
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
           pre({ children, ...props }) {
             const childArray = React.Children.toArray(children)
-            const codeChild = childArray.find(
-              (child) => React.isValidElement(child) && child.type === "code"
-            ) as React.ReactElement | undefined
+            const codeChild = childArray.find((child) => React.isValidElement(child) && child.type === "code") as React.ReactElement | undefined
 
             if (!codeChild) {
               return <pre {...props}>{children}</pre>
@@ -89,11 +79,7 @@ function Markdown({
             const value = String(codeChild.props?.children ?? "").replace(/\n$/, "")
 
             if (codeBlockVariant === "plain") {
-              return (
-                <div className="my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 text-xs font-mono leading-relaxed text-text whitespace-pre overflow-x-auto">
-                  {value}
-                </div>
-              )
+              return <div className="my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 text-xs font-mono leading-relaxed text-text whitespace-pre overflow-x-auto">{value}</div>
             }
             if (codeBlockVariant === "compact") {
               const rawLanguage = match ? match[1] : ""
@@ -101,24 +87,16 @@ function Markdown({
               const highlightLanguage = rawLanguage ? normalizedLanguage : "markdown"
               return (
                 <div className="not-prose my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 overflow-x-auto">
-                  <Highlight
-                    code={value}
-                    language={safeLanguage(highlightLanguage)}
-                    theme={resolveTheme(codeTheme || "dracula")}>
-                    {({
-                      className: highlightClassName,
-                      style,
-                      tokens,
-                      getLineProps,
-                      getTokenProps
-                    }) => (
+                  <Highlight code={value} language={safeLanguage(highlightLanguage)} theme={resolveTheme(codeTheme || "dracula")}>
+                    {({ className: highlightClassName, style, tokens, getLineProps, getTokenProps }) => (
                       <pre
                         className={`${highlightClassName} m-0 text-xs font-mono leading-relaxed`}
                         style={{
                           ...style,
                           backgroundColor: "transparent",
-                          fontFamily: "var(--font-mono)"
-                        }}>
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
                         {tokens.map((line, i) => (
                           <div key={i} {...getLineProps({ line, key: i })}>
                             {line.map((token, key) => (
@@ -132,74 +110,46 @@ function Markdown({
                 </div>
               )
             }
-            return (
-              <CodeBlock
-                language={match ? match[1] : ""}
-                value={value}
-                blockIndex={blockIndex}
-              />
-            )
+            return <CodeBlock language={match ? match[1] : ""} value={value} blockIndex={blockIndex} />
           },
           code({ className, children, ...props }) {
+            const mergedClassName = className ? `${className} font-semibold` : "font-semibold"
             return (
-              <code className={`${className} font-semibold`} {...props}>
+              <code className={mergedClassName} {...props}>
                 {children}
               </code>
             )
           },
-          a({ node, ...props }) {
+          a({ ...props }) {
             return (
-              <a
-                target="_blank"
-                rel="noreferrer"
-                className="text-blue-500 text-sm hover:underline"
-                {...props}>
+              <a target="_blank" rel="noopener noreferrer" className="text-blue-500 text-sm hover:underline" {...props}>
                 {props.children}
               </a>
             )
           },
           img({ src, alt }) {
             const resolvedSrc = typeof src === "string" ? src : ""
-            const isExternal =
-              /^https?:\/\//i.test(resolvedSrc) ||
-              /^\/\/[^/]/.test(resolvedSrc)
+            const isExternal = /^https?:\/\//i.test(resolvedSrc) || /^\/\/[^/]/.test(resolvedSrc)
             const isAllowed = !isExternal || resolvedAllowExternalImages
             if (!resolvedSrc) return null
             if (!isAllowed) {
               return (
                 <span className="inline-flex items-center gap-2 rounded-md border border-border bg-surface2 px-2 py-1 text-[11px] text-text-muted">
-                  <span>
-                    {alt ? `Image: ${alt}` : "External image blocked"}
-                  </span>
-                  <a
-                    href={resolvedSrc}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-primary hover:underline"
-                  >
+                  <span>{alt ? `Image: ${alt}` : "External image blocked"}</span>
+                  <a href={resolvedSrc} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
                     Open
                   </a>
                 </span>
               )
             }
-            return (
-              <img
-                src={resolvedSrc}
-                alt={alt || ""}
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                className="my-2 max-w-full rounded-md border border-border"
-              />
-            )
+            return <img src={resolvedSrc} alt={alt || ""} loading="lazy" referrerPolicy="no-referrer" className="my-2 max-w-full rounded-md border border-border" />
           },
           table({ children }) {
             return <TableBlock>{children}</TableBlock>
           },
           p({ children, className, ...props }) {
             const content = renderHighlightedChildren(children)
-            const mergedClassName = [paragraphClass, className]
-              .filter(Boolean)
-              .join(" ")
+            const mergedClassName = [paragraphClass, className].filter(Boolean).join(" ")
             return (
               <p className={mergedClassName} {...props}>
                 {content}
@@ -232,9 +182,10 @@ function Markdown({
           },
           h6({ children, ...props }) {
             return <h6 {...props}>{renderHighlightedChildren(children)}</h6>
-          }
-        }}>
-        {message}
+          },
+        }}
+      >
+        {processedMessage}
       </ReactMarkdown>
     </React.Fragment>
   )

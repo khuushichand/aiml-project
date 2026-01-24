@@ -23,10 +23,19 @@ and this project adheres to Some kind of Versioning
 - Slides Module
 - NeuTTS, PocketTTS, EchoTTS, Qwen-3 TTS
 - moved the tldw_Browser_Assistant project and the tldw-frontent folder into the '/apps/' folder, as moving forward they will share the same base.
-- As a result, new frontend!
+    - As a result, new frontend!
+- Kanban: vector search integration, activity logging with filtering, rate limiting on endpoints
+- Reading Collections: async import jobs workflow with job monitoring endpoints
+- Workflows: LLM step type with MCP tool allowlist and scope validation
 
 ### Changed
 - Workflows Module
+    - New "llm" step type (distinct from "prompt")
+    - MCP tool allowlist and scope validation
+    - Stricter approve/reject permission checks
+    - Configurable LLM retry cap
+
+
 
 ### Removed
 

@@ -75,6 +75,8 @@ def ingest_files(
     form_fields: Dict[str, str],
     batch_size: int,
 ) -> Tuple[int, int]:
+    if batch_size <= 0:
+        raise ValueError("ingest_files batch_size must be > 0")
     ingested = 0
     failures = 0
     if not paths:

@@ -24,10 +24,28 @@ interface Props {
   blockIndex?: number
 }
 
+const PREVIEW_MAX_HEIGHT = 420
+
+const generatePreviewToken = () => {
+  if (typeof crypto !== "undefined" && "getRandomValues" in crypto) {
+    const bytes = new Uint8Array(16)
+    crypto.getRandomValues(bytes)
+    return Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+  }
+  return `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+}
+
 export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   const [isBtnPressed, setIsBtnPressed] = useState(false)
   const [previewValue, setPreviewValue] = useState(value)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewHeight, setPreviewHeight] = useState(PREVIEW_MAX_HEIGHT)
+  const [isPreviewConstrained, setIsPreviewConstrained] = useState(true)
+  const [previewToken, setPreviewToken] = useState(() => generatePreviewToken())
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const previewFrameRef = useRef<HTMLIFrameElement | null>(null)
   const normalizedLanguage = normalizeLanguage(language)
   const lines = value ? value.split(/\r?\n/) : []
   const totalLines = lines.length
@@ -130,6 +148,9 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
 
   const buildPreviewDoc = useCallback(() => {
     const code = previewValue || ""
+    const tokenLiteral = JSON.stringify(previewToken)
+    const readyScript =
+      `<script>(function(){var token=${tokenLiteral};function sendHeight(){var doc=document.documentElement;var body=document.body;var height=Math.max(doc?doc.scrollHeight:0,body?body.scrollHeight:0);window.parent&&window.parent.postMessage({type:"tldw-preview-resize",height:height,token:token},"*");}window.addEventListener("load",sendHeight);window.addEventListener("resize",sendHeight);if(window.ResizeObserver){var ro=new ResizeObserver(sendHeight);ro.observe(document.documentElement);}window.addEventListener("message",function(event){if(event&&event.data&&event.data.type==="tldw-preview-ping"&&event.data.token===token){sendHeight();}});window.parent&&window.parent.postMessage({type:"tldw-preview-ready",token:token},"*");sendHeight();})();</script>`
     if ((language || "").toLowerCase() === "svg") {
       const hasSvgTag = /<svg[\s>]/i.test(code)
       let svgMarkup = hasSvgTag
@@ -145,10 +166,50 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
         )
       }
       
-      return `<!doctype html><html><head><meta charset='utf-8'/><style>html,body{margin:0;padding:0;display:flex;align-items:center;justify-content:center;background:#fff;height:100%;overflow:hidden;}svg{max-width:100%;max-height:100%;}</style></head><body>${svgMarkup}</body></html>`
+      return `<!doctype html><html><head><meta charset='utf-8'/><style>html,body{margin:0;padding:0;display:flex;align-items:center;justify-content:center;background:#fff;height:100%;overflow:hidden;}svg{max-width:100%;max-height:100%;}</style></head><body>${svgMarkup}${readyScript}</body></html>`
     }
-    return `<!doctype html><html><head><meta charset='utf-8'/></head><body>${code}</body></html>`
-  }, [previewValue, language])
+    return `<!doctype html><html><head><meta charset='utf-8'/></head><body>${code}${readyScript}</body></html>`
+  }, [previewValue, language, previewToken])
+
+  useEffect(() => {
+    if (!showPreview || !isPreviewable) {
+      setPreviewUrl(null)
+      setPreviewHeight(PREVIEW_MAX_HEIGHT)
+      return
+    }
+    const doc = buildPreviewDoc()
+    const blob = new Blob([doc], { type: "text/html" })
+    const url = window.URL.createObjectURL(blob)
+    setPreviewUrl(url)
+    setPreviewHeight(PREVIEW_MAX_HEIGHT)
+    return () => {
+      window.URL.revokeObjectURL(url)
+    }
+  }, [buildPreviewDoc, isPreviewable, showPreview])
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      const frameWindow = previewFrameRef.current?.contentWindow
+      if (!frameWindow || event.source !== frameWindow) return
+      if (event.origin !== "null") return
+      const data = event.data as { type?: string; height?: number; token?: string } | null
+      if (!data || typeof data !== "object") return
+      if (data.token !== previewToken) return
+      if (data.type === "tldw-preview-ready") {
+        frameWindow.postMessage({ type: "tldw-preview-ping", token: previewToken }, "*")
+        return
+      }
+      if (data.type === "tldw-preview-resize" && typeof data.height === "number") {
+        const clamped = Math.min(Math.max(Math.ceil(data.height), 120), 1000)
+        setPreviewHeight(clamped)
+      }
+    }
+
+    window.addEventListener("message", handleMessage)
+    return () => {
+      window.removeEventListener("message", handleMessage)
+    }
+  }, [previewToken])
 
   const handleDownload = () => {
     const blob = new Blob([value], { type: "text/plain" })
@@ -199,13 +260,20 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     const newKey = computeKey()
     if (newKey !== keyRef.current) {
       keyRef.current = newKey
+      setPreviewToken(generatePreviewToken())
+      setPreviewHeight(PREVIEW_MAX_HEIGHT)
+      setIsPreviewConstrained(true)
       if (previewStateMap.has(newKey)) {
         const prev = previewStateMap.get(newKey)!
         if (prev !== showPreview) setShowPreview(prev)
+      } else if (showPreview) {
+        setShowPreview(false)
       }
       if (collapsedStateMap.has(newKey)) {
         const prevCollapsed = collapsedStateMap.get(newKey)!
         if (prevCollapsed !== collapsed) setCollapsed(prevCollapsed)
+      } else if (collapsed !== isLong) {
+        setCollapsed(isLong)
       }
     }
   }, [
@@ -215,7 +283,8 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     previewStateMap,
     collapsedStateMap,
     showPreview,
-    collapsed
+    collapsed,
+    isLong
   ])
 
   useEffect(() => {
@@ -279,6 +348,12 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     autoOpenStateMap.set(artifactId, true)
   }
 
+  const previewContainerHeight = isPreviewConstrained
+    ? Math.min(previewHeight, PREVIEW_MAX_HEIGHT)
+    : previewHeight
+  const isPreviewOversized = previewHeight > PREVIEW_MAX_HEIGHT
+  const isPreviewScrollable = isPreviewConstrained && isPreviewOversized
+
   return (
     <>
       <div className="not-prose">
@@ -308,6 +383,27 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
                     <EyeIcon className="size-3" />
                   </button>
                 </div>
+              )}
+              {showPreview && isPreviewable && !collapsed && isPreviewOversized && (
+                <Tooltip
+                  title={
+                    isPreviewConstrained
+                      ? t("previewToggleExpand", "Expand preview")
+                      : t("previewToggleClamp", "Clamp preview")
+                  }
+                >
+                  <button
+                    onClick={() => setIsPreviewConstrained((prev) => !prev)}
+                    aria-pressed={isPreviewConstrained}
+                    className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-2 py-1 text-[11px] text-text-muted hover:text-text"
+                  >
+                    <span>
+                      {isPreviewConstrained
+                        ? t("previewMaxHeight", "Max height")
+                        : t("previewFitHeight", "Fit height")}
+                    </span>
+                  </button>
+                </Tooltip>
               )}
 
               <span className="font-mono text-xs">
@@ -419,12 +515,18 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
                 </Highlight>
               )}
               {showPreview && isPreviewable && (
-                <div className="w-full h-[420px] bg-surface rounded-b-xl overflow-hidden border-t border-border">
+                <div
+                  className={`w-full bg-surface rounded-b-xl border-t border-border overflow-x-hidden ${
+                    isPreviewScrollable ? "overflow-y-auto" : "overflow-hidden"
+                  }`}
+                  style={{ height: previewContainerHeight }}
+                >
                   <iframe
                     title="Preview"
-                    srcDoc={buildPreviewDoc()}
+                    ref={previewFrameRef}
+                    src={previewUrl ?? "about:blank"}
                     className="w-full h-full border-0"
-                    sandbox="allow-scripts allow-same-origin"
+                    sandbox="allow-scripts"
                   />
                 </div>
               )}
