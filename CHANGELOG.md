@@ -20,7 +20,10 @@ and this project adheres to Some kind of Versioning
 ## [0.1.18] 2026-01-X
 
 ### Added
-Slides Module
+- Slides Module
+- NeuTTS, PocketTTS, EchoTTS, Qwen-3 TTS
+- moved the tldw_Browser_Assistant project and the tldw-frontent folder into the '/apps/' folder, as moving forward they will share the same base.
+- As a result, new frontend!
 
 ### Changed
 - Workflows Module
