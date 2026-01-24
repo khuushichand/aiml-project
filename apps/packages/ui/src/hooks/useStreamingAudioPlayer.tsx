@@ -42,7 +42,9 @@ const toUint8 = (chunk: ArrayBuffer | Uint8Array): Uint8Array<ArrayBuffer> => {
     if (chunk.buffer instanceof ArrayBuffer) {
       return chunk as Uint8Array<ArrayBuffer>
     }
-    return new Uint8Array(chunk.buffer.slice(0))
+    const buffer = new ArrayBuffer(chunk.byteLength)
+    new Uint8Array(buffer).set(chunk)
+    return new Uint8Array(buffer)
   }
   return new Uint8Array(chunk)
 }
