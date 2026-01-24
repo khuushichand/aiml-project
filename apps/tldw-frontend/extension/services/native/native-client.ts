@@ -8,6 +8,10 @@
 import { browser } from "wxt/browser"
 
 const HOST_NAME = "com.tldw.agent"
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
 
 /**
  * Request sent to the native host
@@ -15,7 +19,7 @@ const HOST_NAME = "com.tldw.agent"
 export interface NativeRequest {
   id: string
   type: "ping" | "config" | "mcp_request" | "mcp_list_tools"
-  payload?: any
+  payload?: unknown
 }
 
 /**
@@ -24,7 +28,7 @@ export interface NativeRequest {
 export interface NativeResponse {
   id: string
   ok: boolean
-  data?: any
+  data?: unknown
   error?: {
     code: string
     message: string
@@ -38,7 +42,7 @@ export interface NativeResponse {
 export interface MCPToolDefinition {
   name: string
   description: string
-  parameters: Record<string, any>
+  parameters: Record<string, unknown>
   tier: "read" | "write" | "exec"
 }
 
@@ -47,7 +51,7 @@ export interface MCPToolDefinition {
  */
 export interface MCPToolResult {
   ok: boolean
-  data?: any
+  data?: unknown
   error?: string
 }
 
@@ -118,7 +122,7 @@ export async function listTools(): Promise<MCPToolDefinition[]> {
  */
 export async function executeTool(
   toolName: string,
-  args: Record<string, any> = {}
+  args: Record<string, unknown> = {}
 ): Promise<MCPToolResult> {
   const response = await sendNativeMessage({
     id: generateId(),
@@ -152,9 +156,15 @@ async function sendNativeMessage(request: NativeRequest): Promise<NativeResponse
   try {
     const response = await browser.runtime.sendNativeMessage(HOST_NAME, request)
     return response as NativeResponse
-  } catch (e: any) {
+  } catch (e: unknown) {
     // Handle common native messaging errors
-    if (e?.message?.includes("not found") || e?.message?.includes("Native host")) {
+    const message =
+      e instanceof Error
+        ? e.message
+        : isRecord(e) && typeof e.message === "string"
+          ? e.message
+          : ""
+    if (message.includes("not found") || message.includes("Native host")) {
       throw new NativeHostNotFoundError(
         "tldw-agent is not installed. Please run the install script for your browser."
       )

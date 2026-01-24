@@ -1,5 +1,4 @@
 import { browser } from "wxt/browser"
-import { Storage } from "@plasmohq/storage"
 import { createSafeStorage } from "@/utils/safe-storage"
 import { formatErrorMessage } from "@/utils/format-error-message"
 import { isPlaceholderApiKey } from "@/utils/api-key"
@@ -12,6 +11,19 @@ import type {
   PathOrUrl,
   UpperLower
 } from "@/services/tldw/openapi-guard"
+
+type UnknownRecord = Record<string, unknown>
+type RequestErrorLogEntry = {
+  method: string
+  path: string
+  status?: number
+  error?: string
+  source: "background" | "direct"
+  at?: string
+}
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
 
 const ERROR_LOG_THROTTLE_MS = 15_000
 const RATE_LIMIT_LOG_THROTTLE_MS = 60_000
@@ -107,10 +119,12 @@ const sanitizeResponseData = (
 
 const resolveWebRequestUrl = async (path: PathOrUrl): Promise<{
   url: string
-  config: Record<string, any> | null
+  config: UnknownRecord | null
 }> => {
   const storage = createSafeStorage()
-  const config = await storage.get<Record<string, any>>("tldwConfig").catch(() => null)
+  const config = await storage
+    .get<UnknownRecord>("tldwConfig")
+    .catch(() => null)
   const isAbsoluteUrl = typeof path === "string" && /^https?:/i.test(path)
   if (!config?.serverUrl && !isAbsoluteUrl) {
     throw new Error("tldw server not configured")
@@ -124,7 +138,7 @@ const resolveWebRequestUrl = async (path: PathOrUrl): Promise<{
 
 const applyAuthHeaders = (
   headers: Record<string, string>,
-  config: Record<string, any> | null
+  config: UnknownRecord | null
 ): void => {
   if (!config) return
   for (const key of Object.keys(headers)) {
@@ -155,7 +169,7 @@ const applyAuthHeaders = (
   headers["X-API-KEY"] = key
 }
 
-const isBinaryBody = (value: any): boolean => {
+const isBinaryBody = (value: unknown): boolean => {
   if (!value || typeof value !== "object") return false
   if (typeof FormData !== "undefined" && value instanceof FormData) return true
   if (typeof Blob !== "undefined" && value instanceof Blob) return true
@@ -175,7 +189,7 @@ export interface BgRequestInit<
   path: P
   method?: UpperLower<M>
   headers?: Record<string, string>
-  body?: any
+  body?: unknown
   noAuth?: boolean
   timeoutMs?: number
   abortSignal?: AbortSignal
@@ -184,7 +198,7 @@ export interface BgRequestInit<
 }
 
 export async function bgRequest<
-  T = any,
+  T = unknown,
   P extends PathOrUrl = AllowedPath,
   M extends AllowedMethodFor<P> = AllowedMethodFor<P>
 >(init: BgRequestInit<P, M>): Promise<T> {
@@ -215,7 +229,9 @@ export async function bgRequest<
       const storage = createSafeStorage({ area: "local" })
       const at = new Date().toISOString()
       const payload = { ...entry, at }
-      const existing = (await storage.get<any[]>("__tldwRequestErrors").catch(() => [])) || []
+      const existing =
+        (await storage.get<RequestErrorLogEntry[]>("__tldwRequestErrors").catch(() => [])) ||
+        []
       const next = Array.isArray(existing) ? existing : []
       next.unshift(payload)
       if (next.length > 20) next.length = 20
@@ -329,7 +345,7 @@ export async function bgRequest<
       }
       return (returnResponse ? resp : resp.data) as T
     }
-  } catch (e) {
+  } catch {
     // fallthrough to direct fetch
   }
 
@@ -348,7 +364,7 @@ export async function bgRequest<
     },
     {
       getConfig: () =>
-        storage.get<Record<string, any>>("tldwConfig").catch(() => null)
+        storage.get<UnknownRecord>("tldwConfig").catch(() => null)
     }
   )
   if (!resp?.ok) {
@@ -384,7 +400,7 @@ export interface BgStreamInit<
   path: P
   method?: UpperLower<M>
   headers?: Record<string, string>
-  body?: any
+  body?: unknown
   streamIdleTimeoutMs?: number
   abortSignal?: AbortSignal
 }
@@ -402,11 +418,11 @@ export async function* bgStream<
     const hasContentType = Object.keys(resolvedHeaders).some(
       (key) => key.toLowerCase() === "content-type"
     )
-    const resolvedBody =
+    const resolvedBody: BodyInit | undefined =
       body == null
         ? undefined
         : typeof body === "string" || isBinaryBody(body)
-          ? body
+          ? (body as BodyInit)
           : JSON.stringify(body)
     if (body != null && !hasContentType && !isBinaryBody(body)) {
       resolvedHeaders["Content-Type"] = "application/json"
@@ -438,12 +454,12 @@ export async function* bgStream<
       const resp = await fetch(url, {
         method,
         headers: resolvedHeaders,
-        body: resolvedBody as any,
+        body: resolvedBody,
         signal: controller.signal
       })
 
       if (!resp.ok) {
-        let errorBody: any = null
+        let errorBody: unknown = null
         try {
           const raw = await resp.text()
           try {
@@ -519,18 +535,21 @@ export async function* bgStream<
   }
 
   const port = browser.runtime.connect({ name: 'tldw:stream' })
-  const encoder = new TextEncoder()
   const queue: string[] = []
   let done = false
-  let error: any = null
+  let error: unknown = null
 
-  const onMessage = (msg: any) => {
-    if (msg?.event === 'data') {
-      queue.push(msg.data as string)
-    } else if (msg?.event === 'done') {
+  const onMessage = (msg: unknown) => {
+    if (!isRecord(msg)) return
+    if (msg.event === 'data') {
+      if (typeof msg.data === "string") {
+        queue.push(msg.data)
+      }
+    } else if (msg.event === 'done') {
       done = true
-    } else if (msg?.event === 'error') {
-      error = new Error(msg.message || 'Stream error')
+    } else if (msg.event === 'error') {
+      const message = typeof msg.message === "string" ? msg.message : 'Stream error'
+      error = new Error(message)
       done = true
     }
   }
@@ -583,14 +602,14 @@ export interface BgUploadInit<P extends AllowedPath = AllowedPath, M extends All
   path: P
   method?: UpperLower<M>
   // key/value fields to include alongside file in FormData
-  fields?: Record<string, any>
+  fields?: Record<string, unknown>
   // File payload as raw bytes with metadata (structured-cloneable)
   file?: { name?: string; type?: string; data: ArrayBuffer | Uint8Array | number[] }
   // Optional override for the multipart file field name
   fileFieldName?: string
 }
 
-export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
+export async function bgUpload<T = unknown, P extends AllowedPath = AllowedPath, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
   { path, method = 'POST' as UpperLower<M>, fields = {}, file, fileFieldName }: BgUploadInit<P, M>
 ): Promise<T> {
   if (browser?.runtime?.sendMessage && hasExtensionRuntime()) {
@@ -660,20 +679,20 @@ export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M e
 }
 
 export async function bgRequestValidated<
-  T = any,
+  T = unknown,
   P extends PathOrUrl = AllowedPath,
   M extends AllowedMethodFor<P> = AllowedMethodFor<P>
 >(
   init: BgRequestInit<P, M>,
   validate?: (data: unknown) => T
 ): Promise<T> {
-  const data = await bgRequest<any, P, M>(init)
+  const data = await bgRequest<unknown, P, M>(init)
   return validate ? validate(data) : (data as T)
 }
 
 // Strict variants: enforce that call sites use ClientPath-derived strings by default.
 export async function bgRequestClient<
-  T = any,
+  T = unknown,
   P extends ClientPathOrUrlWithQuery = ClientPathOrUrlWithQuery,
   M extends AllowedMethodFor<P> = AllowedMethodFor<P>
 >(init: BgRequestInit<P, M>): Promise<T> {

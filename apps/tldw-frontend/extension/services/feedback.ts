@@ -22,7 +22,7 @@ export type ExplicitFeedbackRequest = {
 export type ExplicitFeedbackResponse = {
   ok?: boolean
   feedback_id?: string
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export type ImplicitFeedbackEvent = {

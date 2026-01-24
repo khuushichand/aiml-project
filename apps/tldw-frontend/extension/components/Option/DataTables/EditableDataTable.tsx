@@ -162,14 +162,14 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
     if (!editingTable || editingTable.id !== table.id) {
       startEditing(table)
     }
-  }, [table?.id, readOnly, editingTable?.id, startEditing])
+  }, [table, readOnly, editingTable, startEditing])
 
   // Cleanup editing state when the table changes or unmounts.
   useEffect(() => {
     return () => {
       stopEditing()
     }
-  }, [table?.id, stopEditing])
+  }, [table, stopEditing])
 
   // DnD sensors
   const sensors = [PointerSensor, KeyboardSensor]
@@ -276,7 +276,7 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
       key: col.id,
       width: 150,
       ellipsis: true,
-      render: (value: any, record: DataTableRow, rowIndex: number) => {
+      render: (value: unknown, _row: DataTableRow, rowIndex: number) => {
         if (readOnly) {
           // Read-only rendering
           if (value === null || value === undefined) {
@@ -330,7 +330,7 @@ export const EditableDataTable: React.FC<EditableDataTableProps> = ({
         key: "_actions",
         width: 50,
         fixed: "right",
-        render: (_: any, __: DataTableRow, rowIndex: number) => (
+        render: (_value: unknown, _row: DataTableRow, rowIndex: number) => (
           <Popconfirm
             title={t("dataTables:deleteRow", "Delete row?")}
             description={t(

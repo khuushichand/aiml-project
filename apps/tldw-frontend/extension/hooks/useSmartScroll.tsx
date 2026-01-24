@@ -1,7 +1,7 @@
-import { useRef, useEffect, useState, useCallback, useMemo } from "react"
+import { useRef, useEffect, useState, useCallback } from "react"
 
 export const useSmartScroll = (
-  messages: any[],
+  messages: unknown[],
   streaming: boolean,
   threshold: number = 100 
 ) => {

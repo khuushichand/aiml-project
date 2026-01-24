@@ -178,17 +178,22 @@ export const toPinnedResult = (item: RagResult): RagPinnedResult => {
 /**
  * Normalize batch results from various API response formats
  */
-const normalizeBatchResults = (payload: any): BatchResultGroup[] => {
+const normalizeBatchResults = (payload: unknown): BatchResultGroup[] => {
   if (!payload) return []
   if (Array.isArray(payload)) {
     return payload
-      .map((group: any) => ({
-        query: String(group.query || ""),
-        results: group.results || []
-      }))
+      .map((group) => {
+        const record = isRecord(group) ? group : {}
+        return {
+          query: String(record.query || ""),
+          results: Array.isArray(record.results)
+            ? (record.results as RagResult[])
+            : []
+        }
+      })
       .filter((group: BatchResultGroup) => group.results.length > 0)
   }
-  if (typeof payload === "object") {
+  if (isRecord(payload)) {
     return Object.entries(payload)
       .map(([query, results]) => ({
         query,
@@ -278,7 +283,10 @@ export function useKnowledgeSearch({
     }))
   )
 
-  const pinnedResults = ragPinnedResults || []
+  const pinnedResults = React.useMemo(
+    () => ragPinnedResults ?? [],
+    [ragPinnedResults]
+  )
 
   // Sort results by the selected mode
   const sortResults = React.useCallback(

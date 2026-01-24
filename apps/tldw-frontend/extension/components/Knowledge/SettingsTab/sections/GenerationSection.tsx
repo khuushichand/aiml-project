@@ -67,7 +67,7 @@ export const GenerationSection: React.FC<GenerationSectionProps> = ({
   onUpdate,
   searchFilter = ""
 }) => {
-  const { t, i18n } = useTranslation(["sidepanel"])
+  const { t } = useTranslation(["sidepanel"])
   const generationTitle = t("sidepanel:rag.generation", "Answer Generation")
   const enableGenerationLabel = t(
     "sidepanel:rag.enableGeneration",
@@ -157,7 +157,7 @@ export const GenerationSection: React.FC<GenerationSectionProps> = ({
         value: "decline"
       }
     ],
-    [t, i18n.language]
+    [t]
   )
 
   const handleEnableGeneration = React.useCallback(

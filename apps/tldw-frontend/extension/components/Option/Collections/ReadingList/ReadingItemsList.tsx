@@ -37,6 +37,15 @@ const SORT_OPTIONS = [
   { value: "relevance", label: "Relevance" }
 ]
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
 export const ReadingItemsList: React.FC = () => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
@@ -118,8 +127,8 @@ export const ReadingItemsList: React.FC = () => {
         item.tags?.forEach((tag) => tagSet.add(tag))
       })
       setAvailableTags(Array.from(tagSet).sort())
-    } catch (error: any) {
-      const errorMsg = error?.message || "Failed to fetch reading list"
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error, "Failed to fetch reading list")
       setItemsError(errorMsg)
       message.error(errorMsg)
     } finally {
@@ -248,8 +257,8 @@ export const ReadingItemsList: React.FC = () => {
         return rest
       })
       message.success(t("collections:reading.deleted", "Article deleted"))
-    } catch (error: any) {
-      message.error(error?.message || "Failed to delete article")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to delete article"))
     } finally {
       setDeleteLoading(false)
       closeDeleteConfirm()
@@ -420,7 +429,6 @@ export const ReadingItemsList: React.FC = () => {
             <ReadingItemCard
               key={item.id}
               item={item}
-              onRefresh={fetchItems}
               progressPercent={progressById[item.id]}
               onProgressCleared={handleProgressCleared}
             />

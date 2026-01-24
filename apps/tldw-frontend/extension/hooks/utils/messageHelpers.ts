@@ -1,9 +1,13 @@
 import type { NotificationInstance } from "antd/es/notification/interface"
-import { useTranslation } from "react-i18next"
+import type { TFunction } from "i18next"
 import {
   saveMessageOnError as saveError,
   saveMessageOnSuccess as saveSuccess
 } from "../chat-helper"
+import type { ChatHistory } from "@/store/option"
+
+type SaveSuccessPayload = Parameters<typeof saveSuccess>[0]
+type SaveErrorPayload = Parameters<typeof saveError>[0]
 
 export const focusTextArea = (
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>
@@ -19,12 +23,12 @@ export const focusTextArea = (
         textareaElement.focus()
       }
     }
-  } catch (e) { }
+  } catch {}
 }
 
 export const validateBeforeSubmit = (
   selectedModel: string,
-  t: any,
+  t: TFunction,
   notification: NotificationInstance
 ) => {
   if (!selectedModel || selectedModel?.trim()?.length === 0) {
@@ -42,9 +46,9 @@ export const createSaveMessageOnSuccess = (
   temporaryChat: boolean,
   setHistoryId: (id: string, options?: { preserveServerChatId?: boolean }) => void
 ) => {
-  return async (e: any): Promise<string | null> => {
+  return async (payload: SaveSuccessPayload): Promise<string | null> => {
     if (!temporaryChat) {
-      return await saveSuccess(e)
+      return await saveSuccess(payload)
     } else {
       setHistoryId("temp")
       return null
@@ -54,24 +58,24 @@ export const createSaveMessageOnSuccess = (
 
 export const createSaveMessageOnError = (
   temporaryChat: boolean,
-  history: any,
-  setHistory: (history: any) => void,
+  history: ChatHistory,
+  setHistory: (history: ChatHistory) => void,
   setHistoryId: (id: string, options?: { preserveServerChatId?: boolean }) => void
 ) => {
-  return async (e: any): Promise<string | null> => {
+  return async (payload: SaveErrorPayload): Promise<string | null> => {
     if (!temporaryChat) {
-      return await saveError(e)
+      return await saveError(payload)
     } else {
       setHistory([
         ...history,
         {
           role: "user",
-          content: e.userMessage,
-          image: e.image
+          content: payload.userMessage,
+          image: payload.image
         },
         {
           role: "assistant",
-          content: e.botMessage
+          content: payload.botMessage
         }
       ])
 

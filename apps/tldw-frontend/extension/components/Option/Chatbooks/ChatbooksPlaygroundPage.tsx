@@ -52,6 +52,22 @@ const CONTENT_TYPE_KEYS = [
 
 type ContentTypeKey = (typeof CONTENT_TYPE_KEYS)[number]
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const ensureRecord = (value: unknown): Record<string, unknown> =>
+  isRecord(value) ? value : {}
+
+const extractList = (value: unknown, keys: string[]): unknown[] => {
+  if (Array.isArray(value)) return value
+  if (!isRecord(value)) return []
+  for (const key of keys) {
+    const list = value[key]
+    if (Array.isArray(list)) return list
+  }
+  return []
+}
+
 type ChatbookEntity = {
   id: string
   title: string
@@ -95,8 +111,29 @@ type ChatbookJob = {
   failed_items?: number
   skipped_items?: number
   warnings?: string[]
-  conflicts?: any[]
+  conflicts?: unknown[]
 }
+
+type ChatbookManifest = {
+  name?: string | null
+  author?: string | null
+  description?: string | null
+  total_size_bytes?: number | string | null
+  content_items?: unknown[]
+  total_conversations?: number | string | null
+  total_notes?: number | string | null
+  total_characters?: number | string | null
+  total_media_items?: number | string | null
+  total_prompts?: number | string | null
+  total_evaluations?: number | string | null
+  total_embeddings?: number | string | null
+  total_world_books?: number | string | null
+  total_dictionaries?: number | string | null
+  total_documents?: number | string | null
+}
+
+const parseManifest = (value: unknown): ChatbookManifest | null =>
+  isRecord(value) ? (value as ChatbookManifest) : null
 
 const parseIdList = (raw: string) =>
   raw
@@ -104,14 +141,14 @@ const parseIdList = (raw: string) =>
     .map((id) => id.trim())
     .filter(Boolean)
 
-const normalizeTags = (value: any): string[] => {
+const normalizeTags = (value: unknown): string[] => {
   if (!value) return []
   if (Array.isArray(value)) {
     return value
       .map((item) => {
         if (typeof item === "string") return item
-        if (item?.name) return String(item.name)
-        if (item?.keyword) return String(item.keyword)
+        if (isRecord(item) && typeof item.name === "string") return item.name
+        if (isRecord(item) && typeof item.keyword === "string") return item.keyword
         return null
       })
       .filter(Boolean) as string[]
@@ -119,24 +156,26 @@ const normalizeTags = (value: any): string[] => {
   return []
 }
 
-const pickFirstString = (source: any, keys: string[], fallback = "") => {
+const pickFirstString = (source: unknown, keys: string[], fallback = "") => {
+  if (!isRecord(source)) return fallback
   for (const key of keys) {
-    const value = source?.[key]
+    const value = source[key]
     if (typeof value === "string" && value.trim()) return value
   }
   return fallback
 }
 
-const normalizeUpdatedAt = (source: any): string | null => {
+const normalizeUpdatedAt = (source: unknown): string | null => {
+  if (!isRecord(source)) return null
   const value =
-    source?.updated_at ??
-    source?.updatedAt ??
-    source?.last_modified ??
-    source?.lastModified ??
-    source?.modified_at ??
-    source?.modifiedAt ??
-    source?.created_at ??
-    source?.createdAt ??
+    source.updated_at ??
+    source.updatedAt ??
+    source.last_modified ??
+    source.lastModified ??
+    source.modified_at ??
+    source.modifiedAt ??
+    source.created_at ??
+    source.createdAt ??
     null
   if (!value) return null
   if (typeof value === "string") return value
@@ -221,84 +260,86 @@ const buildJobSignature = (jobs: ChatbookJob[]) =>
     )
     .join("|")
 
-const mapConversation = (item: any): ChatbookEntity => {
+const mapConversation = (item: unknown): ChatbookEntity => {
   const title = pickFirstString(item, ["title", "name"], "Untitled conversation")
   return {
-    id: String(item?.id ?? ""),
+    id: String(isRecord(item) ? item.id ?? "" : ""),
     title,
     description: pickFirstString(item, ["topic_label", "state", "source"], ""),
     updated_at: normalizeUpdatedAt(item),
-    tags: normalizeTags(item?.tags)
+    tags: normalizeTags(isRecord(item) ? item.tags : undefined)
   }
 }
 
-const mapNote = (item: any): ChatbookEntity => {
+const mapNote = (item: unknown): ChatbookEntity => {
   const title =
     pickFirstString(item, ["title", "name"], "") ||
     pickFirstString(item, ["content"], "Untitled note").slice(0, 40)
   return {
-    id: String(item?.id ?? ""),
+    id: String(isRecord(item) ? item.id ?? "" : ""),
     title,
     description: pickFirstString(item, ["content"], ""),
     updated_at: normalizeUpdatedAt(item),
-    tags: normalizeTags(item?.tags || item?.keywords)
+    tags: normalizeTags(
+      isRecord(item) ? item.tags ?? item.keywords : undefined
+    )
   }
 }
 
-const mapCharacter = (item: any): ChatbookEntity => ({
-  id: String(item?.id ?? ""),
+const mapCharacter = (item: unknown): ChatbookEntity => ({
+  id: String(isRecord(item) ? item.id ?? "" : ""),
   title: pickFirstString(item, ["name", "character_name", "title"], "Untitled character"),
   description: pickFirstString(item, ["description", "persona"], ""),
   updated_at: normalizeUpdatedAt(item),
-  tags: normalizeTags(item?.tags)
+  tags: normalizeTags(isRecord(item) ? item.tags : undefined)
 })
 
-const mapMedia = (item: any): ChatbookEntity => ({
-  id: String(item?.id ?? ""),
+const mapMedia = (item: unknown): ChatbookEntity => ({
+  id: String(isRecord(item) ? item.id ?? "" : ""),
   title: pickFirstString(item, ["title", "name"], "Untitled media"),
   description: pickFirstString(item, ["url", "source_url", "summary", "type"], ""),
   updated_at: normalizeUpdatedAt(item),
-  tags: normalizeTags(item?.tags || item?.keywords)
+  tags: normalizeTags(isRecord(item) ? item.tags ?? item.keywords : undefined)
 })
 
-const mapPrompt = (item: any): ChatbookEntity => ({
-  id: String(item?.id ?? item?.name ?? ""),
+const mapPrompt = (item: unknown): ChatbookEntity => ({
+  id: String(isRecord(item) ? item.id ?? item.name ?? "" : ""),
   title: pickFirstString(item, ["name", "title"], "Untitled prompt"),
   description: pickFirstString(item, ["details", "description"], ""),
   updated_at: normalizeUpdatedAt(item),
-  tags: normalizeTags(item?.keywords || item?.tags)
+  tags: normalizeTags(isRecord(item) ? item.keywords ?? item.tags : undefined)
 })
 
-const mapEvaluation = (item: any): ChatbookEntity => ({
-  id: String(item?.id ?? ""),
+const mapEvaluation = (item: unknown): ChatbookEntity => ({
+  id: String(isRecord(item) ? item.id ?? "" : ""),
   title: pickFirstString(item, ["name", "title"], "Untitled evaluation"),
   description: pickFirstString(item, ["description", "eval_type"], ""),
   updated_at: normalizeUpdatedAt(item),
-  tags: normalizeTags(item?.tags)
+  tags: normalizeTags(isRecord(item) ? item.tags : undefined)
 })
 
-const mapWorldBook = (item: any): ChatbookEntity => ({
-  id: String(item?.id ?? ""),
+const mapWorldBook = (item: unknown): ChatbookEntity => ({
+  id: String(isRecord(item) ? item.id ?? "" : ""),
   title: pickFirstString(item, ["name", "title"], "Untitled world book"),
   description: pickFirstString(item, ["description"], ""),
   updated_at: normalizeUpdatedAt(item),
-  tags: normalizeTags(item?.tags)
+  tags: normalizeTags(isRecord(item) ? item.tags : undefined)
 })
 
-const mapDictionary = (item: any): ChatbookEntity => ({
-  id: String(item?.id ?? ""),
+const mapDictionary = (item: unknown): ChatbookEntity => ({
+  id: String(isRecord(item) ? item.id ?? "" : ""),
   title: pickFirstString(item, ["name", "title"], "Untitled dictionary"),
   description: pickFirstString(item, ["description"], ""),
   updated_at: normalizeUpdatedAt(item),
-  tags: normalizeTags(item?.tags)
+  tags: normalizeTags(isRecord(item) ? item.tags : undefined)
 })
 
-const mapGeneratedDocument = (item: any): ChatbookEntity => ({
-  id: String(item?.id ?? item?.document_id ?? ""),
+const mapGeneratedDocument = (item: unknown): ChatbookEntity => ({
+  id: String(isRecord(item) ? item.id ?? item.document_id ?? "" : ""),
   title: pickFirstString(item, ["title", "document_type"], "Generated document"),
   description: pickFirstString(item, ["document_type", "source"], ""),
   updated_at: normalizeUpdatedAt(item),
-  tags: normalizeTags(item?.tags)
+  tags: normalizeTags(isRecord(item) ? item.tags : undefined)
 })
 
 const buildContentItems = async (
@@ -312,13 +353,14 @@ const buildContentItems = async (
 
   switch (type) {
     case "conversation": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: `/api/v1/chats?limit=${limit}&offset=${offset}`,
         method: "GET"
       })
-      const list = data?.chats || data?.items || data?.results || data?.data || data || []
-      const items = (Array.isArray(list) ? list : []).map(mapConversation)
-      const totalAvailable = normalizeTotal(data?.total)
+      const record = ensureRecord(data)
+      const list = extractList(data, ["chats", "items", "results", "data"])
+      const items = list.map(mapConversation)
+      const totalAvailable = normalizeTotal(record.total)
       const filtered = filterClientSide ? applyFilters(items, search, tags, updatedAfter) : items
       const paged = filterClientSide ? paginateItems(filtered, page, pageSize) : filtered
       const truncated =
@@ -328,13 +370,14 @@ const buildContentItems = async (
       return { items: paged, total, truncated }
     }
     case "note": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: `/api/v1/notes?limit=${limit}&offset=${offset}&include_keywords=true`,
         method: "GET"
       })
-      const list = data?.notes || data?.items || data?.results || data || []
-      const items = (Array.isArray(list) ? list : []).map(mapNote)
-      const totalAvailable = normalizeTotal(data?.total)
+      const record = ensureRecord(data)
+      const list = extractList(data, ["notes", "items", "results"])
+      const items = list.map(mapNote)
+      const totalAvailable = normalizeTotal(record.total)
       const filtered = filterClientSide ? applyFilters(items, search, tags, updatedAfter) : items
       const paged = filterClientSide ? paginateItems(filtered, page, pageSize) : filtered
       const truncated =
@@ -344,13 +387,14 @@ const buildContentItems = async (
       return { items: paged, total, truncated }
     }
     case "character": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: `/api/v1/characters?limit=${limit}&offset=${offset}`,
         method: "GET"
       })
-      const list = Array.isArray(data) ? data : data?.items || data?.results || data || []
-      const items = (Array.isArray(list) ? list : []).map(mapCharacter)
-      const totalAvailable = normalizeTotal(data?.total)
+      const record = ensureRecord(data)
+      const list = extractList(data, ["items", "results", "data"])
+      const items = list.map(mapCharacter)
+      const totalAvailable = normalizeTotal(record.total)
       const filtered = filterClientSide ? applyFilters(items, search, tags, updatedAfter) : items
       const paged = filterClientSide ? paginateItems(filtered, page, pageSize) : filtered
       const truncated =
@@ -362,13 +406,15 @@ const buildContentItems = async (
     case "media": {
       const pageParam = filterClientSide ? 1 : page
       const perPage = filterClientSide ? SEARCH_FETCH_LIMIT : pageSize
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: `/api/v1/media?page=${pageParam}&results_per_page=${perPage}`,
         method: "GET"
       })
-      const list = data?.items || data?.results || data?.data || data || []
-      const items = (Array.isArray(list) ? list : []).map(mapMedia)
-      const totalAvailable = normalizeTotal(data?.pagination?.total_items)
+      const record = ensureRecord(data)
+      const list = extractList(data, ["items", "results", "data"])
+      const items = list.map(mapMedia)
+      const pagination = isRecord(record.pagination) ? record.pagination : {}
+      const totalAvailable = normalizeTotal(pagination.total_items)
       const filtered = filterClientSide ? applyFilters(items, search, tags, updatedAfter) : items
       const paged = filterClientSide ? paginateItems(filtered, page, pageSize) : filtered
       const truncated =
@@ -378,56 +424,56 @@ const buildContentItems = async (
       return { items: paged, total, truncated }
     }
     case "prompt": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: "/api/v1/prompts",
         method: "GET"
       })
-      const list = Array.isArray(data) ? data : data?.items || data?.results || data || []
-      const items = (Array.isArray(list) ? list : []).map(mapPrompt)
+      const list = extractList(data, ["items", "results", "data"])
+      const items = list.map(mapPrompt)
       const filtered = applyFilters(items, search, tags, updatedAfter)
       const paged = paginateItems(filtered, page, pageSize)
       return { items: paged, total: filtered.length }
     }
     case "evaluation": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: "/api/v1/evaluations?limit=200",
         method: "GET"
       })
-      const list = data?.data || data?.items || data?.results || data || []
-      const items = (Array.isArray(list) ? list : []).map(mapEvaluation)
+      const list = extractList(data, ["data", "items", "results"])
+      const items = list.map(mapEvaluation)
       const filtered = applyFilters(items, search, tags, updatedAfter)
       const paged = paginateItems(filtered, page, pageSize)
       return { items: paged, total: filtered.length }
     }
     case "world_book": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: "/api/v1/characters/world-books",
         method: "GET"
       })
-      const list = Array.isArray(data) ? data : data?.items || data?.results || data || []
-      const items = (Array.isArray(list) ? list : []).map(mapWorldBook)
+      const list = extractList(data, ["items", "results", "data"])
+      const items = list.map(mapWorldBook)
       const filtered = applyFilters(items, search, tags, updatedAfter)
       const paged = paginateItems(filtered, page, pageSize)
       return { items: paged, total: filtered.length }
     }
     case "dictionary": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: "/api/v1/chat/dictionaries",
         method: "GET"
       })
-      const list = Array.isArray(data) ? data : data?.items || data?.results || data || []
-      const items = (Array.isArray(list) ? list : []).map(mapDictionary)
+      const list = extractList(data, ["items", "results", "data"])
+      const items = list.map(mapDictionary)
       const filtered = applyFilters(items, search, tags, updatedAfter)
       const paged = paginateItems(filtered, page, pageSize)
       return { items: paged, total: filtered.length }
     }
     case "generated_document": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: `/api/v1/chat/documents?limit=${SEARCH_FETCH_LIMIT}`,
         method: "GET"
       })
-      const list = data?.documents || data?.items || data?.results || data?.data || data || []
-      const items = (Array.isArray(list) ? list : []).map(mapGeneratedDocument)
+      const list = extractList(data, ["documents", "items", "results", "data"])
+      const items = list.map(mapGeneratedDocument)
       const filtered = applyFilters(items, search, tags, updatedAfter)
       const paged = paginateItems(filtered, page, pageSize)
       return { items: paged, total: filtered.length }
@@ -459,48 +505,48 @@ const fetchAllItemsForType = async (type: ContentTypeKey): Promise<ChatbookEntit
 
   switch (type) {
     case "prompt": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: "/api/v1/prompts",
         method: "GET"
       })
-      const list = Array.isArray(data) ? data : data?.items || data?.results || data || []
-      items = (Array.isArray(list) ? list : []).map(mapPrompt)
+      const list = extractList(data, ["items", "results", "data"])
+      items = list.map(mapPrompt)
       break
     }
     case "evaluation": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: "/api/v1/evaluations?limit=200",
         method: "GET"
       })
-      const list = data?.data || data?.items || data?.results || data || []
-      items = (Array.isArray(list) ? list : []).map(mapEvaluation)
+      const list = extractList(data, ["data", "items", "results"])
+      items = list.map(mapEvaluation)
       break
     }
     case "world_book": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: "/api/v1/characters/world-books",
         method: "GET"
       })
-      const list = Array.isArray(data) ? data : data?.items || data?.results || data || []
-      items = (Array.isArray(list) ? list : []).map(mapWorldBook)
+      const list = extractList(data, ["items", "results", "data"])
+      items = list.map(mapWorldBook)
       break
     }
     case "dictionary": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: "/api/v1/chat/dictionaries",
         method: "GET"
       })
-      const list = Array.isArray(data) ? data : data?.items || data?.results || data || []
-      items = (Array.isArray(list) ? list : []).map(mapDictionary)
+      const list = extractList(data, ["items", "results", "data"])
+      items = list.map(mapDictionary)
       break
     }
     case "generated_document": {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: `/api/v1/chat/documents?limit=${SEARCH_FETCH_LIMIT}`,
         method: "GET"
       })
-      const list = data?.documents || data?.items || data?.results || data?.data || data || []
-      items = (Array.isArray(list) ? list : []).map(mapGeneratedDocument)
+      const list = extractList(data, ["documents", "items", "results", "data"])
+      items = list.map(mapGeneratedDocument)
       break
     }
     default:
@@ -871,9 +917,16 @@ const getJobLabels = (t: (key: string, fallback: string) => string): Record<JobK
   import: t("settings:chatbooksPlayground.tabImport", "Import")
 })
 
-const extractJobList = (payload: any): ChatbookJob[] => {
-  if (Array.isArray(payload)) return payload
-  return payload?.jobs || payload?.items || payload?.results || payload?.data || []
+const extractJobList = (payload: unknown): ChatbookJob[] => {
+  if (Array.isArray(payload)) return payload as ChatbookJob[]
+  if (!isRecord(payload)) return []
+  const list =
+    payload.jobs ||
+    payload.items ||
+    payload.results ||
+    payload.data ||
+    []
+  return Array.isArray(list) ? (list as ChatbookJob[]) : []
 }
 
 const computeProgress = (job: ChatbookJob) => {
@@ -891,44 +944,50 @@ const formatTimestamp = (value?: string) => {
   return date.toLocaleString()
 }
 
-const getPreviewCount = (manifest: any, key: ContentTypeKey) => {
+const getPreviewCount = (manifest: ChatbookManifest | null, key: ContentTypeKey) => {
   if (!manifest) return 0
   switch (key) {
     case "conversation":
-      return manifest.total_conversations || 0
+      return normalizeTotal(manifest.total_conversations) ?? 0
     case "note":
-      return manifest.total_notes || 0
+      return normalizeTotal(manifest.total_notes) ?? 0
     case "character":
-      return manifest.total_characters || 0
+      return normalizeTotal(manifest.total_characters) ?? 0
     case "media":
-      return manifest.total_media_items || 0
+      return normalizeTotal(manifest.total_media_items) ?? 0
     case "prompt":
-      return manifest.total_prompts || 0
+      return normalizeTotal(manifest.total_prompts) ?? 0
     case "evaluation":
-      return manifest.total_evaluations || 0
+      return normalizeTotal(manifest.total_evaluations) ?? 0
     case "embedding":
-      return manifest.total_embeddings || 0
+      return normalizeTotal(manifest.total_embeddings) ?? 0
     case "world_book":
-      return manifest.total_world_books || 0
+      return normalizeTotal(manifest.total_world_books) ?? 0
     case "dictionary":
-      return manifest.total_dictionaries || 0
+      return normalizeTotal(manifest.total_dictionaries) ?? 0
     case "generated_document":
-      return manifest.total_documents || 0
+      return normalizeTotal(manifest.total_documents) ?? 0
     default:
       return 0
   }
 }
 
-const groupPreviewItems = (items: any[]): Record<ContentTypeKey, ChatbookEntity[]> => {
+const groupPreviewItems = (items: unknown[]): Record<ContentTypeKey, ChatbookEntity[]> => {
   const grouped = buildSelectionState(() => [] as ChatbookEntity[])
   items.forEach((item) => {
-    const type = item?.type as ContentTypeKey
-    if (!type || !CONTENT_TYPE_KEYS.includes(type)) return
+    if (!isRecord(item)) return
+    const typeValue = item.type
+    if (typeof typeValue !== "string") return
+    const type = typeValue as ContentTypeKey
+    if (!CONTENT_TYPE_KEYS.includes(type)) return
     grouped[type].push({
       id: String(item.id ?? ""),
-      title: item.title || String(item.id ?? ""),
-      description: item.description || "",
-      updated_at: item.updated_at || null,
+      title:
+        typeof item.title === "string" && item.title.trim()
+          ? item.title
+          : String(item.id ?? ""),
+      description: typeof item.description === "string" ? item.description : "",
+      updated_at: typeof item.updated_at === "string" ? item.updated_at : null,
       tags: normalizeTags(item.tags)
     })
   })
@@ -970,7 +1029,7 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
   const [exportSubmitting, setExportSubmitting] = React.useState(false)
 
   const [importFile, setImportFile] = React.useState<File | null>(null)
-  const [previewManifest, setPreviewManifest] = React.useState<any | null>(null)
+  const [previewManifest, setPreviewManifest] = React.useState<ChatbookManifest | null>(null)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = React.useState(false)
   const [conflictResolution, setConflictResolution] = React.useState("skip")
@@ -1001,8 +1060,10 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
   }, [])
 
   const previewItemsByType = React.useMemo(() => {
-    if (!previewManifest?.content_items?.length) return null
-    return groupPreviewItems(previewManifest.content_items)
+    if (!previewManifest) return null
+    const items = previewManifest.content_items
+    if (!Array.isArray(items) || items.length === 0) return null
+    return groupPreviewItems(items)
   }, [previewManifest])
 
   const previewTypes = React.useMemo(() => {
@@ -1263,10 +1324,11 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
     try {
       await tldwClient.initialize().catch(() => null)
       const res = await tldwClient.previewChatbook(file)
-      if (res?.error) {
+      if (isRecord(res) && typeof res.error === "string") {
         setPreviewError(res.error)
       } else {
-        setPreviewManifest(res?.manifest || null)
+        const manifestValue = isRecord(res) ? res.manifest : null
+        setPreviewManifest(parseManifest(manifestValue))
       }
     } catch (error) {
       setPreviewError(error instanceof Error ? error.message : String(error))

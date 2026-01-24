@@ -25,6 +25,29 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `USER_DB_BASE_DIR_ALLOWED_ROOTS` / `TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS`: Optional allowlist for setup-time changes to `USER_DB_BASE_DIR`. Comma- or colon-separated list of parent directories permitted for the new base.
 - `USER_DB_BASE`: Deprecated alias for `USER_DB_BASE_DIR` (used only by rewrite cache resolution).
 
+## OCR (PDF pipeline)
+- `OCR_PAGE_CONCURRENCY`: Per-page OCR concurrency (default `1`).
+
+### Dolphin OCR
+- `DOLPHIN_MODE`: `auto` | `transformers` | `remote`.
+- `DOLPHIN_PROMPT`, `DOLPHIN_PROMPT_PRESET`: main prompt override/preset (`general|doc|table|json`).
+- `DOLPHIN_JSON_PROMPT`: override JSON prompt (empty disables). `DOLPHIN_DISABLE_JSON=true` disables JSON pass.
+- `DOLPHIN_URL`: remote server base URL.
+- `DOLPHIN_REMOTE_MODE`: `dolphin_vllm` | `dolphin_trt` | `openai`.
+- `DOLPHIN_ENCODER_PROMPT`, `DOLPHIN_DECODER_PROMPT`: remote prompt overrides.
+- `DOLPHIN_REMOTE_MODEL`: model name for OpenAI-compatible mode.
+- `DOLPHIN_TIMEOUT`: request timeout seconds (default `60`).
+- `DOLPHIN_USE_DATA_URL`: `true` to send base64 image URLs (recommended for remote).
+- `DOLPHIN_MODEL_PATH`: local model id/path (default `ByteDance/Dolphin-v2`).
+- `DOLPHIN_DEVICE`: override device (`cuda`, `cpu`, etc.).
+- Generation: `DOLPHIN_MAX_NEW_TOKENS`, `DOLPHIN_MAX_LENGTH`, `DOLPHIN_TEMPERATURE`, `DOLPHIN_TOP_P`,
+  `DOLPHIN_TOP_K`, `DOLPHIN_REPETITION_PENALTY`, `DOLPHIN_DO_SAMPLE`, `DOLPHIN_NUM_BEAMS`.
+
+Config file overrides (`Config_Files/config.txt`)
+- `[OCR] backend_priority`: comma-separated list or JSON array of backends for auto selection.
+  - Example: `backend_priority = ["dolphin", "hunyuan", "points", "dots", "tesseract"]`
+  - When set, this list is used for both `auto` and `auto_high_quality` resolution.
+
 ## Testing & CI Controls
 - `TEST_MODE`: Enables test-friendly behaviors (`true|1|yes`). Used across modules to:
   - Relax or bypass certain rate limiter keys (e.g., client IP) to avoid false positives in tests.
@@ -347,6 +370,36 @@ Quick start (local dev):
 - `POINTS_MODE`: `sglang` or `transformers` (default: auto).
 - `POINTS_SGLANG_URL`: SGLang chat/completions endpoint (e.g., `http://127.0.0.1:8081/v1/chat/completions`).
 - `POINTS_SGLANG_MODEL`: Model name in SGLang server (e.g., `WePoints`).
+
+## OCR - HunyuanOCR (optional)
+- `HUNYUAN_MODE`: `auto` | `vllm` | `transformers` (default: `auto`).
+- `HUNYUAN_PROMPT`: Prompt override (free-form).
+- `HUNYUAN_PROMPT_PRESET`: `general|doc|table|spotting|json` (used when `HUNYUAN_PROMPT` is unset).
+- vLLM:
+  - `HUNYUAN_VLLM_URL`: OpenAI-compatible `/v1/chat/completions` endpoint.
+  - `HUNYUAN_VLLM_MODEL`: Model name (served-model-name).
+  - `HUNYUAN_VLLM_TIMEOUT`: Request timeout seconds (default `60`).
+  - `HUNYUAN_VLLM_USE_DATA_URL`: `true|false` (default `true`).
+- Transformers:
+  - `HUNYUAN_MODEL_PATH`: HF model id or local path (default: `tencent/HunyuanOCR`).
+  - `HUNYUAN_DEVICE`: Optional device override (`cuda`, `cpu`, etc.).
+- Generation:
+  - `HUNYUAN_MAX_NEW_TOKENS`, `HUNYUAN_TEMPERATURE`, `HUNYUAN_DO_SAMPLE`.
+- Post-processing:
+  - `HUNYUAN_CLEAN_REPEATS`: `true|false` (default `true`).
+
+## OCR - DeepSeek (optional)
+- `DEEPSEEK_OCR_MODEL_ID`: HF model id or local path (default: `deepseek-ai/DeepSeek-OCR`).
+- `DEEPSEEK_OCR_PROMPT`: Prompt override (default: layout-aware markdown conversion).
+- `DEEPSEEK_OCR_BASE_SIZE`: Base resolution size (default: `1024`).
+- `DEEPSEEK_OCR_IMAGE_SIZE`: Secondary resolution size (default: `640`).
+- `DEEPSEEK_OCR_CROP_MODE`: `true|false` (default: `true`).
+- `DEEPSEEK_OCR_SAVE_RESULTS`: `true|false` (default: `false`).
+- `DEEPSEEK_OCR_TEST_COMPRESS`: `true|false` (default: `false`).
+- `DEEPSEEK_OCR_DTYPE`: `bfloat16|float16|float32` (default: `bfloat16`).
+- `DEEPSEEK_OCR_ATTN_IMPL`: Attention implementation (default: `flash_attention_2`).
+- `DEEPSEEK_OCR_DEVICE`: `cuda|cpu` (default: `cuda`).
+- `DEEPSEEK_OCR_OUTPUT_DIR`: Optional output directory used when `DEEPSEEK_OCR_SAVE_RESULTS=true`.
 
 ## Workflows (File Access)
 - `WORKFLOWS_FILE_BASE_DIR`: Base directory for workflow `file://` access. Relative paths resolve from the project root; defaults to the per-user base dir under `USER_DB_BASE_DIR` (with a `Databases/` fallback).

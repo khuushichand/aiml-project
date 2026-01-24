@@ -185,7 +185,55 @@ def test_writing_capabilities_basic(client_with_writing_db: TestClient):
     data = resp.json()
     assert data["version"] == 1
     assert data["server"]["sessions"] is True
+    assert data["server"]["wordclouds"] is True
     assert data["providers"] is None
+
+
+def test_writing_wordclouds_flow(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+
+    text = "Alpha beta beta gamma gamma gamma"
+    create_resp = client.post(
+        "/api/v1/writing/wordclouds",
+        json={"text": text, "options": {"stopwords": []}},
+    )
+    assert create_resp.status_code in (200, 202), create_resp.text
+    payload = create_resp.json()
+    assert payload["status"] in ("ready", "queued", "running", "failed")
+    assert payload["id"]
+
+    if payload["status"] == "ready":
+        words = {entry["text"]: entry["weight"] for entry in payload["result"]["words"]}
+        assert words["gamma"] == 3
+        assert words["beta"] == 2
+
+    cached_resp = client.post(
+        "/api/v1/writing/wordclouds",
+        json={"text": text, "options": {"stopwords": []}},
+    )
+    assert cached_resp.status_code in (200, 202), cached_resp.text
+    cached = cached_resp.json()
+    assert cached["id"] == payload["id"]
+
+    get_resp = client.get(f"/api/v1/writing/wordclouds/{payload['id']}")
+    assert get_resp.status_code == 200, get_resp.text
+    fetched = get_resp.json()
+    assert fetched["id"] == payload["id"]
+
+
+def test_writing_wordclouds_empty_result(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+
+    text = "the and of"
+    resp = client.post(
+        "/api/v1/writing/wordclouds",
+        json={"text": text},
+    )
+    assert resp.status_code in (200, 202), resp.text
+    data = resp.json()
+    assert data["status"] in ("ready", "queued", "running", "failed")
+    if data["status"] == "ready":
+        assert data["result"]["words"] == []
 
 
 def test_writing_capabilities_provider_tokenizers(client_with_writing_db: TestClient, monkeypatch):

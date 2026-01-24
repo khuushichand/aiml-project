@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { getVoice } from "@/services/tts"
 import { splitMessageContent } from "@/utils/tts"
 import { resolveTtsProviderContext } from "@/services/tts-provider"
@@ -125,7 +125,7 @@ export const useTTS = () => {
 
       setIsSpeaking(false)
       setAudioElement(null)
-    } catch (error) {
+    } catch {
       setIsSpeaking(false)
       setAudioElement(null)
       notification.error({
@@ -138,7 +138,7 @@ export const useTTS = () => {
     }
   }
 
-  const cancel = () => {
+  const cancel = useCallback(() => {
     if (audioElement) {
       audioElement.pause()
       audioElement.currentTime = 0
@@ -155,13 +155,13 @@ export const useTTS = () => {
       window.speechSynthesis.cancel()
     }
     setIsSpeaking(false)
-  }
+  }, [audioElement])
 
   useEffect(() => {
     return () => {
       cancel()
     }
-  }, [])
+  }, [cancel])
 
   return {
     speak,

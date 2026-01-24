@@ -28,6 +28,15 @@ const COLOR_OPTIONS: { value: HighlightColor | "all"; label: string; color?: str
   { value: "purple", label: "Purple", color: "#ddd6fe" }
 ]
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
 export const HighlightsList: React.FC = () => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
@@ -91,8 +100,8 @@ export const HighlightsList: React.FC = () => {
       const start = (highlightsPage - 1) * highlightsPageSize
       const paged = filtered.slice(start, start + highlightsPageSize)
       setHighlights(paged, total)
-    } catch (error: any) {
-      const errorMsg = error?.message || "Failed to fetch highlights"
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error, "Failed to fetch highlights")
       setHighlightsError(errorMsg)
       message.error(errorMsg)
     } finally {
@@ -141,8 +150,8 @@ export const HighlightsList: React.FC = () => {
       message.success(t("collections:highlights.deleted", "Highlight deleted"))
       setDeleteModalOpen(false)
       setDeleteTargetId(null)
-    } catch (error: any) {
-      message.error(error?.message || "Failed to delete highlight")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to delete highlight"))
     } finally {
       setDeleteLoading(false)
     }

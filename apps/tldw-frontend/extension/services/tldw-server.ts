@@ -1,5 +1,4 @@
-import { Storage } from "@plasmohq/storage"
-import { tldwClient, tldwModels } from "./tldw"
+import { tldwClient, tldwModels, type ModelInfo } from "./tldw"
 import { setNoOfRetrievedDocs, setTotalFilePerKB } from "./app"
 import { createSafeStorage } from "@/utils/safe-storage"
 import { env } from "@/config/env"
@@ -64,7 +63,34 @@ export const isTldwServerRunning = async () => {
 
 type TldwModelFilter = "all" | "chat" | "embedding" | "other"
 
-const mapTldwModel = (model: any) => ({
+type ModelDetails = {
+  provider?: string
+  capabilities?: string[]
+} & Record<string, unknown>
+
+type MappedTldwModel = {
+  name: string
+  model: string
+  provider: string
+  nickname: string
+  context_length?: number
+  avatar?: string
+  modified_at: string
+  size: number
+  digest: string
+  details?: ModelDetails
+}
+
+type EmbeddingProvidersConfig = {
+  default_provider?: string
+  default_model?: string
+}
+
+type EmbeddingProvidersConfigClient = {
+  getEmbeddingProvidersConfig?: () => Promise<EmbeddingProvidersConfig | null>
+}
+
+const mapTldwModel = (model: ModelInfo): MappedTldwModel => ({
   name: `tldw:${model.id}`,
   model: `tldw:${model.id}`,
   provider: String(model.provider || 'unknown').toLowerCase(),
@@ -126,8 +152,8 @@ export const fetchChatModels = async ({ returnEmpty = false }: { returnEmpty?: b
     // Only tldw_server models are exposed as chat models
     const combined = [...tldw]
 
-    const dedupeByModel = (models: any[]) => {
-      const unique: any[] = []
+    const dedupeByModel = (models: MappedTldwModel[]) => {
+      const unique: MappedTldwModel[] = []
       const indexByModel = new Map<string, number>()
       const duplicates: string[] = []
 
@@ -145,7 +171,7 @@ export const fetchChatModels = async ({ returnEmpty = false }: { returnEmpty?: b
         }
         duplicates.push(key)
         const existing = unique[existingIndex] || {}
-        const merged: any = { ...existing }
+        const merged: MappedTldwModel = { ...existing }
         if (!merged.nickname && model?.nickname) merged.nickname = model.nickname
         if (!merged.name && model?.name) merged.name = model.name
         if (!merged.provider && model?.provider) merged.provider = model.provider
@@ -154,15 +180,9 @@ export const fetchChatModels = async ({ returnEmpty = false }: { returnEmpty?: b
           merged.modified_at = model.modified_at
         }
 
-        const existingDetails =
-          merged.details && typeof merged.details === "object"
-            ? merged.details
-            : {}
-        const incomingDetails =
-          model?.details && typeof model.details === "object"
-            ? model.details
-            : {}
-        const mergedDetails: any = { ...incomingDetails, ...existingDetails }
+        const existingDetails: ModelDetails = merged.details ?? {}
+        const incomingDetails: ModelDetails = model.details ?? {}
+        const mergedDetails: ModelDetails = { ...incomingDetails, ...existingDetails }
         const capabilities = new Set<string>()
         const existingCaps = existingDetails.capabilities
         const incomingCaps = incomingDetails.capabilities
@@ -363,9 +383,10 @@ export const defaultEmbeddingModelForRag = async () => {
 
   // Fallback: derive from tldw_server embeddings providers-config, if available
   try {
+    const client = tldwClient as EmbeddingProvidersConfigClient
     const cfg =
-      typeof (tldwClient as any).getEmbeddingProvidersConfig === "function"
-        ? await (tldwClient as any).getEmbeddingProvidersConfig()
+      typeof client.getEmbeddingProvidersConfig === "function"
+        ? await client.getEmbeddingProvidersConfig()
         : null
 
     if (cfg) {

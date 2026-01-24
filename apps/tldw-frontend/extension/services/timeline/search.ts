@@ -59,8 +59,6 @@ export class TimelineSearchService {
       return []
     }
 
-    const matches: SearchMatch[] = []
-
     switch (mode) {
       case 'fragments':
         return this.fragmentSearch(nodes, trimmedQuery, caseSensitive)
@@ -279,17 +277,14 @@ export class TimelineSearchService {
 
       regex.lastIndex = 0
       // Use exec loop so we can enforce a time limit and handle zero-length matches
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
+      let match: RegExpExecArray | null
+      while ((match = regex.exec(content)) !== null) {
         const now =
           typeof performance !== 'undefined' ? performance.now() : Date.now()
         if (now - startTime > REGEX_MATCH_TIME_LIMIT_MS) {
           // Matching is taking too long – fall back to substring search
           return this.substringSearch(nodes, query, caseSensitive)
         }
-
-        const match = regex.exec(content)
-        if (!match) break
 
         const matchText = match[0]
         const matchIndex = match.index ?? 0

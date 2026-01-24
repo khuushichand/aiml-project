@@ -85,6 +85,13 @@ class ProviderLimits:
             "max_speed": 2.0,
             "max_speakers": 4
         },
+        "vibevoice_realtime": {
+            "max_text_length": 8192,
+            "languages": ["en"],
+            "valid_formats": {"pcm", "wav", "mp3", "opus", "flac"},
+            "min_speed": 0.25,
+            "max_speed": 4.0
+        },
         "index_tts": {
             "max_text_length": 4000,
             "languages": ["en", "zh"],
@@ -218,6 +225,7 @@ class TTSInputValidator:
         "dia": 30000,
         "chatterbox": 10000,
         "vibevoice": 15000,
+        "vibevoice_realtime": 8192,
         "neutts": 5000,
         "index_tts": 4000,
         "supertonic": 15000,
@@ -249,6 +257,7 @@ class TTSInputValidator:
         "dia": {"en"},
         "chatterbox": {"en"},
         "vibevoice": {"en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh", "ar", "hi"},
+        "vibevoice_realtime": {"en"},
         "neutts": {"en", "en-us", "en-gb"},
         "index_tts": {"en", "zh"},
         "supertonic": {"en"},
@@ -268,6 +277,7 @@ class TTSInputValidator:
         "dia": {AudioFormat.MP3, AudioFormat.WAV},
         "chatterbox": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS},
         "vibevoice": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS},
+        "vibevoice_realtime": {AudioFormat.PCM, AudioFormat.WAV, AudioFormat.MP3, AudioFormat.OPUS, AudioFormat.FLAC},
         "neutts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM},
         "index_tts": {AudioFormat.MP3, AudioFormat.WAV},
         "supertonic": {AudioFormat.MP3, AudioFormat.WAV},

@@ -12,7 +12,7 @@ interface Result {
     type?: string
     source?: string | null
     duration?: number | null
-    status?: any
+    status?: unknown
   }
 }
 

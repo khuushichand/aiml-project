@@ -4,15 +4,23 @@ import dayjs from "dayjs"
 import type { ColumnType } from "@/types/data-tables"
 
 interface EditableCellProps {
-  value: any
+  value: unknown
   columnType: ColumnType
   columnName: string
   rowIndex: number
   isEditing: boolean
   isModified?: boolean
   onStartEdit: () => void
-  onFinishEdit: (value: any) => void
+  onFinishEdit: (value: unknown) => void
   onCancelEdit: () => void
+}
+
+type FocusTarget = { focus?: () => void; select?: () => void }
+
+const toNumberValue = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === "") return null
+  const num = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(num) ? num : null
 }
 
 /**
@@ -24,16 +32,16 @@ interface EditableCellProps {
 export const EditableCell: React.FC<EditableCellProps> = ({
   value,
   columnType,
-  columnName,
-  rowIndex,
+  columnName: _columnName,
+  rowIndex: _rowIndex,
   isEditing,
   isModified,
   onStartEdit,
   onFinishEdit,
   onCancelEdit
 }) => {
-  const [editValue, setEditValue] = useState(value)
-  const inputRef = useRef<any>(null)
+  const [editValue, setEditValue] = useState<unknown>(value)
+  const inputRef = useRef<FocusTarget | null>(null)
 
   // Reset edit value when value changes or when entering edit mode
   useEffect(() => {
@@ -128,8 +136,8 @@ export const EditableCell: React.FC<EditableCellProps> = ({
         return (
           <InputNumber
             ref={inputRef}
-            value={editValue}
-            onChange={(v) => setEditValue(v)}
+            value={toNumberValue(editValue)}
+            onChange={(v) => setEditValue(v ?? null)}
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
             className="w-full"
@@ -141,8 +149,8 @@ export const EditableCell: React.FC<EditableCellProps> = ({
         return (
           <InputNumber
             ref={inputRef}
-            value={editValue}
-            onChange={(v) => setEditValue(v)}
+            value={toNumberValue(editValue)}
+            onChange={(v) => setEditValue(v ?? null)}
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
             prefix="$"
@@ -156,7 +164,11 @@ export const EditableCell: React.FC<EditableCellProps> = ({
         return (
           <DatePicker
             ref={inputRef}
-            value={editValue ? dayjs(editValue) : null}
+            value={
+              typeof editValue === "string" || editValue instanceof Date
+                ? dayjs(editValue)
+                : null
+            }
             onChange={(date) => {
               const newValue = date ? date.format("YYYY-MM-DD") : null
               setEditValue(newValue)
@@ -188,7 +200,13 @@ export const EditableCell: React.FC<EditableCellProps> = ({
         return (
           <Input
             ref={inputRef}
-            value={editValue || ""}
+            value={
+              typeof editValue === "string"
+                ? editValue
+                : editValue == null
+                  ? ""
+                  : String(editValue)
+            }
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
@@ -201,7 +219,13 @@ export const EditableCell: React.FC<EditableCellProps> = ({
         return (
           <Input
             ref={inputRef}
-            value={editValue || ""}
+            value={
+              typeof editValue === "string"
+                ? editValue
+                : editValue == null
+                  ? ""
+                  : String(editValue)
+            }
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}

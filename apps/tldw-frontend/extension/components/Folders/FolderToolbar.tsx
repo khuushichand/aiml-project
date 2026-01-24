@@ -18,10 +18,20 @@ import {
   MoreHorizontal,
   RefreshCw
 } from "lucide-react"
-import { useFolderStore, useFolderActions, useFolderViewMode, useFolderIsLoading } from "@/store/folder"
+import { useFolderActions, useFolderViewMode, useFolderIsLoading } from "@/store/folder"
 import { useTranslation } from "react-i18next"
 import { useState } from "react"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
+
+const getErrorMessage = (error: unknown): string => {
+  if (typeof error === "string") return error
+  if (error instanceof Error && typeof error.message === "string") return error.message
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === "string") return message
+  }
+  return ""
+}
 
 interface FolderToolbarProps {
   compact?: boolean
@@ -53,12 +63,8 @@ export const FolderToolbar = ({ compact = false }: FolderToolbarProps) => {
       await createFolder(newFolderName.trim())
       setNewFolderName("")
       setNewFolderModalOpen(false)
-    } catch (e: any) {
-      // Surface folder creation failures so users aren't left without feedback.
-      // If this becomes noisy, we can refine the error messaging based on error codes.
-      // eslint-disable-next-line no-console
-      console.error("Failed to create folder:", e)
-      message.error(e?.message || t("common:error.createFolder"))
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error) || t("common:error.createFolder"))
     } finally {
       setIsCreating(false)
     }

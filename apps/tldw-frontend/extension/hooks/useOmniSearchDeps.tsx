@@ -46,6 +46,20 @@ type ScreenConfig = {
   icon: string
 }
 
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
+
+const toString = (value: unknown): string => (value == null ? "" : String(value))
+
+const getErrorMessage = (error: unknown): string => {
+  if (typeof error === "string") return error
+  if (error instanceof Error && typeof error.message === "string") return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return ""
+}
+
 const BASE_SCREEN_CONFIGS: ScreenConfig[] = [
   {
     id: "chat",
@@ -256,7 +270,7 @@ export const useOmniSearchDeps = (): OmniSearchDependencies => {
     () =>
       BASE_SCREEN_CONFIGS.map((cfg) => ({
         id: cfg.id,
-        label: t(cfg.labelKey as any, cfg.defaultLabel),
+        label: t(cfg.labelKey, { defaultValue: cfg.defaultLabel }),
         description: cfg.description,
         icon: cfg.icon,
         route: cfg.route,
@@ -323,28 +337,52 @@ export const useOmniSearchDeps = (): OmniSearchDependencies => {
       const q = query.normalized.trim()
       if (!q || !isOnline) return []
       try {
-        const body: any = {
+        const body: Record<string, unknown> = {
           query: q,
           fields: ["title", "content"],
           sort_by: "relevance"
         }
-        const res = await bgRequest<any, AllowedPath, "POST">({
+        const res = await bgRequest<unknown, AllowedPath, "POST">({
           path: "/api/v1/media/search" as AllowedPath,
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body
         })
-        const items = Array.isArray(res?.items)
-          ? res.items
-          : Array.isArray(res?.results)
-            ? res.results
+        const items = isRecord(res)
+          ? Array.isArray(res.items)
+            ? res.items
+            : Array.isArray(res.results)
+              ? res.results
+              : []
+          : Array.isArray(res)
+            ? res
             : []
-        return items.map((m: any) => ({
-          id: String(m?.id ?? m?.media_id ?? m?.pk ?? m?.uuid),
-          title: m?.title || m?.filename || `Media ${m?.id ?? ""}`,
-          source: String(m?.type || m?.media_type || "").toLowerCase() || undefined,
-          createdAt: m?.created_at
-        }))
+        const summaries: MediaItemSummary[] = []
+        for (const item of items) {
+          if (!isRecord(item)) continue
+          const idCandidate =
+            item.id ?? item.media_id ?? item.pk ?? item.uuid
+          if (idCandidate == null) continue
+          const title =
+            typeof item.title === "string"
+              ? item.title
+              : typeof item.filename === "string"
+                ? item.filename
+                : `Media ${toString(idCandidate)}`
+          const typeValue =
+            typeof item.type === "string"
+              ? item.type
+              : typeof item.media_type === "string"
+                ? item.media_type
+                : ""
+          summaries.push({
+            id: toString(idCandidate),
+            title,
+            source: typeValue ? typeValue.toLowerCase() : undefined,
+            createdAt: typeof item.created_at === "string" ? item.created_at : undefined
+          })
+        }
+        return summaries
       } catch {
         return []
       }
@@ -357,21 +395,33 @@ export const useOmniSearchDeps = (): OmniSearchDependencies => {
       const q = query.normalized.trim()
       if (!q || !isOnline) return []
       try {
-        const res = await bgRequest<any, AllowedPath, "GET">({
+        const res = await bgRequest<unknown, AllowedPath, "GET">({
           path: `/api/v1/notes/search/?query=${encodeURIComponent(q)}` as AllowedPath,
           method: "GET"
         })
-        const items = Array.isArray(res?.items)
-          ? res.items
+        const items = isRecord(res)
+          ? Array.isArray(res.items)
+            ? res.items
+            : []
           : Array.isArray(res)
             ? res
             : []
-        return items.map((n: any) => ({
-          id: String(n?.id),
-          title: n?.title || "Untitled note",
-          snippet: truncate(String(n?.content || ""), 120),
-          updatedAt: n?.updated_at
-        }))
+        const summaries: NoteSummary[] = []
+        for (const item of items) {
+          if (!isRecord(item)) continue
+          const idValue = item.id
+          if (idValue == null) continue
+          summaries.push({
+            id: toString(idValue),
+            title:
+              typeof item.title === "string" && item.title.trim().length > 0
+                ? item.title
+                : "Untitled note",
+            snippet: truncate(toString(item.content), 120),
+            updatedAt: typeof item.updated_at === "string" ? item.updated_at : undefined
+          })
+        }
+        return summaries
       } catch {
         return []
       }
@@ -511,14 +561,14 @@ export const useOmniSearchDeps = (): OmniSearchDependencies => {
 
           updatePageTitle(historyDetails?.title || "Untitled Chat")
           navigate("/")
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error("Failed to open chat from omni-search", e)
+        } catch {
+          message.error("Failed to open chat from omni-search")
         }
       })()
     },
     [
       chatModelSettings,
+      message,
       navigate,
       setContextFiles,
       setHistory,
@@ -567,7 +617,7 @@ export const useOmniSearchDeps = (): OmniSearchDependencies => {
       const trimmed = title.trim()
       if (!trimmed) return
       try {
-        await bgRequest<any, AllowedPath, "POST">({
+        await bgRequest<unknown, AllowedPath, "POST">({
           path: "/api/v1/notes/" as AllowedPath,
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -582,8 +632,8 @@ export const useOmniSearchDeps = (): OmniSearchDependencies => {
             query: trimmed
           })
         )
-      } catch (e: any) {
-        message.error(e?.message || "Failed to create note")
+      } catch (error: unknown) {
+        message.error(getErrorMessage(error) || "Failed to create note")
       } finally {
         navigate("/notes")
       }
@@ -603,8 +653,8 @@ export const useOmniSearchDeps = (): OmniSearchDependencies => {
             query: trimmed
           })
         )
-      } catch (e: any) {
-        message.error(e?.message || "Failed to create flashcard collection")
+      } catch (error: unknown) {
+        message.error(getErrorMessage(error) || "Failed to create flashcard collection")
       } finally {
         navigate("/flashcards")
       }
@@ -621,7 +671,7 @@ export const useOmniSearchDeps = (): OmniSearchDependencies => {
       }
       navigate("/")
     },
-    [clearChat, navigate, updatePageTitle]
+    [clearChat, navigate]
   )
 
   const deps: OmniSearchDependencies = React.useMemo(

@@ -14,6 +14,16 @@ import { useTranslation } from "react-i18next"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useShallow } from "zustand/react/shallow"
 
+const getErrorMessage = (error: unknown): string => {
+  if (typeof error === "string") return error
+  if (error instanceof Error && typeof error.message === "string") return error.message
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === "string") return message
+  }
+  return ""
+}
+
 interface FolderPickerProps {
   open: boolean
   onClose: () => void
@@ -40,16 +50,14 @@ export const FolderPicker = ({
     keywords,
     folderKeywordLinks,
     conversationKeywordLinks,
-    createFolder,
-    isLoading
+    createFolder
   } = useFolderStore(
     useShallow((s) => ({
       folders: s.folders,
       keywords: s.keywords,
       folderKeywordLinks: s.folderKeywordLinks,
       conversationKeywordLinks: s.conversationKeywordLinks,
-      createFolder: s.createFolder,
-      isLoading: s.isLoading
+      createFolder: s.createFolder
     }))
   )
 
@@ -113,10 +121,11 @@ export const FolderPicker = ({
       } else {
         message.error(t("common:error.createFolder", { defaultValue: "Failed to create folder" }))
       }
-    } catch (e: any) {
-      // eslint-disable-next-line no-console
-      console.error("Failed to create folder from picker:", e)
-      message.error(e?.message || t("common:error.createFolder", { defaultValue: "Failed to create folder" }))
+    } catch (error: unknown) {
+      message.error(
+        getErrorMessage(error) ||
+          t("common:error.createFolder", { defaultValue: "Failed to create folder" })
+      )
     } finally {
       setIsCreating(false)
     }

@@ -39,7 +39,7 @@ export interface DataTable {
   description?: string
   prompt: string // Original generation prompt
   columns: DataTableColumn[]
-  rows: Record<string, any>[]
+  rows: Record<string, unknown>[]
   sources: DataTableSource[]
   created_at: string // ISO timestamp
   updated_at: string // ISO timestamp
@@ -147,7 +147,7 @@ export interface ExportState {
 // Row with stable ID for editing
 export interface DataTableRow {
   _id: string // Stable row identifier
-  [key: string]: any
+  [key: string]: unknown
 }
 
 // Individual change record for tracking edits
@@ -161,8 +161,8 @@ export interface TableChange {
     | "column_reorder"
   rowIndex?: number
   columnId?: string
-  oldValue?: any
-  newValue?: any
+  oldValue?: unknown
+  newValue?: unknown
   timestamp: number
 }
 

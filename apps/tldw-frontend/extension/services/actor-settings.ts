@@ -1,4 +1,3 @@
-import { Storage } from "@plasmohq/storage"
 import { createSafeStorage } from "@/utils/safe-storage"
 import {
   ACTOR_SETTINGS_VERSION,
@@ -8,6 +7,9 @@ import {
 } from "@/types/actor"
 
 const storage = createSafeStorage()
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
 
 export const getActorStorageKey = (chatKey: string) =>
   `actorSettings:${chatKey}`
@@ -30,8 +32,8 @@ export const resolveActorChatKey = (params: {
   return "scratch"
 }
 
-const isValidActorAspect = (value: any): value is ActorAspect => {
-  if (!value || typeof value !== "object") return false
+const isValidActorAspect = (value: unknown): value is ActorAspect => {
+  if (!isRecord(value)) return false
 
   const { id, key, target, name, source, value: aspectValue } = value as {
     id: unknown
@@ -66,8 +68,8 @@ const isValidActorAspect = (value: any): value is ActorAspect => {
   return true
 }
 
-const isValidActorSettings = (raw: any): raw is ActorSettings => {
-  if (!raw || typeof raw !== "object") {
+const isValidActorSettings = (raw: unknown): raw is ActorSettings => {
+  if (!isRecord(raw)) {
     return false
   }
 
@@ -118,8 +120,8 @@ const isValidActorSettings = (raw: any): raw is ActorSettings => {
   return true
 }
 
-const migrateSettings = (raw: any): ActorSettings => {
-  if (!raw || typeof raw !== "object") {
+const migrateSettings = (raw: unknown): ActorSettings => {
+  if (!isRecord(raw)) {
     return createDefaultActorSettings()
   }
 

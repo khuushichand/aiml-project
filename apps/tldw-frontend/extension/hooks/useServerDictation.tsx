@@ -17,6 +17,18 @@ export interface UseServerDictationResult {
   stopServerDictation: () => void
 }
 
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown): string => {
+  if (typeof error === "string") return error
+  if (error instanceof Error && typeof error.message === "string") return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return ""
+}
+
 export const useServerDictation = (
   options: UseServerDictationOptions
 ): UseServerDictationResult => {
@@ -90,7 +102,7 @@ export const useServerDictation = (
           }
 
           // Build STT options from settings
-          const sttOptions: Record<string, any> = {
+          const sttOptions: Record<string, unknown> = {
             language: speechToTextLanguage
           }
           if (sttSettings.model && sttSettings.model.trim().length > 0) {
@@ -140,13 +152,14 @@ export const useServerDictation = (
           if (res) {
             if (typeof res === "string") {
               text = res
-            } else if (typeof (res as any).text === "string") {
-              text = (res as any).text
-            } else if (typeof (res as any).transcript === "string") {
-              text = (res as any).transcript
-            } else if (Array.isArray((res as any).segments)) {
-              text = (res as any).segments
-                .map((s: any) => s?.text || "")
+            } else if (isRecord(res) && typeof res.text === "string") {
+              text = res.text
+            } else if (isRecord(res) && typeof res.transcript === "string") {
+              text = res.transcript
+            } else if (isRecord(res) && Array.isArray(res.segments)) {
+              text = res.segments
+                .filter(isRecord)
+                .map((s) => (typeof s.text === "string" ? s.text : ""))
                 .join(" ")
                 .trim()
             }
@@ -166,14 +179,14 @@ export const useServerDictation = (
               )
             })
           }
-        } catch (e: any) {
+        } catch (error: unknown) {
           notification.error({
             message: t(
               "playground:actions.speechErrorTitle",
               "Dictation failed"
             ),
             description:
-              e?.message ||
+              getErrorMessage(error) ||
               t(
                 "playground:actions.speechErrorBody",
                 "Transcription request failed. Check tldw server health."
@@ -191,7 +204,7 @@ export const useServerDictation = (
       serverRecorderRef.current = recorder
       recorder.start()
       setIsServerDictating(true)
-    } catch (e: any) {
+    } catch {
       // Add permissions guidance for microphone errors
       const isChromeOrEdge =
         typeof chrome !== "undefined" && chrome.permissions

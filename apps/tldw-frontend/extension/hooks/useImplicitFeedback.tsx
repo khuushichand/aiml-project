@@ -13,7 +13,7 @@ type ImplicitFeedbackContext = {
   conversationId?: string | null
   messageId?: string | null
   query?: string | null
-  sources?: any[]
+  sources?: unknown[]
   enabled?: boolean
 }
 
@@ -77,7 +77,7 @@ export const useImplicitFeedback = ({
   }, [sendEvent, sources])
 
   const trackSourceClick = React.useCallback(
-    (source: any, index?: number) => {
+    (source: unknown, index?: number) => {
       const { documentIds, chunkIds, corpus } =
         extractSourceFeedbackIds(source)
       const docId =

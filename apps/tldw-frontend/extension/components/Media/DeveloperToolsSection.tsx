@@ -34,7 +34,6 @@ export function DeveloperToolsSection({
     try {
       jsonString = JSON.stringify(data, null, 2)
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('Failed to stringify data in DeveloperToolsSection', err)
       stringifyError = err instanceof Error ? err.message : String(err)
       jsonString = null

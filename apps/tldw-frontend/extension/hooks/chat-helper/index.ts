@@ -40,7 +40,7 @@ export const saveMessageOnError = async ({
   isContinue,
   documents = []
 }: {
-  e: any
+  e: unknown
   setHistory: (history: ChatHistory) => void
   history: ChatHistory
   userMessage: string
@@ -322,7 +322,7 @@ export const saveMessageOnSuccess = async ({
   message: string
   image: string
   fullText: string
-  source: any[]
+  source: unknown[]
   message_source?: "copilot" | "web-ui" | "server" | "branch"
   message_type?: string
   userMessageType?: string
@@ -334,7 +334,7 @@ export const saveMessageOnSuccess = async ({
   assistantMessageId?: string
   userParentMessageId?: string | null
   assistantParentMessageId?: string | null
-  generationInfo?: any
+  generationInfo?: Record<string, unknown>
   prompt_id?: string
   prompt_content?: string
   reasoning_time_taken?: number

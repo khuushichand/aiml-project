@@ -8,6 +8,26 @@ import { getProviderDisplayName } from '@/utils/provider-registry'
 
 type ProviderMap = Record<string, Array<{ id: string, context_length?: number, capabilities?: string[] }>>
 
+type ModelMeta = {
+  provider?: string
+  id?: string
+  model?: string
+  name?: string
+  context_length?: number
+  contextLength?: number
+  capabilities?: string[]
+  features?: string[]
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
 export const AvailableModelsList: React.FC = () => {
   const { t } = useTranslation(['settings', 'common'])
   const { data, status, error, refetch, isFetching } = useQuery({
@@ -20,11 +40,17 @@ export const AvailableModelsList: React.FC = () => {
         throw new Error("Unexpected models metadata response")
       }
       const normalized: ProviderMap = {}
-      for (const item of (meta as any[])) {
+      for (const raw of meta as ModelMeta[]) {
+        const item = isRecord(raw) ? (raw as ModelMeta) : {}
         const provider = String(item.provider || 'unknown')
         const id = String(item.id || item.model || item.name)
-        const context_length = typeof item.context_length === 'number' ? item.context_length : (typeof item.contextLength === 'number' ? item.contextLength : undefined)
-        const capabilities = Array.isArray(item.capabilities) ? item.capabilities : (Array.isArray(item.features) ? item.features : undefined)
+        const context_length =
+          typeof item.context_length === 'number'
+            ? item.context_length
+            : (typeof item.contextLength === 'number' ? item.contextLength : undefined)
+        const capabilities = Array.isArray(item.capabilities)
+          ? item.capabilities
+          : (Array.isArray(item.features) ? item.features : undefined)
         if (!normalized[provider]) normalized[provider] = []
         // Avoid duplicates
         if (!normalized[provider].some((m) => m.id === id)) {
@@ -52,11 +78,13 @@ export const AvailableModelsList: React.FC = () => {
         description={
           <div className="flex flex-col gap-1 text-xs">
             <span>
-              {(error as any)?.message ||
+              {getErrorMessage(
+                error,
                 t(
                   'settings:models.loadErrorBody',
                   'The models endpoint returned an error. Check your server URL and API key, then try again.'
-                )}
+                )
+              )}
             </span>
             <Button size="small" onClick={() => refetch()} loading={isFetching}>
               {t('common:retry', 'Retry')}
@@ -71,19 +99,19 @@ export const AvailableModelsList: React.FC = () => {
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {Object.entries(data || {}).map(([provider, models]) => (
+      {(Object.entries(data || {}) as Array<[string, ProviderMap[string]]>).map(([provider, models]) => (
         <Card
           key={provider}
           title={
             <div className="flex items-center gap-2">
               <ProviderIcons provider={provider} className="h-4 w-4" />
               <span>{getProviderDisplayName(provider)}</span>
-              <Tag>{(models as any[]).length}</Tag>
+              <Tag>{models.length}</Tag>
             </div>
           }
         >
           <div className="flex flex-col gap-2">
-            {(models as any[]).map((m: any) => (
+            {models.map((m) => (
               <div key={m.id} className="flex items-center gap-2 text-xs flex-wrap">
                 <Tag bordered>{m.id}</Tag>
                 {typeof m.context_length === 'number' && (

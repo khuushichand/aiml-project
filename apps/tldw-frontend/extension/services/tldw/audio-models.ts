@@ -15,6 +15,9 @@ const FALLBACK_MODELS = [
   "vibevoice"
 ]
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
 const normalizeModelId = (value: unknown): string | null => {
   if (value === null || value === undefined) return null
   if (typeof value === "string" || typeof value === "number") {
@@ -119,11 +122,13 @@ const extractModelsFromProviders = (
   if (output.length > 0) {
     return output
   }
-  for (const key of modelListKeys) {
-    collectModelIds((providersInfo as any)?.[key], seen, output)
-  }
-  for (const key of singleModelKeys) {
-    collectModelIds((providersInfo as any)?.[key], seen, output)
+  if (isRecord(providersInfo)) {
+    for (const key of modelListKeys) {
+      collectModelIds(providersInfo[key], seen, output)
+    }
+    for (const key of singleModelKeys) {
+      collectModelIds(providersInfo[key], seen, output)
+    }
   }
   return output
 }
@@ -161,7 +166,7 @@ export const fetchTldwTtsModels = async (): Promise<TldwTtsModel[]> => {
         }
       } else if (typeof modelSchema.description === "string") {
         const desc = modelSchema.description as string
-        const match = desc.match(/Supported models?:\s*([^\.]+)/i)
+        const match = desc.match(/Supported models?:\s*([^.]+)/i)
         if (match && match[1]) {
           const parts = match[1]
             .split(",")

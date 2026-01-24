@@ -255,7 +255,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     if (reviewOverrideCard) {
       setLocalOverrideCard(null)
     }
-  }, [reviewOverrideCard?.uuid])
+  }, [reviewOverrideCard])
 
   // Keyboard shortcuts for review
   useFlashcardShortcuts({

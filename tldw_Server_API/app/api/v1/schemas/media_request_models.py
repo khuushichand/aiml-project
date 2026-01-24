@@ -276,6 +276,14 @@ class PdfOptions(BaseModel):
     ocr_dpi: int = Field(300, ge=72, le=600, description="DPI for page rendering before OCR (72-600)")
     ocr_mode: Optional[OcrMode] = Field("fallback", description="'always' to force OCR, 'fallback' when no text")
     ocr_min_page_text_chars: int = Field(40, ge=0, description="Threshold to treat a page as 'no text' for OCR fallback")
+    ocr_output_format: Optional[str] = Field(
+        None,
+        description="OCR output format: text|markdown|json (structured outputs persisted in analysis_details)",
+    )
+    ocr_prompt_preset: Optional[str] = Field(
+        None,
+        description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')",
+    )
 
 class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     """

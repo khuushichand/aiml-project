@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 import { UserCircle2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useEffect, useMemo, useState } from "react"

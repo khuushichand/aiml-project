@@ -552,7 +552,7 @@ const TtsPlaygroundPage: React.FC = () => {
                       style={{ minWidth: 160 }}
                       placeholder="Select voice"
                       className="focus-ring"
-                      options={elevenLabsData.voices.map((v: any) => ({
+                      options={elevenLabsData.voices.map((v) => ({
                         label: v.name,
                         value: v.voice_id
                       }))}
@@ -572,7 +572,7 @@ const TtsPlaygroundPage: React.FC = () => {
                       style={{ minWidth: 160 }}
                       placeholder="Select model"
                       className="focus-ring"
-                      options={elevenLabsData.models.map((m: any) => ({
+                      options={elevenLabsData.models.map((m) => ({
                         label: m.name,
                         value: m.model_id
                       }))}

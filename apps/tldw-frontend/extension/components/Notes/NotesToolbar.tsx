@@ -62,7 +62,7 @@ const NotesToolbar: React.FC<NotesToolbarProps> = ({
             shape="circle"
             onClick={onNewNote}
             className="flex items-center justify-center"
-            icon={(<PlusIcon className="w-4 h-4" />) as any}
+            icon={<PlusIcon className="w-4 h-4" />}
             aria-label={t('option:notesSearch.new', {
               defaultValue: 'New note'
             })}
@@ -75,7 +75,7 @@ const NotesToolbar: React.FC<NotesToolbarProps> = ({
           placeholder={t('option:notesSearch.placeholder', {
             defaultValue: 'Search notes...'
           })}
-          prefix={(<SearchIcon className="w-4 h-4 text-text-subtle" />) as any}
+          prefix={<SearchIcon className="w-4 h-4 text-text-subtle" />}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onPressEnter={onSubmitSearch}
@@ -84,7 +84,7 @@ const NotesToolbar: React.FC<NotesToolbarProps> = ({
       </div>
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
-          <Select
+          <Select<string[]>
             mode="tags"
             allowClear
             placeholder={t('option:notesSearch.keywordsPlaceholder', {
@@ -93,7 +93,7 @@ const NotesToolbar: React.FC<NotesToolbarProps> = ({
             className="min-w-[12rem] w-full pl-2"
             value={keywordTokens}
             onSearch={(txt) => onKeywordSearch(txt)}
-            onChange={(vals) => onKeywordChange(vals as string[])}
+            onChange={(vals) => onKeywordChange(vals)}
             options={keywordOptions.map((k) => ({ label: k, value: k }))}
           />
         </div>
@@ -102,7 +102,7 @@ const NotesToolbar: React.FC<NotesToolbarProps> = ({
         <Button
           size="small"
           onClick={onClearFilters}
-          icon={(<PlusIcon className="w-3 h-3 rotate-45" />) as any}
+          icon={<PlusIcon className="w-3 h-3 rotate-45" />}
           className="w-full justify-center text-xs text-text-muted hover:text-text"
         >
           {t('option:notesSearch.clear', {

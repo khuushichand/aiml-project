@@ -212,7 +212,6 @@ const ExecutionOutput: FC<{
       timeoutRef.current = setTimeout(() => setCopied(false), 2000)
       return
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("[TerminalOutput] Clipboard write failed, attempting fallback", err)
 
       let textarea: HTMLTextAreaElement | null = null
@@ -237,7 +236,6 @@ const ExecutionOutput: FC<{
           return
         }
       } catch (fallbackErr) {
-        // eslint-disable-next-line no-console
         console.error("[TerminalOutput] Fallback copy failed", fallbackErr)
       } finally {
         if (textarea?.parentNode) {

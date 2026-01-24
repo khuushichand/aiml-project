@@ -223,6 +223,8 @@ def process_pdf(
     ocr_dpi: int = 300,
     ocr_mode: Optional[str] = "fallback",
     ocr_min_page_text_chars: int = 40,
+    ocr_output_format: Optional[str] = None,
+    ocr_prompt_preset: Optional[str] = None,
     # VLM options
     enable_vlm: bool = False,
     vlm_backend: Optional[str] = None,
@@ -419,7 +421,7 @@ def process_pdf(
                         except Exception:
                             concurrency_env = 1
 
-                        ocr_text, page_count, ocr_pages = _ocr_pdf_pages(
+                        ocr_text, page_count, ocr_pages, structured_pages = _ocr_pdf_pages(
                             pdf_path=path_for_processing,
                             lang=ocr_lang or "eng",
                             dpi=ocr_dpi,
@@ -427,6 +429,8 @@ def process_pdf(
                             per_page_min_text=ocr_min_page_text_chars,
                             per_page_check=True,
                             concurrency=max(1, concurrency_env),
+                            output_format=ocr_output_format,
+                            prompt_preset=ocr_prompt_preset,
                         )
                         result.setdefault("analysis_details", {})
                         details = {
@@ -437,6 +441,8 @@ def process_pdf(
                             "total_pages": page_count,
                             "ocr_pages": ocr_pages,
                             "page_concurrency": max(1, concurrency_env),
+                            "output_format": ocr_output_format,
+                            "prompt_preset": ocr_prompt_preset,
                         }
                         # Attach backend-specific metadata if available
                         try:
@@ -446,6 +452,28 @@ def process_pdf(
                                     details.update(extra)
                         except Exception:
                             pass
+                        if structured_pages is not None:
+                            try:
+                                from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
+                                    OCRResult,
+                                    normalize_ocr_format,
+                                )
+                                fmt = normalize_ocr_format(ocr_output_format)
+                                if fmt == "unknown":
+                                    fmt = "text"
+                                details["structured"] = OCRResult(
+                                    text=ocr_text or "",
+                                    format=fmt,
+                                    pages=structured_pages,
+                                    meta={
+                                        "backend": details.get("backend"),
+                                        "mode": details.get("mode"),
+                                        "prompt_preset": ocr_prompt_preset,
+                                        "output_format": ocr_output_format,
+                                    },
+                                ).as_dict()
+                            except Exception:
+                                pass
                         result["analysis_details"]["ocr"] = details
 
                         if ocr_text and ocr_text.strip():
@@ -1018,6 +1046,8 @@ async def process_pdf_task(
     ocr_dpi: int = 300,
     ocr_mode: Optional[str] = "fallback",
     ocr_min_page_text_chars: int = 40,
+    ocr_output_format: Optional[str] = None,
+    ocr_prompt_preset: Optional[str] = None,
     # VLM options
     enable_vlm: bool = False,
     vlm_backend: Optional[str] = None,
@@ -1066,6 +1096,8 @@ async def process_pdf_task(
             ocr_dpi=ocr_dpi,
             ocr_mode=ocr_mode,
             ocr_min_page_text_chars=ocr_min_page_text_chars,
+            ocr_output_format=ocr_output_format,
+            ocr_prompt_preset=ocr_prompt_preset,
             enable_vlm=enable_vlm,
             vlm_backend=vlm_backend,
             vlm_detect_tables_only=vlm_detect_tables_only,
@@ -1105,17 +1137,45 @@ def _ocr_pdf_pages(
     per_page_min_text: int = 40,
     per_page_check: bool = True,
     concurrency: int = 1,
-) -> tuple[str, int, int]:
+    output_format: Optional[str] = None,
+    prompt_preset: Optional[str] = None,
+) -> tuple[str, int, int, Optional[List[Dict[str, Any]]]]:
     """
     Render PDF pages to images and run OCR.
 
-    Returns: (markdown_text, total_pages, ocr_pages_count)
+    Returns: (markdown_text, total_pages, ocr_pages_count, structured_pages)
     """
     text_by_index: List[str] = []
     ocr_pages = 0
     with pymupdf.open(pdf_path) as doc:
         page_count = len(doc)
         text_by_index = [""] * page_count
+        structured_pages: Optional[List[Dict[str, Any]]] = None
+        supports_structured = False
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import (
+                OCRBackend as _OCRBackend,
+            )
+            supports_structured = (
+                getattr(backend.__class__, "ocr_image_structured", None)
+                is not getattr(_OCRBackend, "ocr_image_structured", None)
+            )
+        except Exception:
+            supports_structured = False
+
+        # Persist structured OCR outputs whenever a backend provides them,
+        # even if the caller did not explicitly request structured output.
+        persist_structured = (
+            supports_structured
+            or bool(prompt_preset)
+            or (
+                output_format is not None
+                and str(output_format).strip().lower() not in ("", "text", "auto")
+            )
+        )
+        use_structured = persist_structured
+        if persist_structured:
+            structured_pages = [None] * page_count  # type: ignore[list-item]
         scale = max(dpi, 72) / 72.0
 
         # Render pages sequentially (PyMuPDF doc is not thread-safe),
@@ -1134,6 +1194,16 @@ def _ocr_pdf_pages(
                         pre_text = page.get_text("text") or ""
                         if len(pre_text.strip()) >= max(per_page_min_text, 1):
                             text_by_index[idx - 1] = f"## Page {idx}\n\n{pre_text.strip()}\n\n---\n"
+                            if use_structured:
+                                try:
+                                    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import OCRResult
+                                    structured_pages[idx - 1] = OCRResult(  # type: ignore[index]
+                                        text=pre_text.strip(),
+                                        format="text",
+                                        meta={"source": "pdf_text"},
+                                    ).as_dict()
+                                except Exception:
+                                    pass
                             do_ocr = False
                     except Exception:
                         do_ocr = True
@@ -1142,15 +1212,46 @@ def _ocr_pdf_pages(
                     mat = pymupdf.Matrix(scale, scale)
                     pix = page.get_pixmap(matrix=mat, alpha=False)
                     img_bytes = pix.tobytes("png")
-                    fut = pool.submit(backend.ocr_image, img_bytes, lang)
+                    if use_structured and hasattr(backend, "ocr_image_structured"):
+                        def _call_structured(b: bytes) -> Any:
+                            try:
+                                return backend.ocr_image_structured(b, lang, output_format, prompt_preset)
+                            except TypeError:
+                                return backend.ocr_image_structured(b, lang)
+
+                        fut = pool.submit(_call_structured, img_bytes)
+                    else:
+                        fut = pool.submit(backend.ocr_image, img_bytes, lang)
                     futures.append(fut)
                     idx_map[fut] = idx
 
             for fut in as_completed(futures):
-                page_text = fut.result() or ""
+                result = fut.result()
                 idx = idx_map.get(fut)
+                page_text = ""
+                if use_structured and result is not None:
+                    try:
+                        from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import OCRResult
+                        if isinstance(result, OCRResult):
+                            page_text = result.text or ""
+                            if structured_pages is not None:
+                                structured_pages[idx - 1] = result.as_dict()  # type: ignore[index]
+                        elif isinstance(result, tuple) and len(result) == 2:
+                            page_text = str(result[0] or "")
+                            if structured_pages is not None and isinstance(result[1], dict):
+                                structured_pages[idx - 1] = result[1]  # type: ignore[index]
+                        elif isinstance(result, dict):
+                            page_text = str(result.get("text") or "")
+                            if structured_pages is not None:
+                                structured_pages[idx - 1] = result  # type: ignore[index]
+                        else:
+                            page_text = str(result or "")
+                    except Exception:
+                        page_text = str(result or "")
+                else:
+                    page_text = str(result or "")
                 if page_text.strip():
                     ocr_pages += 1
                 text_by_index[idx - 1] = f"## Page {idx}\n\n{page_text.strip()}\n\n---\n"
 
-    return ("".join(text_by_index).strip(), page_count, ocr_pages)
+    return ("".join(text_by_index).strip(), page_count, ocr_pages, structured_pages)

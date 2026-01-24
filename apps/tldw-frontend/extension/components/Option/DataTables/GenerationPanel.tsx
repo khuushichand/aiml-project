@@ -1,12 +1,10 @@
 import React, { useState } from "react"
 import {
   Button,
-  Card,
   Collapse,
   Input,
   InputNumber,
   Select,
-  Space,
   Tag
 } from "antd"
 import { Plus, Trash2, Sparkles, Settings2 } from "lucide-react"

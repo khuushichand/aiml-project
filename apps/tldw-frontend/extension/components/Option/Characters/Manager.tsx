@@ -30,11 +30,81 @@ import { useStoreMessageOption, type State as MessageOptionState } from "@/store
 import { useShallow } from "zustand/react/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
+import type { Character, CharacterApiResponse } from "@/types/character"
 
 const MAX_NAME_LENGTH = 75
 const MAX_DESCRIPTION_LENGTH = 65
 const MAX_TAG_LENGTH = 20
 const MAX_TAGS_DISPLAYED = 6
+
+type CharacterRecord = CharacterApiResponse & {
+  systemPrompt?: string | null
+  instructions?: string | null
+  personality?: string | null
+  scenario?: string | null
+  post_history_instructions?: string | null
+  message_example?: string | null
+  creator_notes?: string | null
+  creator?: string | null
+  character_version?: string | null
+  extensions?: unknown
+  version?: number | null
+  tags?: string[] | string | null
+}
+
+type CharacterFormValues = {
+  name?: string
+  description?: string
+  personality?: string
+  scenario?: string
+  system_prompt?: string
+  post_history_instructions?: string
+  greeting?: string
+  first_message?: string
+  message_example?: string
+  creator_notes?: string
+  tags?: string[] | string
+  alternate_greetings?: string[] | string
+  creator?: string
+  character_version?: string
+  extensions?: string | Record<string, unknown>
+  avatar?: unknown
+  avatar_url?: string
+  image_base64?: string
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
+const toError = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error
+  return new Error(getErrorMessage(error, fallback))
+}
+
+const characterIdentifier = (record?: CharacterRecord | null): string =>
+  String(record?.id ?? record?.slug ?? record?.name ?? "")
+
+const buildSelectedCharacter = (record: CharacterRecord): Character => {
+  const id = characterIdentifier(record)
+  return {
+    id,
+    name: String(record.name ?? record.title ?? record.slug ?? id),
+    system_prompt:
+      record.system_prompt ?? record.systemPrompt ?? record.instructions ?? "",
+    greeting:
+      record.greeting ?? record.first_message ?? record.greet ?? "",
+    avatar_url:
+      record.avatar_url ??
+      validateAndCreateImageDataUrl(record.image_base64) ??
+      ""
+  }
+}
 
 const truncateText = (value?: string, max?: number) => {
   if (!value) return ""
@@ -42,7 +112,7 @@ const truncateText = (value?: string, max?: number) => {
   return `${value.slice(0, max)}...`
 }
 
-const normalizeAlternateGreetings = (value: any): string[] => {
+const normalizeAlternateGreetings = (value: unknown): string[] => {
   if (!value) return []
   if (Array.isArray(value)) {
     return value.map((v) => String(v)).filter((v) => v.trim().length > 0)
@@ -64,7 +134,7 @@ const normalizeAlternateGreetings = (value: any): string[] => {
   return []
 }
 
-const hasAdvancedData = (record: any, extensionsValue: string): boolean =>
+const hasAdvancedData = (record: CharacterRecord, extensionsValue: string): boolean =>
   !!(
     record.personality ||
     record.scenario ||
@@ -77,8 +147,8 @@ const hasAdvancedData = (record: any, extensionsValue: string): boolean =>
     extensionsValue
   )
 
-const buildCharacterPayload = (values: any): Record<string, any> => {
-  const payload: Record<string, any> = {
+const buildCharacterPayload = (values: CharacterFormValues): Record<string, unknown> => {
+  const payload: Record<string, unknown> = {
     name: values.name,
     description: values.description,
     personality: values.personality,
@@ -148,7 +218,7 @@ const buildCharacterPayload = (values: any): Record<string, any> => {
 }
 
 type CharactersManagerProps = {
-  forwardedNewButtonRef?: React.RefObject<HTMLButtonElement | null>
+  forwardedNewButtonRef?: React.MutableRefObject<HTMLButtonElement | null>
   autoOpenCreate?: boolean
 }
 
@@ -167,7 +237,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [editVersion, setEditVersion] = React.useState<number | null>(null)
   const [createForm] = Form.useForm()
   const [editForm] = Form.useForm()
-  const [, setSelectedCharacter] = useSelectedCharacter<any>(null)
+  const [, setSelectedCharacter] = useSelectedCharacter<Character | null>(null)
   const newButtonRef = React.useRef<HTMLButtonElement | null>(null)
   const lastEditTriggerRef = React.useRef<HTMLButtonElement | null>(null)
   const createNameRef = React.useRef<InputRef>(null)
@@ -178,7 +248,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [showEditAdvanced, setShowEditAdvanced] = React.useState(false)
   const [showCreateAdvanced, setShowCreateAdvanced] = React.useState(false)
   const [conversationsOpen, setConversationsOpen] = React.useState(false)
-  const [conversationCharacter, setConversationCharacter] = React.useState<any | null>(null)
+  const [conversationCharacter, setConversationCharacter] = React.useState<CharacterRecord | null>(null)
   const [characterChats, setCharacterChats] = React.useState<ServerChatSummary[]>([])
   const [chatsError, setChatsError] = React.useState<string | null>(null)
   const [loadingChats, setLoadingChats] = React.useState(false)
@@ -196,8 +266,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       // Expose the "New character" button to parent workspaces that may
       // want to focus it (e.g., when coming from a persistence error).
       // The ref object itself is stable; assign its current value once.
-      // eslint-disable-next-line no-param-reassign
-      ;(forwardedNewButtonRef as any).current = newButtonRef.current
+      const forwardedRef = forwardedNewButtonRef
+      forwardedRef.current = newButtonRef.current
     }
   }, [forwardedNewButtonRef])
 
@@ -253,9 +323,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }))
   )
 
-  const characterIdentifier = (record: any): string =>
-    String(record?.id ?? record?.slug ?? record?.name ?? "")
-
   const formatUpdatedLabel = (value?: string | null) => {
     const fallback = t("settings:manageCharacters.conversations.unknownTime", {
       defaultValue: "Unknown"
@@ -279,7 +346,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     status,
     error,
     refetch
-  } = useQuery({
+  } = useQuery<CharacterRecord[], Error>({
     queryKey: [
       "tldw:listCharacters",
       {
@@ -315,11 +382,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
         // When both search and tags are active, use server search then filter client-side by tags
         const searched = await tldwClient.searchCharacters(query)
-        const normalized = Array.isArray(searched) ? searched : []
-        const filtered = normalized.filter((c: any) => {
-          const ct: string[] = Array.isArray(c?.tags)
+        const normalized: CharacterRecord[] = Array.isArray(searched) ? searched : []
+        const filtered = normalized.filter((c) => {
+          const ct: string[] = Array.isArray(c.tags)
             ? c.tags
-            : typeof c?.tags === "string"
+            : typeof c.tags === "string"
               ? [c.tags]
               : []
           if (ct.length === 0) return false
@@ -329,27 +396,33 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           return tags.some((tag) => ct.includes(tag))
         })
         return filtered
-      } catch (e: any) {
+      } catch (error: unknown) {
+        const fallback = t("settings:manageCharacters.notification.someError", {
+          defaultValue: "Something went wrong. Please try again later"
+        })
         notification.error({
           message: t("settings:manageCharacters.notification.error", {
             defaultValue: "Error"
           }),
-          description:
-            e?.message ||
-            t("settings:manageCharacters.notification.someError", {
-              defaultValue: "Something went wrong. Please try again later"
-            })
+          description: getErrorMessage(error, fallback)
         })
-        throw e
+        throw toError(error, fallback)
       }
     }
   })
 
   const allTags = React.useMemo(() => {
     const set = new Set<string>()
-    ;(data || []).forEach((c: any) =>
-      (c?.tags || []).forEach((tag: string) => set.add(tag))
-    )
+    ;(data ?? []).forEach((c) => {
+      const tags = Array.isArray(c.tags)
+        ? c.tags
+        : typeof c.tags === "string"
+          ? [c.tags]
+          : []
+      tags.forEach((tag) => {
+        if (tag) set.add(tag)
+      })
+    })
     return Array.from(set.values())
   }, [data])
 
@@ -362,7 +435,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   )
 
   const { mutate: createCharacter, isPending: creating } = useMutation({
-    mutationFn: async (values: any) =>
+    mutationFn: async (values: CharacterFormValues) =>
       tldwClient.createCharacter(buildCharacterPayload(values)),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
@@ -377,17 +450,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         newButtonRef.current?.focus()
       }, 0)
     },
-    onError: (e: any) =>
+    onError: (error: unknown) => {
+      const fallback = t("settings:manageCharacters.notification.someError", {
+        defaultValue: "Something went wrong. Please try again later"
+      })
       notification.error({
         message: t("settings:manageCharacters.notification.error", {
           defaultValue: "Error"
         }),
-        description:
-          e?.message ||
-          t("settings:manageCharacters.notification.someError", {
-            defaultValue: "Something went wrong. Please try again later"
-          })
+        description: getErrorMessage(error, fallback)
       })
+    }
   })
   React.useEffect(() => {
     if (open) {
@@ -452,7 +525,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   }, [conversationsOpen, conversationCharacter, t])
 
   const { mutate: updateCharacter, isPending: updating } = useMutation({
-    mutationFn: async (values: any) => {
+    mutationFn: async (values: CharacterFormValues) => {
       if (!editId) {
         throw new Error("No character selected for editing")
       }
@@ -476,17 +549,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         lastEditTriggerRef.current?.focus()
       }, 0)
     },
-    onError: (e: any) =>
+    onError: (error: unknown) => {
+      const fallback = t("settings:manageCharacters.notification.someError", {
+        defaultValue: "Something went wrong. Please try again later"
+      })
       notification.error({
         message: t("settings:manageCharacters.notification.error", {
           defaultValue: "Error"
         }),
-        description:
-          e?.message ||
-          t("settings:manageCharacters.notification.someError", {
-            defaultValue: "Something went wrong. Please try again later"
-          })
+        description: getErrorMessage(error, fallback)
       })
+    }
   })
 
   const { mutate: deleteCharacter, isPending: deleting } = useMutation({
@@ -499,17 +572,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         })
       })
     },
-    onError: (e: any) =>
+    onError: (error: unknown) => {
+      const fallback = t("settings:manageCharacters.notification.someError", {
+        defaultValue: "Something went wrong. Please try again later"
+      })
       notification.error({
         message: t("settings:manageCharacters.notification.error", {
           defaultValue: "Error"
         }),
-        description:
-          e?.message ||
-          t("settings:manageCharacters.notification.someError", {
-            defaultValue: "Something went wrong. Please try again later"
-          })
+        description: getErrorMessage(error, fallback)
       })
+    }
   })
 
   return (
@@ -597,10 +670,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             description={
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm text-danger">
-                  {(error as any)?.message ||
+                  {getErrorMessage(
+                    error,
                     t("settings:manageCharacters.loadError.description", {
                       defaultValue: "Check your connection and try again."
-                    })}
+                    })
+                  )}
                 </span>
                 <Button size="small" onClick={() => refetch()}>
                   {t("common:retry", { defaultValue: "Retry" })}
@@ -687,9 +762,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         )}
       {status === "success" && Array.isArray(data) && data.length > 0 && (
         <div className="overflow-x-auto">
-          <Table
-            rowKey={(r: any) => r.id || r.slug || r.name}
-            dataSource={data}
+          <Table<CharacterRecord>
+            rowKey={(record) => characterIdentifier(record)}
+            dataSource={data ?? []}
             columns={[
             {
               title: (
@@ -701,8 +776,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               ),
               key: "avatar",
               width: 48,
-              render: (_: any, record: any) =>
+              render: (_value: unknown, record: CharacterRecord) =>
                 record?.avatar_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- renders user-provided URLs
                   <img
                     src={record.avatar_url}
                     className="w-6 h-6 rounded-full"
@@ -727,7 +803,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               }),
               dataIndex: "name",
               key: "name",
-              sorter: (a: any, b: any) => (a.name || "").localeCompare(b.name || ""),
+              sorter: (a: CharacterRecord, b: CharacterRecord) =>
+                (a.name || "").localeCompare(b.name || ""),
               sortDirections: ["ascend", "descend"] as const,
               render: (v: string) => (
                 <span className="line-clamp-1" title={v || undefined}>
@@ -761,8 +838,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               }),
               dataIndex: "tags",
               key: "tags",
-              render: (tags: string[]) => {
-                const all = tags || []
+              render: (tags: CharacterRecord["tags"]) => {
+                const all = Array.isArray(tags)
+                  ? tags
+                  : typeof tags === "string"
+                    ? [tags]
+                    : []
                 const visible = all.slice(0, MAX_TAGS_DISPLAYED)
                 const hasMore = all.length > MAX_TAGS_DISPLAYED
                 const hiddenCount = all.length - MAX_TAGS_DISPLAYED
@@ -804,7 +885,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 defaultValue: "Actions"
               }),
               key: "actions",
-              render: (_: any, record: any) => {
+              render: (_value: unknown, record: CharacterRecord) => {
                 const chatLabel = t("settings:manageCharacters.actions.chat", {
                   defaultValue: "Chat"
                 })
@@ -839,25 +920,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           name
                         })}
                         onClick={() => {
-                          const id = record.id || record.slug || record.name
-                          setSelectedCharacter({
-                            id,
-                            name: record.name || record.title || record.slug,
-                            system_prompt:
-                              record.system_prompt ||
-                              record.systemPrompt ||
-                              record.instructions ||
-                              "",
-                            greeting:
-                              record.greeting ||
-                              record.first_message ||
-                              record.greet ||
-                              "",
-                            avatar_url:
-                              record.avatar_url ||
-                              validateAndCreateImageDataUrl(record.image_base64) ||
-                              ""
-                          })
+                          setSelectedCharacter(buildSelectedCharacter(record))
                           navigate("/")
                           setTimeout(() => {
                             focusComposer()
@@ -1195,9 +1258,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                                 defaultValue: "Assistant"
                               })
 
+                            const messageParams: Record<string, string> = {
+                              include_deleted: "false"
+                            }
                             const messages = await tldwClient.listChatMessages(
                               chat.id,
-                              { include_deleted: "false" } as any
+                              messageParams
                             )
                             const history = messages.map((m) => ({
                               role: normalizeChatRole(m.role),
@@ -1228,50 +1294,28 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                               }
                             })
 
-                            const id = characterIdentifier(conversationCharacter)
-                            setSelectedCharacter({
-                              id,
-                              name:
-                                conversationCharacter.name ||
-                                conversationCharacter.title ||
-                                conversationCharacter.slug,
-                              system_prompt:
-                                conversationCharacter.system_prompt ||
-                                conversationCharacter.systemPrompt ||
-                                conversationCharacter.instructions ||
-                                "",
-                              greeting:
-                                conversationCharacter.greeting ||
-                                conversationCharacter.first_message ||
-                                conversationCharacter.greet ||
-                                "",
-                              avatar_url:
-                                conversationCharacter.avatar_url ||
-                                validateAndCreateImageDataUrl(
-                                  conversationCharacter.image_base64
-                                ) ||
-                                ""
-                            })
+                            setSelectedCharacter(
+                              buildSelectedCharacter(conversationCharacter)
+                            )
 
                             setHistoryId(null)
                             setServerChatId(chat.id)
+                            const chatRecord = chat as Record<string, unknown>
+                            const fallbackState =
+                              typeof chatRecord.conversation_state === "string"
+                                ? chatRecord.conversation_state
+                                : null
                             setServerChatState(
-                              (chat as any)?.state ??
-                                (chat as any)?.conversation_state ??
+                              (typeof chat.state === "string"
+                                ? chat.state
+                                : null) ??
+                                fallbackState ??
                                 "in-progress"
                             )
-                            setServerChatTopic(
-                              (chat as any)?.topic_label ?? null
-                            )
-                            setServerChatClusterId(
-                              (chat as any)?.cluster_id ?? null
-                            )
-                            setServerChatSource(
-                              (chat as any)?.source ?? null
-                            )
-                            setServerChatExternalRef(
-                              (chat as any)?.external_ref ?? null
-                            )
+                            setServerChatTopic(chat.topic_label ?? null)
+                            setServerChatClusterId(chat.cluster_id ?? null)
+                            setServerChatSource(chat.source ?? null)
+                            setServerChatExternalRef(chat.external_ref ?? null)
                             setHistory(history)
                             setMessages(mappedMessages)
                             updatePageTitle(chat.title)
@@ -1281,7 +1325,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             setTimeout(() => {
                               focusComposer()
                             }, 0)
-                          } catch (e) {
+                          } catch {
                             setChatsError(
                               t("settings:manageCharacters.conversations.error", {
                                 defaultValue:

@@ -12,7 +12,6 @@ import {
   exportFlashcards,
   exportFlashcardsFile,
   getFlashcardsImportLimits,
-  type Deck,
   type Flashcard,
   type FlashcardCreate,
   type FlashcardUpdate

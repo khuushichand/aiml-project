@@ -375,7 +375,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 15  # Schema v15 adds Writing Playground persistence tables
+    _CURRENT_SCHEMA_VERSION = 16  # Schema v16 adds Writing Wordcloud caching tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -2122,6 +2122,34 @@ UPDATE db_schema_version
    AND version < 15;
 """
 
+    # --- Migration: V15 -> V16 (Writing Wordclouds) ---
+    _MIGRATION_SQL_V15_TO_V16 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 16 - Writing Wordclouds (2026-01-24)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS writing_wordclouds(
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'queued',
+  options_json TEXT NOT NULL,
+  words_json TEXT,
+  meta_json TEXT,
+  error TEXT,
+  input_chars INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  client_id TEXT NOT NULL DEFAULT 'unknown'
+);
+CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status);
+CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified);
+
+UPDATE db_schema_version
+   SET version = 16
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 16;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -3196,6 +3224,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V14->V15: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V15 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v15_to_v16(self, conn: sqlite3.Connection):
+        """Migrates schema from V15 to V16 (Writing Wordclouds)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V15 to V16 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V15_TO_V16)
+            final_version = self._get_db_version(conn)
+            if final_version != 16:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V15->V16 failed version check. Expected 16, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V16 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V15->V16 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V15->V16 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V15->V16: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V16 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -3323,6 +3371,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)")
                     except sqlite3.Error:
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
@@ -3369,6 +3419,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 15 and current_db_version == 14:
                         self._migrate_from_v14_to_v15(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 16 and current_db_version == 15:
+                        self._migrate_from_v15_to_v16(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -3390,6 +3443,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_last_modified ON writing_themes(last_modified)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_deleted ON writing_themes(deleted)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)")
                 except sqlite3.Error:
                     pass
                 # Example for future migrations:
@@ -3502,14 +3557,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         if target_version >= 15 and current_db_version == 14:
                             self._migrate_from_v14_to_v15(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 16 and current_db_version == 15:
+                            self._migrate_from_v15_to_v16(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 13 and target_version >= 14:
                         self._migrate_from_v13_to_v14(conn)
                         current_db_version = self._get_db_version(conn)
                         if target_version >= 15 and current_db_version == 14:
                             self._migrate_from_v14_to_v15(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 16 and current_db_version == 15:
+                            self._migrate_from_v15_to_v16(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 14 and target_version >= 15:
                         self._migrate_from_v14_to_v15(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 16 and current_db_version == 15:
+                            self._migrate_from_v15_to_v16(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 15 and target_version >= 16:
+                        self._migrate_from_v15_to_v16(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
@@ -3529,6 +3596,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 15 and current_db_version == 14:
                     self._migrate_from_v14_to_v15(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 16 and current_db_version == 15:
+                    self._migrate_from_v15_to_v16(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -3629,6 +3699,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 15:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V14_TO_V15, conn, expected_version=15)
                 current_version = 15
+            if current_version < 16:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V15_TO_V16, conn, expected_version=16)
+                current_version = 16
 
             if current_version > target_version:
                 raise SchemaError(
@@ -3720,6 +3793,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     self.backend.execute(
                         "CREATE INDEX IF NOT EXISTS idx_writing_themes_order ON writing_themes(order_index)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_status ON writing_wordclouds(status)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)",
                         connection=conn,
                     )
                 except Exception as exc:
@@ -9850,6 +9931,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except (TypeError, ValueError) as exc:
             raise InputError(f"{entity_label} payload must be JSON-serializable.") from exc
 
+    def _serialize_json_payload(self, payload: Any, entity_label: str) -> str:
+        """
+        Serialize an arbitrary payload to JSON for storage.
+
+        Args:
+            payload: JSON-serializable payload.
+            entity_label: Label used in error messages.
+
+        Returns:
+            JSON-serialized payload string.
+
+        Raises:
+            InputError: If the payload is None or not JSON-serializable.
+        """
+        if payload is None:
+            raise InputError(f"{entity_label} payload cannot be None.")
+        try:
+            return json.dumps(payload, ensure_ascii=True)
+        except (TypeError, ValueError) as exc:
+            raise InputError(f"{entity_label} payload must be JSON-serializable.") from exc
+
     def add_writing_session(
         self,
         name: str,
@@ -10483,6 +10585,155 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         theme_name = self._normalize_writing_name(name, "Theme")
         return self._soft_delete_generic_item("writing_themes", theme_name, expected_version, pk_col_name="name")
+
+    # --- Writing Wordcloud Methods ---
+    def _normalize_wordcloud_status(self, status: str) -> str:
+        """
+        Normalize and validate a wordcloud status value.
+
+        Allowed values: queued, running, ready, failed.
+        """
+        if not status or not str(status).strip():
+            raise InputError("Wordcloud status cannot be empty.")
+        normalized = str(status).strip().lower()
+        if normalized not in {"queued", "running", "ready", "failed"}:
+            raise InputError(f"Invalid wordcloud status: {status}.")
+        return normalized
+
+    def add_writing_wordcloud_job(
+        self,
+        wordcloud_id: str,
+        options: Dict[str, Any],
+        *,
+        input_chars: int,
+        status: str = "queued",
+    ) -> None:
+        """
+        Create or reset a writing wordcloud job entry.
+
+        Args:
+            wordcloud_id: Deterministic cache key (hash).
+            options: Wordcloud options payload.
+            input_chars: Character count of input text.
+            status: Initial status (queued by default).
+        """
+        if not wordcloud_id or not str(wordcloud_id).strip():
+            raise InputError("Wordcloud ID cannot be empty.")
+        normalized_status = self._normalize_wordcloud_status(status)
+        options_json = self._serialize_json_payload(options, "Wordcloud options")
+        now = self._get_current_utc_timestamp_iso()
+        query = (
+            "INSERT INTO writing_wordclouds "
+            "(id, status, options_json, input_chars, created_at, last_modified, client_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "status=excluded.status, "
+            "options_json=excluded.options_json, "
+            "input_chars=excluded.input_chars, "
+            "words_json=NULL, "
+            "meta_json=NULL, "
+            "error=NULL, "
+            "last_modified=excluded.last_modified, "
+            "client_id=excluded.client_id"
+        )
+        params = (
+            str(wordcloud_id),
+            normalized_status,
+            options_json,
+            int(input_chars),
+            now,
+            now,
+            self.client_id,
+        )
+        try:
+            self.execute_query(query, params, commit=True)
+        except CharactersRAGDBError:
+            raise
+        except Exception as exc:
+            raise CharactersRAGDBError(f"Failed to create wordcloud job: {exc}") from exc
+
+    def get_writing_wordcloud(self, wordcloud_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a wordcloud job by ID.
+
+        Returns the row with JSON fields deserialized (options, words, meta).
+        """
+        if not wordcloud_id or not str(wordcloud_id).strip():
+            raise InputError("Wordcloud ID cannot be empty.")
+        query = "SELECT * FROM writing_wordclouds WHERE id = ?"
+        try:
+            cursor = self.execute_query(query, (str(wordcloud_id),))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            item = self._deserialize_row_fields(row, ["options_json", "words_json", "meta_json"])
+            if not item:
+                return None
+            item["options"] = item.pop("options_json", None)
+            item["words"] = item.pop("words_json", None)
+            item["meta"] = item.pop("meta_json", None)
+            return item
+        except CharactersRAGDBError:
+            raise
+        except Exception as exc:
+            raise CharactersRAGDBError(f"Failed to fetch wordcloud job: {exc}") from exc
+
+    def _update_writing_wordcloud_fields(self, wordcloud_id: str, update_data: Dict[str, Any]) -> None:
+        if not update_data:
+            raise InputError("No data provided for wordcloud update.")
+        allowed_fields = {
+            "status",
+            "options_json",
+            "words_json",
+            "meta_json",
+            "error",
+            "input_chars",
+        }
+        now = self._get_current_utc_timestamp_iso()
+        fields_sql: List[str] = []
+        params: List[Any] = []
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            fields_sql.append(f"{key} = ?")
+            params.append(value)
+        if not fields_sql:
+            raise InputError("No valid fields provided for wordcloud update.")
+        fields_sql.extend(["last_modified = ?", "client_id = ?"])
+        params.extend([now, self.client_id, str(wordcloud_id)])
+        query = f"UPDATE writing_wordclouds SET {', '.join(fields_sql)} WHERE id = ?"
+        try:
+            cursor = self.execute_query(query, tuple(params), commit=True)
+            if getattr(cursor, "rowcount", 0) == 0:
+                raise ConflictError("Wordcloud job not found.", entity="writing_wordclouds", entity_id=wordcloud_id)
+        except CharactersRAGDBError:
+            raise
+        except Exception as exc:
+            raise CharactersRAGDBError(f"Failed to update wordcloud job: {exc}") from exc
+
+    def set_writing_wordcloud_status(self, wordcloud_id: str, status: str, error: Optional[str] = None) -> None:
+        """Update wordcloud job status (and optional error)."""
+        normalized_status = self._normalize_wordcloud_status(status)
+        update_data: Dict[str, Any] = {"status": normalized_status, "error": error}
+        self._update_writing_wordcloud_fields(wordcloud_id, update_data)
+
+    def set_writing_wordcloud_result(
+        self,
+        wordcloud_id: str,
+        *,
+        status: str,
+        words: Optional[List[Dict[str, Any]]] = None,
+        meta: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Persist wordcloud results and status."""
+        normalized_status = self._normalize_wordcloud_status(status)
+        update_data: Dict[str, Any] = {"status": normalized_status, "error": error}
+        if words is not None:
+            update_data["words_json"] = self._serialize_json_payload(words, "Wordcloud result")
+        if meta is not None:
+            update_data["meta_json"] = self._serialize_json_payload(meta, "Wordcloud meta")
+        self._update_writing_wordcloud_fields(wordcloud_id, update_data)
 
     # --- Sync Log Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None,

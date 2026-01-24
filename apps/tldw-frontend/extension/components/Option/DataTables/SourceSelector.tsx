@@ -10,7 +10,7 @@ import {
   Tag,
   message
 } from "antd"
-import { MessageSquare, FileText, Search, X, Plus } from "lucide-react"
+import { MessageSquare, FileText, Search, Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useDataTablesStore } from "@/store/data-tables"
 import type { DataTablesState } from "@/store/data-tables"
@@ -26,13 +26,16 @@ const DOCUMENT_MEDIA_TYPES = new Set([
   "html"
 ])
 
-const extractMediaItems = (response: any): any[] => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const extractMediaItems = (response: unknown): unknown[] => {
   if (!response) return []
   if (Array.isArray(response)) return response
-  if (Array.isArray(response.items)) return response.items
-  if (Array.isArray(response.results)) return response.results
-  if (Array.isArray(response.data)) return response.data
-  if (Array.isArray(response.media)) return response.media
+  if (isRecord(response) && Array.isArray(response.items)) return response.items
+  if (isRecord(response) && Array.isArray(response.results)) return response.results
+  if (isRecord(response) && Array.isArray(response.data)) return response.data
+  if (isRecord(response) && Array.isArray(response.media)) return response.media
   return []
 }
 
@@ -141,20 +144,26 @@ export const SourceSelector: React.FC = () => {
 
         const items = extractMediaItems(response)
         const sources: DataTableSource[] = items
-          .map((item: any) => {
-            const rawType = String(item?.type || item?.media_type || "").toLowerCase()
+          .map((item) => {
+            if (!isRecord(item)) return null
+            const rawType = String(item.type ?? item.media_type ?? "").toLowerCase()
             if (rawType && !DOCUMENT_MEDIA_TYPES.has(rawType)) {
               return null
             }
-            const title = item?.title || item?.name || `Document ${item?.id ?? ""}`
+            const title =
+              typeof item.title === "string"
+                ? item.title
+                : typeof item.name === "string"
+                  ? item.name
+                  : `Document ${String(item.id ?? "")}`
             const snippet =
-              item?.content_preview ||
-              item?.description ||
-              item?.summary ||
+              (typeof item.content_preview === "string" && item.content_preview) ||
+              (typeof item.description === "string" && item.description) ||
+              (typeof item.summary === "string" && item.summary) ||
               (rawType ? rawType.toUpperCase() : undefined)
             return {
               type: "document" as const,
-              id: String(item?.id ?? ""),
+              id: String(item.id ?? ""),
               title,
               snippet
             }

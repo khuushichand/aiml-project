@@ -369,9 +369,9 @@ export class TldwChatService {
       } else if (Array.isArray(content)) {
         // Roughly approximate by concatenating any text fields
         const text = content
-          .map((part: any) => {
+          .map((part: unknown) => {
             if (typeof part === "string") return part
-            if (part?.type === "text" && typeof part.text === "string") {
+            if (isRecord(part) && part.type === "text" && typeof part.text === "string") {
               return part.text
             }
             return ""

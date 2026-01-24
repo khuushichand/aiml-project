@@ -4,6 +4,7 @@ import { Tooltip, Input } from "antd"
 import { CogIcon, Menu, Search, Signpost, SquarePen, Keyboard, GitBranch } from "lucide-react"
 import { ConnectionStatus } from "./ConnectionStatus"
 import { HeaderShortcuts } from "./HeaderShortcuts"
+import Image from "next/image"
 import logoImage from "~/assets/icon.png"
 
 type ChatHeaderProps = {
@@ -82,10 +83,13 @@ export function ChatHeader({
           )}
           <ConnectionStatus showLabel={false} className="px-2 py-1" />
           <div className="flex items-center gap-2 text-text">
-            <img
-              src={logoImage.src}
+            <Image
+              src={logoImage}
               alt={t("common:pageAssist", "tldw Assistant")}
+              width={20}
+              height={20}
               className="h-5 w-auto"
+              priority
             />
             <span className="text-sm font-medium">
               {t("common:pageAssist", "tldw Assistant")}

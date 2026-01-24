@@ -84,6 +84,7 @@ export const AttachedTabs: React.FC<AttachedTabsProps> = ({
                 className="flex items-center gap-2 px-2 py-1.5 rounded bg-surface2/50 group"
               >
                 {tab.favIconUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={tab.favIconUrl}
                     alt=""
@@ -123,6 +124,7 @@ export const AttachedTabs: React.FC<AttachedTabsProps> = ({
             label: (
               <div className="flex items-center gap-2">
                 {tab.favIconUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={tab.favIconUrl}
                     alt=""

@@ -2,7 +2,7 @@
  * Kanban service - API client for tldw_server kanban endpoints
  */
 
-import { bgRequest, bgUpload } from "./background-proxy"
+import { bgRequest } from "./background-proxy"
 import type {
   Board,
   BoardCreate,
@@ -103,7 +103,7 @@ export async function deleteBoard(boardId: number): Promise<void> {
  * Import a board from JSON (Trello or tldw format)
  */
 export async function importBoard(
-  data: Record<string, any>,
+  data: Record<string, unknown>,
   boardName?: string
 ): Promise<BoardImportResponse> {
   return await bgRequest<BoardImportResponse>({

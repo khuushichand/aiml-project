@@ -2695,6 +2695,18 @@ def convert_html_to_markdown(html: str) -> str:
     return soup.get_text(separator="\n\n")
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+    return default
+
+
 async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     logging.info(f"Scraping article from URL: {url}")
     # Enforce centralized egress/SSRF policy before any network access
@@ -2773,6 +2785,75 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             if backend_choice not in {"auto", "curl", "httpx", "playwright"}:
                 backend_choice = "auto"
 
+    preflight_analysis = None
+    preflight_notes: List[str] = []
+    preflight_method = "auto"
+    if _as_bool(ws_cfg.get("web_scraper_preflight_analyzers", False), False):
+        find_all = _as_bool(ws_cfg.get("web_scraper_preflight_find_all_waf", False), False)
+        impersonate = _as_bool(ws_cfg.get("web_scraper_preflight_impersonate", False), False)
+        scan_depth_raw = str(ws_cfg.get("web_scraper_preflight_scan_depth", "") or "").strip().lower()
+        if scan_depth_raw not in {"default", "thorough", "deep"}:
+            scan_depth_raw = "default"
+
+        try:
+            timeout_s = float(ws_cfg.get("web_scraper_preflight_timeout_s", 0) or 0)
+        except Exception:
+            timeout_s = 0.0
+
+        try:
+            from tldw_Server_API.app.core.Web_Scraping.scraper_analyzers import run_analysis
+
+            task = asyncio.to_thread(
+                run_analysis,
+                url,
+                find_all=find_all,
+                impersonate=impersonate,
+                scan_depth=scan_depth_raw,
+            )
+            if timeout_s and timeout_s > 0:
+                preflight_analysis = await asyncio.wait_for(task, timeout=timeout_s)
+            else:
+                preflight_analysis = await task
+        except asyncio.TimeoutError:
+            logging.debug(f"Preflight analysis timed out for {url}")
+        except Exception as exc:
+            logging.debug(f"Preflight analysis failed for {url}: {exc}")
+
+    if preflight_analysis and isinstance(preflight_analysis, dict):
+        results = preflight_analysis.get("results", {})
+        if isinstance(results, dict):
+            js_result = results.get("js", {}) or {}
+            if (
+                preflight_method == "auto"
+                and js_result.get("status") == "success"
+                and (js_result.get("js_required") or js_result.get("is_spa"))
+            ):
+                preflight_method = "playwright"
+                preflight_notes.append("js_required")
+
+            tls_result = results.get("tls", {}) or {}
+            backend_setting = str(getattr(plan, "backend", "auto") or "auto").lower().strip()
+            if backend_setting == "auto" and tls_result.get("status") == "active":
+                backend_choice = "curl"
+                preflight_notes.append("tls_active")
+
+    include_preflight = _as_bool(ws_cfg.get("web_scraper_preflight_include_results", False), False)
+    preflight_payload = None
+    if include_preflight and preflight_analysis is not None:
+        preflight_payload = {
+            "analysis": preflight_analysis,
+            "advice": {
+                "backend": backend_choice,
+                "method": preflight_method,
+                "notes": preflight_notes,
+            },
+        }
+
+    def _attach_preflight(result: Dict[str, Any]) -> Dict[str, Any]:
+        if preflight_payload and isinstance(result, dict):
+            result.setdefault("preflight_analysis", preflight_payload)
+        return result
+
     # robots.txt enforcement (fail open if error)
     effective_ua = ua_headers.get("User-Agent", web_scraping_user_agent)
     if getattr(plan, "respect_robots", True):
@@ -2783,7 +2864,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
             except Exception:
                 increment_counter("scrape_blocked_by_robots_total", labels={})
-            return {
+            return _attach_preflight({
                 "url": url,
                 "title": "N/A",
                 "author": "N/A",
@@ -2791,9 +2872,9 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 "content": "",
                 "extraction_successful": False,
                 "error": "Blocked by robots policy",
-            }
+            })
 
-    if backend_choice != "playwright":
+    if backend_choice != "playwright" and preflight_method != "playwright":
         # First try lightweight HTTP path (curl/httpx) before Playwright
         try:
             cookies_map = _merge_cookie_list_to_map(custom_cookies)
@@ -2873,7 +2954,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                         labels={"backend": backend_used},
                     )
                     increment_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "success"})
-                    return article_data
+                    return _attach_preflight(article_data)
             # No extractable content
             increment_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "no_extract"})
         except Exception as _e:
@@ -3004,7 +3085,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             len(content.encode("utf-8", errors="ignore")),
             labels={"backend": "playwright"},
         )
-    return article_data
+    return _attach_preflight(article_data)
 
 
 def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:

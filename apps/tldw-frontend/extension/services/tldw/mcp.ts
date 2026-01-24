@@ -12,16 +12,21 @@ export type McpToolDefinition = {
   [key: string]: unknown
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
 export const fetchMcpTools = async (): Promise<McpToolDefinition[]> => {
   try {
-    const res = await bgRequestClient<any>({
+    const res = await bgRequestClient<unknown>({
       path: "/api/v1/mcp/tools",
       method: "GET"
     })
     if (!res) return []
-    if (Array.isArray(res)) return res
-    if (Array.isArray(res.tools)) return res.tools
-    if (Array.isArray(res.data)) return res.data
+    if (Array.isArray(res)) return res as McpToolDefinition[]
+    if (isRecord(res)) {
+      if (Array.isArray(res.tools)) return res.tools as McpToolDefinition[]
+      if (Array.isArray(res.data)) return res.data as McpToolDefinition[]
+    }
     return []
   } catch {
     return []

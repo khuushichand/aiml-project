@@ -1,6 +1,6 @@
 import React, { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Input, Button, List, Switch, Spin, Select, Checkbox, Skeleton, Collapse, Popover } from "antd"
+import { Input, Button, List, Switch, Spin, Select, Checkbox, Collapse, Popover } from "antd"
 import { HelpCircle } from "lucide-react"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { useNavigate } from "react-router-dom"
@@ -14,6 +14,18 @@ import { getNoOfRetrievedDocs } from "@/services/app"
 import { RagDocsPerReplyHint } from "./RagDocsPerReplyHint"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useKnowledgeStatus } from "@/hooks/useConnectionState"
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
+const ensureRecord = (value: unknown): Record<string, unknown> =>
+  isRecord(value) ? value : {}
 
 export const KnowledgeSettings = () => {
   const { t } = useTranslation(["knowledge", "common"])
@@ -38,12 +50,12 @@ export const KnowledgeSettings = () => {
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const [ragQuery, setRagQuery] = useState("")
   const [ragLoading, setRagLoading] = useState(false)
-  const [ragResults, setRagResults] = useState<any[]>([])
+  const [ragResults, setRagResults] = useState<unknown[]>([])
   const [ragError, setRagError] = useState<string | null>(null)
   const [ragAnswer, setRagAnswer] = useState<string | null>(null)
-  const [ragCitations, setRagCitations] = useState<any[]>([])
+  const [ragCitations, setRagCitations] = useState<unknown[]>([])
   const [advancedOverridesText, setAdvancedOverridesText] = useState<string>("")
-  const [advancedOverrides, setAdvancedOverrides] = useState<Record<string, any>>({})
+  const [advancedOverrides, setAdvancedOverrides] = useState<Record<string, unknown>>({})
   const [strategy, setStrategy] = useState<string | null>(null)
   const [enableReranking, setEnableReranking] = useState<boolean | null>(null)
   const [enableCache, setEnableCache] = useState<boolean | null>(null)
@@ -59,9 +71,10 @@ export const KnowledgeSettings = () => {
     // Best-effort: pull defaults from any structured RAG config placed on the capabilities object.
     // We intentionally avoid typing this more strictly to stay forward-compatible with server changes.
     try {
-      const anyCaps: any = capabilities
-      const defaults = anyCaps?.rag?.defaults
-      if (defaults && typeof defaults === "object") {
+      const capsRecord = ensureRecord(capabilities)
+      const ragConfig = ensureRecord(capsRecord.rag)
+      const defaults = ragConfig.defaults
+      if (isRecord(defaults)) {
         if (typeof defaults.strategy === "string" && !strategy) {
           setStrategy(defaults.strategy)
         }
@@ -96,7 +109,7 @@ export const KnowledgeSettings = () => {
       const defaultTopK = await getNoOfRetrievedDocs()
       const top_k =
         typeof ragTopK === "number" && ragTopK > 0 ? ragTopK : defaultTopK
-      const options: any = {
+      const options: Record<string, unknown> = {
         top_k,
         search_mode: ragSearchMode
       }
@@ -118,36 +131,39 @@ export const KnowledgeSettings = () => {
       if (enableCache != null) {
         options.enable_cache = enableCache
       }
-      if (advancedOverrides && typeof advancedOverrides === "object" && Object.keys(advancedOverrides).length > 0) {
+      if (Object.keys(advancedOverrides).length > 0) {
         Object.assign(options, advancedOverrides)
       }
       const ragRes = await tldwClient.ragSearch(q, options)
-      const docs = ragRes?.results || ragRes?.documents || ragRes?.docs || []
+      const ragRecord = ensureRecord(ragRes)
+      const docs = ragRecord.results || ragRecord.documents || ragRecord.docs || []
       setRagResults(Array.isArray(docs) ? docs : [])
       const answer =
-        ragRes?.generated_answer ||
-        ragRes?.answer ||
-        ragRes?.response ||
+        ragRecord.generated_answer ||
+        ragRecord.answer ||
+        ragRecord.response ||
         ""
       setRagAnswer(
         typeof answer === "string" && answer.trim().length > 0
           ? answer
           : null
       )
-      const citations: any[] =
-        ragRes?.citations ||
-        ragRes?.chunk_citations ||
-        ragRes?.academic_citations ||
+      const citations =
+        ragRecord.citations ||
+        ragRecord.chunk_citations ||
+        ragRecord.academic_citations ||
         []
       setRagCitations(Array.isArray(citations) ? citations : [])
-    } catch (e: any) {
+    } catch (error: unknown) {
       setRagResults([])
       setRagError(
-        e?.message ||
+        getErrorMessage(
+          error,
           t("knowledge:rag.searchFailed", {
             defaultValue:
               "RAG search failed. Try again or check Diagnostics."
           })
+        )
       )
     } finally {
       setRagLoading(false)
@@ -797,7 +813,7 @@ export const KnowledgeSettings = () => {
                                   defaultValue: "Advanced RAG options applied."
                                 })
                               )
-                            } catch (e: any) {
+                            } catch {
                               message.error(
                                 t("knowledge:ragWorkspace.advancedInvalid", {
                                   defaultValue: "Invalid JSON for advanced RAG options."
@@ -897,7 +913,10 @@ export const KnowledgeSettings = () => {
                                 </div>
                                 <ul className="mt-1 list-disc pl-4 space-y-0.5">
                                   {ragCitations.slice(0, 6).map((c, idx) => {
-                                    const meta = (c && (c.metadata || c)) || {}
+                                    const citationRecord = ensureRecord(c)
+                                    const meta = isRecord(citationRecord.metadata)
+                                      ? citationRecord.metadata
+                                      : citationRecord
                                     const title =
                                       meta.title ||
                                       meta.source ||
@@ -934,18 +953,24 @@ export const KnowledgeSettings = () => {
                         <List
                           size="small"
                           dataSource={ragResults}
-                          renderItem={(item: any) => {
+                          renderItem={(item) => {
+                            const itemRecord = ensureRecord(item)
                             const content =
-                              item?.content || item?.text || item?.chunk || ""
-                            const meta = item?.metadata || {}
+                              itemRecord.content ||
+                              itemRecord.text ||
+                              itemRecord.chunk ||
+                              ""
+                            const meta = isRecord(itemRecord.metadata)
+                              ? itemRecord.metadata
+                              : {}
                             const title =
-                              meta?.title ||
-                              meta?.source ||
-                              meta?.url ||
+                              meta.title ||
+                              meta.source ||
+                              meta.url ||
                               t("knowledge:ragWorkspace.untitled", {
                                 defaultValue: "Untitled snippet"
                               })
-                            const url = meta?.url || meta?.source || ""
+                            const url = meta.url || meta.source || ""
                             const snippet = String(content || "").slice(0, 260)
                             const wasTruncated = String(content || "").length > 260
                             const insertText = `${snippet}${
@@ -980,7 +1005,9 @@ export const KnowledgeSettings = () => {
                                       })}
                                     </Button>
                                   ) : null
-                                ].filter(Boolean as any)}
+                                ].filter(
+                                  (action): action is React.ReactNode => Boolean(action)
+                                )}
                               >
                                 <List.Item.Meta
                                   title={

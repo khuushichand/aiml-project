@@ -18,6 +18,34 @@ type RecordedItem = {
   text: string
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
+const coerceTranscriptText = (response: unknown): string => {
+  if (!response) return ""
+  if (typeof response === "string") return response
+  if (!isRecord(response)) return ""
+  if (typeof response.text === "string") return response.text
+  if (typeof response.transcript === "string") return response.transcript
+  const segments = response.segments
+  if (Array.isArray(segments)) {
+    return segments
+      .map((segment) =>
+        isRecord(segment) && typeof segment.text === "string" ? segment.text : ""
+      )
+      .filter((text) => text.trim().length > 0)
+      .join(" ")
+      .trim()
+  }
+  return ""
+}
+
 export const SttPlaygroundPage: React.FC = () => {
   const { t } = useTranslation(["playground", "settings"])
   const [speechToTextLanguage] = useStorage("speechToTextLanguage", "en-US")
@@ -81,7 +109,6 @@ export const SttPlaygroundPage: React.FC = () => {
         }
       } catch (e) {
         if (env.DEV) {
-          // eslint-disable-next-line no-console
           console.warn("Failed to load transcription models for STT Playground", e)
         }
       } finally {
@@ -117,7 +144,7 @@ export const SttPlaygroundPage: React.FC = () => {
 
   const transcribeBlob = React.useCallback(
     async (blob: Blob, modelOverride?: string): Promise<string> => {
-      const sttOptions: Record<string, any> = {
+      const sttOptions: Record<string, unknown> = {
         language: speechToTextLanguage
       }
       const modelToUse = modelOverride || activeModel || sttModel
@@ -163,22 +190,7 @@ export const SttPlaygroundPage: React.FC = () => {
         }
       }
       const res = await tldwClient.transcribeAudio(blob, sttOptions)
-      let text = ""
-      if (res) {
-        if (typeof res === "string") {
-          text = res
-        } else if (typeof (res as any).text === "string") {
-          text = (res as any).text
-        } else if (typeof (res as any).transcript === "string") {
-          text = (res as any).transcript
-        } else if (Array.isArray((res as any).segments)) {
-          text = (res as any).segments
-            .map((s: any) => s?.text || "")
-            .join(" ")
-            .trim()
-        }
-      }
-      return text
+      return coerceTranscriptText(res)
     },
     [
       activeModel,
@@ -224,9 +236,8 @@ export const SttPlaygroundPage: React.FC = () => {
             if (text) {
               appendLiveText(text)
             }
-          } catch (e: any) {
-            // eslint-disable-next-line no-console
-            console.error("Streaming STT chunk failed", e)
+          } catch (error: unknown) {
+            console.error("Streaming STT chunk failed", error)
           }
         } else {
           chunksRef.current.push(ev.data)
@@ -234,7 +245,6 @@ export const SttPlaygroundPage: React.FC = () => {
       }
 
       recorder.onerror = (event: Event) => {
-        // eslint-disable-next-line no-console
         console.error("MediaRecorder error", event)
         notification.error({
           message: t("playground:actions.speechErrorTitle", "Dictation failed"),
@@ -305,18 +315,17 @@ export const SttPlaygroundPage: React.FC = () => {
             }
             setItems((prev) => [item, ...prev])
           }
-        } catch (e: any) {
+        } catch (error: unknown) {
+          const fallback = t(
+            "playground:actions.speechErrorBody",
+            "Transcription request failed. Check tldw server health."
+          )
           notification.error({
             message: t(
               "playground:actions.speechErrorTitle",
               "Dictation failed"
             ),
-            description:
-              e?.message ||
-              t(
-                "playground:actions.speechErrorBody",
-                "Transcription request failed. Check tldw server health."
-              )
+            description: getErrorMessage(error, fallback)
           })
         } finally {
           try {
@@ -329,7 +338,7 @@ export const SttPlaygroundPage: React.FC = () => {
 
       recorder.start(useLongRunning ? 5000 : undefined)
       setIsRecording(true)
-    } catch (e: any) {
+    } catch {
       notification.error({
         message: t("playground:actions.speechErrorTitle", "Dictation failed"),
         description: t(
@@ -362,10 +371,13 @@ export const SttPlaygroundPage: React.FC = () => {
           "Transcription saved as a note."
         )
       })
-    } catch (e: any) {
+    } catch (error: unknown) {
       notification.error({
         message: t("error", "Error"),
-        description: e?.message || t("somethingWentWrong", "Something went wrong")
+        description: getErrorMessage(
+          error,
+          t("somethingWentWrong", "Something went wrong")
+        )
       })
     }
   }
@@ -556,7 +568,7 @@ export const SttPlaygroundPage: React.FC = () => {
                   model: activeModel || sttModel || "whisper-1",
                   task: sttTask === "translate" ? "translate" : "transcribe",
                   format: (sttResponseFormat || "json").toUpperCase()
-                } as any
+                }
               ) as string}
             </div>
             {(liveText || isRecording || isTranscribing) && (

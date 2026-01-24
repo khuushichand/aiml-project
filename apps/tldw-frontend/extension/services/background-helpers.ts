@@ -3,11 +3,20 @@ import { openSidepanel } from "@/utils/sidepanel"
 
 export const ensureSidepanelOpen = openSidepanel
 
-export const pickFirstString = (value: any, keys: string[], visited?: WeakSet<object>): string | null => {
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
+
+export const pickFirstString = (
+  value: unknown,
+  keys: string[],
+  visited?: WeakSet<object>
+): string | null => {
   if (!value) return null
   if (typeof value === "string" && value.trim().length > 0) return value.trim()
 
-  if (typeof value === "object") {
+  if (isRecord(value)) {
     const visitedSet = visited ?? new WeakSet<object>()
 
     if (visitedSet.has(value as object)) {
@@ -24,7 +33,7 @@ export const pickFirstString = (value: any, keys: string[], visited?: WeakSet<ob
     }
 
     for (const key of keys) {
-      const maybe = (value as any)[key]
+      const maybe = value[key]
       if (typeof maybe === "string" && maybe.trim().length > 0) {
         return maybe.trim()
       }
@@ -38,7 +47,9 @@ export const pickFirstString = (value: any, keys: string[], visited?: WeakSet<ob
   return null
 }
 
-export const extractTranscriptionPieces = (data: any): { transcript: string | null; summary: string | null } => {
+export const extractTranscriptionPieces = (
+  data: unknown
+): { transcript: string | null; summary: string | null } => {
   const transcript = pickFirstString(data, ["transcript", "transcription", "text", "raw_text", "content"])
   const summary = pickFirstString(data, ["summary", "analysis", "overview", "abstract"])
   return { transcript, summary }

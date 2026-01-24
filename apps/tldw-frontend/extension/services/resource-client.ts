@@ -18,14 +18,14 @@ export type QueryOptions = {
 }
 
 export type RequestFn = <
-  T = any,
+  T = unknown,
   P extends PathOrUrl = AllowedPath,
   M extends AllowedMethodFor<P> = AllowedMethodFor<P>
 >(init: {
   path: P
   method?: UpperLower<M>
   headers?: Record<string, string>
-  body?: any
+  body?: unknown
   timeoutMs?: number
   abortSignal?: AbortSignal
 }) => Promise<T>
@@ -116,7 +116,7 @@ export const createResourceClient = ({
   }
 
   return {
-    list: async <T = any>(params?: QueryParams, options?: RequestOptions) => {
+    list: async <T = unknown>(params?: QueryParams, options?: RequestOptions) => {
       return await request<T>({
         path: withQuery(basePath, params, options?.queryOptions),
         method: "GET",
@@ -125,7 +125,7 @@ export const createResourceClient = ({
         abortSignal: options?.abortSignal
       })
     },
-    create: async <T = any>(body?: any, options?: RequestOptions) => {
+    create: async <T = unknown>(body?: unknown, options?: RequestOptions) => {
       return await request<T>({
         path: basePath,
         method: "POST",
@@ -135,7 +135,7 @@ export const createResourceClient = ({
         abortSignal: options?.abortSignal
       })
     },
-    get: async <T = any>(
+    get: async <T = unknown>(
       id: string | number,
       params?: QueryParams,
       options?: RequestOptions
@@ -148,9 +148,9 @@ export const createResourceClient = ({
         abortSignal: options?.abortSignal
       })
     },
-    update: async <T = any>(
+    update: async <T = unknown>(
       id: string | number,
-      body?: any,
+      body?: unknown,
       options?: RequestOptions
     ) => {
       return await request<T>({
@@ -162,7 +162,7 @@ export const createResourceClient = ({
         abortSignal: options?.abortSignal
       })
     },
-    remove: async <T = any>(
+    remove: async <T = unknown>(
       id: string | number,
       params?: QueryParams,
       options?: RequestOptions

@@ -41,6 +41,11 @@ const ContentEditModal = React.lazy(() =>
   import('./ContentEditModal').then((m) => ({ default: m.ContentEditModal }))
 )
 
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
+
 const PLAIN_TEXT_MEDIA_TYPES = new Set(['audio', 'video', 'transcript', 'subtitle'])
 const MARKDOWN_HINTS = [
   /^#{1,6}\s+/m,
@@ -61,7 +66,7 @@ const shouldForceHardBreaks = (text: string, mediaType?: string) => {
   return !looksLikeMarkdown(text)
 }
 
-const firstNonEmptyString = (...vals: any[]): string => {
+const firstNonEmptyString = (...vals: unknown[]): string => {
   for (const v of vals) {
     if (typeof v === 'string' && v.trim().length > 0) return v
   }
@@ -71,7 +76,7 @@ const firstNonEmptyString = (...vals: any[]): string => {
 interface ContentViewerProps {
   selectedMedia: MediaResultItem | null
   content: string
-  mediaDetail?: any
+  mediaDetail?: UnknownRecord | null
   isDetailLoading?: boolean
   onPrevious?: () => void
   onNext?: () => void
@@ -87,7 +92,7 @@ interface ContentViewerProps {
   onOpenInMultiReview?: () => void
   onSendAnalysisToChat?: (text: string) => void
   contentRef?: (node: HTMLDivElement | null) => void
-  onDeleteItem?: (item: MediaResultItem, detail: any | null) => Promise<void>
+  onDeleteItem?: (item: MediaResultItem, detail: UnknownRecord | null) => Promise<void>
 }
 
 
@@ -160,24 +165,27 @@ export function ContentViewer({
     }
   }, [pendingDeleteId, selectedMediaId])
 
-  const resolveNoteVersion = useCallback((detail: any, raw: any): number | null => {
-    const candidates = [
-      detail?.version,
-      detail?.metadata?.version,
-      raw?.version,
-      raw?.metadata?.version
-    ]
-    for (const candidate of candidates) {
-      if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate
-      if (typeof candidate === 'string' && candidate.trim().length > 0) {
-        const parsed = Number(candidate)
-        if (Number.isFinite(parsed)) return parsed
+  const resolveNoteVersion = useCallback(
+    (detail: UnknownRecord | null | undefined, raw: UnknownRecord | null | undefined): number | null => {
+      const candidates: unknown[] = [
+        detail?.version,
+        isRecord(detail?.metadata) ? detail?.metadata.version : undefined,
+        raw?.version,
+        isRecord(raw?.metadata) ? raw?.metadata.version : undefined
+      ]
+      for (const candidate of candidates) {
+        if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate
+        if (typeof candidate === 'string' && candidate.trim().length > 0) {
+          const parsed = Number(candidate)
+          if (Number.isFinite(parsed)) return parsed
+        }
       }
-    }
-    return null
-  }, [])
+      return null
+    },
+    []
+  )
 
-  const getVersionNumber = useCallback((v: any): number | null => {
+  const getVersionNumber = useCallback((v: UnknownRecord | null | undefined): number | null => {
     const raw = v?.version_number ?? v?.version
     if (typeof raw === 'number' && Number.isFinite(raw)) return raw
     if (typeof raw === 'string' && raw.trim().length > 0) {
@@ -187,9 +195,9 @@ export function ContentViewer({
     return null
   }, [])
 
-  const pickLatestVersion = useCallback((versions: any[]): any | null => {
+  const pickLatestVersion = useCallback((versions: UnknownRecord[]): UnknownRecord | null => {
     if (!Array.isArray(versions) || versions.length === 0) return null
-    let best: any | null = null
+    let best: UnknownRecord | null = null
     let bestNum = -Infinity
     for (const v of versions) {
       const num = getVersionNumber(v)
@@ -202,33 +210,46 @@ export function ContentViewer({
   }, [getVersionNumber])
 
   const latestVersion = useMemo(() => {
-    if (!mediaDetail || typeof mediaDetail !== 'object') return null
-    const direct = mediaDetail.latest_version || mediaDetail.latestVersion
-    if (direct && typeof direct === 'object') return direct
-    const versions = Array.isArray(mediaDetail.versions) ? mediaDetail.versions : []
+    const detail = isRecord(mediaDetail) ? mediaDetail : null
+    if (!detail) return null
+    const direct = detail.latest_version ?? detail.latestVersion
+    if (isRecord(direct)) return direct
+    const versions = Array.isArray(detail.versions)
+      ? detail.versions.filter(isRecord)
+      : []
     return pickLatestVersion(versions)
   }, [mediaDetail, pickLatestVersion])
 
   const derivedPrompt = useMemo(() => {
-    if (!mediaDetail) return ''
-    const fromRoot = firstNonEmptyString(mediaDetail.prompt)
+    const detail = isRecord(mediaDetail) ? mediaDetail : null
+    if (!detail) return ''
+    const fromRoot = firstNonEmptyString(detail.prompt)
     if (fromRoot) return fromRoot
-    const fromProcessing = firstNonEmptyString(mediaDetail?.processing?.prompt)
+    const processing = isRecord(detail.processing) ? detail.processing : null
+    const fromProcessing = firstNonEmptyString(processing?.prompt)
     if (fromProcessing) return fromProcessing
     return firstNonEmptyString(latestVersion?.prompt)
   }, [mediaDetail, latestVersion])
 
   const derivedAnalysisContent = useMemo(() => {
-    if (!mediaDetail) return ''
-    const fromProcessing = firstNonEmptyString(mediaDetail?.processing?.analysis)
+    const detail = isRecord(mediaDetail) ? mediaDetail : null
+    if (!detail) return ''
+    const processing = isRecord(detail.processing) ? detail.processing : null
+    const fromProcessing = firstNonEmptyString(processing?.analysis)
     if (fromProcessing) return fromProcessing
-    const fromAnalysis = firstNonEmptyString(mediaDetail?.analysis)
+    const fromAnalysis = firstNonEmptyString(detail.analysis)
     if (fromAnalysis) return fromAnalysis
-    if (Array.isArray(mediaDetail?.analyses)) {
-      for (const entry of mediaDetail.analyses) {
+    if (Array.isArray(detail.analyses)) {
+      for (const entry of detail.analyses) {
         const text = typeof entry === 'string'
           ? entry
-          : (entry?.content || entry?.text || entry?.summary || entry?.analysis_content || '')
+          : (isRecord(entry)
+              ? (entry.content ||
+                  entry.text ||
+                  entry.summary ||
+                  entry.analysis_content ||
+                  '')
+              : '')
         const resolved = firstNonEmptyString(text)
         if (resolved) return resolved
       }
@@ -238,7 +259,7 @@ export function ContentViewer({
       latestVersion?.analysis
     )
     if (fromVersion) return fromVersion
-    return firstNonEmptyString(mediaDetail?.summary)
+    return firstNonEmptyString(detail.summary)
   }, [mediaDetail, latestVersion])
 
   // Sync editing keywords with selected media
@@ -265,11 +286,14 @@ export function ContentViewer({
           let expectedVersion = resolveNoteVersion(mediaDetail, selectedMedia.raw)
           if (expectedVersion == null) {
             try {
-              const latest = await bgRequest<any>({
-                path: `/api/v1/notes/${selectedMedia.id}` as any,
-                method: 'GET' as any
+              const latest = await bgRequest({
+                path: `/api/v1/notes/${selectedMedia.id}`,
+                method: 'GET'
               })
-              expectedVersion = resolveNoteVersion(latest, null)
+              expectedVersion = resolveNoteVersion(
+                isRecord(latest) ? latest : null,
+                null
+              )
             } catch {
               expectedVersion = null
             }
@@ -285,8 +309,8 @@ export function ContentViewer({
         }
 
         await bgRequest({
-          path: endpoint as any,
-          method: 'PUT' as any,
+          path: endpoint,
+          method: 'PUT',
           headers,
           body: { keywords: newKeywords }
         })
@@ -360,29 +384,46 @@ export function ContentViewer({
 
   // Extract analyses from media detail
   const existingAnalyses = useMemo(() => {
-    if (!mediaDetail) return []
+    const detail = isRecord(mediaDetail) ? mediaDetail : null
+    if (!detail) return []
     const analyses: Array<{ type: string; text: string }> = []
 
     // Check processing.analysis (tldw API structure)
-    if (mediaDetail.processing?.analysis && typeof mediaDetail.processing.analysis === 'string' && mediaDetail.processing.analysis.trim()) {
-      analyses.push({ type: 'Analysis', text: mediaDetail.processing.analysis })
+    const processing = isRecord(detail.processing) ? detail.processing : null
+    if (
+      processing?.analysis &&
+      typeof processing.analysis === 'string' &&
+      processing.analysis.trim()
+    ) {
+      analyses.push({ type: 'Analysis', text: processing.analysis })
     }
 
     // Check for summary field (root level)
-    if (mediaDetail.summary && typeof mediaDetail.summary === 'string' && mediaDetail.summary.trim()) {
-      analyses.push({ type: 'Summary', text: mediaDetail.summary })
+    if (detail.summary && typeof detail.summary === 'string' && detail.summary.trim()) {
+      analyses.push({ type: 'Summary', text: detail.summary })
     }
 
     // Check for analysis field (root level)
-    if (mediaDetail.analysis && typeof mediaDetail.analysis === 'string' && mediaDetail.analysis.trim()) {
-      analyses.push({ type: 'Analysis', text: mediaDetail.analysis })
+    if (detail.analysis && typeof detail.analysis === 'string' && detail.analysis.trim()) {
+      analyses.push({ type: 'Analysis', text: detail.analysis })
     }
 
     // Check for analyses array
-    if (Array.isArray(mediaDetail.analyses)) {
-      mediaDetail.analyses.forEach((a: any, idx: number) => {
-        const text = typeof a === 'string' ? a : (a?.content || a?.text || a?.summary || a?.analysis_content || '')
-        const type = typeof a === 'object' && a?.type ? a.type : `Analysis ${idx + 1}`
+    if (Array.isArray(detail.analyses)) {
+      detail.analyses.forEach((a, idx: number) => {
+        const record = isRecord(a) ? a : null
+        const text =
+          typeof a === 'string'
+            ? a
+            : (record?.content ||
+                record?.text ||
+                record?.summary ||
+                record?.analysis_content ||
+                '')
+        const type =
+          record && typeof record.type === 'string'
+            ? record.type
+            : `Analysis ${idx + 1}`
         if (text && text.trim()) {
           analyses.push({ type, text })
         }
@@ -390,11 +431,20 @@ export function ContentViewer({
     }
 
     // Check versions array for analysis_content
-    if (Array.isArray(mediaDetail.versions)) {
-      mediaDetail.versions.forEach((v: any, idx: number) => {
-        if (v?.analysis_content && typeof v.analysis_content === 'string' && v.analysis_content.trim()) {
-          const versionNum = v?.version_number || idx + 1
-          analyses.push({ type: `Analysis (Version ${versionNum})`, text: v.analysis_content })
+    if (Array.isArray(detail.versions)) {
+      detail.versions.forEach((v, idx: number) => {
+        if (!isRecord(v)) return
+        const analysisContent = v.analysis_content
+        if (
+          analysisContent &&
+          typeof analysisContent === 'string' &&
+          analysisContent.trim()
+        ) {
+          const versionNum = v.version_number ?? idx + 1
+          analyses.push({
+            type: `Analysis (Version ${versionNum})`,
+            text: analysisContent
+          })
         }
       })
     }
@@ -1078,7 +1128,7 @@ export function ContentViewer({
             <div className="mb-2">
               <VersionHistoryPanel
                 mediaId={selectedMedia.id}
-                onVersionLoad={(vContent, vAnalysis, vPrompt, vNum) => {
+                onVersionLoad={(_vContent, vAnalysis, _vPrompt, _vNum) => {
                   // Update the analysis edit text with the loaded version
                   if (vAnalysis) {
                     setEditingAnalysisText(vAnalysis)

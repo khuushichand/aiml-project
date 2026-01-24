@@ -1,4 +1,7 @@
 import { apiSend } from "@/services/api-send"
+import type { PathOrUrl } from "@/services/tldw/openapi-guard"
+
+type UnknownRecord = Record<string, unknown>
 
 // Lightweight client for the Evaluations module.
 // Shapes are intentionally loose for now; we can tighten them
@@ -12,11 +15,11 @@ export type EvaluationSummary = {
   created?: number
   created_at?: string | number | null
   dataset_id?: string | null
-  metadata?: Record<string, any> | null
+  metadata?: UnknownRecord | null
 }
 
 export type EvaluationDetail = EvaluationSummary & {
-  eval_spec?: Record<string, any>
+  eval_spec?: UnknownRecord
   updated_at?: string | number | null
   deleted?: boolean
 }
@@ -37,9 +40,9 @@ export type EvaluationListResponse = {
 }
 
 export type DatasetSample = {
-  input: any
-  expected?: any
-  metadata?: Record<string, any>
+  input: unknown
+  expected?: unknown
+  metadata?: UnknownRecord
 }
 
 export type DatasetResponse = {
@@ -51,7 +54,7 @@ export type DatasetResponse = {
   created: number
   created_at?: number | null
   created_by: string
-  metadata?: Record<string, any> | null
+  metadata?: UnknownRecord | null
   samples?: DatasetSample[]
 }
 
@@ -97,25 +100,25 @@ export type EvaluationRunDetail = {
   created_at?: number | null
   started_at?: number | null
   completed_at?: number | null
-  progress?: Record<string, any> | null
+  progress?: UnknownRecord | null
   error_message?: string | null
-  results?: Record<string, any> | null
-  usage?: Record<string, any> | null
+  results?: UnknownRecord | null
+  usage?: UnknownRecord | null
 }
 
 export type CreateEvaluationPayload = {
   name: string
   description?: string
   eval_type: string
-  eval_spec: any
+  eval_spec: UnknownRecord
   dataset_id?: string
   dataset?: DatasetSample[]
-  metadata?: Record<string, any>
+  metadata?: UnknownRecord
 }
 
 export type CreateRunPayload = {
   target_model: string
-  config?: Record<string, any>
+  config?: UnknownRecord
   dataset_override?: { samples: DatasetSample[] }
   webhook_url?: string
 }
@@ -134,7 +137,7 @@ export type EvaluationHistoryItem = {
   created_at?: string
   eval_id?: string
   run_id?: string
-  detail?: Record<string, any>
+  detail?: UnknownRecord
 }
 
 export type EvaluationWebhook = {
@@ -167,14 +170,14 @@ export async function listEvaluations(params?: {
     "/api/v1/evaluations" + (query.toString() ? `?${query.toString()}` : "")
 
   return await apiSend<EvaluationListResponse>({
-    path: path as any,
+    path: path as PathOrUrl,
     method: "GET"
   })
 }
 
 export async function getEvaluation(evalId: string) {
   return await apiSend<EvaluationDetail>({
-    path: `/api/v1/evaluations/${encodeURIComponent(evalId)}` as any,
+    path: `/api/v1/evaluations/${encodeURIComponent(evalId)}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -184,7 +187,7 @@ export async function updateEvaluation(
   payload: Partial<CreateEvaluationPayload>
 ) {
   return await apiSend<EvaluationDetail>({
-    path: `/api/v1/evaluations/${encodeURIComponent(evalId)}` as any,
+    path: `/api/v1/evaluations/${encodeURIComponent(evalId)}` as PathOrUrl,
     method: "PATCH",
     body: payload
   })
@@ -192,7 +195,7 @@ export async function updateEvaluation(
 
 export async function deleteEvaluation(evalId: string) {
   return await apiSend<void>({
-    path: `/api/v1/evaluations/${encodeURIComponent(evalId)}` as any,
+    path: `/api/v1/evaluations/${encodeURIComponent(evalId)}` as PathOrUrl,
     method: "DELETE"
   })
 }
@@ -211,7 +214,7 @@ export async function listRuns(evalId: string, params?: { limit?: number }) {
     first_id?: string | null
     last_id?: string | null
   }>({
-    path: path as any,
+    path: path as PathOrUrl,
     method: "GET"
   })
 }
@@ -236,21 +239,21 @@ export async function listRunsGlobal(params?: {
     first_id?: string | null
     last_id?: string | null
   }>({
-    path: path as any,
+    path: path as PathOrUrl,
     method: "GET"
   })
 }
 
 export async function cancelRun(runId: string) {
   return await apiSend({
-    path: `/api/v1/evaluations/runs/${encodeURIComponent(runId)}/cancel` as any,
+    path: `/api/v1/evaluations/runs/${encodeURIComponent(runId)}/cancel` as PathOrUrl,
     method: "POST"
   })
 }
 
 export async function getRateLimits() {
   return await apiSend<EvaluationRateLimitStatus>({
-    path: "/api/v1/evaluations/rate-limits" as any,
+    path: "/api/v1/evaluations/rate-limits" as PathOrUrl,
     method: "GET"
   })
 }
@@ -268,7 +271,7 @@ export async function listDatasets(params?: {
     (query.toString() ? `?${query.toString()}` : "")
 
   return await apiSend<DatasetListResponse>({
-    path: path as any,
+    path: path as PathOrUrl,
     method: "GET"
   })
 }
@@ -286,7 +289,7 @@ export async function getDataset(
     (search.toString() ? `?${search.toString()}` : "")
 
   return await apiSend<DatasetResponse>({
-    path: path as any,
+    path: path as PathOrUrl,
     method: "GET"
   })
 }
@@ -295,10 +298,10 @@ export async function createDataset(payload: {
   name: string
   description?: string
   samples: DatasetSample[]
-  metadata?: Record<string, any>
+  metadata?: UnknownRecord
 }) {
   return await apiSend<DatasetResponse>({
-    path: "/api/v1/evaluations/datasets" as any,
+    path: "/api/v1/evaluations/datasets" as PathOrUrl,
     method: "POST",
     body: payload
   })
@@ -308,7 +311,7 @@ export async function deleteDataset(datasetId: string) {
   return await apiSend<void>({
     path: `/api/v1/evaluations/datasets/${encodeURIComponent(
       datasetId
-    )}` as any,
+    )}` as PathOrUrl,
     method: "DELETE"
   })
 }
@@ -318,7 +321,7 @@ export async function createEvaluation(
   options?: { idempotencyKey?: string }
 ) {
   return await apiSend({
-    path: "/api/v1/evaluations" as any,
+    path: "/api/v1/evaluations" as PathOrUrl,
     method: "POST",
     headers: withIdempotency(options?.idempotencyKey),
     body: payload
@@ -338,11 +341,11 @@ export async function createSpecializedEvaluation(
     | "embeddings-ab"
     | "embeddings-batch"
     | string,
-  payload: Record<string, any>,
+  payload: UnknownRecord,
   options?: { idempotencyKey?: string }
 ) {
   return await apiSend({
-    path: `/api/v1/evaluations/${endpoint}` as any,
+    path: `/api/v1/evaluations/${endpoint}` as PathOrUrl,
     method: "POST",
     headers: withIdempotency(options?.idempotencyKey),
     body: payload
@@ -355,7 +358,7 @@ export async function createRun(
   options?: { idempotencyKey?: string }
 ) {
   return await apiSend({
-    path: `/api/v1/evaluations/${encodeURIComponent(evalId)}/runs` as any,
+    path: `/api/v1/evaluations/${encodeURIComponent(evalId)}/runs` as PathOrUrl,
     method: "POST",
     headers: withIdempotency(options?.idempotencyKey),
     body: payload
@@ -364,14 +367,14 @@ export async function createRun(
 
 export async function getRun(runId: string) {
   return await apiSend<EvaluationRunDetail>({
-    path: `/api/v1/evaluations/runs/${encodeURIComponent(runId)}` as any,
+    path: `/api/v1/evaluations/runs/${encodeURIComponent(runId)}` as PathOrUrl,
     method: "GET"
   })
 }
 
 export async function getHistory(filters?: EvaluationHistoryFilters) {
   return await apiSend<{ data?: EvaluationHistoryItem[] }>({
-    path: "/api/v1/evaluations/history" as any,
+    path: "/api/v1/evaluations/history" as PathOrUrl,
     method: "POST",
     body: filters || {}
   })
@@ -382,7 +385,7 @@ export async function registerWebhook(payload: {
   events: string[]
 }) {
   return await apiSend<EvaluationWebhook>({
-    path: "/api/v1/evaluations/webhooks" as any,
+    path: "/api/v1/evaluations/webhooks" as PathOrUrl,
     method: "POST",
     body: payload
   })
@@ -390,7 +393,7 @@ export async function registerWebhook(payload: {
 
 export async function listWebhooks() {
   return await apiSend<{ data?: EvaluationWebhook[] }>({
-    path: "/api/v1/evaluations/webhooks" as any,
+    path: "/api/v1/evaluations/webhooks" as PathOrUrl,
     method: "GET"
   })
 }
@@ -399,7 +402,7 @@ export async function deleteWebhook(webhookId: string) {
   return await apiSend<void>({
     path: `/api/v1/evaluations/webhooks/${encodeURIComponent(
       webhookId
-    )}` as any,
+    )}` as PathOrUrl,
     method: "DELETE"
   })
 }

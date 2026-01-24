@@ -11,7 +11,13 @@ export interface TldwModelWithMetadata {
   modified_at?: string
   size?: number
   digest?: string
-  details?: any
+  details?: Record<string, unknown>
+}
+
+type ModelMetadata = {
+  id: string
+  name?: string
+  provider?: string
 }
 
 export const useTldwModels = () => {
@@ -25,7 +31,7 @@ export const useTldwModels = () => {
       }
 
       try {
-        const models = await tldwModels.getModels()
+        const models = await tldwModels.getModels() as ModelMetadata[]
         
         // Transform tldw models to match the existing format
         const transformedModels: TldwModelWithMetadata[] = models.map(model => ({
@@ -54,8 +60,13 @@ export const useTldwModels = () => {
   })
 }
 
+type CombinedModel = TldwModelWithMetadata | Record<string, unknown>
+
 // Hook to combine all model sources
-export const useCombinedModels = (ollamaModels: any[] = [], customModels: any[] = []) => {
+export const useCombinedModels = (
+  ollamaModels: CombinedModel[] = [],
+  customModels: CombinedModel[] = []
+) => {
   const { data: tldwModelsList = [] } = useTldwModels()
   
   // Combine all model sources

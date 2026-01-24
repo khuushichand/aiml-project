@@ -4,6 +4,6 @@ export type MediaResultItem = {
   title?: string
   snippet?: string
   keywords?: string[]
-  meta?: Record<string, any>
-  raw: any
+  meta?: Record<string, unknown>
+  raw: unknown
 }

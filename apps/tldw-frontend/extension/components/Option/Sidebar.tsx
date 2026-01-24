@@ -37,6 +37,7 @@ import React, { useState, useEffect } from "react"
 import { FolderTree, FolderToolbar } from "@/components/Folders"
 import { useFolderStore, useFolderViewMode, useFolderActions } from "@/store/folder"
 import { PageAssistDatabase } from "@/db/dexie/chat"
+import type { HistoryInfo } from "@/db/dexie/types"
 import { useStorage } from "@plasmohq/storage/hook"
 import {
   deleteByHistoryId,
@@ -70,6 +71,11 @@ const FOLDER_CONVERSATION_BATCH_SIZE = 10
 type Props = {
   onClose: () => void
   isOpen: boolean
+}
+
+type ChatHistoryGroup = {
+  label: string
+  items: HistoryInfo[]
 }
 
 export const Sidebar = ({ onClose, isOpen }: Props) => {
@@ -143,10 +149,12 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
   )
   const {
     data: serverChatData,
-    status: serverStatus,
-    isLoading: isServerLoading
+    status: serverStatus
   } = useServerChatHistory(debouncedSearchQuery)
-  const serverChats = serverChatData || []
+  const serverChats = React.useMemo(
+    () => serverChatData || [],
+    [serverChatData]
+  )
   const pinnedServerChatSet = React.useMemo(
     () => new Set(pinnedServerChatIds || []),
     [pinnedServerChatIds]
@@ -270,7 +278,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
         })
         return acc
       },
-      [] as Array<{ label: string; items: any[] }>
+      [] as ChatHistoryGroup[]
     ) || []
 
   // Collect all history IDs for metadata fetching
@@ -320,7 +328,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
   const truncateMessage = (content: string, maxLength: number = 60) => {
     if (!content) return ""
     // Remove markdown formatting for preview
-    const cleaned = content.replace(/[#*_`~\[\]]/g, "").trim()
+    const cleaned = content.replace(/[#*_`~[\]]/g, "").trim()
     if (cleaned.length <= maxLength) return cleaned
     return cleaned.substring(0, maxLength).trim() + "..."
   }
@@ -918,7 +926,7 @@ export const Sidebar = ({ onClose, isOpen }: Props) => {
                 )}
               </div>
               <div className="flex flex-col gap-2 mt-2">
-                {group.items.map((chat, index) => (
+                {group.items.map((chat) => (
                   <div
                     key={chat.id}
                     className={`flex py-2 px-2 items-start gap-2 relative rounded-md hover:pr-4 group transition-opacity duration-300 ease-in-out border ${

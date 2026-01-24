@@ -28,6 +28,5 @@ export type UseMessageOptionReturn = {
   compareSelectionByCluster: Record<string, string[]>
   compareSelectedModels: string[]
   onSubmit: (args: OnSubmitArgs) => Promise<void>
-  [key: string]: any
+  [key: string]: unknown
 }
-

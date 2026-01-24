@@ -1144,6 +1144,12 @@ custom_scrapers_yaml_path = tldw_Server_API/Config_Files/custom_scrapers.yaml
 web_scraper_default_backend = auto
 web_scraper_ua_mode = fixed
 web_scraper_respect_robots = True
+web_scraper_preflight_analyzers = False
+web_scraper_preflight_timeout_s = 0
+web_scraper_preflight_scan_depth = default
+web_scraper_preflight_find_all_waf = False
+web_scraper_preflight_impersonate = False
+web_scraper_preflight_include_results = False
 
 [Logging]
 log_level = INFO

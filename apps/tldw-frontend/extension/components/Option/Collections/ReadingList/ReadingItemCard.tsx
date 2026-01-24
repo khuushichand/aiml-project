@@ -19,14 +19,21 @@ import { StatusBadge } from "../common/StatusBadge"
 
 interface ReadingItemCardProps {
   item: ReadingItemSummary
-  onRefresh?: () => void
   progressPercent?: number
   onProgressCleared?: (id: string) => void
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
 export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
   item,
-  onRefresh,
   progressPercent,
   onProgressCleared
 }) => {
@@ -49,8 +56,8 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
         favorite: !item.favorite
       })
       updateItemInList(item.id, { favorite: !item.favorite })
-    } catch (error: any) {
-      message.error(error?.message || "Failed to update favorite status")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to update favorite status"))
     } finally {
       setActionLoading(false)
     }
@@ -75,8 +82,8 @@ export const ReadingItemCard: React.FC<ReadingItemCardProps> = ({
             console.warn("Failed to clear reading progress", err)
           }
         }
-      } catch (error: any) {
-        message.error(error?.message || "Failed to update status")
+      } catch (error: unknown) {
+        message.error(getErrorMessage(error, "Failed to update status"))
       } finally {
         setActionLoading(false)
       }

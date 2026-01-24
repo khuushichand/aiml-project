@@ -16,6 +16,15 @@ const COLOR_OPTIONS: { value: HighlightColor; labelKey: string }[] = [
   { value: "purple", labelKey: "purple" }
 ]
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
 interface HighlightFormValues {
   quote: string
   note?: string
@@ -85,9 +94,9 @@ export const HighlightEditor: React.FC<HighlightEditorProps> = ({ onSuccess }) =
 
       handleCancel()
       onSuccess?.()
-    } catch (error: any) {
-      if (error?.errorFields) return
-      message.error(error?.message || "Failed to save highlight")
+    } catch (error: unknown) {
+      if (isRecord(error) && Array.isArray(error.errorFields)) return
+      message.error(getErrorMessage(error, "Failed to save highlight"))
     } finally {
       setLoading(false)
     }

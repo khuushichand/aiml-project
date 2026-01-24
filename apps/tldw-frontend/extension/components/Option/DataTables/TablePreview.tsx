@@ -14,7 +14,6 @@ import {
   Space,
   Spin,
   Table,
-  Tag,
   Tooltip,
   message
 } from "antd"
@@ -346,7 +345,7 @@ export const TablePreview: React.FC = () => {
       key: col.id,
       width: 150,
       ellipsis: true,
-      render: (value: any, _: DataTableRow, rowIndex: number) => {
+      render: (value: unknown, _row: DataTableRow, rowIndex: number) => {
         const cellKey = `${rowIndex}-${col.id}`
         const isEditing = editingState.editingCellKey === cellKey
 
@@ -375,7 +374,7 @@ export const TablePreview: React.FC = () => {
       key: "_actions",
       width: 50,
       fixed: "right",
-      render: (_: any, __: DataTableRow, rowIndex: number) => (
+      render: (_value: unknown, _row: DataTableRow, rowIndex: number) => (
         <Popconfirm
           title={t("dataTables:deleteRow", "Delete row?")}
           onConfirm={() => deleteRow(rowIndex)}
@@ -535,7 +534,7 @@ export const TablePreview: React.FC = () => {
             editingRows.length > 0
               ? editingRows
               : generatedTable?.rows?.map(
-                  (row: Record<string, any>, index: number) => ({
+                  (row: Record<string, unknown>, index: number) => ({
                     ...row,
                     _id: `row-${index}`
                   })

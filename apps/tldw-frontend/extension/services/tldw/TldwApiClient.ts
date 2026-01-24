@@ -1,6 +1,13 @@
 import { Storage } from "@plasmohq/storage"
 import { createSafeStorage, safeStorageSerde } from "@/utils/safe-storage"
-import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
+import {
+  bgRequest,
+  bgStream,
+  bgUpload,
+  type BgRequestInit,
+  type BgStreamInit,
+  type BgUploadInit
+} from "@/services/background-proxy"
 import { isPlaceholderApiKey } from "@/utils/api-key"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import { env } from "@/config/env"
@@ -11,6 +18,7 @@ import {
   mapApiDetailToUi,
   mapApiListToUi,
   mapUiSourceToApi,
+  type ApiDataTableDetailResponse,
   type ApiDataTableGenerateResponse,
   type ApiDataTableJobStatus
 } from "@/services/tldw/data-tables"
@@ -20,6 +28,11 @@ import type { DataTableColumn, DataTableSource } from "@/types/data-tables"
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
 const CHAT_MESSAGES_CACHE_TTL_MS = 60 * 1000
+
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
 
 export interface TldwConfig {
   serverUrl: string
@@ -283,8 +296,8 @@ export class TldwApiClient {
   private config: TldwConfig | null = null
   private baseUrl: string = ''
   private headers: HeadersInit = {}
-  private characterCache = new Map<string, { value: any; expiresAt: number }>()
-  private characterInFlight = new Map<string, Promise<any>>()
+  private characterCache = new Map<string, { value: unknown; expiresAt: number }>()
+  private characterInFlight = new Map<string, Promise<unknown>>()
   private chatMessagesCache = new Map<
     string,
     { value: ServerChatMessage[]; expiresAt: number }
@@ -350,7 +363,6 @@ export class TldwApiClient {
     if (!cfg || !cfg.serverUrl) {
       const msg =
         "tldw server is not configured. Open Settings → tldw server in the extension and set the server URL and API key."
-      // eslint-disable-next-line no-console
       console.warn(msg)
       throw new Error(msg)
     }
@@ -364,7 +376,6 @@ export class TldwApiClient {
       if (!token) {
         const msg =
           "Not authenticated. Please log in under Settings → tldw server before continuing."
-        // eslint-disable-next-line no-console
         console.warn(msg)
         throw new Error(msg)
       }
@@ -375,30 +386,28 @@ export class TldwApiClient {
     const key = (cfg.apiKey || "").trim()
     if (!key) {
       const msg = this.getMissingApiKeyMessage()
-      // eslint-disable-next-line no-console
       console.warn(msg)
       throw new Error(msg)
     }
     if (isPlaceholderApiKey(key)) {
       const msg = this.getPlaceholderApiKeyMessage()
-      // eslint-disable-next-line no-console
       console.warn(msg)
       throw new Error(msg)
     }
     return cfg
   }
 
-  private async request<T>(init: any, requireAuth = true): Promise<T> {
+  private async request<T>(init: BgRequestInit<PathOrUrl>, requireAuth = true): Promise<T> {
     await this.ensureConfigForRequest(requireAuth && !init?.noAuth)
     return await bgRequest<T>(init)
   }
 
-  private async upload<T>(init: any, requireAuth = true): Promise<T> {
+  private async upload<T>(init: BgUploadInit, requireAuth = true): Promise<T> {
     await this.ensureConfigForRequest(requireAuth)
     return await bgUpload<T>(init)
   }
 
-  private async *stream(init: any, requireAuth = true): AsyncGenerator<string> {
+  private async *stream(init: BgStreamInit, requireAuth = true): AsyncGenerator<string> {
     await this.ensureConfigForRequest(requireAuth)
     for await (const line of bgStream(init)) {
       yield line as string
@@ -477,7 +486,7 @@ export class TldwApiClient {
 
   async updateConfig(config: Partial<TldwConfig>): Promise<void> {
     const currentConfig = (await this.getConfig()) || {}
-    const newConfig = { ...(currentConfig as any), ...config } as TldwConfig
+    const newConfig = { ...currentConfig, ...config } as TldwConfig
     await this.storage.set('tldwConfig', newConfig)
     this.config = newConfig
     await this.initialize().catch(() => null)
@@ -485,7 +494,7 @@ export class TldwApiClient {
 
   async healthCheck(): Promise<boolean> {
     try {
-      await bgRequest<{ status?: string; [k: string]: any }>({
+      await bgRequest<{ status?: string; [k: string]: unknown }>({
         path: '/api/v1/health',
         method: 'GET'
       })
@@ -496,11 +505,11 @@ export class TldwApiClient {
     }
   }
 
-  async getServerInfo(): Promise<any> {
-    return await bgRequest<any>({ path: '/', method: 'GET' })
+  async getServerInfo(): Promise<unknown> {
+    return await bgRequest<unknown>({ path: '/', method: 'GET' })
   }
 
-  private buildQuery(params?: Record<string, any>): string {
+  private buildQuery(params?: Record<string, unknown>): string {
     if (!params || Object.keys(params).length === 0) {
       return ''
     }
@@ -517,13 +526,13 @@ export class TldwApiClient {
     return query ? `?${query}` : ''
   }
 
-  async getOpenAPISpec(): Promise<any | null> {
+  async getOpenAPISpec(): Promise<unknown | null> {
     try {
       if (!this.baseUrl) await this.initialize()
       if (!this.baseUrl) return null
-      return await bgRequest<any>({
-        path: `${this.baseUrl.replace(/\/$/, '')}/openapi.json` as any,
-        method: 'GET' as any
+      return await bgRequest<unknown, PathOrUrl, "GET">({
+        path: `${this.baseUrl.replace(/\/$/, '')}/openapi.json`,
+        method: 'GET'
       })
     } catch {
       return null
@@ -539,7 +548,7 @@ export class TldwApiClient {
     if (!this.openApiPathSetPromise) {
       this.openApiPathSetPromise = (async () => {
         const spec = await this.getOpenAPISpec()
-        if (!spec?.paths || typeof spec.paths !== "object") {
+        if (!isRecord(spec) || !isRecord(spec.paths)) {
           this.openApiPathSet = null
           this.openApiPathSetPromise = null
           return null
@@ -600,8 +609,8 @@ export class TldwApiClient {
     return template.replace(/\{[^}]+\}/g, encoded) as AllowedPath
   }
 
-  async postChatMetric(payload: Record<string, unknown>): Promise<any> {
-    return await this.request<any>({
+  async postChatMetric(payload: Record<string, unknown>): Promise<unknown> {
+    return await this.request<unknown>({
       path: "/api/v1/metrics/chat",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -611,56 +620,67 @@ export class TldwApiClient {
 
   async getModels(): Promise<TldwModel[]> {
     const meta = await this.getModelsMetadata()
+    const toStringArray = (value: unknown): string[] | undefined =>
+      Array.isArray(value) ? value.map((item) => String(item)) : undefined
     const list =
       Array.isArray(meta) && meta.length > 0
         ? meta
-        : meta && typeof meta === "object" && Array.isArray((meta as any).models)
-          ? (meta as any).models
+        : isRecord(meta) && Array.isArray(meta.models)
+          ? meta.models
           : []
 
-    return list.map((m: any) => ({
-      id: String(m.id || m.model || m.name),
-      name: String(m.name || m.id || m.model),
-      provider: String(m.provider || "default"),
-      description: m.description,
-      capabilities: Array.isArray(m.capabilities)
-        ? m.capabilities
-        : Array.isArray(m.features)
-          ? m.features
-          : undefined,
-      context_length:
-        typeof m.context_length === "number"
-          ? m.context_length
-          : typeof m.context_window === "number"
-            ? m.context_window
-            : typeof m.contextLength === "number"
-          ? m.contextLength
-          : undefined,
-      type: typeof m.type === "string" ? m.type : undefined,
-      modalities:
-        m && typeof m.modalities === "object" ? m.modalities : undefined,
-      vision: Boolean(
-        (m.capabilities && m.capabilities.vision) ?? m.vision
-      ),
-      function_calling: Boolean(
-        (m.capabilities &&
-          (m.capabilities.function_calling || m.capabilities.tool_use)) ??
-          m.function_calling
-      ),
-      json_output: Boolean(
-        (m.capabilities && m.capabilities.json_mode) ?? m.json_output
-      )
-    }))
+    return list.map((item) => {
+      const record = isRecord(item) ? item : {}
+      const capabilitiesArray =
+        toStringArray(record.capabilities) ?? toStringArray(record.features)
+      const capabilitiesObject = isRecord(record.capabilities)
+        ? record.capabilities
+        : null
+      const modalities = isRecord(record.modalities)
+        ? {
+            input: toStringArray(record.modalities.input),
+            output: toStringArray(record.modalities.output)
+          }
+        : undefined
+      return {
+        id: String(record.id || record.model || record.name || ""),
+        name: String(record.name || record.id || record.model || ""),
+        provider: String(record.provider || "default"),
+        description:
+          typeof record.description === "string" ? record.description : undefined,
+        capabilities: capabilitiesArray,
+        context_length:
+          typeof record.context_length === "number"
+            ? record.context_length
+            : typeof record.context_window === "number"
+              ? record.context_window
+              : typeof record.contextLength === "number"
+              ? record.contextLength
+              : undefined,
+        type: typeof record.type === "string" ? record.type : undefined,
+        modalities,
+        vision: Boolean((capabilitiesObject?.vision ?? record.vision)),
+        function_calling: Boolean(
+          (capabilitiesObject &&
+            (capabilitiesObject.function_calling ||
+              capabilitiesObject.tool_use)) ??
+            record.function_calling
+        ),
+        json_output: Boolean(
+          (capabilitiesObject?.json_mode ?? record.json_output)
+        )
+      }
+    })
   }
 
-  async getProviders(): Promise<any> {
-    return await bgRequest<any>({ path: '/api/v1/llm/providers', method: 'GET' })
+  async getProviders(): Promise<unknown> {
+    return await bgRequest<unknown>({ path: '/api/v1/llm/providers', method: 'GET' })
   }
 
-  async getModelsMetadata(): Promise<any> {
+  async getModelsMetadata(): Promise<unknown> {
     // tldw_server returns either an array or an object
     // of the form { models: [...], total: N }.
-    return await bgRequest<any>({ path: '/api/v1/llm/models/metadata', method: 'GET' })
+    return await bgRequest<unknown>({ path: '/api/v1/llm/models/metadata', method: 'GET' })
   }
 
   // Embeddings - Models & Providers
@@ -671,22 +691,25 @@ export class TldwApiClient {
         method: "GET"
       })
 
-      const list: any[] = Array.isArray(data)
+      const list: unknown[] = Array.isArray(data)
         ? data
-        : Array.isArray((data as TldwEmbeddingModelsResponse)?.data)
-          ? (data as TldwEmbeddingModelsResponse).data!
+        : isRecord(data) && Array.isArray(data.data)
+          ? data.data
           : []
 
       return list
-        .map((item) => ({
-          provider: String((item as any).provider || "unknown"),
-          model: String((item as any).model || ""),
+        .map((item) => {
+          const record = isRecord(item) ? item : {}
+          return {
+            provider: String(record.provider || "unknown"),
+            model: String(record.model || ""),
           allowed:
-            typeof (item as any).allowed === "boolean"
-              ? Boolean((item as any).allowed)
+            typeof record.allowed === "boolean"
+              ? Boolean(record.allowed)
               : true,
-          default: Boolean((item as any).default)
-        }))
+            default: Boolean(record.default)
+          }
+        })
         .filter((m) => m.model.length > 0)
     } catch (e) {
       if (env.DEV) {
@@ -715,22 +738,22 @@ export class TldwApiClient {
   }
 
   // Admin / diagnostics helpers
-  async getSystemStats(): Promise<any> {
-    return await bgRequest<any>({
+  async getSystemStats(): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/admin/stats",
       method: "GET"
     })
   }
 
-  async getLlamacppStatus(): Promise<any> {
-    return await bgRequest<any>({
+  async getLlamacppStatus(): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/llamacpp/status",
       method: "GET"
     })
   }
 
-  async listLlamacppModels(): Promise<any> {
-    return await bgRequest<any>({
+  async listLlamacppModels(): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/llamacpp/models",
       method: "GET"
     })
@@ -738,9 +761,9 @@ export class TldwApiClient {
 
   async startLlamacppServer(
     modelFilename: string,
-    serverArgs?: Record<string, any>
-  ): Promise<any> {
-    return await bgRequest<any>({
+    serverArgs?: Record<string, unknown>
+  ): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/llamacpp/start_server",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -751,8 +774,8 @@ export class TldwApiClient {
     })
   }
 
-  async stopLlamacppServer(): Promise<any> {
-    return await bgRequest<any>({
+  async stopLlamacppServer(): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/llamacpp/stop_server",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -762,9 +785,9 @@ export class TldwApiClient {
 
   async getLlmProviders(
     includeDeprecated = false
-  ): Promise<any> {
+  ): Promise<unknown> {
     const query = this.buildQuery(includeDeprecated ? { include_deprecated: true } : {})
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/llm/providers${query}`,
       method: "GET"
     })
@@ -803,7 +826,7 @@ export class TldwApiClient {
     is_active?: boolean
     search?: string
   }): Promise<AdminUserListResponse> {
-    const query = this.buildQuery(params as Record<string, any>)
+    const query = this.buildQuery(params as Record<string, unknown>)
     return await bgRequest<AdminUserListResponse>({
       path: `/api/v1/admin/users${query}`,
       method: "GET"
@@ -853,41 +876,60 @@ export class TldwApiClient {
     const res = await bgRequest<Response>({ path: '/api/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request })
     // bgRequest returns parsed data; for non-streaming chat we expect a JSON structure or text. To keep existing consumers happy, wrap as Response-like
     // For simplicity, return a minimal object with json() and text()
-    const data = res as any
+    const data = res as unknown
     return new Response(typeof data === 'string' ? data : JSON.stringify(data), { status: 200, headers: { 'content-type': typeof data === 'string' ? 'text/plain' : 'application/json' } })
   }
 
-  async *streamChatCompletion(request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {
+  async *streamChatCompletion(request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<unknown, void, unknown> {
     request.stream = true
     for await (const line of bgStream({ path: '/api/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request, abortSignal: options?.signal, streamIdleTimeoutMs: options?.streamIdleTimeoutMs })) {
       try {
         const parsed = JSON.parse(line)
         yield parsed
-      } catch (e) {
+      } catch {
         // Ignore non-JSON lines
       }
     }
   }
 
   // RAG Methods
-  async ragHealth(): Promise<any> {
-    return await this.request<any>({ path: '/api/v1/rag/health', method: 'GET' })
+  async ragHealth(): Promise<unknown> {
+    return await this.request<unknown>({ path: '/api/v1/rag/health', method: 'GET' })
   }
 
-  async ragSearch(query: string, options?: any): Promise<any> {
-    const { timeoutMs, ...rest } = options || {}
-    return await bgRequest<any>({ path: '/api/v1/rag/search', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query, ...rest }, timeoutMs })
+  async ragSearch(query: string, options?: Record<string, unknown>): Promise<unknown> {
+    const opts = isRecord(options) ? options : {}
+    const timeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : undefined
+    const { timeoutMs: _discard, ...rest } = opts
+    return await bgRequest<unknown>({
+      path: '/api/v1/rag/search',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { query, ...rest },
+      timeoutMs
+    })
   }
 
-  async ragSimple(query: string, options?: any): Promise<any> {
-    const { timeoutMs, ...rest } = options || {}
-    return await bgRequest<any>({ path: '/api/v1/rag/simple', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query, ...rest }, timeoutMs })
+  async ragSimple(query: string, options?: Record<string, unknown>): Promise<unknown> {
+    const opts = isRecord(options) ? options : {}
+    const timeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : undefined
+    const { timeoutMs: _discard, ...rest } = opts
+    return await bgRequest<unknown>({
+      path: '/api/v1/rag/simple',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { query, ...rest },
+      timeoutMs
+    })
   }
 
   // Research / Web search
-  async webSearch(options: any): Promise<any> {
-    const { timeoutMs, signal, ...rest } = options || {}
-    return await bgRequest<any>({
+  async webSearch(options: Record<string, unknown>): Promise<unknown> {
+    const opts = isRecord(options) ? options : {}
+    const timeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : undefined
+    const signal = opts.signal as AbortSignal | undefined
+    const { timeoutMs: _timeout, signal: _signal, ...rest } = opts
+    return await bgRequest<unknown>({
       path: "/api/v1/research/websearch",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -898,43 +940,51 @@ export class TldwApiClient {
   }
 
   // Media Methods
-  async addMedia(url: string, metadata?: any): Promise<any> {
-    const { timeoutMs, ...rest } = metadata || {}
-    return await bgRequest<any>({ path: '/api/v1/media/add', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { url, ...rest }, timeoutMs })
+  async addMedia(url: string, metadata?: Record<string, unknown>): Promise<unknown> {
+    const opts = isRecord(metadata) ? metadata : {}
+    const timeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : undefined
+    const { timeoutMs: _discard, ...rest } = opts
+    return await bgRequest<unknown>({
+      path: '/api/v1/media/add',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { url, ...rest },
+      timeoutMs
+    })
   }
 
-  async addMediaForm(fields: Record<string, any>): Promise<any> {
+  async addMediaForm(fields: Record<string, unknown>): Promise<unknown> {
     // Multipart form for rich ingest parameters
     // Accepts a flat fields map; callers may pass booleans/strings and they will be converted
-    const normalized: Record<string, any> = {}
+    const normalized: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(fields || {})) {
       if (typeof v === 'undefined' || v === null) continue
       if (typeof v === 'boolean') normalized[k] = v ? 'true' : 'false'
       else normalized[k] = v
     }
-    return await bgUpload<any>({ path: '/api/v1/media/add', method: 'POST', fields: normalized })
+    return await bgUpload<unknown>({ path: '/api/v1/media/add', method: 'POST', fields: normalized })
   }
 
-  async uploadMedia(file: File, fields?: Record<string, any>): Promise<any> {
+  async uploadMedia(file: File, fields?: Record<string, unknown>): Promise<unknown> {
     const data = await file.arrayBuffer()
     const name = file.name || 'upload'
     const type = file.type || 'application/octet-stream'
-    const normalized: Record<string, any> = {}
+    const normalized: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(fields || {})) {
       if (typeof v === 'undefined' || v === null) continue
       if (typeof v === 'boolean') normalized[k] = v ? 'true' : 'false'
       else normalized[k] = v
     }
-    return await bgUpload<any>({ path: '/api/v1/media/add', method: 'POST', fields: normalized, file: { name, type, data } })
+    return await bgUpload<unknown>({ path: '/api/v1/media/add', method: 'POST', fields: normalized, file: { name, type, data } })
   }
 
   async listMedia(params?: {
     page?: number
     results_per_page?: number
     include_keywords?: boolean
-  }): Promise<any> {
-    const query = this.buildQuery(params as Record<string, any>)
-    return await bgRequest<any>({
+  }): Promise<unknown> {
+    const query = this.buildQuery(params as Record<string, unknown>)
+    return await bgRequest<unknown>({
       path: `/api/v1/media${query}`,
       method: "GET"
     })
@@ -946,16 +996,16 @@ export class TldwApiClient {
       fields?: string[]
       exact_phrase?: string
       media_types?: string[]
-      date_range?: Record<string, any>
+      date_range?: Record<string, unknown>
       must_have?: string[]
       must_not_have?: string[]
       sort_by?: string
       boost_fields?: Record<string, number>
     },
     params?: { page?: number; results_per_page?: number }
-  ): Promise<any> {
-    const query = this.buildQuery(params as Record<string, any>)
-    return await bgRequest<any>({
+  ): Promise<unknown> {
+    const query = this.buildQuery(params as Record<string, unknown>)
+    return await bgRequest<unknown>({
       path: `/api/v1/media/search${query}`,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -964,34 +1014,50 @@ export class TldwApiClient {
   }
 
   // Notes Methods
-  async createNote(content: string, metadata?: any): Promise<any> {
-    return await bgRequest<any>({ path: '/api/v1/notes/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { content, ...metadata } })
+  async createNote(content: string, metadata?: Record<string, unknown>): Promise<unknown> {
+    const meta = isRecord(metadata) ? metadata : {}
+    return await bgRequest<unknown>({
+      path: '/api/v1/notes/',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { content, ...meta }
+    })
   }
 
-  async searchNotes(query: string): Promise<any> {
+  async searchNotes(query: string): Promise<unknown> {
     // OpenAPI uses trailing slash for this path
-    return await bgRequest<any>({ path: '/api/v1/notes/search/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query } })
+    return await bgRequest<unknown>({
+      path: '/api/v1/notes/search/',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { query }
+    })
   }
   // Prompts Methods
-  async getPrompts(): Promise<any> {
+  async getPrompts(): Promise<unknown> {
     const path = await this.resolveApiPath("prompts.list", [
       "/api/v1/prompts",
       "/api/v1/prompts/"
     ])
-    return await bgRequest<any>({ path, method: 'GET' })
+    return await bgRequest<unknown>({ path, method: 'GET' })
   }
 
-  async searchPrompts(query: string): Promise<any> {
+  async searchPrompts(query: string): Promise<unknown> {
     // TODO: confirm trailing slash per OpenAPI (`/api/v1/prompts/search` exists without slash)
-    return await bgRequest<any>({ path: '/api/v1/prompts/search', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query } })
+    return await bgRequest<unknown>({
+      path: '/api/v1/prompts/search',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { query }
+    })
   }
 
-  async createPrompt(payload: PromptPayload): Promise<any> {
+  async createPrompt(payload: PromptPayload): Promise<unknown> {
     const name = payload.name || payload.title || 'Untitled'
     const system_prompt = payload.system_prompt ?? (payload.is_system ? payload.content : undefined)
     const user_prompt = payload.user_prompt ?? (!payload.is_system ? payload.content : undefined)
     const keywords = payload.keywords
-    const normalized: Record<string, any> = {
+    const normalized: Record<string, unknown> = {
       name,
       author: payload.author,
       details: payload.details,
@@ -1008,7 +1074,7 @@ export class TldwApiClient {
       "/api/v1/prompts",
       "/api/v1/prompts/"
     ])
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1016,14 +1082,14 @@ export class TldwApiClient {
     })
   }
 
-  async updatePrompt(id: string | number, payload: PromptPayload): Promise<any> {
+  async updatePrompt(id: string | number, payload: PromptPayload): Promise<unknown> {
     const pid = String(id)
     const name = payload.name || payload.title || 'Untitled'
     const system_prompt = payload.system_prompt ?? (payload.is_system ? payload.content : undefined)
     const user_prompt = payload.user_prompt ?? (!payload.is_system ? payload.content : undefined)
     const keywords = payload.keywords
 
-    const normalized: Record<string, any> = {
+    const normalized: Record<string, unknown> = {
       name,
       author: payload.author,
       details: payload.details,
@@ -1037,29 +1103,34 @@ export class TldwApiClient {
     })
 
     // Path per OpenAPI: /api/v1/prompts/{prompt_identifier}
-    return await bgRequest<any>({ path: `/api/v1/prompts/${pid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: normalized })
+    return await bgRequest<unknown>({
+      path: `/api/v1/prompts/${pid}`,
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: normalized
+    })
   }
 
   // Characters API
-  async listCharacters(params?: Record<string, any>): Promise<any[]> {
-    const query = this.buildQuery(params)
+  async listCharacters(params?: Record<string, unknown>): Promise<unknown[]> {
+    const query = this.buildQuery(params as Record<string, unknown>)
     const base = await this.resolveApiPath("characters.list", [
       "/api/v1/characters",
       "/api/v1/characters/"
     ])
-    return await bgRequest<any[]>({
+    return await bgRequest<unknown[]>({
       path: appendPathQuery(base, query),
       method: 'GET'
     })
   }
 
-   async searchCharacters(query: string, params?: Record<string, any>): Promise<any[]> {
-    const qp = this.buildQuery({ query, ...(params || {}) })
+   async searchCharacters(query: string, params?: Record<string, unknown>): Promise<unknown[]> {
+    const qp = this.buildQuery({ query, ...(params || {}) } as Record<string, unknown>)
     const base = await this.resolveApiPath("characters.search", [
       "/api/v1/characters/search",
       "/api/v1/characters/search/"
     ])
-    return await bgRequest<any[]>({
+    return await bgRequest<unknown[]>({
       path: appendPathQuery(base, qp),
       method: 'GET'
     })
@@ -1068,22 +1139,22 @@ export class TldwApiClient {
   async filterCharactersByTags(
     tags: string[],
     options?: { match_all?: boolean; limit?: number; offset?: number }
-  ): Promise<any[]> {
+  ): Promise<unknown[]> {
     const qp = this.buildQuery({
       tags,
       ...(options || {})
-    })
+    } as Record<string, unknown>)
     const base = await this.resolveApiPath("characters.filter", [
       "/api/v1/characters/filter",
       "/api/v1/characters/filter/"
     ])
-    return await bgRequest<any[]>({
+    return await bgRequest<unknown[]>({
       path: appendPathQuery(base, qp),
       method: 'GET'
     })
   }
 
-  async getCharacter(id: string | number): Promise<any> {
+  async getCharacter(id: string | number): Promise<unknown> {
     const cid = String(id)
     const cached = this.characterCache.get(cid)
     if (cached && cached.expiresAt > Date.now()) {
@@ -1099,7 +1170,7 @@ export class TldwApiClient {
           "/api/v1/characters/{id}/"
         ])
         const path = this.fillPathParams(template, cid)
-        const value = await bgRequest<any>({
+        const value = await bgRequest<unknown>({
           path,
           method: 'GET'
         })
@@ -1117,12 +1188,12 @@ export class TldwApiClient {
     return request
   }
 
-  async createCharacter(payload: Record<string, any>): Promise<any> {
+  async createCharacter(payload: Record<string, unknown>): Promise<unknown> {
     const path = await this.resolveApiPath("characters.create", [
       "/api/v1/characters",
       "/api/v1/characters/"
     ])
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1133,7 +1204,7 @@ export class TldwApiClient {
   async importCharacterFile(
     file: File,
     options?: { allowImageOnly?: boolean }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const buffer = await file.arrayBuffer()
     const data = Array.from(new Uint8Array(buffer))
     const name = file.name || "character-card"
@@ -1145,7 +1216,7 @@ export class TldwApiClient {
     const fields = options?.allowImageOnly
       ? { allow_image_only: true }
       : undefined
-    return await this.upload<any>({
+    return await this.upload<unknown>({
       path,
       method: "POST",
       fileFieldName: "character_file",
@@ -1154,7 +1225,11 @@ export class TldwApiClient {
     })
   }
 
-  async updateCharacter(id: string | number, payload: Record<string, any>, expectedVersion?: number): Promise<any> {
+  async updateCharacter(
+    id: string | number,
+    payload: Record<string, unknown>,
+    expectedVersion?: number
+  ): Promise<unknown> {
     const cid = String(id)
     const qp = expectedVersion != null ? `?expected_version=${encodeURIComponent(String(expectedVersion))}` : ''
     const template = await this.resolveApiPath("characters.update", [
@@ -1162,7 +1237,7 @@ export class TldwApiClient {
       "/api/v1/characters/{id}/"
     ])
     const path = appendPathQuery(this.fillPathParams(template, cid), qp)
-    const res = await bgRequest<any>({
+    const res = await bgRequest<unknown>({
       path,
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -1184,23 +1259,23 @@ export class TldwApiClient {
   }
 
   // Character chat sessions
-  async listCharacterChatSessions(): Promise<any[]> {
+  async listCharacterChatSessions(): Promise<unknown[]> {
     const path = await this.resolveApiPath("characterChatSessions.list", [
       "/api/v1/character-chat/sessions",
       "/api/v1/character_chat_sessions",
       "/api/v1/character_chat_sessions/"
     ])
-    return await bgRequest<any[]>({ path, method: 'GET' })
+    return await bgRequest<unknown[]>({ path, method: 'GET' })
   }
 
-  async createCharacterChatSession(character_id: string): Promise<any> {
+  async createCharacterChatSession(character_id: string): Promise<unknown> {
     const body = { character_id }
     const path = await this.resolveApiPath("characterChatSessions.create", [
       "/api/v1/character-chat/sessions",
       "/api/v1/character_chat_sessions",
       "/api/v1/character_chat_sessions/"
     ])
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1220,7 +1295,7 @@ export class TldwApiClient {
   }
 
   // Character messages
-  async listCharacterMessages(session_id: string | number): Promise<any[]> {
+  async listCharacterMessages(session_id: string | number): Promise<unknown[]> {
     const sid = String(session_id)
     const query = this.buildQuery({ session_id: sid })
     const template = await this.resolveApiPath("characterChatMessages.list", [
@@ -1231,10 +1306,14 @@ export class TldwApiClient {
     const path = template.includes("{")
       ? this.fillPathParams(template, sid)
       : appendPathQuery(template, query)
-    return await bgRequest<any[]>({ path, method: 'GET' })
+    return await bgRequest<unknown[]>({ path, method: 'GET' })
   }
 
-  async sendCharacterMessage(session_id: string | number, content: string, options?: { extra?: Record<string, any> }): Promise<any> {
+  async sendCharacterMessage(
+    session_id: string | number,
+    content: string,
+    options?: { extra?: Record<string, unknown> }
+  ): Promise<unknown> {
     const sid = String(session_id)
     const body = { content, session_id: sid, ...(options?.extra || {}) }
     const template = await this.resolveApiPath("characterChatMessages.send", [
@@ -1245,7 +1324,7 @@ export class TldwApiClient {
     const path = template.includes("{")
       ? this.fillPathParams(template, sid)
       : template
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1253,7 +1332,11 @@ export class TldwApiClient {
     })
   }
 
-  async * streamCharacterMessage(session_id: string | number, content: string, options?: { extra?: Record<string, any> }): AsyncGenerator<any> {
+  async * streamCharacterMessage(
+    session_id: string | number,
+    content: string,
+    options?: { extra?: Record<string, unknown> }
+  ): AsyncGenerator<unknown> {
     const sid = String(session_id)
     const body = { content, session_id: sid, ...(options?.extra || {}) }
     const template = await this.resolveApiPath("characterChatMessages.stream", [
@@ -1267,81 +1350,79 @@ export class TldwApiClient {
     }
   }
 
-  private normalizeChatSummary(input: any): ServerChatSummary {
-    const created_at = String(input?.created_at || input?.createdAt || "")
+  private normalizeChatSummary(input: unknown): ServerChatSummary {
+    const record = isRecord(input) ? input : {}
+    const created_at = String(record.created_at || record.createdAt || "")
     const updated_at =
-      input?.updated_at ??
-      input?.updatedAt ??
-      input?.last_modified ??
-      input?.lastModified ??
+      record.updated_at ??
+      record.updatedAt ??
+      record.last_modified ??
+      record.lastModified ??
       null
-    const state = input?.state ?? input?.conversation_state ?? null
+    const state = record.state ?? record.conversation_state ?? null
     return {
-      id: String(input?.id ?? ""),
-      title: String(input?.title || ""),
+      id: String(record.id ?? ""),
+      title: String(record.title || ""),
       created_at,
       updated_at: updated_at ? String(updated_at) : null,
-      source: input?.source ?? null,
+      source: record.source ?? null,
       state: state ? String(state) : null,
-      topic_label: input?.topic_label ?? input?.topicLabel ?? null,
-      cluster_id: input?.cluster_id ?? input?.clusterId ?? null,
-      external_ref: input?.external_ref ?? input?.externalRef ?? null,
+      topic_label: record.topic_label ?? record.topicLabel ?? null,
+      cluster_id: record.cluster_id ?? record.clusterId ?? null,
+      external_ref: record.external_ref ?? record.externalRef ?? null,
       bm25_norm:
-        typeof input?.bm25_norm === "number"
-          ? input?.bm25_norm
-          : typeof input?.relevance === "number"
-            ? input?.relevance
+        typeof record.bm25_norm === "number"
+          ? record.bm25_norm
+          : typeof record.relevance === "number"
+            ? record.relevance
             : null,
-      character_id: input?.character_id ?? input?.characterId ?? null,
+      character_id: record.character_id ?? record.characterId ?? null,
       parent_conversation_id:
-        input?.parent_conversation_id ?? input?.parentConversationId ?? null,
-      root_id: input?.root_id ?? input?.rootId ?? null,
+        record.parent_conversation_id ?? record.parentConversationId ?? null,
+      root_id: record.root_id ?? record.rootId ?? null,
       version:
-        typeof input?.version === "number"
-          ? input.version
-          : typeof input?.expected_version === "number"
-            ? input.expected_version
+        typeof record.version === "number"
+          ? record.version
+          : typeof record.expected_version === "number"
+            ? record.expected_version
             : null
     }
   }
 
   // Chats API (resource-based)
-  async listChatCommands(): Promise<any> {
-    return await bgRequest<any>({
+  async listChatCommands(): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/chat/commands",
       method: "GET"
     })
   }
 
-  async listChats(params?: Record<string, any>): Promise<ServerChatSummary[]> {
+  async listChats(params?: Record<string, unknown>): Promise<ServerChatSummary[]> {
     const query = this.buildQuery(params)
-    const data = await bgRequest<any>({
+    const data = await bgRequest<unknown>({
       path: `/api/v1/chats/${query}`,
       method: "GET"
     })
 
-    let list: any[] = []
+    let list: unknown[] = []
 
     if (Array.isArray(data)) {
       list = data
-    } else if (data && typeof data === "object") {
-      const obj: any = data
-      if (Array.isArray(obj.chats)) {
-        list = obj.chats
-      } else if (Array.isArray(obj.items)) {
-        list = obj.items
-      } else if (Array.isArray(obj.results)) {
-        list = obj.results
-      } else if (Array.isArray(obj.data)) {
-        list = obj.data
+    } else if (isRecord(data)) {
+      const candidates = [data.chats, data.items, data.results, data.data]
+      for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+          list = candidate
+          break
+        }
       }
     }
 
     return list.map((c) => this.normalizeChatSummary(c))
   }
 
-  async createChat(payload: Record<string, any>): Promise<ServerChatSummary> {
-    const res = await bgRequest<any>({
+  async createChat(payload: Record<string, unknown>): Promise<ServerChatSummary> {
+    const res = await bgRequest<unknown>({
       path: "/api/v1/chats/",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1352,7 +1433,7 @@ export class TldwApiClient {
 
   async getChat(chat_id: string | number): Promise<ServerChatSummary> {
     const cid = String(chat_id)
-    const res = await bgRequest<any>({
+    const res = await bgRequest<unknown>({
       path: `/api/v1/chats/${cid}`,
       method: "GET"
     })
@@ -1361,7 +1442,7 @@ export class TldwApiClient {
 
   async updateChat(
     chat_id: string | number,
-    payload: Record<string, any>,
+    payload: Record<string, unknown>,
     options?: { expectedVersion?: number }
   ): Promise<ServerChatSummary> {
     const cid = String(chat_id)
@@ -1380,7 +1461,7 @@ export class TldwApiClient {
       typeof expectedVersion === "number"
         ? `?expected_version=${encodeURIComponent(String(expectedVersion))}`
         : ""
-    const res = await bgRequest<any>({
+    const res = await bgRequest<unknown>({
       path: `/api/v1/chats/${cid}${qp}`,
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1396,7 +1477,7 @@ export class TldwApiClient {
 
   async listChatMessages(
     chat_id: string | number,
-    params?: Record<string, any>,
+    params?: Record<string, unknown>,
     options?: { signal?: AbortSignal }
   ): Promise<ServerChatMessage[]> {
     const cid = String(chat_id)
@@ -1416,64 +1497,68 @@ export class TldwApiClient {
     }
 
     const request = (async () => {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: `/api/v1/chats/${cid}/messages${query}`,
         method: "GET",
         abortSignal: options?.signal
       })
 
-      let list: any[] = []
+      let list: unknown[] = []
 
       if (Array.isArray(data)) {
         list = data
-      } else if (data && typeof data === "object") {
-        const obj: any = data
-        if (Array.isArray(obj.messages)) {
-          list = obj.messages
-        } else if (Array.isArray(obj.items)) {
-          list = obj.items
-        } else if (Array.isArray(obj.results)) {
-          list = obj.results
-        } else if (Array.isArray(obj.data)) {
-          list = obj.data
+      } else if (isRecord(data)) {
+        const candidates = [data.messages, data.items, data.results, data.data]
+        for (const candidate of candidates) {
+          if (Array.isArray(candidate)) {
+            list = candidate
+            break
+          }
         }
       }
 
-      const normalized = list.map((m) => {
+      const normalized = list.map((item) => {
+        const record = isRecord(item) ? item : {}
+        const nested = isRecord(record.message) ? record.message : {}
         const roleCandidate =
-          typeof m.role === "string"
-            ? m.role
-            : typeof m.sender === "string"
-              ? m.sender
-              : typeof m.author === "string"
-                ? m.author
-                : typeof (m as any)?.message?.role === "string"
-                  ? (m as any).message.role
-                  : typeof (m as any)?.message?.sender === "string"
-                    ? (m as any).message.sender
-                    : typeof (m as any)?.message?.author === "string"
-                      ? (m as any).message.author
+          typeof record.role === "string"
+            ? record.role
+            : typeof record.sender === "string"
+              ? record.sender
+              : typeof record.author === "string"
+                ? record.author
+                : typeof nested.role === "string"
+                  ? nested.role
+                  : typeof nested.sender === "string"
+                    ? nested.sender
+                    : typeof nested.author === "string"
+                      ? nested.author
                       : undefined
+        const isBotFlag =
+          typeof record.is_bot === "boolean"
+            ? record.is_bot
+            : typeof record.isBot === "boolean"
+              ? record.isBot
+              : null
         const role =
-          typeof (m as any)?.is_bot === "boolean" ||
-          typeof (m as any)?.isBot === "boolean"
-            ? (m as any).is_bot || (m as any).isBot
+          isBotFlag !== null
+            ? isBotFlag
               ? "assistant"
               : "user"
             : normalizeChatRole(roleCandidate)
         const created_at = String(
-          m.created_at || m.createdAt || m.timestamp || ""
+          record.created_at || record.createdAt || record.timestamp || ""
         )
         return {
-          id: String(m.id),
+          id: String(record.id ?? ""),
           role,
-          content: String(m.content ?? ""),
+          content: String(record.content ?? ""),
           created_at,
           version:
-            typeof m.version === "number"
-              ? m.version
-              : typeof m.expected_version === "number"
-                ? m.expected_version
+            typeof record.version === "number"
+              ? record.version
+              : typeof record.expected_version === "number"
+                ? record.expected_version
                 : undefined
         } as ServerChatMessage
       })
@@ -1494,7 +1579,7 @@ export class TldwApiClient {
 
   async addChatMessage(
     chat_id: string | number,
-    payload: Record<string, any>
+    payload: Record<string, unknown>
   ): Promise<ServerChatMessage> {
     const cid = String(chat_id)
     const res = await bgRequest<ServerChatMessage>({
@@ -1509,10 +1594,10 @@ export class TldwApiClient {
 
   async prepareCharacterCompletion(
     chat_id: string | number,
-    payload?: Record<string, any>
-  ): Promise<any> {
+    payload?: Record<string, unknown>
+  ): Promise<unknown> {
     const cid = String(chat_id)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chats/${cid}/completions`,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1522,10 +1607,10 @@ export class TldwApiClient {
 
   async persistCharacterCompletion(
     chat_id: string | number,
-    payload: Record<string, any>
-  ): Promise<any> {
+    payload: Record<string, unknown>
+  ): Promise<unknown> {
     const cid = String(chat_id)
-    const res = await bgRequest<any>({
+    const res = await bgRequest<unknown>({
       path: `/api/v1/chats/${cid}/completions/persist`,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1537,9 +1622,9 @@ export class TldwApiClient {
 
   async *streamCharacterChatCompletion(
     chat_id: string | number,
-    payload?: Record<string, any>,
+    payload?: Record<string, unknown>,
     options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }
-  ): AsyncGenerator<any> {
+  ): AsyncGenerator<unknown> {
     const cid = String(chat_id)
     const body = { ...(payload || {}), stream: true }
     for await (const line of bgStream({
@@ -1560,18 +1645,30 @@ export class TldwApiClient {
     }
   }
 
-  async searchChatMessages(chat_id: string | number, query: string, limit?: number): Promise<any> {
+  async searchChatMessages(
+    chat_id: string | number,
+    query: string,
+    limit?: number
+  ): Promise<unknown> {
     const cid = String(chat_id)
     const qp = `?query=${encodeURIComponent(query)}${typeof limit === 'number' ? `&limit=${encodeURIComponent(String(limit))}` : ''}`
-    return await bgRequest<any>({ path: `/api/v1/chats/${cid}/messages/search${qp}`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/chats/${cid}/messages/search${qp}`, method: 'GET' })
   }
 
-  async completeChat(chat_id: string | number, payload?: Record<string, any>): Promise<any> {
+  async completeChat(chat_id: string | number, payload?: Record<string, unknown>): Promise<unknown> {
     const cid = String(chat_id)
-    return await bgRequest<any>({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload || {} })
+    return await bgRequest<unknown>({
+      path: `/api/v1/chats/${cid}/complete`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload || {}
+    })
   }
 
-  async * streamCompleteChat(chat_id: string | number, payload?: Record<string, any>): AsyncGenerator<any> {
+  async * streamCompleteChat(
+    chat_id: string | number,
+    payload?: Record<string, unknown>
+  ): AsyncGenerator<unknown> {
     const cid = String(chat_id)
     for await (const line of bgStream({ path: `/api/v1/chats/${cid}/complete`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload || {} })) {
       try { yield JSON.parse(line) } catch {}
@@ -1579,9 +1676,9 @@ export class TldwApiClient {
   }
 
   // Message (single) APIs
-  async getMessage(message_id: string | number): Promise<any> {
+  async getMessage(message_id: string | number): Promise<unknown> {
     const mid = String(message_id)
-    return await bgRequest<any>({ path: `/api/v1/messages/${mid}`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/messages/${mid}`, method: 'GET' })
   }
 
   async editMessage(
@@ -1589,10 +1686,10 @@ export class TldwApiClient {
     content: string,
     expectedVersion: number,
     chatId?: string | number
-  ): Promise<any> {
+  ): Promise<unknown> {
     const mid = String(message_id)
     const qp = `?expected_version=${encodeURIComponent(String(expectedVersion))}`
-    const res = await bgRequest<any>({
+    const res = await bgRequest<unknown>({
       path: `/api/v1/messages/${mid}${qp}`,
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -1626,13 +1723,13 @@ export class TldwApiClient {
     snippet: string
     tags?: string[]
     make_flashcard?: boolean
-  }): Promise<any> {
+  }): Promise<unknown> {
     const body = {
       ...payload,
       conversation_id: String(payload.conversation_id),
       message_id: String(payload.message_id)
     }
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: "/api/v1/chat/knowledge/save",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1641,143 +1738,143 @@ export class TldwApiClient {
   }
 
   // World Books
-  async listWorldBooks(include_disabled?: boolean): Promise<any> {
+  async listWorldBooks(include_disabled?: boolean): Promise<unknown> {
     const qp = include_disabled ? `?include_disabled=true` : ''
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books${qp}`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/world-books${qp}`, method: 'GET' })
   }
 
-  async createWorldBook(payload: Record<string, any>): Promise<any> {
-    return await bgRequest<any>({ path: '/api/v1/characters/world-books', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+  async createWorldBook(payload: Record<string, unknown>): Promise<unknown> {
+    return await bgRequest<unknown>({ path: '/api/v1/characters/world-books', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async updateWorldBook(world_book_id: number | string, payload: Record<string, any>): Promise<any> {
+  async updateWorldBook(world_book_id: number | string, payload: Record<string, unknown>): Promise<unknown> {
     const wid = String(world_book_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/world-books/${wid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async deleteWorldBook(world_book_id: number | string): Promise<any> {
+  async deleteWorldBook(world_book_id: number | string): Promise<unknown> {
     const wid = String(world_book_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}`, method: 'DELETE' })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/world-books/${wid}`, method: 'DELETE' })
   }
 
-  async listWorldBookEntries(world_book_id: number | string, enabled_only?: boolean): Promise<any> {
+  async listWorldBookEntries(world_book_id: number | string, enabled_only?: boolean): Promise<unknown> {
     const wid = String(world_book_id)
     const qp = enabled_only ? `?enabled_only=true` : ''
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}/entries${qp}`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/world-books/${wid}/entries${qp}`, method: 'GET' })
   }
 
-  async addWorldBookEntry(world_book_id: number | string, payload: Record<string, any>): Promise<any> {
+  async addWorldBookEntry(world_book_id: number | string, payload: Record<string, unknown>): Promise<unknown> {
     const wid = String(world_book_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}/entries`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/world-books/${wid}/entries`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async updateWorldBookEntry(entry_id: number | string, payload: Record<string, any>): Promise<any> {
+  async updateWorldBookEntry(entry_id: number | string, payload: Record<string, unknown>): Promise<unknown> {
     const eid = String(entry_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/entries/${eid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/world-books/entries/${eid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async deleteWorldBookEntry(entry_id: number | string): Promise<any> {
+  async deleteWorldBookEntry(entry_id: number | string): Promise<unknown> {
     const eid = String(entry_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/entries/${eid}`, method: 'DELETE' })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/world-books/entries/${eid}`, method: 'DELETE' })
   }
 
-  async attachWorldBookToCharacter(character_id: number | string, world_book_id: number | string): Promise<any> {
+  async attachWorldBookToCharacter(character_id: number | string, world_book_id: number | string): Promise<unknown> {
     const cid = String(character_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { world_book_id: Number(world_book_id) } })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/${cid}/world-books`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { world_book_id: Number(world_book_id) } })
   }
 
-  async detachWorldBookFromCharacter(character_id: number | string, world_book_id: number | string): Promise<any> {
+  async detachWorldBookFromCharacter(character_id: number | string, world_book_id: number | string): Promise<unknown> {
     const cid = String(character_id)
     const wid = String(world_book_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books/${wid}`, method: 'DELETE' })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/${cid}/world-books/${wid}`, method: 'DELETE' })
   }
 
-  async listCharacterWorldBooks(character_id: number | string): Promise<any> {
+  async listCharacterWorldBooks(character_id: number | string): Promise<unknown> {
     const cid = String(character_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/${cid}/world-books`, method: 'GET' })
   }
 
-  async exportWorldBook(world_book_id: number | string): Promise<any> {
+  async exportWorldBook(world_book_id: number | string): Promise<unknown> {
     const wid = String(world_book_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}/export`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/world-books/${wid}/export`, method: 'GET' })
   }
 
-  async importWorldBook(request: { world_book: Record<string, any>; entries?: any[]; merge_on_conflict?: boolean }): Promise<any> {
-    return await bgRequest<any>({ path: '/api/v1/characters/world-books/import', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request })
+  async importWorldBook(request: { world_book: Record<string, unknown>; entries?: unknown[]; merge_on_conflict?: boolean }): Promise<unknown> {
+    return await bgRequest<unknown>({ path: '/api/v1/characters/world-books/import', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request })
   }
 
-  async worldBookStatistics(world_book_id: number | string): Promise<any> {
+  async worldBookStatistics(world_book_id: number | string): Promise<unknown> {
     const wid = String(world_book_id)
-    return await bgRequest<any>({ path: `/api/v1/characters/world-books/${wid}/statistics`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/characters/world-books/${wid}/statistics`, method: 'GET' })
   }
 
   // Chat Dictionaries
-  async createDictionary(payload: Record<string, any>): Promise<any> {
-    return await bgRequest<any>({ path: '/api/v1/chat/dictionaries', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+  async createDictionary(payload: Record<string, unknown>): Promise<unknown> {
+    return await bgRequest<unknown>({ path: '/api/v1/chat/dictionaries', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async listDictionaries(include_inactive?: boolean): Promise<any> {
+  async listDictionaries(include_inactive?: boolean): Promise<unknown> {
     const qp = include_inactive ? `?include_inactive=true` : ''
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries${qp}`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries${qp}`, method: 'GET' })
   }
 
-  async getDictionary(dictionary_id: number | string): Promise<any> {
+  async getDictionary(dictionary_id: number | string): Promise<unknown> {
     const id = String(dictionary_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/${id}`, method: 'GET' })
   }
 
-  async updateDictionary(dictionary_id: number | string, payload: Record<string, any>): Promise<any> {
+  async updateDictionary(dictionary_id: number | string, payload: Record<string, unknown>): Promise<unknown> {
     const id = String(dictionary_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/${id}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async deleteDictionary(dictionary_id: number | string, hard_delete?: boolean): Promise<any> {
+  async deleteDictionary(dictionary_id: number | string, hard_delete?: boolean): Promise<unknown> {
     const id = String(dictionary_id)
     const qp = hard_delete ? `?hard_delete=true` : ''
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}${qp}`, method: 'DELETE' })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/${id}${qp}`, method: 'DELETE' })
   }
 
-  async listDictionaryEntries(dictionary_id: number | string, group?: string): Promise<any> {
+  async listDictionaryEntries(dictionary_id: number | string, group?: string): Promise<unknown> {
     const id = String(dictionary_id)
     const qp = group ? `?group=${encodeURIComponent(group)}` : ''
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/entries${qp}`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/${id}/entries${qp}`, method: 'GET' })
     }
 
-  async addDictionaryEntry(dictionary_id: number | string, payload: Record<string, any>): Promise<any> {
+  async addDictionaryEntry(dictionary_id: number | string, payload: Record<string, unknown>): Promise<unknown> {
     const id = String(dictionary_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/entries`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/${id}/entries`, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async updateDictionaryEntry(entry_id: number | string, payload: Record<string, any>): Promise<any> {
+  async updateDictionaryEntry(entry_id: number | string, payload: Record<string, unknown>): Promise<unknown> {
     const eid = String(entry_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/entries/${eid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/entries/${eid}`, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload })
   }
 
-  async deleteDictionaryEntry(entry_id: number | string): Promise<any> {
+  async deleteDictionaryEntry(entry_id: number | string): Promise<unknown> {
     const eid = String(entry_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/entries/${eid}`, method: 'DELETE' })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/entries/${eid}`, method: 'DELETE' })
   }
 
-  async exportDictionaryMarkdown(dictionary_id: number | string): Promise<any> {
+  async exportDictionaryMarkdown(dictionary_id: number | string): Promise<unknown> {
     const id = String(dictionary_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/export/markdown`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/${id}/export/markdown`, method: 'GET' })
   }
 
-  async exportDictionaryJSON(dictionary_id: number | string): Promise<any> {
+  async exportDictionaryJSON(dictionary_id: number | string): Promise<unknown> {
     const id = String(dictionary_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/export/json`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/${id}/export/json`, method: 'GET' })
   }
 
-  async importDictionaryJSON(data: any, activate?: boolean): Promise<any> {
-    return await bgRequest<any>({ path: '/api/v1/chat/dictionaries/import/json', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { data, activate: !!activate } })
+  async importDictionaryJSON(data: unknown, activate?: boolean): Promise<unknown> {
+    return await bgRequest<unknown>({ path: '/api/v1/chat/dictionaries/import/json', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { data, activate: !!activate } })
   }
 
   async validateDictionary(payload: {
-    data: Record<string, any>
+    data: Record<string, unknown>
     schema_version?: number
     strict?: boolean
-  }): Promise<any> {
-    return await bgRequest<any>({
+  }): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/chat/dictionaries/validate",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1790,8 +1887,8 @@ export class TldwApiClient {
     token_budget?: number
     dictionary_id?: number | string
     max_iterations?: number
-  }): Promise<any> {
-    return await bgRequest<any>({
+  }): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/chat/dictionaries/process",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1799,9 +1896,9 @@ export class TldwApiClient {
     })
   }
 
-  async dictionaryStatistics(dictionary_id: number | string): Promise<any> {
+  async dictionaryStatistics(dictionary_id: number | string): Promise<unknown> {
     const id = String(dictionary_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/statistics`, method: 'GET' })
+    return await bgRequest<unknown>({ path: `/api/v1/chat/dictionaries/${id}/statistics`, method: 'GET' })
   }
 
   // Chat Documents
@@ -1814,12 +1911,12 @@ export class TldwApiClient {
     custom_prompt?: string | null
     stream?: boolean
     async_generation?: boolean
-  }): Promise<any> {
+  }): Promise<unknown> {
     const body = {
       ...payload,
       conversation_id: String(payload.conversation_id)
     }
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: "/api/v1/chat/documents/generate",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1831,41 +1928,41 @@ export class TldwApiClient {
     conversation_id?: string | number
     document_type?: string
     limit?: number
-  }): Promise<any> {
-    const query = this.buildQuery(params as Record<string, any>)
-    return await bgRequest<any>({
+  }): Promise<unknown> {
+    const query = this.buildQuery(params as Record<string, unknown>)
+    return await bgRequest<unknown>({
       path: `/api/v1/chat/documents${query}`,
       method: "GET"
     })
   }
 
-  async getChatDocument(document_id: number | string): Promise<any> {
+  async getChatDocument(document_id: number | string): Promise<unknown> {
     const id = String(document_id)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chat/documents/${id}`,
       method: "GET"
     })
   }
 
-  async deleteChatDocument(document_id: number | string): Promise<any> {
+  async deleteChatDocument(document_id: number | string): Promise<unknown> {
     const id = String(document_id)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chat/documents/${id}`,
       method: "DELETE"
     })
   }
 
-  async getChatDocumentJob(job_id: string): Promise<any> {
+  async getChatDocumentJob(job_id: string): Promise<unknown> {
     const id = String(job_id)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chat/documents/jobs/${id}`,
       method: "GET"
     })
   }
 
-  async cancelChatDocumentJob(job_id: string): Promise<any> {
+  async cancelChatDocumentJob(job_id: string): Promise<unknown> {
     const id = String(job_id)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chat/documents/jobs/${id}`,
       method: "DELETE"
     })
@@ -1877,8 +1974,8 @@ export class TldwApiClient {
     user_prompt: string
     temperature?: number
     max_tokens?: number
-  }): Promise<any> {
-    return await bgRequest<any>({
+  }): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/chat/documents/prompts",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1886,15 +1983,15 @@ export class TldwApiClient {
     })
   }
 
-  async getChatDocumentPrompt(document_type: string): Promise<any> {
-    return await bgRequest<any>({
+  async getChatDocumentPrompt(document_type: string): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: `/api/v1/chat/documents/prompts/${encodeURIComponent(document_type)}`,
       method: "GET"
     })
   }
 
-  async chatDocumentStatistics(): Promise<any> {
-    return await bgRequest<any>({
+  async chatDocumentStatistics(): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/chat/documents/statistics",
       method: "GET"
     })
@@ -1913,8 +2010,8 @@ export class TldwApiClient {
     tags?: string[]
     categories?: string[]
     async_mode?: boolean
-  }): Promise<any> {
-    return await bgRequest<any>({
+  }): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/chatbooks/export",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1922,11 +2019,11 @@ export class TldwApiClient {
     })
   }
 
-  async previewChatbook(file: File): Promise<any> {
+  async previewChatbook(file: File): Promise<unknown> {
     const data = await file.arrayBuffer()
     const name = file.name || "chatbook.zip"
     const type = file.type || "application/zip"
-    return await bgUpload<any>({
+    return await bgUpload<unknown>({
       path: "/api/v1/chatbooks/preview",
       method: "POST",
       file: { name, type, data }
@@ -1943,16 +2040,16 @@ export class TldwApiClient {
       async_mode?: boolean
       content_selections?: Record<string, string[]>
     }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const data = await file.arrayBuffer()
     const name = file.name || "chatbook.zip"
     const type = file.type || "application/zip"
-    const normalized: Record<string, any> = {}
+    const normalized: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(options || {})) {
       if (typeof v === "undefined" || v === null) continue
       normalized[k] = typeof v === "boolean" ? (v ? "true" : "false") : v
     }
-    return await bgUpload<any>({
+    return await bgUpload<unknown>({
       path: "/api/v1/chatbooks/import",
       method: "POST",
       fields: normalized,
@@ -1960,63 +2057,63 @@ export class TldwApiClient {
     })
   }
 
-  async listChatbookExportJobs(params?: { limit?: number; offset?: number }): Promise<any> {
-    const query = this.buildQuery(params as Record<string, any>)
-    return await bgRequest<any>({
+  async listChatbookExportJobs(params?: { limit?: number; offset?: number }): Promise<unknown> {
+    const query = this.buildQuery(params as Record<string, unknown>)
+    return await bgRequest<unknown>({
       path: `/api/v1/chatbooks/export/jobs${query}`,
       method: "GET"
     })
   }
 
-  async listChatbookImportJobs(params?: { limit?: number; offset?: number }): Promise<any> {
-    const query = this.buildQuery(params as Record<string, any>)
-    return await bgRequest<any>({
+  async listChatbookImportJobs(params?: { limit?: number; offset?: number }): Promise<unknown> {
+    const query = this.buildQuery(params as Record<string, unknown>)
+    return await bgRequest<unknown>({
       path: `/api/v1/chatbooks/import/jobs${query}`,
       method: "GET"
     })
   }
 
-  async getChatbookExportJob(job_id: string): Promise<any> {
+  async getChatbookExportJob(job_id: string): Promise<unknown> {
     const id = String(job_id)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chatbooks/export/jobs/${id}`,
       method: "GET"
     })
   }
 
-  async getChatbookImportJob(job_id: string): Promise<any> {
+  async getChatbookImportJob(job_id: string): Promise<unknown> {
     const id = String(job_id)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chatbooks/import/jobs/${id}`,
       method: "GET"
     })
   }
 
-  async cancelChatbookExportJob(job_id: string): Promise<any> {
+  async cancelChatbookExportJob(job_id: string): Promise<unknown> {
     const id = String(job_id)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chatbooks/export/jobs/${id}`,
       method: "DELETE"
     })
   }
 
-  async cancelChatbookImportJob(job_id: string): Promise<any> {
+  async cancelChatbookImportJob(job_id: string): Promise<unknown> {
     const id = String(job_id)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chatbooks/import/jobs/${id}`,
       method: "DELETE"
     })
   }
 
-  async cleanupChatbooks(): Promise<any> {
-    return await bgRequest<any>({
+  async cleanupChatbooks(): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/chatbooks/cleanup",
       method: "POST"
     })
   }
 
-  async chatbooksHealth(): Promise<any> {
-    return await bgRequest<any>({
+  async chatbooksHealth(): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/chatbooks/health",
       method: "GET"
     })
@@ -2051,7 +2148,7 @@ export class TldwApiClient {
     let filename = `chatbook-${job_id}.zip`
     if (disposition) {
       const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
-      const plainMatch = disposition.match(/filename="?([^\";]+)"?/i)
+      const plainMatch = disposition.match(/filename="?([^";]+)"?/i)
       const raw = utfMatch?.[1] || plainMatch?.[1]
       if (raw) {
         try {
@@ -2064,76 +2161,78 @@ export class TldwApiClient {
     return { blob, filename }
   }
 
-  async chatQueueStatus(): Promise<any> {
-    return await bgRequest<any>({
+  async chatQueueStatus(): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/chat/queue/status",
       method: "GET"
     })
   }
 
-  async chatQueueActivity(limit?: number): Promise<any> {
+  async chatQueueActivity(limit?: number): Promise<unknown> {
     const query = this.buildQuery(
       typeof limit === "number" ? { limit } : undefined
     )
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/chat/queue/activity${query}`,
       method: "GET"
     })
   }
 
   // STT Methods
-  async getTranscriptionModels(): Promise<any> {
+  async getTranscriptionModels(): Promise<unknown> {
     await this.ensureConfigForRequest(true)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: "/api/v1/media/transcription-models",
       method: "GET"
     })
   }
 
-  async getTranscriptionModelHealth(model: string): Promise<any> {
+  async getTranscriptionModelHealth(model: string): Promise<unknown> {
     await this.ensureConfigForRequest(true)
     const query = this.buildQuery({ model })
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/audio/transcriptions/health${query}`,
       method: "GET"
     })
   }
 
-  async transcribeAudio(audioFile: File | Blob, options?: any): Promise<any> {
+  async transcribeAudio(audioFile: File | Blob, options?: Record<string, unknown>): Promise<unknown> {
     await this.ensureConfigForRequest(true)
-    const fields: Record<string, any> = {}
-    if (options) {
-      if (options.model != null) fields.model = options.model
-      if (options.language != null) fields.language = options.language
-      if (options.prompt != null) fields.prompt = options.prompt
-      if (options.response_format != null) fields.response_format = options.response_format
-      if (options.temperature != null) fields.temperature = options.temperature
-      if (options.task != null) fields.task = options.task
-      if (options.timestamp_granularities != null) {
-        fields.timestamp_granularities = options.timestamp_granularities
-      }
-      if (options.segment != null) fields.segment = options.segment
-      if (options.seg_K != null) fields.seg_K = options.seg_K
-      if (options.seg_min_segment_size != null) {
-        fields.seg_min_segment_size = options.seg_min_segment_size
-      }
-      if (options.seg_lambda_balance != null) {
-        fields.seg_lambda_balance = options.seg_lambda_balance
-      }
-      if (options.seg_utterance_expansion_width != null) {
-        fields.seg_utterance_expansion_width = options.seg_utterance_expansion_width
-      }
-      if (options.seg_embeddings_provider != null) {
-        fields.seg_embeddings_provider = options.seg_embeddings_provider
-      }
-      if (options.seg_embeddings_model != null) {
-        fields.seg_embeddings_model = options.seg_embeddings_model
-      }
+    const fields: Record<string, unknown> = {}
+    const opts = isRecord(options) ? options : {}
+    if (opts.model != null) fields.model = opts.model
+    if (opts.language != null) fields.language = opts.language
+    if (opts.prompt != null) fields.prompt = opts.prompt
+    if (opts.response_format != null) fields.response_format = opts.response_format
+    if (opts.temperature != null) fields.temperature = opts.temperature
+    if (opts.task != null) fields.task = opts.task
+    if (opts.timestamp_granularities != null) {
+      fields.timestamp_granularities = opts.timestamp_granularities
+    }
+    if (opts.segment != null) fields.segment = opts.segment
+    if (opts.seg_K != null) fields.seg_K = opts.seg_K
+    if (opts.seg_min_segment_size != null) {
+      fields.seg_min_segment_size = opts.seg_min_segment_size
+    }
+    if (opts.seg_lambda_balance != null) {
+      fields.seg_lambda_balance = opts.seg_lambda_balance
+    }
+    if (opts.seg_utterance_expansion_width != null) {
+      fields.seg_utterance_expansion_width = opts.seg_utterance_expansion_width
+    }
+    if (opts.seg_embeddings_provider != null) {
+      fields.seg_embeddings_provider = opts.seg_embeddings_provider
+    }
+    if (opts.seg_embeddings_model != null) {
+      fields.seg_embeddings_model = opts.seg_embeddings_model
     }
     const data = await audioFile.arrayBuffer()
     const name = (typeof File !== 'undefined' && audioFile instanceof File && (audioFile as File).name) ? (audioFile as File).name : 'audio'
-    const type = (audioFile as any)?.type || 'application/octet-stream'
-    return await this.upload<any>({ path: '/api/v1/audio/transcriptions', method: 'POST', fields, file: { name, type, data } })
+    const type =
+      typeof (audioFile as Blob).type === "string" && (audioFile as Blob).type
+        ? (audioFile as Blob).type
+        : 'application/octet-stream'
+    return await this.upload<unknown>({ path: '/api/v1/audio/transcriptions', method: 'POST', fields, file: { name, type, data } })
   }
 
   async synthesizeSpeech(
@@ -2141,7 +2240,7 @@ export class TldwApiClient {
     options?: { voice?: string; model?: string; responseFormat?: string; speed?: number }
   ): Promise<ArrayBuffer> {
     await this.ensureConfigForRequest(true)
-    const body: Record<string, any> = { input: text, text }
+    const body: Record<string, unknown> = { input: text, text }
     if (options?.voice) body.voice = options.voice
     if (options?.model) body.model = options.model
     if (options?.responseFormat) body.response_format = options.responseFormat
@@ -2179,7 +2278,7 @@ export class TldwApiClient {
     offset?: number
     search?: string
     status?: string
-  }): Promise<{ tables: any[]; total: number }> {
+  }): Promise<{ tables: unknown[]; total: number }> {
     const limit = params?.limit ?? params?.page_size ?? 20
     const page = params?.page ?? 1
     const offset = params?.offset ?? Math.max(0, (page - 1) * limit)
@@ -2188,8 +2287,8 @@ export class TldwApiClient {
       offset,
       search: params?.search,
       status_filter: params?.status
-    } as Record<string, any>)
-    const response = await bgRequest<any>({
+    } as Record<string, unknown>)
+    const response = await bgRequest<unknown>({
       path: `/api/v1/data-tables${query}`,
       method: "GET"
     })
@@ -2204,19 +2303,21 @@ export class TldwApiClient {
       include_rows?: boolean
       include_sources?: boolean
     }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const id = encodeURIComponent(tableId)
     const query = this.buildQuery({
       rows_limit: params?.rows_limit,
       rows_offset: params?.rows_offset,
       include_rows: params?.include_rows,
       include_sources: params?.include_sources
-    } as Record<string, any>)
-    const response = await bgRequest<any>({
+    } as Record<string, unknown>)
+    const response = await bgRequest<unknown>({
       path: `/api/v1/data-tables/${id}${query}`,
       method: "GET"
     })
-    return response?.table ? mapApiDetailToUi(response) : response
+    return isRecord(response) && response.table
+      ? mapApiDetailToUi(response as ApiDataTableDetailResponse)
+      : response
   }
 
   async generateDataTable(payload: {
@@ -2246,9 +2347,9 @@ export class TldwApiClient {
   async updateDataTable(
     tableId: string,
     payload: { name?: string; description?: string }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const id = encodeURIComponent(tableId)
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path: `/api/v1/data-tables/${id}`,
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -2260,18 +2361,20 @@ export class TldwApiClient {
     tableId: string,
     payload: {
       columns: DataTableColumn[]
-      rows: Record<string, any>[]
+      rows: Record<string, unknown>[]
     }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const id = encodeURIComponent(tableId)
     const body = buildContentPayload(payload.columns, payload.rows)
-    const response = await bgRequest<any>({
+    const response = await bgRequest<unknown>({
       path: `/api/v1/data-tables/${id}/content`,
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body
     })
-    return response?.table ? mapApiDetailToUi(response) : response
+    return isRecord(response) && response.table
+      ? mapApiDetailToUi(response as ApiDataTableDetailResponse)
+      : response
   }
 
   async deleteDataTable(tableId: string): Promise<void> {
@@ -2313,7 +2416,7 @@ export class TldwApiClient {
       const disposition = res.headers.get("content-disposition")
       if (!disposition) return fallbackFilename
       const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
-      const plainMatch = disposition.match(/filename="?([^\";]+)"?/i)
+      const plainMatch = disposition.match(/filename="?([^";]+)"?/i)
       const raw = utfMatch?.[1] || plainMatch?.[1]
       if (!raw) return fallbackFilename
       try {
@@ -2490,7 +2593,7 @@ export class TldwApiClient {
     domain?: string
     date_from?: string
     date_to?: string
-  }): Promise<any> {
+  }): Promise<unknown> {
     const query = new URLSearchParams()
     if (params?.page) query.set("page", String(params.page))
     if (params?.size) query.set("size", String(params.size))
@@ -2507,43 +2610,48 @@ export class TldwApiClient {
     if (params?.date_to) query.set("date_to", params.date_to)
     const qs = query.toString()
     const path = `/api/v1/reading/items${qs ? `?${qs}` : ""}` as const
-    const data = await bgRequest<any>({ path, method: "GET" })
-    const items = Array.isArray(data?.items)
-      ? data.items.map((item: any) => ({
-          id: String(item.id),
-          title: item.title || item.url || "Untitled",
-          url: item.url,
-          canonical_url: item.canonical_url,
-          domain: item.domain,
-          summary: item.summary ?? undefined,
-          notes: item.notes ?? undefined,
-          status: item.status ?? "saved",
-          favorite: Boolean(item.favorite),
-          tags: Array.isArray(item.tags) ? item.tags : [],
-          reading_time_minutes: item.reading_time_minutes,
-          created_at: item.created_at,
-          updated_at: item.updated_at,
-          published_at: item.published_at
-        }))
+    const data = await bgRequest<unknown>({ path, method: "GET" })
+    const record = isRecord(data) ? data : {}
+    const items = Array.isArray(record.items)
+      ? record.items.map((item) => {
+          const entry = isRecord(item) ? item : {}
+          return {
+            id: String(entry.id ?? ""),
+            title: entry.title || entry.url || "Untitled",
+            url: entry.url,
+            canonical_url: entry.canonical_url,
+            domain: entry.domain,
+            summary: entry.summary ?? undefined,
+            notes: entry.notes ?? undefined,
+            status: entry.status ?? "saved",
+            favorite: Boolean(entry.favorite),
+            tags: Array.isArray(entry.tags) ? entry.tags : [],
+            reading_time_minutes: entry.reading_time_minutes,
+            created_at: entry.created_at,
+            updated_at: entry.updated_at,
+            published_at: entry.published_at
+          }
+        })
       : []
     return {
-      ...data,
+      ...record,
       items,
-      total: data?.total ?? items.length,
-      page: data?.page ?? params?.page ?? 1,
-      size: data?.size ?? params?.size ?? items.length
+      total: record.total ?? items.length,
+      page: record.page ?? params?.page ?? 1,
+      size: record.size ?? params?.size ?? items.length
     }
   }
 
-  async getReadingItem(itemId: string): Promise<any> {
+  async getReadingItem(itemId: string): Promise<unknown> {
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}` as const
-    const item = await bgRequest<any>({ path, method: "GET" })
+    const item = await bgRequest<unknown>({ path, method: "GET" })
+    const record = isRecord(item) ? item : {}
     return {
-      ...item,
-      id: String(item?.id),
-      media_id: item?.media_id ? String(item.media_id) : undefined,
-      favorite: Boolean(item?.favorite),
-      tags: Array.isArray(item?.tags) ? item.tags : []
+      ...record,
+      id: String(record.id ?? ""),
+      media_id: record.media_id ? String(record.media_id) : undefined,
+      favorite: Boolean(record.favorite),
+      tags: Array.isArray(record.tags) ? record.tags : []
     }
   }
 
@@ -2556,8 +2664,8 @@ export class TldwApiClient {
     favorite?: boolean
     summary?: string
     content?: string
-  }): Promise<any> {
-    return await bgRequest<any>({
+  }): Promise<unknown> {
+    return await bgRequest<unknown>({
       path: "/api/v1/reading/save",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2574,9 +2682,9 @@ export class TldwApiClient {
       notes?: string
       title?: string
     }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}` as const
-    return await bgRequest<any>({
+    return await bgRequest<unknown>({
       path,
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -2605,12 +2713,13 @@ export class TldwApiClient {
     }
   ): Promise<{ summary: string; provider: string; model?: string }> {
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/summarize` as const
-    return await bgRequest<any>({
+    const response = await bgRequest<unknown>({
       path,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: options || {}
     })
+    return response as { summary: string; provider: string; model?: string }
   }
 
   async generateReadingItemTts(
@@ -2634,18 +2743,21 @@ export class TldwApiClient {
   }
 
   // Highlights
-  async getHighlights(itemId: string): Promise<any[]> {
+  async getHighlights(itemId: string): Promise<unknown[]> {
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/highlights` as const
-    const data = await bgRequest<any>({ path, method: "GET" })
+    const data = await bgRequest<unknown>({ path, method: "GET" })
     return Array.isArray(data)
-      ? data.map((highlight) => ({
-          ...highlight,
-          id: String(highlight.id),
-          item_id: String(highlight.item_id),
-          color: highlight.color || "yellow",
-          anchor_strategy: highlight.anchor_strategy || "fuzzy_quote",
-          state: highlight.state || "active"
-        }))
+      ? data.map((highlight) => {
+          const record = isRecord(highlight) ? highlight : {}
+          return {
+            ...record,
+            id: String(record.id ?? ""),
+            item_id: String(record.item_id ?? ""),
+            color: record.color || "yellow",
+            anchor_strategy: record.anchor_strategy || "fuzzy_quote",
+            state: record.state || "active"
+          }
+        })
       : []
   }
 
@@ -2657,7 +2769,7 @@ export class TldwApiClient {
     start_offset?: number
     end_offset?: number
     anchor_strategy?: string
-  }): Promise<any> {
+  }): Promise<unknown> {
     const path = `/api/v1/reading/items/${encodeURIComponent(data.item_id)}/highlight` as const
     const payload = {
       item_id: Number(data.item_id),
@@ -2668,40 +2780,42 @@ export class TldwApiClient {
       end_offset: data.end_offset,
       anchor_strategy: data.anchor_strategy
     }
-    const highlight = await bgRequest<any>({
+    const highlight = await bgRequest<unknown>({
       path,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload
     })
+    const record = isRecord(highlight) ? highlight : {}
     return {
-      ...highlight,
-      id: String(highlight.id),
-      item_id: String(highlight.item_id),
-      color: highlight.color || "yellow",
-      anchor_strategy: highlight.anchor_strategy || "fuzzy_quote",
-      state: highlight.state || "active"
+      ...record,
+      id: String(record.id ?? ""),
+      item_id: String(record.item_id ?? ""),
+      color: record.color || "yellow",
+      anchor_strategy: record.anchor_strategy || "fuzzy_quote",
+      state: record.state || "active"
     }
   }
 
   async updateHighlight(
     highlightId: string,
     data: { note?: string; color?: string; state?: string }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const path = `/api/v1/reading/highlights/${encodeURIComponent(highlightId)}` as const
-    const highlight = await bgRequest<any>({
+    const highlight = await bgRequest<unknown>({
       path,
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: data
     })
+    const record = isRecord(highlight) ? highlight : {}
     return {
-      ...highlight,
-      id: String(highlight.id),
-      item_id: String(highlight.item_id),
-      color: highlight.color || "yellow",
-      anchor_strategy: highlight.anchor_strategy || "fuzzy_quote",
-      state: highlight.state || "active"
+      ...record,
+      id: String(record.id ?? ""),
+      item_id: String(record.item_id ?? ""),
+      color: record.color || "yellow",
+      anchor_strategy: record.anchor_strategy || "fuzzy_quote",
+      state: record.state || "active"
     }
   }
 
@@ -2715,24 +2829,28 @@ export class TldwApiClient {
     q?: string
     limit?: number
     offset?: number
-  }): Promise<any> {
+  }): Promise<unknown> {
     const query = new URLSearchParams()
     if (params?.q) query.set("q", params.q)
     if (params?.limit) query.set("limit", String(params.limit))
     if (params?.offset !== undefined) query.set("offset", String(params.offset))
     const qs = query.toString()
     const path = `/api/v1/outputs/templates${qs ? `?${qs}` : ""}` as const
-    const data = await bgRequest<any>({ path, method: "GET" })
-    const items = Array.isArray(data?.items)
-      ? data.items.map((template: any) => ({
-          ...template,
-          id: String(template.id)
-        }))
+    const data = await bgRequest<unknown>({ path, method: "GET" })
+    const record = isRecord(data) ? data : {}
+    const items = Array.isArray(record.items)
+      ? record.items.map((template) => {
+          const entry = isRecord(template) ? template : {}
+          return {
+            ...entry,
+            id: String(entry.id ?? "")
+          }
+        })
       : []
     return {
-      ...data,
+      ...record,
       items,
-      total: data?.total ?? items.length
+      total: record.total ?? items.length
     }
   }
 
@@ -2743,14 +2861,15 @@ export class TldwApiClient {
     format: string
     body: string
     is_default?: boolean
-  }): Promise<any> {
-    const template = await bgRequest<any>({
+  }): Promise<unknown> {
+    const template = await bgRequest<unknown>({
       path: "/api/v1/outputs/templates",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: data
     })
-    return { ...template, id: String(template.id) }
+    const record = isRecord(template) ? template : {}
+    return { ...record, id: String(record.id ?? "") }
   }
 
   async updateOutputTemplate(
@@ -2763,15 +2882,16 @@ export class TldwApiClient {
       type?: string
       format?: string
     }
-  ): Promise<any> {
+  ): Promise<unknown> {
     const path = `/api/v1/outputs/templates/${encodeURIComponent(templateId)}` as const
-    const template = await bgRequest<any>({
+    const template = await bgRequest<unknown>({
       path,
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: data
     })
-    return { ...template, id: String(template.id) }
+    const record = isRecord(template) ? template : {}
+    return { ...record, id: String(record.id ?? "") }
   }
 
   async deleteOutputTemplate(templateId: string): Promise<void> {
@@ -2787,7 +2907,7 @@ export class TldwApiClient {
     data?: Record<string, unknown>
   }): Promise<{ rendered: string; format: string }> {
     const path = `/api/v1/outputs/templates/${encodeURIComponent(data.template_id)}/preview` as const
-    return await bgRequest<any>({
+    return await bgRequest<{ rendered: string; format: string }>({
       path,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2807,8 +2927,8 @@ export class TldwApiClient {
     run_id?: string
     title?: string
     data?: Record<string, unknown>
-  }): Promise<any> {
-    const output = await bgRequest<any>({
+  }): Promise<unknown> {
+    const output = await bgRequest<unknown>({
       path: "/api/v1/outputs",
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2820,7 +2940,8 @@ export class TldwApiClient {
         data: data.data
       }
     })
-    return { ...output, id: String(output.id) }
+    const record = isRecord(output) ? output : {}
+    return { ...record, id: String(record.id ?? "") }
   }
 
   async downloadOutput(outputId: string, format?: string): Promise<Blob> {
@@ -2895,7 +3016,13 @@ export class TldwApiClient {
     if (params?.size) query.set("size", String(params.size))
     const qs = query.toString()
     const path = `/api/v1/reading/export${qs ? `?${qs}` : ""}` as const
-    const response = await bgRequest<any>({
+    const response = await bgRequest<{
+      ok: boolean
+      status: number
+      data?: ArrayBuffer
+      error?: string
+      headers?: Record<string, string>
+    }>({
       path,
       method: "GET",
       responseType: "arrayBuffer",

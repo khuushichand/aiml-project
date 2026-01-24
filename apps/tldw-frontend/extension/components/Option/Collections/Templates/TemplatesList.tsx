@@ -19,8 +19,7 @@ import {
   Edit,
   Trash2,
   Eye,
-  Copy,
-  Download
+  Copy
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useCollectionsStore } from "@/store/collections"
@@ -44,6 +43,15 @@ const FORMAT_COLORS: Record<TemplateFormat, string> = {
   mp3: "purple"
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
 export const TemplatesList: React.FC = () => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
@@ -52,9 +60,7 @@ export const TemplatesList: React.FC = () => {
   const templates = useCollectionsStore((s) => s.templates)
   const templatesLoading = useCollectionsStore((s) => s.templatesLoading)
   const templatesError = useCollectionsStore((s) => s.templatesError)
-  const templatesTotal = useCollectionsStore((s) => s.templatesTotal)
   const templateEditorOpen = useCollectionsStore((s) => s.templateEditorOpen)
-  const editingTemplate = useCollectionsStore((s) => s.editingTemplate)
 
   // Store actions
   const setTemplates = useCollectionsStore((s) => s.setTemplates)
@@ -79,14 +85,14 @@ export const TemplatesList: React.FC = () => {
         q: searchQuery || undefined
       })
       setTemplates(response.items, response.total)
-    } catch (error: any) {
-      const errorMsg = error?.message || "Failed to fetch templates"
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error, "Failed to fetch templates")
       setTemplatesError(errorMsg)
       message.error(errorMsg)
     } finally {
       setTemplatesLoading(false)
     }
-  }, [api, searchQuery, filterType, setTemplates, setTemplatesLoading, setTemplatesError])
+  }, [api, searchQuery, setTemplates, setTemplatesLoading, setTemplatesError])
 
   useEffect(() => {
     fetchTemplates()
@@ -106,8 +112,8 @@ export const TemplatesList: React.FC = () => {
       message.success(t("collections:templates.deleted", "Template deleted"))
       setDeleteModalOpen(false)
       setDeleteTargetId(null)
-    } catch (error: any) {
-      message.error(error?.message || "Failed to delete template")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to delete template"))
     } finally {
       setDeleteLoading(false)
     }
@@ -117,10 +123,10 @@ export const TemplatesList: React.FC = () => {
     (template: OutputTemplate) => {
       openTemplateEditor({
         ...template,
-        id: undefined,
+        id: "",
         name: `${template.name} (copy)`,
         is_default: false
-      } as any)
+      })
     },
     [openTemplateEditor]
   )

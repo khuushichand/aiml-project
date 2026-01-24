@@ -86,6 +86,93 @@ const clamp = (value: number, min: number, max: number) =>
 
 const buildSessionName = (index: number) => `Writing Playground #${index}`
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
+const getErrorName = (error: unknown) => {
+  if (error instanceof Error && error.name) return error.name
+  if (isRecord(error) && typeof error.name === "string") return error.name
+  return ""
+}
+
+const toNumber = (value: unknown): number | null => {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+type LogprobEntry = { tok_str: string; prob: number }
+
+const parseTopLogprobs = (value: unknown): LogprobEntry[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => {
+      if (!isRecord(entry)) return []
+      const token = entry.token
+      const logprob = toNumber(entry.logprob)
+      if (typeof token !== "string" || logprob === null) return []
+      return [{ tok_str: token, prob: Math.exp(logprob) }]
+    })
+  }
+  if (isRecord(value)) {
+    return Object.entries(value).map(([tok, logprob]) => {
+      const parsed = toNumber(logprob)
+      return {
+        tok_str: tok,
+        prob: parsed === null ? 0 : Math.exp(parsed)
+      }
+    })
+  }
+  return []
+}
+
+const getChoiceFromPayload = (payload: unknown): Record<string, unknown> | null => {
+  if (!isRecord(payload)) return null
+  const choices = payload.choices
+  if (!Array.isArray(choices)) return null
+  const choice = choices[0]
+  return isRecord(choice) ? choice : null
+}
+
+const getChoiceDelta = (choice: Record<string, unknown>): string | null => {
+  const delta = choice.delta
+  if (isRecord(delta) && typeof delta.content === "string") return delta.content
+  if (typeof choice.text === "string") return choice.text
+  const message = choice.message
+  if (isRecord(message) && typeof message.content === "string") return message.content
+  return null
+}
+
+const getLogprobContentEntries = (choice: Record<string, unknown>): Record<string, unknown>[] => {
+  const logprobs = choice.logprobs
+  if (!isRecord(logprobs)) return []
+  const content = logprobs.content
+  return Array.isArray(content) ? content.filter(isRecord) : []
+}
+
+const getChoiceTopLogprobs = (choice: Record<string, unknown>): unknown => {
+  const logprobs = choice.logprobs
+  if (!isRecord(logprobs)) return undefined
+  const content = logprobs.content
+  if (Array.isArray(content) && content.length > 0 && isRecord(content[0])) {
+    return content[0].top_logprobs
+  }
+  const topLogprobs = logprobs.top_logprobs
+  if (Array.isArray(topLogprobs) && topLogprobs.length > 0) {
+    return topLogprobs[0]
+  }
+  return undefined
+}
+
 const highlightOptions = [
   { label: "Show on hover", value: 0 },
   { label: "Only current token", value: 1 },
@@ -534,8 +621,8 @@ export const WritingPlayground: React.FC = () => {
           expectedVersion: sessionMeta.version
         })
         setSessionMeta(updated)
-      } catch (error: any) {
-        setSessionError(error?.message || "Failed to save session")
+      } catch (error: unknown) {
+        setSessionError(getErrorMessage(error, "Failed to save session"))
       } finally {
         savingRef.current = false
         if (pendingSaveRef.current) {
@@ -590,8 +677,8 @@ export const WritingPlayground: React.FC = () => {
       try {
         JSON.parse(value)
         setter(null)
-      } catch (error: any) {
-        setter(error?.message || "Invalid JSON")
+      } catch (error: unknown) {
+        setter(getErrorMessage(error, "Invalid JSON"))
       }
     }
     hasError(session.stoppingStrings, setStoppingStringsError)
@@ -633,8 +720,8 @@ export const WritingPlayground: React.FC = () => {
           text: finalPromptText
         })
         setTokens(response.count)
-      } catch (error: any) {
-        if (error?.name !== "AbortError") {
+      } catch (error: unknown) {
+        if (getErrorName(error) !== "AbortError") {
           setTokens(0)
         }
       }
@@ -701,8 +788,8 @@ export const WritingPlayground: React.FC = () => {
         } else {
           setWorldInfoTokenCount(0)
         }
-      } catch (error: any) {
-        if (error?.name !== "AbortError") {
+      } catch (error: unknown) {
+        if (getErrorName(error) !== "AbortError") {
           setMemoryTokenCount(0)
           setAuthorNoteTokenCount(0)
           setWorldInfoTokenCount(0)
@@ -1078,19 +1165,19 @@ export const WritingPlayground: React.FC = () => {
   }, [session.useBasicStoppingMode, session.basicStoppingModeType, session.stoppingStrings, fimPromptInfo])
 
   const buildRequestBody = React.useCallback(
-    (prompt: string, includeLogprobs: boolean, customParams?: Record<string, any>) => {
+    (prompt: string, includeLogprobs: boolean, customParams?: Record<string, unknown>) => {
       const useChat = session.chatAPI || session.chatMode
       const messages = useChat
         ? convertChatToMessages(prompt, selectedTemplatePayload)
         : [{ role: "user", content: prompt }]
-      const body: Record<string, any> = {
+      const body: Record<string, unknown> = {
         model: session.model,
         messages,
         stream: session.tokenStreaming,
         ...(session.provider ? { api_provider: session.provider } : {})
       }
 
-      const extraBody: Record<string, any> = {}
+      const extraBody: Record<string, unknown> = {}
       const enabled = new Set(session.enabledSamplers)
 
       if (enabled.has("temperature") && supportedFields.has("temperature")) {
@@ -1197,10 +1284,10 @@ export const WritingPlayground: React.FC = () => {
   )
 
   const streamCompletion = React.useCallback(async function* (
-    body: Record<string, any>,
+    body: Record<string, unknown>,
     signal: AbortSignal
   ): AsyncGenerator<WritingPromptChunk> {
-    if (body.stream) {
+    if (body.stream === true) {
       for await (const line of bgStream({
         path: "/api/v1/chat/completions",
         method: "POST",
@@ -1208,26 +1295,20 @@ export const WritingPlayground: React.FC = () => {
         body,
         abortSignal: signal
       })) {
-        let parsed: any
+        let parsed: unknown
         try {
           parsed = JSON.parse(line)
         } catch {
           continue
         }
-        const choice = parsed?.choices?.[0]
+        const choice = getChoiceFromPayload(parsed)
         if (!choice) continue
-        const logprobContent = choice.logprobs?.content
-        if (Array.isArray(logprobContent) && logprobContent.length) {
+        const logprobContent = getLogprobContentEntries(choice)
+        if (logprobContent.length) {
           for (const tokenInfo of logprobContent) {
-            const token = tokenInfo.token
+            const token = typeof tokenInfo.token === "string" ? tokenInfo.token : ""
             if (!token) continue
-            const topLogprobs = tokenInfo.top_logprobs ?? []
-            const probs = Array.isArray(topLogprobs)
-              ? topLogprobs.map((entry: any) => ({
-                  tok_str: entry.token,
-                  prob: Math.exp(entry.logprob)
-                }))
-              : []
+            const probs = parseTopLogprobs(tokenInfo.top_logprobs)
             const prob = probs.find((p) => p.tok_str === token)?.prob
             yield {
               type: "assistant",
@@ -1247,22 +1328,9 @@ export const WritingPlayground: React.FC = () => {
           }
           continue
         }
-        const delta = choice.delta?.content ?? choice.text ?? choice.message?.content
+        const delta = getChoiceDelta(choice)
         if (!delta) continue
-        const topLogprobs =
-          choice.logprobs?.content?.[0]?.top_logprobs ??
-          choice.logprobs?.top_logprobs?.[0]
-        const probs = Array.isArray(topLogprobs)
-          ? topLogprobs.map((entry: any) => ({
-              tok_str: entry.token,
-              prob: Math.exp(entry.logprob)
-            }))
-          : topLogprobs
-            ? Object.entries(topLogprobs).map(([tok, logprob]) => ({
-                tok_str: tok,
-                prob: Math.exp(Number(logprob))
-              }))
-            : []
+        const probs = parseTopLogprobs(getChoiceTopLogprobs(choice))
         const prob = probs.find((p) => p.tok_str === delta)?.prob
         yield {
           type: "assistant",
@@ -1283,27 +1351,21 @@ export const WritingPlayground: React.FC = () => {
       return
     }
 
-    const payload = await bgRequest<Record<string, any>>({
+    const payload = await bgRequest<Record<string, unknown>>({
       path: "/api/v1/chat/completions",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
       abortSignal: signal
     })
-    const choice = payload?.choices?.[0]
+    const choice = getChoiceFromPayload(payload)
     if (!choice) return
-    const logprobContent = choice.logprobs?.content
-    if (Array.isArray(logprobContent) && logprobContent.length) {
+    const logprobContent = getLogprobContentEntries(choice)
+    if (logprobContent.length) {
       for (const tokenInfo of logprobContent) {
-        const token = tokenInfo.token
+        const token = typeof tokenInfo.token === "string" ? tokenInfo.token : ""
         if (!token) continue
-        const topLogprobs = tokenInfo.top_logprobs ?? []
-        const probs = Array.isArray(topLogprobs)
-          ? topLogprobs.map((entry: any) => ({
-              tok_str: entry.token,
-              prob: Math.exp(entry.logprob)
-            }))
-          : []
+        const probs = parseTopLogprobs(tokenInfo.top_logprobs)
         const prob = probs.find((p) => p.tok_str === token)?.prob
         yield {
           type: "assistant",
@@ -1323,7 +1385,7 @@ export const WritingPlayground: React.FC = () => {
       }
       return
     }
-    const content = choice.message?.content ?? choice.text
+    const content = getChoiceDelta(choice)
     if (content) {
       yield { type: "assistant", content }
     }
@@ -1335,7 +1397,7 @@ export const WritingPlayground: React.FC = () => {
     onChunk?: (chunk: WritingPromptChunk) => boolean
     abortController?: AbortController
     invalidateUndo?: boolean
-    customParams?: Record<string, any>
+    customParams?: Record<string, unknown>
   }) => {
     if (!online) return false
     const promptOverride = options?.promptOverride ?? finalPromptText
@@ -1403,9 +1465,9 @@ export const WritingPlayground: React.FC = () => {
         predictCount += 1
         ttsAddChunk(chunk.content)
       }
-    } catch (error: any) {
-      if (error?.name !== "AbortError") {
-        setLastError(error?.message || "Prediction failed")
+    } catch (error: unknown) {
+      if (getErrorName(error) !== "AbortError") {
+        setLastError(getErrorMessage(error, "Prediction failed"))
       }
       return false
     } finally {
@@ -1620,8 +1682,8 @@ export const WritingPlayground: React.FC = () => {
       })
       queryClient.invalidateQueries({ queryKey: ["writing", "sessions"] })
       setSelectedSessionId(cloned.id)
-    } catch (error: any) {
-      message.error(error?.message || "Failed to clone session")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to clone session"))
     }
   }, [sessionMeta, queryClient, setSelectedSessionId, sessionsSupported])
 
@@ -1641,8 +1703,8 @@ export const WritingPlayground: React.FC = () => {
           await deleteWritingSession(sessionMeta.id, sessionMeta.version)
           queryClient.invalidateQueries({ queryKey: ["writing", "sessions"] })
           setSelectedSessionId(null)
-        } catch (error: any) {
-          message.error(error?.message || "Failed to delete session")
+        } catch (error: unknown) {
+          message.error(getErrorMessage(error, "Failed to delete session"))
         }
       }
     })
@@ -1663,8 +1725,8 @@ export const WritingPlayground: React.FC = () => {
       setSessionMeta(updated)
       queryClient.invalidateQueries({ queryKey: ["writing", "sessions"] })
       setModals((prev) => ({ ...prev, renameSession: false }))
-    } catch (error: any) {
-      message.error(error?.message || "Failed to rename session")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to rename session"))
     }
   }, [sessionMeta, sessionNameDraft, queryClient, sessionsSupported])
 
@@ -1704,8 +1766,8 @@ export const WritingPlayground: React.FC = () => {
             payload: payload as Record<string, unknown>,
             schema_version: payload.schemaVersion
           })
-        } catch (error: any) {
-          message.error(error?.message || "Failed to import session")
+        } catch (error: unknown) {
+          message.error(getErrorMessage(error, "Failed to import session"))
         }
       }
       queryClient.invalidateQueries({ queryKey: ["writing", "sessions"] })
@@ -2837,7 +2899,7 @@ const WorldInfoModal: React.FC<WorldInfoModalProps> = ({
   worldInfo,
   onChange
 }) => {
-  const [importBuffer, setImportBuffer] = React.useState<any | null>(null)
+  const [importBuffer, setImportBuffer] = React.useState<unknown | null>(null)
   const addEntry = () => {
     onChange({
       ...worldInfo,
@@ -2882,7 +2944,19 @@ const WorldInfoModal: React.FC<WorldInfoModalProps> = ({
     input.click()
   }
   const exportWorldInfo = () => {
-    const exported: any = { entries: {} }
+    const exported: {
+      entries: Record<
+        string,
+        {
+          uid: number
+          key: string[]
+          keysecondary: string[]
+          comment: string
+          content: string
+          scanDepth: string | null
+        }
+      >
+    } = { entries: {} }
     worldInfo.entries.forEach((entry, index) => {
       exported.entries[index] = {
         uid: index,
@@ -3392,8 +3466,8 @@ const SearchReplaceModal: React.FC<SearchReplaceModalProps> = ({
         if (match.index === regex.lastIndex) regex.lastIndex++
       }
       return positions
-    } catch (err: any) {
-      setError(err?.message || "Invalid regex")
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Invalid regex"))
       return []
     }
   }, [mode, searchTerm, flags, promptRef])
@@ -3445,8 +3519,8 @@ const SearchReplaceModal: React.FC<SearchReplaceModalProps> = ({
       try {
         const regex = new RegExp(searchTerm, flags)
         next = text.replace(regex, replaceTerm)
-      } catch (err: any) {
-        setError(err?.message || "Invalid regex")
+      } catch (err: unknown) {
+        setError(getErrorMessage(err, "Invalid regex"))
         return
       }
     }
@@ -3585,16 +3659,32 @@ const InstructModal: React.FC<InstructModalProps> = ({
 }
 
 const importSillyTavernWorldInfo = (
-  json: any,
+  json: unknown,
   existing: WritingWorldInfoEntry[]
 ): WritingWorldInfoEntry[] => {
   const entries = [...existing]
-  Object.values(json.entries || {}).forEach((entry: any) => {
+  if (!isRecord(json)) return entries
+  const rawEntries = isRecord(json.entries) ? json.entries : {}
+  Object.values(rawEntries).forEach((entry) => {
+    if (!isRecord(entry)) return
+    const displayName = typeof entry.comment === "string" ? entry.comment : ""
+    const text = typeof entry.content === "string" ? entry.content : ""
+    const keyValue = entry.key
+    const keys = Array.isArray(keyValue)
+      ? keyValue.filter((key): key is string => typeof key === "string")
+      : typeof keyValue === "string"
+        ? [keyValue]
+        : []
+    const scanDepth = entry.scanDepth
+    const search =
+      typeof scanDepth === "string" || typeof scanDepth === "number"
+        ? String(scanDepth)
+        : ""
     entries.push({
-      displayName: entry.comment,
-      text: entry.content,
-      keys: [...(entry.key || [])],
-      search: entry.scanDepth || ""
+      displayName,
+      text,
+      keys,
+      search
     })
   })
   return entries
@@ -3620,7 +3710,7 @@ const collectLegacySessions = () => {
     }
     return Object.entries(sessions).map(([id, payload]) => ({
       id,
-      name: (payload as any).name || `Legacy ${id}`,
+      name: typeof payload.name === "string" ? payload.name : `Legacy ${id}`,
       payload
     }))
   } catch {

@@ -29,7 +29,7 @@ type LlamacppStatus = {
   state?: string
   status?: string
   port?: number
-  [key: string]: any
+  [key: string]: unknown
 }
 
 const CONTEXT_PRESETS = [
@@ -59,7 +59,7 @@ export const LlamacppAdminPage: React.FC = () => {
   const [threads, setThreads] = React.useState<number | undefined>()
   const [batchSize, setBatchSize] = React.useState<number | undefined>()
   const [mlock, setMlock] = React.useState<boolean>(false)
-  const [customArgs, setCustomArgs] = React.useState<Record<string, any>>({})
+  const [customArgs, setCustomArgs] = React.useState<Record<string, unknown>>({})
 
   // Action state
   const [actionLoading, setActionLoading] = React.useState(false)
@@ -67,8 +67,8 @@ export const LlamacppAdminPage: React.FC = () => {
   // Admin guard
   const [adminGuard, setAdminGuard] = React.useState<"forbidden" | "notFound" | null>(null)
 
-  const markAdminGuardFromError = (err: any) => {
-    const msg = String(err?.message || "")
+  const markAdminGuardFromError = (err: unknown) => {
+    const msg = String(err instanceof Error ? err.message : "")
     if (msg.includes("Request failed: 403")) {
       setAdminGuard("forbidden")
     } else if (msg.includes("Request failed: 404")) {
@@ -82,9 +82,11 @@ export const LlamacppAdminPage: React.FC = () => {
       setStatusError(null)
       const data = await tldwClient.getLlamacppStatus()
       setStatus(data as LlamacppStatus)
-    } catch (e: any) {
-      setStatusError(e?.message || "Failed to load Llama.cpp status.")
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      setStatusError(
+        error instanceof Error ? error.message : "Failed to load Llama.cpp status."
+      )
+      markAdminGuardFromError(error)
     } finally {
       setLoadingStatus(false)
     }
@@ -101,8 +103,8 @@ export const LlamacppAdminPage: React.FC = () => {
       if (list.length > 0) {
         setSelectedModel((current) => current ?? list[0])
       }
-    } catch (e: any) {
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      markAdminGuardFromError(error)
     } finally {
       setLoadingModels(false)
     }
@@ -134,9 +136,11 @@ export const LlamacppAdminPage: React.FC = () => {
       })
       await tldwClient.startLlamacppServer(selectedModel, serverArgs)
       await loadStatus()
-    } catch (e: any) {
-      setStatusError(e?.message || "Failed to start Llama.cpp server.")
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      setStatusError(
+        error instanceof Error ? error.message : "Failed to start Llama.cpp server."
+      )
+      markAdminGuardFromError(error)
     } finally {
       setActionLoading(false)
     }
@@ -148,9 +152,11 @@ export const LlamacppAdminPage: React.FC = () => {
       setActionLoading(true)
       await tldwClient.startLlamacppServer(selectedModel)
       await loadStatus()
-    } catch (e: any) {
-      setStatusError(e?.message || "Failed to start Llama.cpp server.")
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      setStatusError(
+        error instanceof Error ? error.message : "Failed to start Llama.cpp server."
+      )
+      markAdminGuardFromError(error)
     } finally {
       setActionLoading(false)
     }
@@ -161,9 +167,11 @@ export const LlamacppAdminPage: React.FC = () => {
       setActionLoading(true)
       await tldwClient.stopLlamacppServer()
       await loadStatus()
-    } catch (e: any) {
-      setStatusError(e?.message || "Failed to stop Llama.cpp server.")
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      setStatusError(
+        error instanceof Error ? error.message : "Failed to stop Llama.cpp server."
+      )
+      markAdminGuardFromError(error)
     } finally {
       setActionLoading(false)
     }

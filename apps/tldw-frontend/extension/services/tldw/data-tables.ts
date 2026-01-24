@@ -11,8 +11,8 @@ export type ApiDataTableSource = {
   source_type: string
   source_id: string
   title?: string | null
-  snapshot?: any
-  retrieval_params?: any
+  snapshot?: unknown
+  retrieval_params?: unknown
 }
 
 export type ApiDataTableColumn = {
@@ -27,7 +27,7 @@ export type ApiDataTableColumn = {
 export type ApiDataTableRow = {
   row_id: string
   row_index: number
-  data: Record<string, any>
+  data: Record<string, unknown>
   row_hash?: string | null
 }
 
@@ -36,7 +36,7 @@ export type ApiDataTableSummary = {
   name: string
   description?: string | null
   prompt: string
-  column_hints?: any
+  column_hints?: unknown
   status: string
   row_count: number
   generation_model?: string | null
@@ -88,7 +88,7 @@ export type ApiDataTableJobStatus = {
   cancellation_reason?: string | null
   progress_percent?: number | null
   progress_message?: string | null
-  result?: Record<string, any> | null
+  result?: Record<string, unknown> | null
   error_message?: string | null
   table_uuid?: string | null
 }
@@ -141,7 +141,7 @@ export const mapApiDetailToUi = (detail: ApiDataTableDetailResponse): DataTable 
   }))
   const columnIdToName = new Map(columns.map((col) => [col.id, col.name]))
   const rows = (detail.rows || []).map((row) => {
-    const mapped: Record<string, any> = {}
+    const mapped: Record<string, unknown> = {}
     const data = row.data || {}
     for (const [key, value] of Object.entries(data)) {
       const name = columnIdToName.get(key) || key
@@ -178,7 +178,7 @@ export const mapUiSourceToApi = (source: DataTableSource): ApiDataTableSource =>
 
 export const buildContentPayload = (
   columns: DataTableColumn[],
-  rows: Record<string, any>[]
+  rows: Record<string, unknown>[]
 ): {
   columns: Array<{
     column_id: string
@@ -188,7 +188,7 @@ export const buildContentPayload = (
     format?: string
     position: number
   }>
-  rows: Array<Record<string, any>>
+  rows: Array<Record<string, unknown>>
 } => {
   const mappedColumns = columns.map((col, index) => ({
     column_id: col.id,
@@ -199,7 +199,7 @@ export const buildContentPayload = (
     position: index
   }))
   const rowsPayload = rows.map((row) => {
-    const rowJson: Record<string, any> = {}
+    const rowJson: Record<string, unknown> = {}
     for (const column of mappedColumns) {
       rowJson[column.column_id] = row[column.name] ?? null
     }

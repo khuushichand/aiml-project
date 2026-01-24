@@ -15,6 +15,7 @@ import {
   Popconfirm,
   Form
 } from "antd"
+import type { ColumnsType, TablePaginationConfig } from "antd/es/table"
 import { useTranslation } from "react-i18next"
 import {
   tldwClient,
@@ -27,10 +28,96 @@ import { PageShell } from "@/components/Common/PageShell"
 
 const { Title, Text } = Typography
 
+type UsersStats = {
+  total?: number
+  active?: number
+  admins?: number
+  verified?: number
+  new_last_30d?: number
+}
+
+type StorageStats = {
+  total_used_mb?: number
+  total_quota_mb?: number
+  average_used_mb?: number
+  max_used_mb?: number
+}
+
+type SessionsStats = {
+  active?: number
+  unique_users?: number
+}
+
+type SystemStats = {
+  users?: UsersStats
+  storage?: StorageStats
+  sessions?: SessionsStats
+}
+
+const EMPTY_USERS: UsersStats = {}
+const EMPTY_STORAGE: StorageStats = {}
+const EMPTY_SESSIONS: SessionsStats = {}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
+const toNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return undefined
+}
+
+const parseUsersStats = (value: unknown): UsersStats | undefined => {
+  if (!isRecord(value)) return undefined
+  return {
+    total: toNumber(value.total),
+    active: toNumber(value.active),
+    admins: toNumber(value.admins),
+    verified: toNumber(value.verified),
+    new_last_30d: toNumber(value.new_last_30d)
+  }
+}
+
+const parseStorageStats = (value: unknown): StorageStats | undefined => {
+  if (!isRecord(value)) return undefined
+  return {
+    total_used_mb: toNumber(value.total_used_mb),
+    total_quota_mb: toNumber(value.total_quota_mb),
+    average_used_mb: toNumber(value.average_used_mb),
+    max_used_mb: toNumber(value.max_used_mb)
+  }
+}
+
+const parseSessionsStats = (value: unknown): SessionsStats | undefined => {
+  if (!isRecord(value)) return undefined
+  return {
+    active: toNumber(value.active),
+    unique_users: toNumber(value.unique_users)
+  }
+}
+
+const parseSystemStats = (value: unknown): SystemStats | null => {
+  if (!isRecord(value)) return null
+  return {
+    users: parseUsersStats(value.users),
+    storage: parseStorageStats(value.storage),
+    sessions: parseSessionsStats(value.sessions)
+  }
+}
+
 export const ServerAdminPage: React.FC = () => {
   const { t } = useTranslation(["option", "settings"])
   const [config, setConfig] = React.useState<TldwConfig | null>(null)
-  const [stats, setStats] = React.useState<any | null>(null)
+  const [stats, setStats] = React.useState<SystemStats | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [adminGuard, setAdminGuard] = React.useState<"forbidden" | "notFound" | null>(null)
@@ -50,8 +137,8 @@ export const ServerAdminPage: React.FC = () => {
   const [roleForm] = Form.useForm()
   const initialLoadRef = React.useRef(false)
 
-  const markAdminGuardFromError = (err: any) => {
-    const msg = String(err?.message || "")
+  const markAdminGuardFromError = (err: unknown) => {
+    const msg = getErrorMessage(err, "")
     if (msg.includes("Request failed: 403")) {
       setAdminGuard("forbidden")
     } else if (msg.includes("Request failed: 404")) {
@@ -78,9 +165,9 @@ export const ServerAdminPage: React.FC = () => {
         })
         setUsersData(data)
         setUsersError(null)
-      } catch (e: any) {
-        setUsersError(e?.message || "Failed to load users.")
-        markAdminGuardFromError(e)
+      } catch (error: unknown) {
+        setUsersError(getErrorMessage(error, "Failed to load users."))
+        markAdminGuardFromError(error)
       } finally {
         setUsersLoading(false)
       }
@@ -94,9 +181,9 @@ export const ServerAdminPage: React.FC = () => {
       const data = await tldwClient.listAdminRoles()
       setRoles(data || [])
       setRolesError(null)
-    } catch (e: any) {
-      setRolesError(e?.message || "Failed to load roles.")
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      setRolesError(getErrorMessage(error, "Failed to load roles."))
+      markAdminGuardFromError(error)
     } finally {
       setRolesLoading(false)
     }
@@ -119,13 +206,13 @@ export const ServerAdminPage: React.FC = () => {
         setLoading(true)
         const data = await tldwClient.getSystemStats()
         if (!cancelled) {
-          setStats(data)
+          setStats(parseSystemStats(data))
           setError(null)
         }
-      } catch (e: any) {
+      } catch (error: unknown) {
         if (!cancelled) {
-          setError(e?.message || "Failed to load system statistics.")
-          markAdminGuardFromError(e)
+          setError(getErrorMessage(error, "Failed to load system statistics."))
+          markAdminGuardFromError(error)
         }
       } finally {
         if (!cancelled) {
@@ -147,21 +234,21 @@ export const ServerAdminPage: React.FC = () => {
     try {
       setLoading(true)
       const data = await tldwClient.getSystemStats()
-      setStats(data)
+      setStats(parseSystemStats(data))
       setError(null)
-    } catch (e: any) {
-      setError(e?.message || "Failed to load system statistics.")
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, "Failed to load system statistics."))
+      markAdminGuardFromError(error)
     } finally {
       setLoading(false)
     }
   }
 
-  const users = stats?.users || {}
-  const storage = stats?.storage || {}
-  const sessions = stats?.sessions || {}
+  const users = stats?.users ?? EMPTY_USERS
+  const storage = stats?.storage ?? EMPTY_STORAGE
+  const sessions = stats?.sessions ?? EMPTY_SESSIONS
 
-  const handleUserTableChange = (pagination: any) => {
+  const handleUserTableChange = (pagination: TablePaginationConfig) => {
     const page = pagination.current || 1
     const pageSize = pagination.pageSize || usersPageSize
     setUsersPage(page)
@@ -183,9 +270,9 @@ export const ServerAdminPage: React.FC = () => {
       setUpdatingUserId(user.id)
       await tldwClient.updateAdminUser(user.id, { is_active: nextActive })
       await loadUsers(usersPage, usersPageSize, userRoleFilter, userActiveFilter)
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error("Failed to update user active state", e)
+    } catch (error: unknown) {
+      setUsersError(getErrorMessage(error, "Failed to update user active state."))
+      markAdminGuardFromError(error)
     } finally {
       setUpdatingUserId(null)
     }
@@ -196,9 +283,9 @@ export const ServerAdminPage: React.FC = () => {
       setUpdatingUserId(user.id)
       await tldwClient.updateAdminUser(user.id, { role })
       await loadUsers(usersPage, usersPageSize, userRoleFilter, userActiveFilter)
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error("Failed to update user role", e)
+    } catch (error: unknown) {
+      setUsersError(getErrorMessage(error, "Failed to update user role."))
+      markAdminGuardFromError(error)
     } finally {
       setUpdatingUserId(null)
     }
@@ -214,10 +301,12 @@ export const ServerAdminPage: React.FC = () => {
       await tldwClient.createAdminRole(name, description)
       roleForm.resetFields()
       await loadRoles()
-    } catch (e) {
-      // validation or request error; log-only
-      // eslint-disable-next-line no-console
-      if (e) console.error("Failed to create role", e)
+    } catch (error: unknown) {
+      if (isRecord(error) && Array.isArray(error.errorFields)) {
+        return
+      }
+      setRolesError(getErrorMessage(error, "Failed to create role."))
+      markAdminGuardFromError(error)
     } finally {
       setCreatingRole(false)
     }
@@ -228,9 +317,9 @@ export const ServerAdminPage: React.FC = () => {
       setDeletingRoleId(roleId)
       await tldwClient.deleteAdminRole(roleId)
       await loadRoles()
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error("Failed to delete role", e)
+    } catch (error: unknown) {
+      setRolesError(getErrorMessage(error, "Failed to delete role."))
+      markAdminGuardFromError(error)
     } finally {
       setDeletingRoleId(null)
     }
@@ -245,7 +334,7 @@ export const ServerAdminPage: React.FC = () => {
           { label: "service", value: "service" }
         ]
 
-  const userColumns = [
+  const userColumns: ColumnsType<AdminUserSummary> = [
     {
       title: t("settings:admin.users.username", "Username"),
       dataIndex: "username",
@@ -302,7 +391,7 @@ export const ServerAdminPage: React.FC = () => {
     {
       title: t("settings:admin.users.storage", "Storage"),
       key: "storage",
-      render: (_: any, record: AdminUserSummary) => (
+      render: (_value: unknown, record: AdminUserSummary) => (
         <span>
           {record.storage_used_mb} / {record.storage_quota_mb} MB
         </span>
@@ -530,7 +619,7 @@ export const ServerAdminPage: React.FC = () => {
                   rowKey="id"
                   loading={usersLoading}
                   dataSource={usersData?.users || []}
-                  columns={userColumns as any}
+                  columns={userColumns}
                   pagination={{
                     current: usersPage,
                     pageSize: usersPageSize,
@@ -599,7 +688,7 @@ export const ServerAdminPage: React.FC = () => {
                       {
                         title: t("settings:admin.roles.actions", "Actions"),
                         key: "actions",
-                        render: (_: any, record: AdminRole) =>
+                        render: (_value: unknown, record: AdminRole) =>
                           record.is_system ? null : (
                             <Popconfirm
                               title={t(

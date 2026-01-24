@@ -133,8 +133,7 @@ const UPLOAD_MEDIA_TYPES = new Set<UploadMediaType>([
 
 export const inferIngestTypeFromUrl = (url: string): IngestEntryType => {
   try {
-    // eslint-disable-next-line no-new
-    new URL(url)
+    void new URL(url)
   } catch {
     return "auto"
   }

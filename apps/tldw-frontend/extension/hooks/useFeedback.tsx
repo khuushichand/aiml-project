@@ -31,8 +31,18 @@ type FeedbackDetailInput = {
 
 type SourceFeedbackInput = {
   sourceKey: string
-  source: any
+  source: unknown
   thumb: FeedbackThumb
+}
+
+const getErrorMessage = (error: unknown): string => {
+  if (typeof error === "string") return error
+  if (error instanceof Error && typeof error.message === "string") return error.message
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === "string") return message
+  }
+  return ""
 }
 
 const normalizeQuery = (value?: string | null) => {
@@ -137,7 +147,7 @@ export const useFeedback = ({
         if (typeof updated?.version === "number") {
           setServerChatVersion(updated.version)
         }
-      } catch (e) {
+      } catch {
         try {
           const refreshed = await updateChatRating(conversationId, rating)
           if (typeof refreshed?.version === "number") {
@@ -164,11 +174,11 @@ export const useFeedback = ({
           helpful: thumb === "up"
         })
         triggerThanks()
-      } catch (e: any) {
+      } catch (error: unknown) {
         notification.error({
           message: t("playground:feedback.errorTitle", "Feedback failed"),
           description:
-            e?.message ||
+            getErrorMessage(error) ||
             t("playground:feedback.errorBody", "Unable to submit feedback.")
         })
         setIsSubmitting(false)
@@ -261,11 +271,11 @@ export const useFeedback = ({
         setDetail(messageKey, detail)
         setDetailSubmittedAt(messageKey, Date.now())
         triggerThanks()
-      } catch (e: any) {
+      } catch (error: unknown) {
         notification.error({
           message: t("playground:feedback.errorTitle", "Feedback failed"),
           description:
-            e?.message ||
+            getErrorMessage(error) ||
             t("playground:feedback.errorBody", "Unable to submit feedback.")
         })
         setIsSubmitting(false)
@@ -317,7 +327,7 @@ export const useFeedback = ({
           corpus
         })
         return true
-      } catch (e: any) {
+      } catch (error: unknown) {
         // Rollback optimistic update on error
         setSourceThumb(messageKey, sourceKey, null)
         setSourceSubmittedAt(messageKey, sourceKey, 0)
@@ -325,7 +335,7 @@ export const useFeedback = ({
         notification.error({
           message: t("playground:feedback.errorTitle", "Feedback failed"),
           description:
-            e?.message ||
+            getErrorMessage(error) ||
             t(
               "playground:feedback.errorSource",
               "Unable to submit source feedback."

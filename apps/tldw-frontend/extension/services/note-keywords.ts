@@ -1,5 +1,6 @@
 import { bgRequest } from "@/services/background-proxy"
 import { buildQuery } from "@/services/resource-client"
+import type { PathOrUrl } from "@/services/tldw/openapi-guard"
 
 const KEYWORDS_CACHE_TTL_MS = 5 * 60 * 1000
 
@@ -13,11 +14,17 @@ const listInFlight = new Map<number, Promise<string[]>>()
 const allCache = new Map<number, KeywordCacheEntry>()
 const allInFlight = new Map<number, Promise<string[]>>()
 
-const normalizeKeyword = (value: any): string | null => {
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
+
+const normalizeKeyword = (value: unknown): string | null => {
+  const record = isRecord(value) ? value : null
   const raw =
-    value?.keyword ??
-    value?.keyword_text ??
-    value?.text ??
+    record?.keyword ??
+    record?.keyword_text ??
+    record?.text ??
     value
   if (raw == null) return null
   const text = String(raw).trim()
@@ -44,13 +51,13 @@ export const getNoteKeywords = async (limit = 200): Promise<string[]> => {
   if (inFlight) return inFlight
 
   const request = (async () => {
-    const abs = await bgRequest<any>({
-      path: `/api/v1/notes/keywords${buildQuery({ limit })}` as any,
-      method: "GET" as any
+    const abs = await bgRequest({
+      path: `/api/v1/notes/keywords${buildQuery({ limit })}` as PathOrUrl,
+      method: "GET"
     })
     const arr = Array.isArray(abs)
       ? abs
-          .map((item: any) => normalizeKeyword(item))
+          .map((item) => normalizeKeyword(item))
           .filter(Boolean) as string[]
       : []
     const deduped = dedupeKeywords(arr)
@@ -83,13 +90,13 @@ export const getAllNoteKeywords = async (pageSize = 1000): Promise<string[]> => 
     const maxPages = 100
 
     for (let page = 0; page < maxPages; page += 1) {
-      const abs = await bgRequest<any>({
-        path: `/api/v1/notes/keywords${buildQuery({ limit: pageSize, offset })}` as any,
-        method: "GET" as any
+      const abs = await bgRequest({
+        path: `/api/v1/notes/keywords${buildQuery({ limit: pageSize, offset })}` as PathOrUrl,
+        method: "GET"
       })
       const arr = Array.isArray(abs)
         ? abs
-            .map((item: any) => normalizeKeyword(item))
+            .map((item) => normalizeKeyword(item))
             .filter(Boolean) as string[]
         : []
       if (!arr.length) break
@@ -120,13 +127,13 @@ export const searchNoteKeywords = async (
 ): Promise<string[]> => {
   const q = String(query || "").trim()
   if (!q) return []
-  const abs = await bgRequest<any>({
-    path: `/api/v1/notes/keywords/search${buildQuery({ query: q, limit })}` as any,
-    method: "GET" as any
+  const abs = await bgRequest({
+    path: `/api/v1/notes/keywords/search${buildQuery({ query: q, limit })}` as PathOrUrl,
+    method: "GET"
   })
   const arr = Array.isArray(abs)
     ? abs
-        .map((item: any) => normalizeKeyword(item))
+        .map((item) => normalizeKeyword(item))
         .filter(Boolean) as string[]
     : []
   return dedupeKeywords(arr)

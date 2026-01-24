@@ -3,7 +3,7 @@ import { ChatHistory } from "@/store"
 export type BotResponse = {
     bot: {
         text: string
-        sourceDocuments: any[]
+        sourceDocuments: unknown[]
     }
     history: ChatHistory
     history_id: string

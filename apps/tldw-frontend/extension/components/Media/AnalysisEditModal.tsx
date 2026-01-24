@@ -4,6 +4,11 @@ import { useTranslation } from 'react-i18next'
 import { Copy, Send, Save } from 'lucide-react'
 import { bgRequest } from '@/services/background-proxy'
 
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
+
 interface AnalysisEditModalProps {
   open: boolean
   onClose: () => void
@@ -100,7 +105,7 @@ export function AnalysisEditModal({
 
     setSaving(true)
     try {
-      const getVersionNumber = (v: any): number | null => {
+      const getVersionNumber = (v: UnknownRecord | null | undefined): number | null => {
         const raw = v?.version_number ?? v?.version
         if (typeof raw === 'number' && Number.isFinite(raw)) return raw
         if (typeof raw === 'string' && raw.trim().length > 0) {
@@ -110,9 +115,9 @@ export function AnalysisEditModal({
         return null
       }
 
-      const pickLatestVersion = (versions: any[]): any | null => {
+      const pickLatestVersion = (versions: UnknownRecord[]): UnknownRecord | null => {
         if (!Array.isArray(versions) || versions.length === 0) return null
-        let best: any | null = null
+        let best: UnknownRecord | null = null
         let bestNum = -Infinity
         for (const v of versions) {
           const num = getVersionNumber(v)
@@ -127,12 +132,17 @@ export function AnalysisEditModal({
       let resolvedPrompt = String(prompt || '')
       if (!resolvedPrompt) {
         try {
-          const versions = await bgRequest<any>({
+          const versions = await bgRequest({
             path: `/api/v1/media/${mediaId}/versions?include_content=false&limit=50&page=1`,
             method: 'GET'
           })
-          const arr = Array.isArray(versions) ? versions : (versions?.items || [])
-          const latest = pickLatestVersion(arr)
+          const arr = Array.isArray(versions)
+            ? versions
+            : isRecord(versions) && Array.isArray(versions.items)
+              ? versions.items
+              : []
+          const versionItems = arr.filter(isRecord)
+          const latest = pickLatestVersion(versionItems)
           resolvedPrompt = String(latest?.prompt || '')
         } catch {}
       }

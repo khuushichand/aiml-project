@@ -13,7 +13,12 @@ type ClassifiedError = {
 }
 
 const classifyAuthError = (error: unknown): ClassifiedError => {
-  const raw = (error as any)?.message || ""
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : ""
   let status: number | undefined
   const match = typeof raw === "string" ? raw.match(/(\d{3})/) : null
   if (match) {
@@ -92,4 +97,3 @@ export const mapMultiUserLoginErrorMessage = (
   }
   return friendly
 }
-

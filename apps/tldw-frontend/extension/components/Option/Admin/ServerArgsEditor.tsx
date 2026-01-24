@@ -12,9 +12,9 @@ interface KeyValuePair {
 
 interface ServerArgsEditorProps {
   /** Current server arguments as key-value object */
-  value: Record<string, any>
+  value: Record<string, unknown>
   /** Callback when arguments change */
-  onChange: (args: Record<string, any>) => void
+  onChange: (args: Record<string, unknown>) => void
   /** Placeholder text for empty state */
   placeholder?: string
   className?: string
@@ -62,13 +62,13 @@ export const ServerArgsEditor: React.FC<ServerArgsEditorProps> = ({
 
   const handlePairChange = (oldKey: string, newKey: string, newValue: string) => {
     const entries = Object.entries(value)
-    const newObj: Record<string, any> = {}
+    const newObj: Record<string, unknown> = {}
 
     for (const [k, v] of entries) {
       if (k === oldKey) {
         if (newKey) {
           // Try to parse the value as JSON (for numbers, booleans, etc.)
-          let parsedValue: any = newValue
+          let parsedValue: unknown = newValue
           try {
             if (newValue.trim() !== "") {
               const parsed = JSON.parse(newValue)
@@ -99,7 +99,7 @@ export const ServerArgsEditor: React.FC<ServerArgsEditorProps> = ({
       } else {
         setJsonError("Must be a JSON object")
       }
-    } catch (e) {
+    } catch {
       setJsonError("Invalid JSON")
     }
   }

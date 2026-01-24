@@ -17,7 +17,7 @@ interface ExportMenuProps {
  *
  * Dropdown menu for exporting a data table in various formats.
  */
-export const ExportMenu: React.FC<ExportMenuProps> = ({ tableId, tableName }) => {
+export const ExportMenu: React.FC<ExportMenuProps> = ({ tableId, tableName: _tableName }) => {
   const { t } = useTranslation(["dataTables", "common"])
   const [isExporting, setIsExporting] = useState(false)
 

@@ -27,6 +27,11 @@ export type ServerCapabilities = {
   specVersion: string | null
 }
 
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
+
 const defaultCapabilities: ServerCapabilities = {
   hasChat: false,
   hasRag: false,
@@ -115,9 +120,9 @@ const fallbackSpec = {
   )
 }
 
-const normalizePaths = (raw: any): Record<string, any> => {
-  const out: Record<string, any> = {}
-  if (!raw || typeof raw !== "object") return out
+const normalizePaths = (raw: unknown): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
+  if (!isRecord(raw)) return out
   for (const key of Object.keys(raw)) {
     const k = key.trim()
     out[k] = raw[key]
@@ -130,31 +135,34 @@ const normalizePaths = (raw: any): Record<string, any> => {
   return out
 }
 
-const resolveSchemaRef = (schema: any, spec: any): any => {
-  if (!schema || typeof schema !== "object") return schema
+const resolveSchemaRef = (schema: unknown, spec: unknown): unknown => {
+  if (!isRecord(schema)) return schema
   const ref = schema.$ref
   if (typeof ref !== "string") return schema
   const prefix = "#/components/schemas/"
   if (!ref.startsWith(prefix)) return schema
   const name = ref.slice(prefix.length)
-  const resolved = spec?.components?.schemas?.[name]
-  return resolved || schema
+  if (!isRecord(spec)) return schema
+  const components = isRecord(spec.components) ? spec.components : null
+  const schemas = components && isRecord(components.schemas) ? components.schemas : null
+  const resolved = schemas ? schemas[name] : null
+  return resolved ?? schema
 }
 
 const schemaHasProperty = (
-  schema: any,
+  schema: unknown,
   property: string,
-  spec: any,
+  spec: unknown,
   seen: Set<string> = new Set()
 ): boolean => {
-  if (!schema || typeof schema !== "object") return false
+  if (!isRecord(schema)) return false
   const ref = typeof schema.$ref === "string" ? schema.$ref : null
   if (ref) {
     if (seen.has(ref)) return false
     seen.add(ref)
     return schemaHasProperty(resolveSchemaRef(schema, spec), property, spec, seen)
   }
-  if (schema.properties && schema.properties[property]) return true
+  if (isRecord(schema.properties) && schema.properties[property]) return true
 
   const combos = [
     ...(Array.isArray(schema.allOf) ? schema.allOf : []),
@@ -167,19 +175,32 @@ const schemaHasProperty = (
   return false
 }
 
-const detectChatSaveToDb = (spec: any): boolean => {
-  const post = spec?.paths?.["/api/v1/chat/completions"]?.post
-  const schema =
-    post?.requestBody?.content?.["application/json"]?.schema ??
-    post?.requestBody?.content?.["application/json;charset=utf-8"]?.schema
+const detectChatSaveToDb = (spec: unknown): boolean => {
+  if (!isRecord(spec)) return false
+  const paths = isRecord(spec.paths) ? spec.paths : {}
+  const chatPath = isRecord(paths["/api/v1/chat/completions"])
+    ? paths["/api/v1/chat/completions"]
+    : {}
+  const post = isRecord(chatPath.post) ? chatPath.post : {}
+  const requestBody = isRecord(post.requestBody) ? post.requestBody : {}
+  const content = isRecord(requestBody.content) ? requestBody.content : {}
+  const jsonSchema =
+    (isRecord(content["application/json"]) ? content["application/json"] : null) ??
+    (isRecord(content["application/json;charset=utf-8"])
+      ? content["application/json;charset=utf-8"]
+      : null)
+  const schema = isRecord(jsonSchema) ? jsonSchema.schema : null
   return schemaHasProperty(schema, "save_to_db", spec)
 }
 
-const computeCapabilities = (spec: any | null | undefined): ServerCapabilities => {
-  if (!spec || typeof spec !== "object") return { ...defaultCapabilities }
+const computeCapabilities = (spec: unknown): ServerCapabilities => {
+  if (!isRecord(spec)) return { ...defaultCapabilities }
   const paths = normalizePaths(spec.paths || {})
   const has = (p: string) => Boolean(paths[p])
   const hasChatSaveToDb = detectChatSaveToDb(spec)
+  const specInfo = isRecord(spec.info) ? spec.info : {}
+  const specVersion =
+    typeof specInfo.version === "string" ? specInfo.version : null
 
   return {
     hasChat: has("/api/v1/chat/completions"),
@@ -221,7 +242,7 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
     hasWebSearch: has("/api/v1/research/websearch"),
     hasFeedbackExplicit: has("/api/v1/feedback/explicit"),
     hasFeedbackImplicit: has("/api/v1/rag/feedback/implicit"),
-    specVersion: spec?.info?.version ?? null
+    specVersion
   }
 }
 
@@ -230,7 +251,7 @@ let capabilitiesPromise: Promise<ServerCapabilities> | null = null
 export const getServerCapabilities = async (): Promise<ServerCapabilities> => {
   if (!capabilitiesPromise) {
     capabilitiesPromise = (async () => {
-      let spec: any | null = null
+      let spec: unknown = null
       try {
         const healthy = await tldwClient.healthCheck()
         if (healthy) {

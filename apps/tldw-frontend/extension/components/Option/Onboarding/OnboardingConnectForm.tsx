@@ -31,9 +31,7 @@ import {
 import {
   useConnectionState,
   useConnectionActions,
-  useConnectionUxState,
 } from "@/hooks/useConnectionState"
-import { useConnectionStore } from "@/store/connection"
 import { useDemoMode } from "@/context/demo-mode"
 import { openSidepanelForActiveTab } from "@/utils/sidepanel"
 import { cn } from "@/libs/utils"
@@ -84,6 +82,29 @@ type ConnectionUiAction =
       type: "SET_HAS_RUN_TEST"
       hasRunConnectionTest: boolean
     }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getStatusCode = (error: unknown): number | null => {
+  if (!isRecord(error)) return null
+  const direct = error.status ?? error.statusCode
+  if (typeof direct === "number") return direct
+  if (typeof direct === "string") {
+    const parsed = Number(direct)
+    return Number.isNaN(parsed) ? null : parsed
+  }
+  const response = error.response
+  if (isRecord(response)) {
+    const respStatus = response.status
+    if (typeof respStatus === "number") return respStatus
+    if (typeof respStatus === "string") {
+      const parsed = Number(respStatus)
+      return Number.isNaN(parsed) ? null : parsed
+    }
+  }
+  return null
+}
 
 const initialConnectionUiState: ConnectionUiState = {
   isConnecting: false,
@@ -164,7 +185,6 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   const { t } = useTranslation(["settings", "common"])
   const { setDemoEnabled } = useDemoMode()
   const connectionState = useConnectionState()
-  const { uxState } = useConnectionUxState()
   const actions = useConnectionActions()
 
   // Form state
@@ -497,12 +517,8 @@ export function OnboardingConnectForm({ onFinish }: Props) {
             p.serverReachable === "checking" ? "error" : p.serverReachable,
         }),
       })
-      const message = (error as Error)?.message || null
-      const status =
-        (error as any)?.status ??
-        (error as any)?.response?.status ??
-        (error as any)?.statusCode ??
-        null
+      const message = error instanceof Error ? error.message : null
+      const status = getStatusCode(error)
       const kind =
         categorizeConnectionError(status, message) ??
         ("refused" as ConnectionErrorKind)

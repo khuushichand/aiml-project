@@ -4,6 +4,7 @@
  */
 
 import { bgRequest, bgUpload } from "@/services/background-proxy"
+import type { PathOrUrl } from "@/services/tldw/openapi-guard"
 import type {
   ClaimCluster,
   JobPreviewResult,
@@ -66,14 +67,14 @@ export const fetchWatchlistSources = async (
 ): Promise<PaginatedResponse<WatchlistSource>> => {
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<WatchlistSource>>({
-    path: `/api/v1/watchlists/sources${qs}` as any,
+    path: `/api/v1/watchlists/sources${qs}` as PathOrUrl,
     method: "GET"
   })
 }
 
 export const getWatchlistSource = async (sourceId: number): Promise<WatchlistSource> => {
   return bgRequest<WatchlistSource>({
-    path: `/api/v1/watchlists/sources/${sourceId}` as any,
+    path: `/api/v1/watchlists/sources/${sourceId}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -93,7 +94,7 @@ export const updateWatchlistSource = async (
   updates: WatchlistSourceUpdate
 ): Promise<WatchlistSource> => {
   return bgRequest<WatchlistSource>({
-    path: `/api/v1/watchlists/sources/${sourceId}` as any,
+    path: `/api/v1/watchlists/sources/${sourceId}` as PathOrUrl,
     method: "PATCH",
     body: updates
   })
@@ -101,7 +102,7 @@ export const updateWatchlistSource = async (
 
 export const deleteWatchlistSource = async (sourceId: number): Promise<void> => {
   return bgRequest<void>({
-    path: `/api/v1/watchlists/sources/${sourceId}` as any,
+    path: `/api/v1/watchlists/sources/${sourceId}` as PathOrUrl,
     method: "DELETE"
   })
 }
@@ -140,7 +141,7 @@ export const exportOpml = async (params?: {
 }): Promise<string> => {
   const qs = buildQuery(params || {})
   return bgRequest<string>({
-    path: `/api/v1/watchlists/sources/export${qs}` as any,
+    path: `/api/v1/watchlists/sources/export${qs}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -154,7 +155,7 @@ export const fetchWatchlistGroups = async (
 ): Promise<PaginatedResponse<WatchlistGroup>> => {
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<WatchlistGroup>>({
-    path: `/api/v1/watchlists/groups${qs}` as any,
+    path: `/api/v1/watchlists/groups${qs}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -174,7 +175,7 @@ export const updateWatchlistGroup = async (
   updates: Partial<WatchlistGroupCreate>
 ): Promise<WatchlistGroup> => {
   return bgRequest<WatchlistGroup>({
-    path: `/api/v1/watchlists/groups/${groupId}` as any,
+    path: `/api/v1/watchlists/groups/${groupId}` as PathOrUrl,
     method: "PATCH",
     body: updates
   })
@@ -182,7 +183,7 @@ export const updateWatchlistGroup = async (
 
 export const deleteWatchlistGroup = async (groupId: number): Promise<void> => {
   return bgRequest<void>({
-    path: `/api/v1/watchlists/groups/${groupId}` as any,
+    path: `/api/v1/watchlists/groups/${groupId}` as PathOrUrl,
     method: "DELETE"
   })
 }
@@ -196,7 +197,7 @@ export const fetchWatchlistTags = async (
 ): Promise<PaginatedResponse<WatchlistTag>> => {
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<WatchlistTag>>({
-    path: `/api/v1/watchlists/tags${qs}` as any,
+    path: `/api/v1/watchlists/tags${qs}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -216,14 +217,14 @@ export const fetchWatchlistJobs = async (
 ): Promise<PaginatedResponse<WatchlistJob>> => {
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<WatchlistJob>>({
-    path: `/api/v1/watchlists/jobs${qs}` as any,
+    path: `/api/v1/watchlists/jobs${qs}` as PathOrUrl,
     method: "GET"
   })
 }
 
 export const getWatchlistJob = async (jobId: number): Promise<WatchlistJob> => {
   return bgRequest<WatchlistJob>({
-    path: `/api/v1/watchlists/jobs/${jobId}` as any,
+    path: `/api/v1/watchlists/jobs/${jobId}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -241,7 +242,7 @@ export const updateWatchlistJob = async (
   updates: WatchlistJobUpdate
 ): Promise<WatchlistJob> => {
   return bgRequest<WatchlistJob>({
-    path: `/api/v1/watchlists/jobs/${jobId}` as any,
+    path: `/api/v1/watchlists/jobs/${jobId}` as PathOrUrl,
     method: "PATCH",
     body: updates
   })
@@ -249,7 +250,7 @@ export const updateWatchlistJob = async (
 
 export const deleteWatchlistJob = async (jobId: number): Promise<void> => {
   return bgRequest<void>({
-    path: `/api/v1/watchlists/jobs/${jobId}` as any,
+    path: `/api/v1/watchlists/jobs/${jobId}` as PathOrUrl,
     method: "DELETE"
   })
 }
@@ -260,7 +261,7 @@ export const previewWatchlistJob = async (
 ): Promise<JobPreviewResult> => {
   const qs = buildQuery(params || {})
   return bgRequest<JobPreviewResult>({
-    path: `/api/v1/watchlists/jobs/${jobId}/preview${qs}` as any,
+    path: `/api/v1/watchlists/jobs/${jobId}/preview${qs}` as PathOrUrl,
     method: "POST"
   })
 }
@@ -270,7 +271,7 @@ export const updateJobFilters = async (
   filters: WatchlistFilter[]
 ): Promise<WatchlistJob> => {
   return bgRequest<WatchlistJob>({
-    path: `/api/v1/watchlists/jobs/${jobId}/filters` as any,
+    path: `/api/v1/watchlists/jobs/${jobId}/filters` as PathOrUrl,
     method: "PATCH",
     body: { filters }
   })
@@ -281,7 +282,7 @@ export const addJobFilters = async (
   filters: WatchlistFilter[]
 ): Promise<WatchlistJob> => {
   return bgRequest<WatchlistJob>({
-    path: `/api/v1/watchlists/jobs/${jobId}/filters:add` as any,
+    path: `/api/v1/watchlists/jobs/${jobId}/filters:add` as PathOrUrl,
     method: "POST",
     body: { filters }
   })
@@ -302,7 +303,7 @@ export const fetchWatchlistRuns = async (
 ): Promise<PaginatedResponse<WatchlistRun>> => {
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<WatchlistRun>>({
-    path: `/api/v1/watchlists/runs${qs}` as any,
+    path: `/api/v1/watchlists/runs${qs}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -313,28 +314,28 @@ export const fetchJobRuns = async (
 ): Promise<PaginatedResponse<WatchlistRun>> => {
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<WatchlistRun>>({
-    path: `/api/v1/watchlists/jobs/${jobId}/runs${qs}` as any,
+    path: `/api/v1/watchlists/jobs/${jobId}/runs${qs}` as PathOrUrl,
     method: "GET"
   })
 }
 
 export const getWatchlistRun = async (runId: number): Promise<WatchlistRun> => {
   return bgRequest<WatchlistRun>({
-    path: `/api/v1/watchlists/runs/${runId}` as any,
+    path: `/api/v1/watchlists/runs/${runId}` as PathOrUrl,
     method: "GET"
   })
 }
 
 export const getRunDetails = async (runId: number): Promise<RunDetailResponse> => {
   return bgRequest<RunDetailResponse>({
-    path: `/api/v1/watchlists/runs/${runId}/details?include_tallies=true` as any,
+    path: `/api/v1/watchlists/runs/${runId}/details?include_tallies=true` as PathOrUrl,
     method: "GET"
   })
 }
 
 export const triggerWatchlistRun = async (jobId: number): Promise<WatchlistRun> => {
   return bgRequest<WatchlistRun>({
-    path: `/api/v1/watchlists/jobs/${jobId}/run` as any,
+    path: `/api/v1/watchlists/jobs/${jobId}/run` as PathOrUrl,
     method: "POST"
   })
 }
@@ -342,14 +343,14 @@ export const triggerWatchlistRun = async (jobId: number): Promise<WatchlistRun> 
 export const exportRunsCsv = async (params?: FetchRunsParams): Promise<string> => {
   const qs = buildQuery(params || {})
   return bgRequest<string>({
-    path: `/api/v1/watchlists/runs/export.csv${qs}` as any,
+    path: `/api/v1/watchlists/runs/export.csv${qs}` as PathOrUrl,
     method: "GET"
   })
 }
 
 export const exportRunTalliesCsv = async (runId: number): Promise<string> => {
   return bgRequest<string>({
-    path: `/api/v1/watchlists/runs/${runId}/tallies.csv` as any,
+    path: `/api/v1/watchlists/runs/${runId}/tallies.csv` as PathOrUrl,
     method: "GET"
   })
 }
@@ -376,14 +377,14 @@ export const fetchScrapedItems = async (
 ): Promise<PaginatedResponse<ScrapedItem>> => {
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<ScrapedItem>>({
-    path: `/api/v1/watchlists/items${qs}` as any,
+    path: `/api/v1/watchlists/items${qs}` as PathOrUrl,
     method: "GET"
   })
 }
 
 export const getScrapedItem = async (itemId: number): Promise<ScrapedItem> => {
   return bgRequest<ScrapedItem>({
-    path: `/api/v1/watchlists/items/${itemId}` as any,
+    path: `/api/v1/watchlists/items/${itemId}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -393,7 +394,7 @@ export const updateScrapedItem = async (
   updates: ScrapedItemUpdate
 ): Promise<ScrapedItem> => {
   return bgRequest<ScrapedItem>({
-    path: `/api/v1/watchlists/items/${itemId}` as any,
+    path: `/api/v1/watchlists/items/${itemId}` as PathOrUrl,
     method: "PATCH",
     body: updates
   })
@@ -415,14 +416,14 @@ export const fetchWatchlistOutputs = async (
 ): Promise<PaginatedResponse<WatchlistOutput>> => {
   const qs = buildQuery(params || {})
   return bgRequest<PaginatedResponse<WatchlistOutput>>({
-    path: `/api/v1/watchlists/outputs${qs}` as any,
+    path: `/api/v1/watchlists/outputs${qs}` as PathOrUrl,
     method: "GET"
   })
 }
 
 export const getWatchlistOutput = async (outputId: number): Promise<WatchlistOutput> => {
   return bgRequest<WatchlistOutput>({
-    path: `/api/v1/watchlists/outputs/${outputId}` as any,
+    path: `/api/v1/watchlists/outputs/${outputId}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -439,7 +440,7 @@ export const createWatchlistOutput = async (
 
 export const downloadWatchlistOutput = async (outputId: number): Promise<string> => {
   return bgRequest<string>({
-    path: `/api/v1/watchlists/outputs/${outputId}/download` as any,
+    path: `/api/v1/watchlists/outputs/${outputId}/download` as PathOrUrl,
     method: "GET"
   })
 }
@@ -459,7 +460,7 @@ export const getWatchlistTemplate = async (
   templateName: string
 ): Promise<WatchlistTemplate> => {
   return bgRequest<WatchlistTemplate>({
-    path: `/api/v1/watchlists/templates/${encodeURIComponent(templateName)}` as any,
+    path: `/api/v1/watchlists/templates/${encodeURIComponent(templateName)}` as PathOrUrl,
     method: "GET"
   })
 }
@@ -476,7 +477,7 @@ export const createWatchlistTemplate = async (
 
 export const deleteWatchlistTemplate = async (templateName: string): Promise<void> => {
   return bgRequest<void>({
-    path: `/api/v1/watchlists/templates/${encodeURIComponent(templateName)}` as any,
+    path: `/api/v1/watchlists/templates/${encodeURIComponent(templateName)}` as PathOrUrl,
     method: "DELETE"
   })
 }
@@ -500,7 +501,7 @@ export const fetchJobClaimClusters = async (
   jobId: number
 ): Promise<WatchlistClusterSubscription[]> => {
   const response = await bgRequest<{ clusters: WatchlistClusterSubscription[] }>({
-    path: `/api/v1/watchlists/${jobId}/clusters` as any,
+    path: `/api/v1/watchlists/${jobId}/clusters` as PathOrUrl,
     method: "GET"
   })
   return response.clusters
@@ -511,7 +512,7 @@ export const subscribeJobToCluster = async (
   clusterId: number
 ): Promise<void> => {
   return bgRequest<void>({
-    path: `/api/v1/watchlists/${jobId}/clusters` as any,
+    path: `/api/v1/watchlists/${jobId}/clusters` as PathOrUrl,
     method: "POST",
     body: { cluster_id: clusterId }
   })
@@ -522,7 +523,7 @@ export const unsubscribeJobFromCluster = async (
   clusterId: number
 ): Promise<void> => {
   return bgRequest<void>({
-    path: `/api/v1/watchlists/${jobId}/clusters/${clusterId}` as any,
+    path: `/api/v1/watchlists/${jobId}/clusters/${clusterId}` as PathOrUrl,
     method: "DELETE"
   })
 }
@@ -537,7 +538,7 @@ export const fetchClaimClusters = async (params?: {
 }): Promise<ClaimCluster[]> => {
   const qs = buildQuery(params || {})
   return bgRequest<ClaimCluster[]>({
-    path: `/api/v1/claims/clusters${qs}` as any,
+    path: `/api/v1/claims/clusters${qs}` as PathOrUrl,
     method: "GET"
   })
 }

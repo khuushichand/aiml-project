@@ -167,6 +167,45 @@ class WritingTokenCountResponse(BaseModel):
     meta: WritingTokenizeMeta
 
 
+class WritingWordcloudOptions(BaseModel):
+    max_words: int = Field(100, ge=1, le=1000, description="Maximum number of words to return")
+    min_word_length: int = Field(3, ge=1, le=64, description="Minimum token length to include")
+    keep_numbers: bool = Field(False, description="Whether to include purely numeric tokens")
+    stopwords: Optional[List[str]] = Field(
+        None,
+        description="Optional stopwords list. Omit to use defaults; use [] to disable stopwords.",
+    )
+
+
+class WritingWordcloudRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="Input text to analyze")
+    options: Optional[WritingWordcloudOptions] = None
+
+
+class WritingWordcloudWord(BaseModel):
+    text: str
+    weight: int
+
+
+class WritingWordcloudMeta(BaseModel):
+    input_chars: int
+    total_tokens: int
+    top_n: int
+
+
+class WritingWordcloudResult(BaseModel):
+    words: List[WritingWordcloudWord]
+    meta: WritingWordcloudMeta
+
+
+class WritingWordcloudResponse(BaseModel):
+    id: str
+    status: str
+    cached: bool = False
+    result: Optional[WritingWordcloudResult] = None
+    error: Optional[str] = None
+
+
 class WritingTokenizerSupport(BaseModel):
     available: bool
     tokenizer: Optional[str] = None
@@ -179,6 +218,7 @@ class WritingServerCapabilities(BaseModel):
     themes: bool
     tokenize: bool
     token_count: bool
+    wordclouds: bool = False
 
 
 class WritingProviderCapabilities(BaseModel):

@@ -1748,6 +1748,8 @@ async def evaluate_ocr_pdf_endpoint(
     ocr_dpi: int = Form(300, description="Render DPI (72-600)"),
     ocr_mode: str = Form("fallback", description="OCR mode: 'always' or 'fallback'"),
     ocr_min_page_text_chars: int = Form(40, description="Threshold for per-page OCR fallback"),
+    ocr_output_format: Optional[str] = Form(None, description="OCR output format: text|markdown|json"),
+    ocr_prompt_preset: Optional[str] = Form(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
@@ -1815,6 +1817,8 @@ async def evaluate_ocr_pdf_endpoint(
             "ocr_dpi": int(ocr_dpi),
             "ocr_mode": ocr_mode,
             "ocr_min_page_text_chars": int(ocr_min_page_text_chars),
+            "ocr_output_format": ocr_output_format,
+            "ocr_prompt_preset": ocr_prompt_preset,
         }
 
         service = get_unified_evaluation_service_for_user(current_user.id)

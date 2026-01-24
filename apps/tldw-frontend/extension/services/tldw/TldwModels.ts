@@ -1,4 +1,3 @@
-import { Storage } from "@plasmohq/storage"
 import { tldwClient, TldwModel } from "./TldwApiClient"
 import { createSafeStorage } from "@/utils/safe-storage"
 import {
@@ -17,6 +16,9 @@ export interface ModelInfo {
   description?: string
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
 export class TldwModelsService {
   private cachedModels: ModelInfo[] | null = null
   private lastFetchTime: number = 0
@@ -31,8 +33,8 @@ export class TldwModelsService {
     if (!this.storageInitPromise) {
       this.storageInitPromise = (async () => {
         try {
-          const cached = (await this.storage.get<any>(this.CACHE_KEY)) || null
-          if (cached?.models && Array.isArray(cached.models)) {
+          const cached = (await this.storage.get<unknown>(this.CACHE_KEY)) || null
+          if (isRecord(cached) && Array.isArray(cached.models)) {
             this.cachedModels = cached.models as ModelInfo[]
             this.lastFetchTime = Number(cached.timestamp || 0)
           }

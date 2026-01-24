@@ -27,7 +27,7 @@ interface MediaDetailResponse {
   title: string
   content?: {
     text?: string
-    metadata?: Record<string, any>
+    metadata?: Record<string, unknown>
   }
 }
 

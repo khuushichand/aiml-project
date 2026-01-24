@@ -33,7 +33,6 @@ import {
   useDecksQuery,
   useManageQuery,
   useUpdateFlashcardMutation,
-  useDeleteFlashcardMutation,
   useCardsKeyboardNav,
   type DueStatus
 } from "../hooks"
@@ -53,6 +52,16 @@ type PendingDeletion = {
   card: Flashcard
   expiresAt: number
   batchId: string
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === "string" && error.trim()) return error
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
 }
 
 interface ManageTabProps {
@@ -184,11 +193,12 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   }, [mDeckId, mQuery, mTag, mDue])
 
   React.useEffect(() => {
+    const batches = pendingDeletionBatchesRef.current
     return () => {
-      pendingDeletionBatchesRef.current.forEach((batch) => {
+      batches.forEach((batch) => {
         window.clearTimeout(batch.timeoutId)
       })
-      pendingDeletionBatchesRef.current.clear()
+      batches.clear()
     }
   }, [])
 
@@ -208,10 +218,10 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setSelectedIds(new Set([...(selectedIds || new Set()), ...ids]))
   }
 
-  const clearSelection = () => {
+  const clearSelection = React.useCallback(() => {
     setSelectedIds(new Set())
     setSelectAllAcross(false)
-  }
+  }, [])
 
   const selectAllAcrossResults = () => {
     setSelectAllAcross(true)
@@ -242,7 +252,6 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const someOnPageSelected = selectedOnPageCount > 0 && selectedOnPageCount < pageCount
 
   const updateMutation = useUpdateFlashcardMutation()
-  const deleteMutation = useDeleteFlashcardMutation()
 
   // Reset focused index when page or filters change
   React.useEffect(() => {
@@ -304,7 +313,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     setMoveOpen(true)
   }
 
-  const executeBulkDelete = async (
+  const executeBulkDelete = React.useCallback(async (
     items: Flashcard[],
     options?: { showProgress?: boolean; showSuccessMessage?: boolean; clearSelection?: boolean }
   ) => {
@@ -375,7 +384,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         setBulkProgress(null)
       }
     }
-  }
+  }, [clearSelection, message, qc, t])
 
   const removePendingDeletions = React.useCallback(
     (uuids: string[]) => {
@@ -588,8 +597,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-    } catch (e: any) {
-      message.error(e?.message || "Export failed")
+    } catch (e: unknown) {
+      message.error(getErrorMessage(e, "Export failed"))
     }
   }
 
@@ -617,8 +626,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       })
       await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
       message.success(t("common:created", { defaultValue: "Created" }))
-    } catch (e: any) {
-      message.error(e?.message || "Duplicate failed")
+    } catch (e: unknown) {
+      message.error(getErrorMessage(e, "Duplicate failed"))
     }
   }
 
@@ -627,8 +636,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       setMoveCard(card)
       setMoveDeckId(card.deck_id ?? null)
       setMoveOpen(true)
-    } catch (e: any) {
-      message.error(e?.message || "Failed to load card")
+    } catch (e: unknown) {
+      message.error(getErrorMessage(e, "Failed to load card"))
     }
   }
 
@@ -679,8 +688,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       setMoveDeckId(null)
       await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
       message.success(t("common:updated", { defaultValue: "Updated" }))
-    } catch (e: any) {
-      message.error(e?.message || "Move failed")
+    } catch (e: unknown) {
+      message.error(getErrorMessage(e, "Move failed"))
     }
   }
 
@@ -724,9 +733,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       setEditOpen(false)
       setEditing(null)
       await qc.invalidateQueries({ queryKey: ["flashcards:list"] })
-    } catch (e: any) {
-      if (e?.errorFields) return
-      message.error(e?.message || "Update failed")
+    } catch (e: unknown) {
+      if (isRecord(e) && "errorFields" in e) return
+      message.error(getErrorMessage(e, "Update failed"))
     }
   }
 
@@ -755,8 +764,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           ? `${preview}${cardToDelete.front.length > 60 ? "…" : ""} · ${undoHint}`
           : undoHint
       })
-    } catch (e: any) {
-      message.error(e?.message || "Delete failed")
+    } catch (e: unknown) {
+      message.error(getErrorMessage(e, "Delete failed"))
     }
   }
 
@@ -823,9 +832,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               placeholder={t("option:flashcards.deck", { defaultValue: "All decks" })}
               allowClear
               loading={decksQuery.isLoading}
-              value={mDeckId as any}
+              value={mDeckId ?? undefined}
               onChange={(v) => {
-                setMDeckId(v)
+                setMDeckId(v ?? undefined)
                 setPage(1)
               }}
               className="min-w-44"
@@ -1290,8 +1299,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           className="w-full"
           allowClear
           loading={decksQuery.isLoading}
-          value={moveDeckId as any}
-          onChange={(v) => setMoveDeckId(v)}
+          value={moveDeckId ?? undefined}
+          onChange={(v) => setMoveDeckId(v ?? null)}
           options={(decksQuery.data || []).map((d) => ({
             label: d.name,
             value: d.id

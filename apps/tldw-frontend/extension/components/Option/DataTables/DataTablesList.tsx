@@ -14,7 +14,6 @@ import {
 } from "antd"
 import type { ColumnsType } from "antd/es/table"
 import {
-  Download,
   Eye,
   RefreshCw,
   Search,
@@ -198,7 +197,7 @@ export const DataTablesList: React.FC = () => {
       title: t("dataTables:columns.actions", "Actions"),
       key: "actions",
       width: 150,
-      render: (_: any, record: DataTableSummary) => (
+      render: (_value: unknown, record: DataTableSummary) => (
         <div className="flex items-center gap-2">
           <Tooltip title={t("dataTables:view", "View")}>
             <Button

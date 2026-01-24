@@ -13,6 +13,15 @@ interface TemplatePreviewProps {
   onClose: () => void
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
 export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
   templateId,
   onClose
@@ -70,9 +79,9 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
         const response = await api.getReadingList({ page: 1, size: 50 })
         if (!active) return
         setPreviewItems(response.items || [])
-      } catch (error: any) {
+      } catch (error: unknown) {
         if (!active) return
-        const msg = error?.message || "Failed to load reading items"
+        const msg = getErrorMessage(error, "Failed to load reading items")
         setPreviewItemsError(msg)
         message.error(msg)
       } finally {
@@ -120,9 +129,10 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
       setPreviewContent(response.rendered)
       setPreviewFormat(response.format)
       setStep("preview")
-    } catch (error: any) {
-      setPreviewError(error?.message || "Failed to generate preview")
-      message.error(error?.message || "Failed to generate preview")
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error, "Failed to generate preview")
+      setPreviewError(errorMessage)
+      message.error(errorMessage)
     } finally {
       setPreviewLoading(false)
     }
@@ -216,8 +226,8 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
         setGeneratedContent(text)
       }
       setStep("output")
-    } catch (error: any) {
-      message.error(error?.message || "Failed to generate output")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to generate output"))
     } finally {
       setGenerating(false)
     }

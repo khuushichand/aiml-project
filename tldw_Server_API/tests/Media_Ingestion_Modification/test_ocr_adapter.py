@@ -9,6 +9,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.tesseract_
 )
 
 
+@pytest.mark.unit
 def test_registry_selects_tesseract_when_available(monkeypatch):
 
 
@@ -19,6 +20,7 @@ def test_registry_selects_tesseract_when_available(monkeypatch):
     assert isinstance(backend, TesseractCLIBackend)
 
 
+@pytest.mark.unit
 def test_tesseract_cli_ocr_invocation(monkeypatch):
 
 
@@ -42,3 +44,11 @@ def test_tesseract_cli_ocr_invocation(monkeypatch):
     assert backend is not None
     text = backend.ocr_image(b"\x89PNG\r\n....")
     assert text == "Hello OCR"
+
+
+@pytest.mark.unit
+def test_registry_resolves_nemotron_parse_when_configured(monkeypatch):
+    monkeypatch.setenv("NEMOTRON_VLLM_URL", "http://127.0.0.1:8001/v1/chat/completions")
+    backend = get_backend("nemotron_parse")
+    assert backend is not None
+    assert getattr(backend, "name", None) == "nemotron_parse"

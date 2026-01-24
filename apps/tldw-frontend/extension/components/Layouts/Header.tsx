@@ -50,7 +50,7 @@ export const Header: React.FC<Props> = ({
     })()
   }, [historyId, temporaryChat])
 
-  const saveTitle = async (value: string) => {
+  const saveTitle = React.useCallback(async (value: string) => {
     try {
       if (historyId && historyId !== "temp" && !temporaryChat) {
         await updateHistory(historyId, value.trim() || "Untitled")
@@ -58,7 +58,7 @@ export const Header: React.FC<Props> = ({
     } catch (e) {
       console.error("Failed to update chat title", e)
     }
-  }
+  }, [historyId, temporaryChat])
 
   const handleOpenTimeline = React.useCallback(() => {
     if (!historyId || temporaryChat || historyId === "temp") return

@@ -1,6 +1,5 @@
 import { SquarePen } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { useMessageOption } from "@/hooks/useMessageOption"
 
 type Props = {
   clearChat: () => void
@@ -8,8 +7,6 @@ type Props = {
 
 export const NewChat: React.FC<Props> = ({ clearChat }) => {
   const { t } = useTranslation(["option", "common"])
-
-  const { temporaryChat, setTemporaryChat, messages } = useMessageOption()
 
   return (
     <div className="flex items-center justify-between">

@@ -11,6 +11,9 @@ import { generateBranchMessage } from "@/db/dexie/branch"
 import { getPromptById, getSessionFiles, UploadedFile } from "@/db"
 import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
 import { notification } from "antd"
+import type { OnSubmitArgs } from "@/hooks/useMessageOptionTypes"
+
+type SavedMessage = Awaited<ReturnType<typeof saveMessage>>
 
 export const createRegenerateLastMessage = ({
   validateBeforeSubmitFn,
@@ -25,7 +28,7 @@ export const createRegenerateLastMessage = ({
   messages: Message[]
   setHistory: (history: ChatHistory) => void
   setMessages: (messages: Message[]) => void
-  onSubmit: (params: any) => Promise<void>
+  onSubmit: (params: OnSubmitArgs) => Promise<void>
 }) => {
   return async () => {
     const isOk = validateBeforeSubmitFn()
@@ -73,7 +76,7 @@ export const createEditMessage = ({
   setHistory: (history: ChatHistory) => void
   historyId: string | null
   validateBeforeSubmitFn: () => boolean
-  onSubmit: (params: any) => Promise<void>
+  onSubmit: (params: OnSubmitArgs) => Promise<void>
 }) => {
   return async (
     index: number,
@@ -242,7 +245,7 @@ export const createBranchMessage = ({
 
     try {
       const newHistory = await saveHistory(branchTitle, false, "branch")
-      const savedMessages: any[] = []
+      const savedMessages: SavedMessage[] = []
 
       for (let i = 0; i < snapshot.length; i++) {
         const msg = snapshot[i]
@@ -306,8 +309,7 @@ export const createBranchMessage = ({
             if (!resolvedTitle) {
               resolvedTitle = (chat?.title || "").trim()
             }
-            resolvedCharacterId =
-              (chat as any)?.character_id ?? (chat as any)?.characterId ?? null
+            resolvedCharacterId = chat.character_id ?? null
           } catch (e) {
             console.log("[branch] server metadata fetch failed", e)
           }
@@ -322,7 +324,7 @@ export const createBranchMessage = ({
             : originalTitle
         const branchTitle = `${base} [${shortId}] · msg #${index + 1}`
 
-        const payload: Record<string, any> = {
+        const payload: Record<string, unknown> = {
           title: branchTitle,
           parent_conversation_id: serverChatId,
           state: serverChatState || "in-progress",
@@ -336,9 +338,7 @@ export const createBranchMessage = ({
         }
 
         const created = await tldwClient.createChat(payload)
-        const rawId =
-          (created as any)?.id ?? (created as any)?.chat_id ?? created
-        const newChatId = rawId != null ? String(rawId) : ""
+        const newChatId = created?.id ? String(created.id) : ""
         if (!newChatId) {
           throw new Error("Failed to create server branch chat")
         }
@@ -370,34 +370,32 @@ export const createBranchMessage = ({
         }
         if (setServerChatState) {
           setServerChatState(
-            (created as any)?.state ??
-              (created as any)?.conversation_state ??
-              "in-progress"
+            created.state ?? "in-progress"
           )
         }
         if (setServerChatVersion) {
-          setServerChatVersion((created as any)?.version ?? null)
+          setServerChatVersion(created.version ?? null)
         }
         if (setServerChatTopic) {
-          setServerChatTopic((created as any)?.topic_label ?? null)
+          setServerChatTopic(created.topic_label ?? null)
         }
         if (setServerChatClusterId) {
-          setServerChatClusterId((created as any)?.cluster_id ?? null)
+          setServerChatClusterId(created.cluster_id ?? null)
         }
         if (setServerChatSource) {
-          setServerChatSource((created as any)?.source ?? null)
+          setServerChatSource(created.source ?? null)
         }
         if (setServerChatExternalRef) {
-          setServerChatExternalRef((created as any)?.external_ref ?? null)
+          setServerChatExternalRef(created.external_ref ?? null)
         }
         if (setServerChatTitle) {
           setServerChatTitle(
-            String((created as any)?.title ?? chatTitle ?? "")
+            String(created.title || chatTitle || "")
           )
         }
         if (setServerChatCharacterId) {
           setServerChatCharacterId(
-            (created as any)?.character_id ?? characterId ?? null
+            created.character_id ?? characterId ?? null
           )
         }
         if (setServerChatMetaLoaded) {

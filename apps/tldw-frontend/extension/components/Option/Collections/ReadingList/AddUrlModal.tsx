@@ -19,6 +19,18 @@ interface FormValues {
   notes?: string
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const isFormValidationError = (error: unknown): boolean =>
+  isRecord(error) && Array.isArray(error.errorFields)
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
 export const AddUrlModal: React.FC<AddUrlModalProps> = ({ onSuccess }) => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
@@ -66,12 +78,12 @@ export const AddUrlModal: React.FC<AddUrlModalProps> = ({ onSuccess }) => {
       setTags([])
       closeAddUrlModal()
       onSuccess?.()
-    } catch (error: any) {
-      if (error?.errorFields) {
+    } catch (error: unknown) {
+      if (isFormValidationError(error)) {
         // Form validation error
         return
       }
-      message.error(error?.message || "Failed to add article")
+      message.error(getErrorMessage(error, "Failed to add article"))
     } finally {
       setLoading(false)
     }

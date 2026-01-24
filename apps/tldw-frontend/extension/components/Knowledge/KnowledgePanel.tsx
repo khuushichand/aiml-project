@@ -69,7 +69,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   showToggle = true,
   variant = "card",
   currentMessage,
-  showAttachedContext = false,
+  showAttachedContext: _showAttachedContext = false,
   attachedTabs = [],
   availableTabs = [],
   attachedFiles = [],
@@ -109,6 +109,7 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
 
   // Settings state (from hook)
   const settings = useKnowledgeSettings(currentMessage)
+  const { discardChanges } = settings
 
   // Search state (from hook)
   const search = useKnowledgeSearch({
@@ -128,10 +129,10 @@ export const KnowledgePanel: React.FC<KnowledgePanelProps> = ({
   const previousOpen = React.useRef(isOpen)
   React.useEffect(() => {
     if (previousOpen.current && !isOpen) {
-      settings.discardChanges()
+      discardChanges()
     }
     previousOpen.current = isOpen
-  }, [isOpen, settings.discardChanges])
+  }, [discardChanges, isOpen])
 
   // Handle Ask with confirmation for pinned results
   const handleAsk = React.useCallback(

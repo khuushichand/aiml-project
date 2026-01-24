@@ -33,7 +33,7 @@ export interface Board {
   deleted: boolean
   deleted_at?: string | null
   version: number
-  metadata?: Record<string, any> | null
+  metadata?: Record<string, unknown> | null
 }
 
 export interface BoardCreate {
@@ -41,14 +41,14 @@ export interface BoardCreate {
   description?: string
   client_id: string
   activity_retention_days?: number
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 export interface BoardUpdate {
   name?: string
   description?: string
   activity_retention_days?: number
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 export interface BoardListResponse {
@@ -115,7 +115,7 @@ export interface Card {
   deleted: boolean
   deleted_at?: string | null
   version: number
-  metadata?: Record<string, any> | null
+  metadata?: Record<string, unknown> | null
 }
 
 export interface CardCreate {
@@ -126,7 +126,7 @@ export interface CardCreate {
   due_date?: string
   start_date?: string
   priority?: PriorityType
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 export interface CardUpdate {
@@ -136,7 +136,7 @@ export interface CardUpdate {
   due_complete?: boolean
   start_date?: string | null
   priority?: PriorityType | null
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 export interface CardsListResponse {
@@ -179,7 +179,7 @@ export interface ReorderResponse {
 // =============================================================================
 
 export interface BoardImportRequest {
-  data: Record<string, any>
+  data: Record<string, unknown>
   board_name?: string
 }
 

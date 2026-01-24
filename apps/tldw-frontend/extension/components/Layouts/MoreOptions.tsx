@@ -133,10 +133,12 @@ const buildCanonicalMessages = (
 
   return canonicalMessages
 }
+const MODEL_PATH_PREFIX_RE = /accounts\/[^/]+\/models\//g
+
 const formatAsText = (messages: Message[]) => {
   return messages
     .map((msg) => {
-      const text = `${msg.isBot ? removeModelSuffix(`${msg.modelName || msg.name}`?.replaceAll(/accounts\/[^\/]+\/models\//g, "")) : "You"}: ${msg.message}`
+      const text = `${msg.isBot ? removeModelSuffix(`${msg.modelName || msg.name}`?.replaceAll(MODEL_PATH_PREFIX_RE, "")) : "You"}: ${msg.message}`
       return text
     })
     .join("\n\n")
@@ -144,7 +146,7 @@ const formatAsText = (messages: Message[]) => {
 const formatAsMarkdown = (messages: Message[]) => {
   return messages
     .map((msg) => {
-      let content = `### **${msg.isBot ? removeModelSuffix(`${msg.modelName || msg.name}`?.replaceAll(/accounts\/[^\/]+\/models\//g, "")) : "You"}**:\n\n${msg.message}`
+      let content = `### **${msg.isBot ? removeModelSuffix(`${msg.modelName || msg.name}`?.replaceAll(MODEL_PATH_PREFIX_RE, "")) : "You"}**:\n\n${msg.message}`
 
       if (msg.images && msg.images.length > 0) {
         const imageMarkdown = msg.images
@@ -334,7 +336,7 @@ export const MoreOptions = ({
               link.download = `chat_${new Date().toISOString()}.png`
               link.href = dataUrl
               link.click()
-            } catch (e) {
+            } catch {
               message.error("Failed to generate image")
             }
           }

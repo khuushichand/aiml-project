@@ -10,6 +10,11 @@ import {
 import { fetchTldwTtsModels, type TldwTtsModel } from "@/services/tldw/audio-models"
 import { fetchTldwVoiceCatalog } from "@/services/tldw/audio-voices"
 
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
+
 export const OPENAI_TTS_MODELS = [
   { label: "tts-1", value: "tts-1" },
   { label: "tts-1-hd", value: "tts-1-hd" }
@@ -68,18 +73,19 @@ export const useTtsProviderData = ({
 
   const { data: tldwVoiceCatalog } = useQuery<TldwTtsVoiceInfo[]>({
     queryKey: ["tldw-voice-catalog", inferredProviderKey],
-    queryFn: async () => {
-      if (!inferredProviderKey) return []
-      const voices = await fetchTldwVoiceCatalog(inferredProviderKey)
-      return voices.map((v) => ({
-        id: v.voice_id || v.id || v.name,
-        name: v.name || v.voice_id || v.id,
-        language: (v as any)?.language,
-        gender: (v as any)?.gender,
-        description: v.description,
-        preview_url: (v as any)?.preview_url
-      })) as TldwTtsVoiceInfo[]
-    },
+      queryFn: async () => {
+        if (!inferredProviderKey) return []
+        const voices = await fetchTldwVoiceCatalog(inferredProviderKey)
+        return voices.map((v) => ({
+          id: v.voice_id || v.id || v.name,
+          name: v.name || v.voice_id || v.id,
+          language: isRecord(v) && typeof v.language === "string" ? v.language : undefined,
+          gender: isRecord(v) && typeof v.gender === "string" ? v.gender : undefined,
+          description: v.description,
+          preview_url:
+            isRecord(v) && typeof v.preview_url === "string" ? v.preview_url : undefined
+        })) as TldwTtsVoiceInfo[]
+      },
     enabled: hasAudio && provider === "tldw" && Boolean(inferredProviderKey)
   })
 

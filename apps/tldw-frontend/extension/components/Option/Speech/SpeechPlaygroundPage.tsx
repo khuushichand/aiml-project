@@ -57,6 +57,34 @@ type SpeechHistoryItem = {
   mode?: "short" | "long"
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
+const coerceTranscriptText = (response: unknown): string => {
+  if (!response) return ""
+  if (typeof response === "string") return response
+  if (!isRecord(response)) return ""
+  if (typeof response.text === "string") return response.text
+  if (typeof response.transcript === "string") return response.transcript
+  const segments = response.segments
+  if (Array.isArray(segments)) {
+    return segments
+      .map((segment) =>
+        isRecord(segment) && typeof segment.text === "string" ? segment.text : ""
+      )
+      .filter((text) => text.trim().length > 0)
+      .join(" ")
+      .trim()
+  }
+  return ""
+}
+
 const SAMPLE_TEXT =
   "Sample: Hi there, this is the speech playground reading a short passage so you can preview voice and speed."
 
@@ -174,7 +202,6 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         }
       } catch (e) {
         if (env.DEV) {
-          // eslint-disable-next-line no-console
           console.warn("Failed to load transcription models for Speech Playground", e)
         }
       } finally {
@@ -208,7 +235,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
 
   const transcribeBlob = React.useCallback(
     async (blob: Blob, modelOverride?: string): Promise<string> => {
-      const sttOptions: Record<string, any> = {
+      const sttOptions: Record<string, unknown> = {
         language: speechToTextLanguage
       }
       const modelToUse = modelOverride || activeModel || sttModel
@@ -252,22 +279,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         }
       }
       const res = await tldwClient.transcribeAudio(blob, sttOptions)
-      let text = ""
-      if (res) {
-        if (typeof res === "string") {
-          text = res
-        } else if (typeof (res as any).text === "string") {
-          text = (res as any).text
-        } else if (typeof (res as any).transcript === "string") {
-          text = (res as any).transcript
-        } else if (Array.isArray((res as any).segments)) {
-          text = (res as any).segments
-            .map((s: any) => s?.text || "")
-            .join(" ")
-            .trim()
-        }
-      }
-      return text
+      return coerceTranscriptText(res)
     },
     [
       activeModel,
@@ -315,9 +327,8 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
             if (text) {
               appendLiveText(text)
             }
-          } catch (e: any) {
-            // eslint-disable-next-line no-console
-            console.error("Streaming STT chunk failed", e)
+          } catch (error: unknown) {
+            console.error("Streaming STT chunk failed", error)
           }
         } else {
           chunksRef.current.push(ev.data)
@@ -325,7 +336,6 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
       }
 
       recorder.onerror = (event: Event) => {
-        // eslint-disable-next-line no-console
         console.error("MediaRecorder error", event)
         setRecordingError(
           t(
@@ -401,14 +411,16 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
             })
             setLastTranscript(text)
           }
-        } catch (e: any) {
+        } catch (error: unknown) {
           notification.error({
             message: t("playground:actions.speechErrorTitle", "Dictation failed"),
             description:
-              e?.message ||
-              t(
-                "playground:actions.speechErrorBody",
-                "Transcription request failed. Check tldw server health."
+              getErrorMessage(
+                error,
+                t(
+                  "playground:actions.speechErrorBody",
+                  "Transcription request failed. Check tldw server health."
+                )
               )
           })
         } finally {
@@ -423,7 +435,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
 
       recorder.start(useLongRunning ? 5000 : undefined)
       setIsRecording(true)
-    } catch (e: any) {
+    } catch {
       setRecordingError(
         t(
           "playground:actions.speechMicError",
@@ -456,10 +468,10 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         message: t("settings:healthPage.copyDiagnostics", "Saved to Notes"),
         description: t("playground:tts.savedToNotes", "Transcription saved as a note.")
       })
-    } catch (e: any) {
+    } catch (error: unknown) {
       notification.error({
         message: t("error", "Error"),
-        description: e?.message || t("somethingWentWrong", "Something went wrong")
+        description: getErrorMessage(error, t("somethingWentWrong", "Something went wrong"))
       })
     }
   }
@@ -693,12 +705,14 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         notification.success({
           message: t("playground:speech.copySuccess", "Copied to clipboard")
         })
-      } catch (e: any) {
+      } catch (error: unknown) {
         notification.error({
           message: t("error", "Error"),
           description:
-            e?.message ||
-            t("playground:speech.copyError", "Failed to copy transcript.")
+            getErrorMessage(
+              error,
+              t("playground:speech.copyError", "Failed to copy transcript.")
+            )
         })
       }
     },
@@ -922,7 +936,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                       model: activeModel || sttModel || "whisper-1",
                       task: sttTask === "translate" ? "translate" : "transcribe",
                       format: (sttResponseFormat || "json").toUpperCase()
-                    } as any
+                    }
                   ) as string}
                 </div>
 
@@ -1069,7 +1083,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                           style={{ minWidth: 160 }}
                           placeholder="Select voice"
                           className="focus-ring"
-                          options={elevenLabsData.voices.map((v: any) => ({
+                          options={elevenLabsData.voices.map((v) => ({
                             label: v.name,
                             value: v.voice_id
                           }))}
@@ -1090,7 +1104,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                           style={{ minWidth: 160 }}
                           placeholder="Select model"
                           className="focus-ring"
-                          options={elevenLabsData.models.map((m: any) => ({
+                          options={elevenLabsData.models.map((m) => ({
                             label: m.name,
                             value: m.model_id
                           }))}

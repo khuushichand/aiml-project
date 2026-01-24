@@ -38,7 +38,7 @@ export const getSettingsNavGroups = (): SettingsNavGroup[] => {
   return NAV_GROUPS.map((group) => {
     const items = (navItemsByGroup.get(group.key) ?? [])
       .sort((a, b) => a.order - b.order)
-      .map(({ order, ...item }) => item)
+      .map(({ order: _order, ...item }) => item)
     return {
       key: group.key,
       titleToken: group.titleToken,

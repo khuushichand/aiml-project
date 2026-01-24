@@ -33,7 +33,7 @@ export interface ToolDefinition {
   function: {
     name: string
     description: string
-    parameters: Record<string, any>
+    parameters: Record<string, unknown>
   }
 }
 
@@ -66,7 +66,7 @@ export type AgentStatus =
 export interface PendingApproval {
   toolCallId: string
   toolName: string
-  args: Record<string, any>
+  args: Record<string, unknown>
   tier: ApprovalTier
   status: "pending" | "approved" | "rejected"
 }
@@ -122,7 +122,7 @@ export type AgentEvent =
   | { type: "llm_chunk"; content: string }
   | { type: "llm_complete"; content: string; tool_calls?: ToolCall[] }
   | { type: "tool_start"; tool_call: ToolCall }
-  | { type: "tool_complete"; tool_call_id: string; result: any }
+  | { type: "tool_complete"; tool_call_id: string; result: unknown }
   | { type: "approval_needed"; approvals: PendingApproval[] }
   | { type: "complete"; result: AgentResult }
   | { type: "error"; error: string }

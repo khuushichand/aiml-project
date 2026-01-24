@@ -51,12 +51,45 @@ import { getPromptStudioDefaults } from "@/services/prompt-studio-settings"
 
 const { Title, Paragraph, Text } = Typography
 
-const parseJson = (value: string | undefined, fallback: any = {}) => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
+const unwrapData = (value: unknown): unknown => {
+  if (isRecord(value) && "data" in value) {
+    return value.data
+  }
+  return value
+}
+
+const getListFromPayload = <T,>(payload: unknown, keys: string[]): T[] => {
+  const raw = unwrapData(payload)
+  if (Array.isArray(raw)) return raw as T[]
+  if (!isRecord(raw)) return []
+  for (const key of keys) {
+    const candidate = raw[key]
+    if (Array.isArray(candidate)) return candidate as T[]
+  }
+  return []
+}
+
+const getMetaFromPayload = (payload: unknown): Record<string, unknown> | undefined => {
+  if (!isRecord(payload)) return undefined
+  const meta = payload.metadata ?? payload.pagination
+  return isRecord(meta) ? meta : undefined
+}
+
+const parseJson = <T,>(value: string | undefined, fallback: T): T => {
   if (!value) return fallback
   try {
-    return JSON.parse(value)
-  } catch (e: any) {
-    throw new Error(e?.message || "Invalid JSON")
+    return JSON.parse(value) as T
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Invalid JSON"))
   }
 }
 
@@ -85,6 +118,12 @@ type EvaluationFormFields = {
   temperature?: number
   max_tokens?: number
   run_async?: boolean
+}
+
+type ExecutionResult = {
+  output?: string
+  tokens_used?: number
+  execution_time?: number
 }
 
 const statusColor = (status?: string) => {
@@ -121,7 +160,7 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
   const [promptModalOpen, setPromptModalOpen] = React.useState(false)
   const [testCaseModalOpen, setTestCaseModalOpen] = React.useState(false)
   const [bulkTestCaseModalOpen, setBulkTestCaseModalOpen] = React.useState(false)
-  const [executionResult, setExecutionResult] = React.useState<any>(null)
+  const [executionResult, setExecutionResult] = React.useState<ExecutionResult | null>(null)
   const [executionError, setExecutionError] = React.useState<string | null>(null)
   const [savePromptForm] = Form.useForm<PromptFormFields>()
   const [createPromptForm] = Form.useForm<Partial<PromptFormFields>>()
@@ -158,17 +197,12 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
 
   // Unwrap payloads up front so effects/hooks don't use variables before declaration
   const projectsPayload = projectsQuery.data?.data
-  const projectList = React.useMemo<Project[]>(() => {
-    const raw =
-      Array.isArray(projectsPayload?.data)
-        ? projectsPayload?.data
-        : Array.isArray((projectsPayload as any)?.projects)
-          ? (projectsPayload as any).projects
-          : []
-    return (raw || []) as Project[]
-  }, [projectsPayload])
+  const projectList = React.useMemo<Project[]>(
+    () => getListFromPayload<Project>(projectsPayload, ["projects"]),
+    [projectsPayload]
+  )
   const projectMeta = React.useMemo(
-    () => (projectsPayload as any)?.metadata || (projectsPayload as any)?.pagination,
+    () => getMetaFromPayload(projectsPayload),
     [projectsPayload]
   )
 
@@ -193,14 +227,11 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
 
   const promptsPayload = promptsQuery.data?.data
   const promptList = React.useMemo<Prompt[]>(
-    () =>
-      (Array.isArray(promptsPayload?.data)
-        ? promptsPayload?.data || []
-        : []) as Prompt[],
+    () => getListFromPayload<Prompt>(promptsPayload, []),
     [promptsPayload]
   )
   const promptMeta = React.useMemo(
-    () => (promptsPayload as any)?.metadata || (promptsPayload as any)?.pagination,
+    () => getMetaFromPayload(promptsPayload),
     [promptsPayload]
   )
 
@@ -257,12 +288,12 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
   })
 
   const testCasesPayload = testCasesQuery.data?.data
-  const testCaseList = React.useMemo(
-    () => (Array.isArray(testCasesPayload?.data) ? testCasesPayload?.data || [] : []),
+  const testCaseList = React.useMemo<TestCase[]>(
+    () => getListFromPayload<TestCase>(testCasesPayload, []),
     [testCasesPayload]
   )
   const testCaseMeta = React.useMemo(
-    () => (testCasesPayload as any)?.metadata || (testCasesPayload as any)?.pagination,
+    () => getMetaFromPayload(testCasesPayload),
     [testCasesPayload]
   )
 
@@ -279,10 +310,17 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
         : null,
     enabled: capabilityQuery.data === true && !!selectedProjectId && online,
     refetchInterval: (data) => {
-      const hasRunning =
-        (data as any)?.data?.evaluations?.some((e: any) =>
-          ["running", "pending", "processing"].includes((e.status || "").toLowerCase())
-        ) ?? false
+      const payload = isRecord(data) ? data.data : null
+      const evaluations = isRecord(payload) && Array.isArray(payload.evaluations)
+        ? payload.evaluations
+        : []
+      const hasRunning = evaluations.some(
+        (entry) =>
+          isRecord(entry) &&
+          ["running", "pending", "processing"].includes(
+            String(entry.status ?? "").toLowerCase()
+          )
+      )
       return hasRunning ? 5000 : false
     }
   })
@@ -319,19 +357,23 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
     queryFn: () => (selectedEvaluationId ? getEvaluation(selectedEvaluationId) : null),
     enabled: capabilityQuery.data === true && !!selectedEvaluationId && online,
     refetchInterval: (data) => {
-      const status = ((data as any)?.data?.status || "").toLowerCase()
-      return status === "running" || status === "pending" ? 4000 : false
+      const payload = isRecord(data) ? data.data : null
+      const status = isRecord(payload) ? String(payload.status ?? "") : ""
+      const normalized = status.toLowerCase()
+      return normalized === "running" || normalized === "pending" ? 4000 : false
     }
   })
 
-  const promptDetail = React.useMemo(() => {
-    const raw = promptDetailQuery.data?.data as any
-    return raw?.data ?? raw
+  const promptDetail = React.useMemo<Prompt | null>(() => {
+    const payload = promptDetailQuery.data?.data
+    const raw = unwrapData(payload)
+    return isRecord(raw) ? (raw as Prompt) : null
   }, [promptDetailQuery.data])
 
-  const evaluationDetail = React.useMemo(() => {
-    const raw = evaluationDetailQuery.data as any
-    return raw?.data ?? raw
+  const evaluationDetail = React.useMemo<PromptStudioEvaluation | null>(() => {
+    const payload = evaluationDetailQuery.data?.data
+    const raw = unwrapData(payload)
+    return isRecord(raw) ? (raw as PromptStudioEvaluation) : null
   }, [evaluationDetailQuery.data])
 
   const selectedProject = React.useMemo(
@@ -359,7 +401,7 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
   })
 
   const createPromptMutation = useMutation({
-    mutationFn: (values: any) =>
+    mutationFn: (values: Partial<PromptFormFields>) =>
       createPrompt({
         project_id: selectedProjectId!,
         name: values.name,
@@ -414,9 +456,9 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
   })
 
   const executePromptMutation = useMutation({
-    mutationFn: async (values: any) => {
+    mutationFn: async (values: { inputs?: string; provider?: string; model?: string }) => {
       if (!selectedPromptId) throw new Error("No prompt selected")
-      const inputs = parseJson(values.inputs || "{}", {})
+      const inputs = parseJson<Record<string, unknown>>(values.inputs || "{}", {})
       return await executePrompt({
         prompt_id: selectedPromptId,
         inputs,
@@ -425,11 +467,20 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
       })
     },
     onSuccess: (data) => {
-      setExecutionResult(data?.data || data)
+      const raw = unwrapData(data)
+      const result = isRecord(raw)
+        ? {
+            output: typeof raw.output === "string" ? raw.output : "",
+            tokens_used: typeof raw.tokens_used === "number" ? raw.tokens_used : undefined,
+            execution_time:
+              typeof raw.execution_time === "number" ? raw.execution_time : undefined
+          }
+        : null
+      setExecutionResult(result)
       setExecutionError(null)
     },
-    onError: (err: any) => {
-      setExecutionError(err?.message || "Execution failed")
+    onError: (err: unknown) => {
+      setExecutionError(getErrorMessage(err, "Execution failed"))
       setExecutionResult(null)
     }
   })
@@ -462,21 +513,25 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
       }))
     },
     onSuccess: (resp, testCase) => {
-      const payload = (resp as any)?.data || (resp as any)
+      const payload = unwrapData(resp)
+      const record = isRecord(payload) ? payload : {}
       setTestCaseRuns((prev) => ({
         ...prev,
         [testCase.id]: {
           status: "done",
-          output: payload?.output,
-          tokens: payload?.tokens_used,
-          time: payload?.execution_time
+          output: typeof record.output === "string" ? record.output : undefined,
+          tokens: typeof record.tokens_used === "number" ? record.tokens_used : undefined,
+          time: typeof record.execution_time === "number" ? record.execution_time : undefined
         }
       }))
     },
-    onError: (err: any, testCase) => {
+    onError: (err: unknown, testCase) => {
       setTestCaseRuns((prev) => ({
         ...prev,
-        [testCase.id]: { status: "error", error: err?.message || "Inline run failed" }
+        [testCase.id]: {
+          status: "error",
+          error: getErrorMessage(err, "Inline run failed")
+        }
       }))
     }
   })
@@ -1057,7 +1112,7 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                               {
                                 title: t("common:actions", "Actions"),
                                 width: 180,
-                                render: (_: any, record: TestCase) => (
+                                render: (_value: unknown, record: TestCase) => (
                                   <Space size="small">
                                     <Button
                                       size="small"
@@ -1078,7 +1133,7 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                               {
                                 title: t("option:promptStudio.lastRun", "Last run"),
                                 width: 120,
-                                render: (_: any, record: TestCase) => {
+                                render: (_value: unknown, record: TestCase) => {
                                   const run = testCaseRuns[record.id]
                                   if (!run) return <Text type="secondary">-</Text>
                                   if (run.status === "running") return <Tag color="blue">{t("common:running", "Running")}</Tag>
@@ -1140,10 +1195,13 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
                               {
                                 title: t("option:promptStudio.avgScore", "Avg score"),
                                 dataIndex: "aggregate_metrics",
-                                render: (metrics: any) =>
-                                  metrics?.average_score != null
-                                    ? Number(metrics.average_score).toFixed(3)
+                                render: (metrics: unknown) => {
+                                  const record = isRecord(metrics) ? metrics : {}
+                                  const average = record.average_score
+                                  return typeof average === "number"
+                                    ? average.toFixed(3)
                                     : "-"
+                                }
                               }
                             ]}
                             onRow={(record) => ({

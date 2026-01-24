@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   ChevronRight,
   History,
-  Copy,
   FileText,
   RotateCcw,
   Trash2,
@@ -17,6 +16,11 @@ import { Dropdown, message, Checkbox } from 'antd'
 import type { MenuProps } from 'antd'
 import { bgRequest } from '@/services/background-proxy'
 import { useConfirmDanger } from '@/components/Common/confirm-danger'
+
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
 
 interface VersionHistoryPanelProps {
   mediaId: string | number
@@ -67,9 +71,6 @@ export function VersionHistoryPanel({
   const getVersionAnalysis = (v: Version): string =>
     String(v?.analysis_content || v?.analysis || '')
 
-  const getVersionPrompt = (v: Version): string =>
-    String(v?.prompt || '')
-
   const getVersionTimestamp = (v: Version): string =>
     String(v?.created_at || v?.updated_at || v?.timestamp || '')
 
@@ -92,13 +93,18 @@ export function VersionHistoryPanel({
     if (!mediaId) return
     setLoading(true)
     try {
-      const data = await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions?include_content=false&limit=50&page=1` as any,
-        method: 'GET' as any
+      const data = await bgRequest({
+        path: `/api/v1/media/${mediaId}/versions?include_content=false&limit=50&page=1`,
+        method: 'GET'
       })
-      const arr = Array.isArray(data) ? data : (data?.items || [])
-      setVersions(arr)
-      if (arr.length > 0 && selectedIndexRef.current < 0) {
+      const arr = Array.isArray(data)
+        ? data
+        : isRecord(data) && Array.isArray(data.items)
+          ? data.items
+          : []
+      const nextVersions = arr.filter(isRecord).map((item) => item as Version)
+      setVersions(nextVersions)
+      if (nextVersions.length > 0 && selectedIndexRef.current < 0) {
         setSelectedIndex(0)
       }
     } catch (err) {
@@ -132,13 +138,14 @@ export function VersionHistoryPanel({
     if (vNum === undefined) return
 
     try {
-      const data = await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions/${vNum}?include_content=true` as any,
-        method: 'GET' as any
+      const data = await bgRequest({
+        path: `/api/v1/media/${mediaId}/versions/${vNum}?include_content=true`,
+        method: 'GET'
       })
-      const content = String(data?.content || data?.raw_content || '')
-      const analysis = String(data?.analysis_content || data?.analysis || '')
-      const prompt = String(data?.prompt || '')
+      const record = isRecord(data) ? data : {}
+      const content = String(record.content || record.raw_content || '')
+      const analysis = String(record.analysis_content || record.analysis || '')
+      const prompt = String(record.prompt || '')
 
       if (onVersionLoad) {
         onVersionLoad(content, analysis, prompt, vNum)
@@ -164,9 +171,9 @@ export function VersionHistoryPanel({
     if (!ok) return
 
     try {
-      await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions/rollback` as any,
-        method: 'POST' as any,
+      await bgRequest({
+        path: `/api/v1/media/${mediaId}/versions/rollback`,
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: { version_number: vNum }
       })
@@ -196,9 +203,9 @@ export function VersionHistoryPanel({
     if (!ok) return
 
     try {
-      await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions/${vNum}` as any,
-        method: 'DELETE' as any
+      await bgRequest({
+        path: `/api/v1/media/${mediaId}/versions/${vNum}`,
+        method: 'DELETE'
       })
       message.success(t('mediaPage.versionDeleted', 'Version deleted'))
       loadVersions()

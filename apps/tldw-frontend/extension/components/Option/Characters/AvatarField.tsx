@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 import React from "react"
 import { Input, Radio, Upload, message } from "antd"
 import { ImageIcon, Link, X, Upload as UploadIcon } from "lucide-react"

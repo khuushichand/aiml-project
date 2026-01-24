@@ -175,8 +175,8 @@ export async function reviewFlashcard(input: FlashcardReviewRequest): Promise<Fl
 }
 
 // Import
-export async function getFlashcardsImportLimits(): Promise<any> {
-  return await bgRequest<any, AllowedPath, "GET">({
+export async function getFlashcardsImportLimits(): Promise<Record<string, unknown>> {
+  return await bgRequest<Record<string, unknown>, AllowedPath, "GET">({
     path: "/api/v1/config/flashcards-import-limits",
     method: "GET"
   })
@@ -186,14 +186,14 @@ export async function importFlashcards(payload: FlashcardsImportRequest, overrid
   max_lines?: number | null
   max_line_length?: number | null
   max_field_length?: number | null
-}): Promise<any> {
+}): Promise<Record<string, unknown>> {
   const query = buildQuery({
     max_lines: overrides?.max_lines,
     max_line_length: overrides?.max_line_length,
     max_field_length: overrides?.max_field_length
   })
   const path = `/api/v1/flashcards/import${query}` as AllowedPath
-  return await bgRequest<any, AllowedPath, "POST">({
+  return await bgRequest<Record<string, unknown>, AllowedPath, "POST">({
     path,
     method: "POST",
     headers: { "Content-Type": "application/json" },

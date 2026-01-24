@@ -5,6 +5,7 @@
 import { bgRequest, bgUpload } from "./background-proxy"
 
 // Types for chunking API
+type UnknownRecord = Record<string, unknown>
 
 export interface ChunkMetadata {
   index?: number
@@ -26,7 +27,7 @@ export interface ChunkMetadata {
   header_text?: string
   section?: string
   code_mode_used?: string
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface Chunk {
@@ -78,7 +79,7 @@ export interface ChunkingResponse {
 
 export interface ChunkingCapabilities {
   methods: string[]
-  default_options: Record<string, any>
+  default_options: UnknownRecord
   llm_required_methods: string[]
   hierarchical_support: boolean
   notes?: string
@@ -110,10 +111,10 @@ export interface ChunkingTemplateListResponse {
 }
 
 export interface TemplateConfig {
-  preprocessing?: Array<Record<string, any>>
-  chunking: Record<string, any>
-  postprocessing?: Array<Record<string, any>>
-  classifier?: Record<string, any>
+  preprocessing?: Array<UnknownRecord>
+  chunking: UnknownRecord
+  postprocessing?: Array<UnknownRecord>
+  classifier?: UnknownRecord
 }
 
 export interface ChunkingTemplateCreateRequest {
@@ -133,13 +134,13 @@ export interface ChunkingTemplateUpdateRequest {
 export interface ApplyTemplateRequest {
   template_name: string
   text: string
-  override_options?: Record<string, any>
+  override_options?: UnknownRecord
 }
 
 export interface ApplyTemplateResponse {
   template_name: string
-  chunks: Array<any>
-  metadata?: Record<string, any>
+  chunks: Array<unknown>
+  metadata?: UnknownRecord
 }
 
 export interface TemplateValidationResponse {
@@ -157,11 +158,11 @@ export interface TemplateLearnRequest {
   example_text?: string
   description?: string
   save?: boolean
-  classifier?: Record<string, any>
+  classifier?: UnknownRecord
 }
 
 export interface TemplateLearnResponse {
-  template: Record<string, any>
+  template: UnknownRecord
   saved: boolean
 }
 
@@ -349,7 +350,7 @@ export async function applyChunkingTemplate(
 }
 
 export async function validateChunkingTemplate(
-  templateConfig: Record<string, any>
+  templateConfig: Record<string, unknown>
 ): Promise<TemplateValidationResponse> {
   return await bgRequest<TemplateValidationResponse>({
     path: "/api/v1/chunking/templates/validate",

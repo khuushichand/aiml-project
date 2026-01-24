@@ -7,13 +7,13 @@ export interface ApiSendPayload<P extends PathOrUrl = PathOrUrl, M extends Allow
   path: P
   method?: UpperLower<M>
   headers?: Record<string, string>
-  body?: any
+  body?: unknown
   noAuth?: boolean
   timeoutMs?: number
   responseType?: "json" | "text" | "arrayBuffer"
 }
 
-export interface ApiSendResponse<T = any> {
+export interface ApiSendResponse<T = unknown> {
   ok: boolean
   status: number
   data?: T
@@ -22,7 +22,7 @@ export interface ApiSendResponse<T = any> {
   retryAfterMs?: number | null
 }
 
-export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
+export async function apiSend<T = unknown, P extends PathOrUrl = PathOrUrl, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
   payload: ApiSendPayload<P, M>
 ): Promise<ApiSendResponse<T>> {
   try {
@@ -39,6 +39,6 @@ export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extend
   const storage = createSafeStorage()
   return await tldwRequest(payload, {
     getConfig: () =>
-      storage.get<Record<string, any>>('tldwConfig').catch(() => null)
+      storage.get<Record<string, unknown>>('tldwConfig').catch(() => null)
   })
 }

@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { browser } from "wxt/browser"
 
-type SttEvent = { event: 'open' | 'data' | 'error' | 'close'; data?: any; message?: string }
+type SttEvent = {
+  event: "open" | "data" | "error" | "close"
+  data?: unknown
+  message?: string
+}
 
 export function useTldwStt() {
   const portRef = useRef<ReturnType<typeof browser.runtime.connect> | null>(null)

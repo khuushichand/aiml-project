@@ -353,7 +353,7 @@ export function sessionToRestoreOutput(session: StoredAgentSession): SessionRest
  * Simple debounce implementation
  * Returns a debounced function with a cancel method
  */
-export function debounce<T extends (...args: any[]) => any>(
+export function debounce<T extends (...args: unknown[]) => unknown>(
   fn: T,
   delay: number
 ): T & { cancel: () => void } {

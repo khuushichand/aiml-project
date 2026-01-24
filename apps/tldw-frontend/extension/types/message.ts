@@ -13,7 +13,7 @@ export type Message = {
   isBot: boolean
   name: string
   message: string
-  sources: any[]
+  sources: unknown[]
   images?: string[]
   search?: WebSearch
   messageType?: string
@@ -22,7 +22,7 @@ export type Message = {
   parentMessageId?: string | null
   createdAt?: number
   id?: string
-  generationInfo?: any
+  generationInfo?: Record<string, unknown>
   reasoning_time_taken?: number
   modelImage?: string
   modelName?: string
@@ -36,9 +36,9 @@ export type Message = {
 export type MessageVariant = {
   id?: string
   message: string
-  sources?: any[]
+  sources?: unknown[]
   images?: string[]
-  generationInfo?: any
+  generationInfo?: Record<string, unknown>
   reasoning_time_taken?: number
   createdAt?: number
   serverMessageId?: string

@@ -3,6 +3,8 @@ import { appendPathQuery, toAllowedPath } from "@/services/tldw/path-utils"
 
 // Prompt Studio client – aligns with tldw_server prompt_studio endpoints.
 
+type UnknownRecord = Record<string, unknown>
+
 export type PaginationMeta = {
   page: number
   per_page: number
@@ -15,7 +17,7 @@ export type StandardResponse<T> = {
   data?: T
   error?: string
   error_code?: string
-  metadata?: Record<string, any>
+  metadata?: UnknownRecord
 }
 
 export type ListResponse<T> = StandardResponse<T[]> & {
@@ -32,14 +34,14 @@ export type Project = {
   updated_at?: string
   prompt_count?: number
   test_case_count?: number
-  metadata?: Record<string, any> | null
+  metadata?: UnknownRecord | null
 }
 
 export type ProjectCreatePayload = {
   name: string
   description?: string | null
   status?: string
-  metadata?: Record<string, any> | null
+  metadata?: UnknownRecord | null
 }
 
 export type ProjectUpdatePayload = Partial<ProjectCreatePayload>
@@ -47,12 +49,12 @@ export type ProjectUpdatePayload = Partial<ProjectCreatePayload>
 export type PromptModule = {
   type: string
   enabled?: boolean
-  config?: Record<string, any> | null
+  config?: UnknownRecord | null
 }
 
 export type FewShotExample = {
-  inputs: Record<string, any>
-  outputs: Record<string, any>
+  inputs: UnknownRecord
+  outputs: UnknownRecord
   explanation?: string | null
 }
 
@@ -106,7 +108,7 @@ export type PromptVersion = {
 
 export type ExecutePromptPayload = {
   prompt_id: number
-  inputs?: Record<string, any>
+  inputs?: UnknownRecord
   provider?: string
   model?: string
 }
@@ -122,8 +124,8 @@ export type TestCase = {
   project_id: number
   name?: string | null
   description?: string | null
-  inputs: Record<string, any>
-  expected_outputs?: Record<string, any> | null
+  inputs: UnknownRecord
+  expected_outputs?: UnknownRecord | null
   tags?: string[] | null
   is_golden?: boolean
   signature_id?: number | null
@@ -135,8 +137,8 @@ export type TestCaseCreatePayload = {
   project_id: number
   name?: string | null
   description?: string | null
-  inputs: Record<string, any>
-  expected_outputs?: Record<string, any> | null
+  inputs: UnknownRecord
+  expected_outputs?: UnknownRecord | null
   tags?: string[] | null
   is_golden?: boolean
   signature_id?: number | null
@@ -184,9 +186,9 @@ export type PromptStudioEvaluation = {
   name?: string | null
   description?: string | null
   status: string
-  metrics?: Record<string, any>
-  aggregate_metrics?: Record<string, any>
-  config?: Record<string, any>
+  metrics?: UnknownRecord
+  aggregate_metrics?: UnknownRecord
+  config?: UnknownRecord
   model_configs?: EvaluationConfig[]
   test_case_ids?: number[]
   test_run_ids?: number[]
@@ -219,7 +221,7 @@ const withIdempotency = (
   return { "Idempotency-Key": key }
 }
 
-const buildQuery = (params: Record<string, any>) => {
+const buildQuery = (params: UnknownRecord) => {
   const qs = new URLSearchParams()
   Object.entries(params).forEach(([k, v]) => {
     if (v === undefined || v === null) return
@@ -233,8 +235,15 @@ const buildQuery = (params: Record<string, any>) => {
 export async function hasPromptStudio(): Promise<boolean> {
   try {
     const res = await getPromptStudioStatus()
-    const status = (res as any)?.data
-    return Boolean((res as any)?.ok && (status?.success ?? true))
+    const status = res?.data
+    const statusRecord =
+      status && typeof status === "object" ? (status as UnknownRecord) : null
+    const ok = res?.ok
+    const success =
+      statusRecord && typeof statusRecord.success === "boolean"
+        ? statusRecord.success
+        : true
+    return Boolean(ok && success)
   } catch {
     return false
   }

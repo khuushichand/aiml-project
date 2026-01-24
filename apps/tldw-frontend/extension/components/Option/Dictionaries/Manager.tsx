@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button, Collapse, Divider, Form, Input, Modal, Skeleton, Switch, Table, Tooltip, Tag, InputNumber, Select, Descriptions } from "antd"
+import type { ColumnsType } from "antd/es/table"
+import type { FormInstance } from "antd/es/form"
 import { useTranslation } from "react-i18next"
 import React from "react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -10,6 +12,119 @@ import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 
+type Dictionary = {
+  id: number
+  name: string
+  description?: string | null
+  is_active?: boolean
+  entry_count?: number
+}
+
+type DictionaryFormValues = {
+  name: string
+  description?: string
+  is_active?: boolean
+}
+
+type DictionaryEntry = {
+  id: number
+  pattern: string
+  replacement: string
+  type?: string
+  probability?: number
+  enabled?: boolean
+  case_sensitive?: boolean
+  group?: string
+  max_replacements?: number
+}
+
+type DictionaryEntryFormValues = {
+  pattern: string
+  replacement: string
+  type?: string
+  probability?: number
+  group?: string
+  max_replacements?: number
+  enabled?: boolean
+  case_sensitive?: boolean
+}
+
+type DictionaryStats = {
+  dictionary_id?: number
+  name?: string
+  total_entries?: number
+  regex_entries?: number
+  literal_entries?: number
+  groups?: string[]
+  average_probability?: number
+  total_usage_count?: number
+}
+
+type DictionaryValidationIssue = {
+  code?: string
+  message?: string
+  field?: string
+}
+
+type DictionaryValidationReport = {
+  ok?: boolean
+  schema_version?: number
+  entry_stats?: {
+    total?: number
+    literal?: number
+    regex?: number
+  }
+  errors?: DictionaryValidationIssue[]
+  warnings?: DictionaryValidationIssue[]
+}
+
+type DictionaryPreviewResult = {
+  processed_text?: string
+  replacements?: number
+  iterations?: number
+  entries_used?: string[]
+  token_budget_exceeded?: boolean
+}
+
+type ImportDictionaryPayload = {
+  data: unknown
+  activate?: boolean
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const toNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return undefined
+}
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
+const parseDictionaryStats = (value: unknown): DictionaryStats | null => {
+  if (!isRecord(value)) return null
+  return {
+    dictionary_id: toNumber(value.dictionary_id),
+    name: typeof value.name === "string" ? value.name : undefined,
+    total_entries: toNumber(value.total_entries),
+    regex_entries: toNumber(value.regex_entries),
+    literal_entries: toNumber(value.literal_entries),
+    groups: Array.isArray(value.groups)
+      ? value.groups.map((group) => String(group))
+      : undefined,
+    average_probability: toNumber(value.average_probability),
+    total_usage_count: toNumber(value.total_usage_count)
+  }
+}
+
 export const DictionariesManager: React.FC = () => {
   const { t } = useTranslation(["common", "option"])
   const isOnline = useServerOnline()
@@ -19,61 +134,75 @@ export const DictionariesManager: React.FC = () => {
   const [openEdit, setOpenEdit] = React.useState(false)
   const [openEntries, setOpenEntries] = React.useState<null | number>(null)
   const [editId, setEditId] = React.useState<number | null>(null)
-  const [createForm] = Form.useForm()
-  const [editForm] = Form.useForm()
-  const [entryForm] = Form.useForm()
+  const [createForm] = Form.useForm<DictionaryFormValues>()
+  const [editForm] = Form.useForm<DictionaryFormValues>()
+  const [entryForm] = Form.useForm<DictionaryEntryFormValues>()
   const [openImport, setOpenImport] = React.useState(false)
   const [activateOnImport, setActivateOnImport] = React.useState(false)
-  const [statsFor, setStatsFor] = React.useState<any | null>(null)
+  const [statsFor, setStatsFor] = React.useState<DictionaryStats | null>(null)
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const confirmDanger = useConfirmDanger()
 
-  const { data, status } = useQuery({
+  const { data: dictionaries = [], status } = useQuery<Dictionary[]>({
     queryKey: ['tldw:listDictionaries'],
     queryFn: async () => {
       await tldwClient.initialize()
       const res = await tldwClient.listDictionaries(false)
-      return res?.dictionaries || []
+      return Array.isArray(res?.dictionaries) ? (res.dictionaries as Dictionary[]) : []
     },
     enabled: isOnline
   })
 
   const { mutate: createDict, isPending: creating } = useMutation({
-    mutationFn: (v: any) => tldwClient.createDictionary(v),
+    mutationFn: (v: DictionaryFormValues) => tldwClient.createDictionary(v),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['tldw:listDictionaries'] }); setOpen(false); createForm.resetFields() },
-    onError: (e: any) => notification.error({ message: 'Error', description: e?.message || 'Failed to create dictionary' })
+    onError: (e: unknown) =>
+      notification.error({
+        message: "Error",
+        description: getErrorMessage(e, "Failed to create dictionary")
+      })
   })
   const { mutate: updateDict, isPending: updating } = useMutation({
-    mutationFn: (v: any) => editId != null ? tldwClient.updateDictionary(editId, v) : Promise.resolve(null),
+    mutationFn: (v: DictionaryFormValues) =>
+      editId != null ? tldwClient.updateDictionary(editId, v) : Promise.resolve(null),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['tldw:listDictionaries'] }); setOpenEdit(false); editForm.resetFields(); setEditId(null) },
-    onError: (e: any) => notification.error({ message: 'Error', description: e?.message || 'Failed to update dictionary' })
+    onError: (e: unknown) =>
+      notification.error({
+        message: "Error",
+        description: getErrorMessage(e, "Failed to update dictionary")
+      })
   })
   const { mutate: deleteDict } = useMutation({
     mutationFn: (id: number) => tldwClient.deleteDictionary(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tldw:listDictionaries'] })
   })
   const { mutate: importDict, isPending: importing } = useMutation({
-    mutationFn: ({ data, activate }: any) => tldwClient.importDictionaryJSON(data, activate),
+    mutationFn: ({ data, activate }: ImportDictionaryPayload) =>
+      tldwClient.importDictionaryJSON(data, activate),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['tldw:listDictionaries'] }); setOpenImport(false) },
-    onError: (e: any) => notification.error({ message: 'Import failed', description: e?.message })
+    onError: (e: unknown) =>
+      notification.error({
+        message: "Import failed",
+        description: getErrorMessage(e, "Import failed")
+      })
   })
 
   const dictionariesUnsupported =
     !capsLoading && capabilities && !capabilities.hasChatDictionaries
 
-  const columns = [
+  const columns: ColumnsType<Dictionary> = [
     { title: '', key: 'icon', width: 40, render: () => <Book className="w-4 h-4" /> },
     { title: 'Name', dataIndex: 'name', key: 'name' },
     { title: 'Description', dataIndex: 'description', key: 'description', render: (v: string) => <span className="line-clamp-1">{v}</span> },
     { title: 'Active', dataIndex: 'is_active', key: 'is_active', render: (v: boolean) => v ? <Tag color="green">Active</Tag> : <Tag>Inactive</Tag> },
     { title: 'Entries', dataIndex: 'entry_count', key: 'entry_count' },
-    { title: 'Actions', key: 'actions', render: (_: any, record: any) => (
+    { title: 'Actions', key: 'actions', render: (_value: unknown, record: Dictionary) => (
       <div className="flex gap-3">
         <Tooltip title="Edit"><button className="text-text-muted" onClick={() => { setEditId(record.id); editForm.setFieldsValue(record); setOpenEdit(true) }}><Pen className="w-4 h-4" /></button></Tooltip>
         <Tooltip title="Manage Entries"><button className="text-text-muted" onClick={() => setOpenEntries(record.id)}>Entries</button></Tooltip>
-        <Tooltip title="Export JSON"><button className="text-text-muted" onClick={async () => { try { const exp = await tldwClient.exportDictionaryJSON(record.id); const blob = new Blob([JSON.stringify(exp, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${record.name || 'dictionary'}.json`; a.click(); URL.revokeObjectURL(url) } catch (e: any) { notification.error({ message: 'Export failed', description: e?.message }) } }}>Export JSON</button></Tooltip>
-        <Tooltip title="Export Markdown"><button className="text-text-muted" onClick={async () => { try { const exp = await tldwClient.exportDictionaryMarkdown(record.id); const blob = new Blob([exp?.content || '' ], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${record.name || 'dictionary'}.md`; a.click(); URL.revokeObjectURL(url) } catch (e: any) { notification.error({ message: 'Export failed', description: e?.message }) } }}>Export MD</button></Tooltip>
-        <Tooltip title="Statistics"><button className="text-text-muted" onClick={async () => { try { const s = await tldwClient.dictionaryStatistics(record.id); setStatsFor(s) } catch (e: any) { notification.error({ message: 'Stats failed', description: e?.message }) } }}>Stats</button></Tooltip>
+        <Tooltip title="Export JSON"><button className="text-text-muted" onClick={async () => { try { const exp = await tldwClient.exportDictionaryJSON(record.id); const blob = new Blob([JSON.stringify(exp, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${record.name || 'dictionary'}.json`; a.click(); URL.revokeObjectURL(url) } catch (e: unknown) { notification.error({ message: 'Export failed', description: getErrorMessage(e, 'Export failed') }) } }}>Export JSON</button></Tooltip>
+        <Tooltip title="Export Markdown"><button className="text-text-muted" onClick={async () => { try { const exp = await tldwClient.exportDictionaryMarkdown(record.id); const payload = isRecord(exp) ? exp : {}; const blob = new Blob([String(payload.content ?? "") ], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${record.name || 'dictionary'}.md`; a.click(); URL.revokeObjectURL(url) } catch (e: unknown) { notification.error({ message: 'Export failed', description: getErrorMessage(e, 'Export failed') }) } }}>Export MD</button></Tooltip>
+        <Tooltip title="Statistics"><button className="text-text-muted" onClick={async () => { try { const s = await tldwClient.dictionaryStatistics(record.id); setStatsFor(parseDictionaryStats(s)) } catch (e: unknown) { notification.error({ message: 'Stats failed', description: getErrorMessage(e, 'Stats failed') }) } }}>Stats</button></Tooltip>
         <Tooltip title="Delete"><button className="text-danger" onClick={async () => { const ok = await confirmDanger({ title: t('common:confirmTitle', { defaultValue: 'Please confirm' }), content: 'Delete dictionary?', okText: t('common:delete', { defaultValue: 'Delete' }), cancelText: t('common:cancel', { defaultValue: 'Cancel' }) }); if (ok) deleteDict(record.id) }}><Trash2 className="w-4 h-4" /></button></Tooltip>
       </div>
     )}
@@ -106,7 +235,7 @@ export const DictionariesManager: React.FC = () => {
         />
       )}
       {status === 'success' && !dictionariesUnsupported && (
-        <Table rowKey={(r: any) => r.id} dataSource={data} columns={columns as any} />
+        <Table rowKey={(record) => record.id} dataSource={dictionaries} columns={columns} />
       )}
 
       <Modal title="Create Dictionary" open={open} onCancel={() => setOpen(false)} footer={null}>
@@ -131,20 +260,29 @@ export const DictionariesManager: React.FC = () => {
       </Modal>
       <Modal title="Import Dictionary (JSON)" open={openImport} onCancel={() => setOpenImport(false)} footer={null}>
         <div className="space-y-3">
-          <input type="file" accept="application/json" onChange={async (e) => {
-            const file = e.target.files?.[0]
+          <input type="file" accept="application/json" disabled={importing} onChange={async (e) => {
+            const input = e.target as HTMLInputElement
+            const file = input.files?.[0]
             if (!file) return
             try {
               const text = await file.text()
               const parsed = JSON.parse(text)
               await importDict({ data: parsed, activate: activateOnImport })
-            } catch (err: any) {
-              notification.error({ message: 'Import failed', description: err?.message })
+            } catch (err: unknown) {
+              notification.error({ message: 'Import failed', description: getErrorMessage(err, 'Import failed') })
             } finally {
-              (e.target as any).value = ''
+              input.value = ""
             }
           }} />
-          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={activateOnImport} onChange={(ev) => setActivateOnImport(ev.target.checked)} /> Activate after import</label>
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={activateOnImport}
+              disabled={importing}
+              onChange={(ev) => setActivateOnImport(ev.target.checked)}
+            />
+            Activate after import
+          </label>
         </div>
       </Modal>
       <Modal title="Dictionary Statistics" open={!!statsFor} onCancel={() => setStatsFor(null)} footer={null}>
@@ -155,7 +293,7 @@ export const DictionariesManager: React.FC = () => {
             <Descriptions.Item label="Total Entries">{statsFor.total_entries}</Descriptions.Item>
             <Descriptions.Item label="Regex Entries">{statsFor.regex_entries}</Descriptions.Item>
             <Descriptions.Item label="Literal Entries">{statsFor.literal_entries}</Descriptions.Item>
-            <Descriptions.Item label="Groups">{(statsFor.groups||[]).join(', ')}</Descriptions.Item>
+            <Descriptions.Item label="Groups">{(statsFor.groups || []).join(', ')}</Descriptions.Item>
             <Descriptions.Item label="Average Probability">{statsFor.average_probability}</Descriptions.Item>
             <Descriptions.Item label="Total Usage Count">{statsFor.total_usage_count}</Descriptions.Item>
           </Descriptions>
@@ -165,7 +303,7 @@ export const DictionariesManager: React.FC = () => {
   )
 }
 
-const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
+const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: FormInstance<DictionaryEntryFormValues> }> = ({
   dictionaryId,
   form
 }) => {
@@ -173,12 +311,12 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
   const qc = useQueryClient()
   const confirmDanger = useConfirmDanger()
   const [validationStrict, setValidationStrict] = React.useState(false)
-  const [validationReport, setValidationReport] = React.useState<any | null>(null)
+  const [validationReport, setValidationReport] = React.useState<DictionaryValidationReport | null>(null)
   const [validationError, setValidationError] = React.useState<string | null>(null)
   const [previewText, setPreviewText] = React.useState("")
   const [previewTokenBudget, setPreviewTokenBudget] = React.useState<number | null>(1000)
   const [previewMaxIterations, setPreviewMaxIterations] = React.useState<number | null>(5)
-  const [previewResult, setPreviewResult] = React.useState<any | null>(null)
+  const [previewResult, setPreviewResult] = React.useState<DictionaryPreviewResult | null>(null)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
 
   const { data: dictionaryMeta } = useQuery({
@@ -189,19 +327,20 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
     }
   })
 
-  const { data: entriesData, status: entriesStatus } = useQuery({
+  const { data: entriesData = [], status: entriesStatus } = useQuery<DictionaryEntry[]>({
     queryKey: ["tldw:listDictionaryEntries", dictionaryId],
     queryFn: async () => {
       await tldwClient.initialize()
       const res = await tldwClient.listDictionaryEntries(dictionaryId)
-      return res?.entries || []
+      return Array.isArray(res?.entries) ? (res.entries as DictionaryEntry[]) : []
     }
   })
 
-  const entries = Array.isArray(entriesData) ? entriesData : []
+  const entries = entriesData
 
   const { mutate: addEntry, isPending: adding } = useMutation({
-    mutationFn: (v: any) => tldwClient.addDictionaryEntry(dictionaryId, v),
+    mutationFn: (v: DictionaryEntryFormValues) =>
+      tldwClient.addDictionaryEntry(dictionaryId, v),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tldw:listDictionaryEntries", dictionaryId] })
       form.resetFields()
@@ -220,7 +359,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
         data: {
           name: dictionaryMeta?.name || undefined,
           description: dictionaryMeta?.description || undefined,
-          entries: entries.map((entry: any) => ({
+          entries: entries.map((entry) => ({
             pattern: entry.pattern,
             replacement: entry.replacement,
             type: entry.type,
@@ -240,11 +379,13 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
       setValidationReport(res)
       setValidationError(null)
     },
-    onError: (e: any) => {
+    onError: (e: unknown) => {
       setValidationReport(null)
       setValidationError(
-        e?.message ||
+        getErrorMessage(
+          e,
           t("option:dictionariesTools.validateError", "Validation failed.")
+        )
       )
     }
   })
@@ -285,11 +426,13 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
       setPreviewResult(res)
       setPreviewError(null)
     },
-    onError: (e: any) => {
+    onError: (e: unknown) => {
       setPreviewResult(null)
       setPreviewError(
-        e?.message ||
+        getErrorMessage(
+          e,
           t("option:dictionariesTools.previewError", "Preview failed.")
+        )
       )
     }
   })
@@ -405,13 +548,13 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                       </div>
                       {validationErrors.length > 0 ? (
                         <ul className="list-disc pl-4 text-xs text-text-muted">
-                          {validationErrors.map((err: any, idx: number) => (
+                          {validationErrors.map((err, idx) => (
                             <li key={`err-${idx}`}>
                               <span className="font-medium text-text">
-                                {err?.code || "error"}:
+                                {err.code || "error"}:
                               </span>{" "}
-                              {err?.message || String(err)}
-                              {err?.field ? ` (${err.field})` : ""}
+                              {err.message || String(err)}
+                              {err.field ? ` (${err.field})` : ""}
                             </li>
                           ))}
                         </ul>
@@ -433,13 +576,13 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                       </div>
                       {validationWarnings.length > 0 ? (
                         <ul className="list-disc pl-4 text-xs text-text-muted">
-                          {validationWarnings.map((warn: any, idx: number) => (
+                          {validationWarnings.map((warn, idx) => (
                             <li key={`warn-${idx}`}>
                               <span className="font-medium text-text">
-                                {warn?.code || "warning"}:
+                                {warn.code || "warning"}:
                               </span>{" "}
-                              {warn?.message || String(warn)}
-                              {warn?.field ? ` (${warn.field})` : ""}
+                              {warn.message || String(warn)}
+                              {warn.field ? ` (${warn.field})` : ""}
                             </li>
                           ))}
                         </ul>
@@ -599,7 +742,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
       {entriesStatus === "success" && (
         <Table
           size="small"
-          rowKey={(r: any) => r.id}
+          rowKey={(record) => record.id}
           dataSource={entries}
           columns={[
             { title: "Pattern", dataIndex: "pattern", key: "pattern" },
@@ -620,7 +763,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
             {
               title: "Actions",
               key: "actions",
-              render: (_: any, r: any) => (
+              render: (_value: unknown, r: DictionaryEntry) => (
                 <div className="flex gap-2">
                   <Tooltip title="Delete">
                     <button
@@ -644,7 +787,7 @@ const DictionaryEntryManager: React.FC<{ dictionaryId: number; form: any }> = ({
                 </div>
               )
             }
-          ] as any}
+          ] as ColumnsType<DictionaryEntry>}
         />
       )}
       <Form layout="vertical" form={form} onFinish={(v) => addEntry(v)}>

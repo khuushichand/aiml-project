@@ -5,7 +5,7 @@
  * Tracks recently used workspaces and provides quick access.
  */
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import type { WorkspaceHistoryEntry } from "@/services/agent/storage"
 import {
   getRecentWorkspaces,
@@ -47,7 +47,10 @@ export function useWorkspaceHistory(
   const [initialized, setInitialized] = useState(false)
 
   // Get existing workspace IDs for filtering
-  const existingIds = existingWorkspaces.map((w) => w.id)
+  const existingIds = useMemo(
+    () => existingWorkspaces.map((w) => w.id),
+    [existingWorkspaces]
+  )
 
   // Initialize and load history when workspaces change
   useEffect(() => {
@@ -87,7 +90,7 @@ export function useWorkspaceHistory(
     }
 
     loadHistory()
-  }, [existingIds.join(","), initialized]) // Join IDs to create stable dependency
+  }, [existingIds, initialized])
 
   // Record workspace usage
   const recordUsage = useCallback(
@@ -184,7 +187,10 @@ export function useAutoSelectWorkspace(
   currentSelectedId: string | null,
   onSelect: (workspace: Workspace) => void
 ): void {
-  const existingIds = existingWorkspaces.map((w) => w.id)
+  const existingIds = useMemo(
+    () => existingWorkspaces.map((w) => w.id),
+    [existingWorkspaces]
+  )
 
   useEffect(() => {
     // Only run if no workspace is currently selected

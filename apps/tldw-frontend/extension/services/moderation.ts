@@ -34,7 +34,7 @@ export interface ModerationUserOverride {
 }
 
 export interface ModerationUserOverridesResponse {
-  overrides: Record<string, Record<string, any>>
+  overrides: Record<string, Record<string, unknown>>
 }
 
 export interface BlocklistManagedItem {
@@ -88,7 +88,7 @@ export interface ModerationTestResponse {
   action: ModerationAction
   sample?: string | null
   redacted_text?: string | null
-  effective: Record<string, any>
+  effective: Record<string, unknown>
   category?: string | null
 }
 
@@ -109,9 +109,9 @@ export async function updateModerationSettings(
   })
 }
 
-export async function getEffectivePolicy(userId?: string): Promise<Record<string, any>> {
+export async function getEffectivePolicy(userId?: string): Promise<Record<string, unknown>> {
   const query = userId ? `?user_id=${encodeURIComponent(userId)}` : ""
-  return await bgRequest<Record<string, any>>({
+  return await bgRequest<Record<string, unknown>>({
     path: `/api/v1/moderation/policy/effective${query}` as ClientPathRuntimeWithQuery,
     method: "GET"
   })
@@ -131,8 +131,8 @@ export async function listUserOverrides(): Promise<ModerationUserOverridesRespon
   })
 }
 
-export async function getUserOverride(userId: string): Promise<Record<string, any>> {
-  return await bgRequest<Record<string, any>>({
+export async function getUserOverride(userId: string): Promise<Record<string, unknown>> {
+  return await bgRequest<Record<string, unknown>>({
     path: `/api/v1/moderation/users/${encodeURIComponent(userId)}` as ClientPathRuntimeWithQuery,
     method: "GET"
   })
@@ -141,8 +141,8 @@ export async function getUserOverride(userId: string): Promise<Record<string, an
 export async function setUserOverride(
   userId: string,
   body: ModerationUserOverride
-): Promise<Record<string, any>> {
-  return await bgRequest<Record<string, any>>({
+): Promise<Record<string, unknown>> {
+  return await bgRequest<Record<string, unknown>>({
     path: `/api/v1/moderation/users/${encodeURIComponent(userId)}` as ClientPathRuntimeWithQuery,
     method: "PUT",
     body

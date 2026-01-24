@@ -51,6 +51,42 @@ def generate_recommendations(results: Dict[str, Any]) -> Dict[str, List[str]]:
             strategy.add("Use a modern, non-generic User-Agent and align headers with real browsers.")
             break
 
+    fingerprint = results.get("fingerprint", {})
+    if fingerprint.get("status") == "success":
+        detected_services = fingerprint.get("detected_services", []) or []
+        behavioral_listeners = fingerprint.get("behavioral_listeners_detected", []) or []
+        canvas_signal = fingerprint.get("canvas_fingerprinting_signal", False)
+
+        if detected_services:
+            services_str = ", ".join(detected_services)
+            strategy.add(
+                f"Site uses advanced bot detection ({services_str}). Use playwright-stealth or undetected-chromedriver."
+            )
+            tools.add("An anti-detection browser automation library (e.g. playwright-stealth, undetected-chromedriver).")
+
+        if behavioral_listeners:
+            strategy.add("Site monitors user behavior (mouse, keyboard, scroll). Simulate realistic interaction.")
+            strategy.add("Add random delays and jitter between actions to appear more human.")
+
+        if canvas_signal:
+            strategy.add("Canvas fingerprinting detected. Use automation with built-in evasion (not basic requests).")
+
+    integrity = results.get("integrity", {})
+    if integrity.get("status") == "success":
+        modified_functions = integrity.get("modified_functions", {}) or {}
+        if modified_functions:
+            has_canvas_mods = any("Canvas" in func for func in modified_functions.keys())
+            has_timing_mods = any(
+                ("Date.now" in func or "performance.now" in func) for func in modified_functions.keys()
+            )
+
+            if has_canvas_mods:
+                strategy.add("Site modifies canvas functions (strong fingerprinting). Avoid basic automation.")
+            if has_timing_mods:
+                strategy.add("Site monitors timing patterns. Vary your request timing to look less robotic.")
+            if not (has_canvas_mods or has_timing_mods):
+                strategy.add("Site modifies browser functions. Use advanced evasion techniques and test thoroughly.")
+
     if not tools:
         tools.add("Standard HTTP clients (requests, aiohttp) should be sufficient.")
 

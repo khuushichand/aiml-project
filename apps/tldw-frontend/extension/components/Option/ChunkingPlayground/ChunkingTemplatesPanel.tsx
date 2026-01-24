@@ -39,6 +39,8 @@ import {
 const { TextArea } = Input
 const { Text, Title } = Typography
 
+const EMPTY_TEMPLATES: ChunkingTemplateResponse[] = []
+
 const parseJson = (raw: string) => {
   if (!raw.trim()) return { value: undefined, error: null }
   try {
@@ -124,7 +126,7 @@ export const ChunkingTemplatesPanel: React.FC = () => {
     staleTime: 60 * 1000
   })
 
-  const templates = templateList?.templates ?? []
+  const templates = templateList?.templates ?? EMPTY_TEMPLATES
   const selectedTemplate = templates.find(
     (template) => template.name === selectedTemplateName
   )
@@ -249,7 +251,7 @@ export const ChunkingTemplatesPanel: React.FC = () => {
       const payload: {
         template_name: string
         text: string
-        override_options?: Record<string, any>
+        override_options?: Record<string, unknown>
       } = {
         template_name: applyTemplateName.trim(),
         text: applyText

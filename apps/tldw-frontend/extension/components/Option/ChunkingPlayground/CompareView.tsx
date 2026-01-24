@@ -8,7 +8,6 @@ import {
   InputNumber,
   Button,
   Segmented,
-  Space,
   Alert,
   Spin,
   Typography,
@@ -22,7 +21,6 @@ import { useAntdMessage } from "@/hooks/useAntdMessage"
 import {
   chunkText,
   calculateChunkStats,
-  DEFAULT_CHUNKING_OPTIONS,
   type Chunk,
   type ChunkingOptions,
   type ChunkingCapabilities
@@ -33,7 +31,7 @@ import { ChunkInlineView } from "./ChunkInlineView"
 import { getLanguageOptions } from "./constants"
 
 const { TextArea } = Input
-const { Text, Title } = Typography
+const { Text } = Typography
 
 type ViewMode = "cards" | "inline"
 
@@ -155,7 +153,7 @@ export const CompareView: React.FC<CompareViewProps> = ({
         }))
       }
     },
-    [inputText, t]
+    [inputText, t, message]
   )
 
   const handleChunkBoth = useCallback(async () => {

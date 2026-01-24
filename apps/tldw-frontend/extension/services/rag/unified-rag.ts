@@ -428,7 +428,15 @@ export const buildRagSearchRequest = (settings: RagSettings) => {
 }
 
 export const toRagAdvancedOptions = (settings: RagSettings) => {
-  const { query, search_mode, top_k, enable_generation, enable_citations, sources, ...rest } = settings
+  const {
+    query: _query,
+    search_mode: _search_mode,
+    top_k: _top_k,
+    enable_generation: _enable_generation,
+    enable_citations: _enable_citations,
+    sources: _sources,
+    ...rest
+  } = settings
   const options: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(rest)) {
     if (value === undefined || value === null) continue

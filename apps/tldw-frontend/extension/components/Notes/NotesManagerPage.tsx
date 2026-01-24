@@ -3,12 +3,11 @@ import type { InputRef } from 'antd'
 import { Input, Typography, Select, Button, Tooltip } from 'antd'
 import { Plus as PlusIcon, Search as SearchIcon, ChevronLeft, ChevronRight } from 'lucide-react'
 import { bgRequest } from '@/services/background-proxy'
-import { useQuery, keepPreviousData, useQueryClient } from '@tanstack/react-query'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { useServerOnline } from '@/hooks/useServerOnline'
 import { useConfirmDanger } from '@/components/Common/confirm-danger'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import FeatureEmptyState from '@/components/Common/FeatureEmptyState'
 import { useDemoMode } from '@/context/demo-mode'
 import { useServerCapabilities } from '@/hooks/useServerCapabilities'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
@@ -18,7 +17,6 @@ import { useStoreMessageOption, type State as MessageOptionState } from "@/store
 import { useShallow } from "zustand/react/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
-import { useScrollToServerCard } from "@/hooks/useScrollToServerCard"
 import { MarkdownPreview } from "@/components/Common/MarkdownPreview"
 import NotesEditorHeader from "@/components/Notes/NotesEditorHeader"
 import NotesListPanel from "@/components/Notes/NotesListPanel"
@@ -28,48 +26,84 @@ import { formatFileSize } from "@/utils/format"
 import { clearSetting, getSetting } from "@/services/settings/registry"
 import { LAST_NOTE_ID_SETTING } from "@/services/settings/ui-settings"
 
+type UnknownRecord = Record<string, unknown>
+
 type NoteWithKeywords = {
-  metadata?: { keywords?: any[] }
-  keywords?: any[]
+  metadata?: { keywords?: unknown[] }
+  keywords?: unknown[]
 }
 
 const KeywordPickerModal = React.lazy(() => import('@/components/Notes/KeywordPickerModal'))
 
-const extractBacklink = (note: any) => {
-  const meta = note?.metadata || {}
-  const backlinks = meta?.backlinks || meta || {}
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
+
+const toOptionalString = (value: unknown): string | undefined =>
+  value == null ? undefined : String(value)
+
+const toNullableString = (value: unknown): string | null =>
+  value == null ? null : String(value)
+
+const toNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
+const toNonNegativeInteger = (value: unknown): number | null => {
+  const parsed = toNumber(value)
+  if (parsed == null || !Number.isInteger(parsed) || parsed < 0) return null
+  return parsed
+}
+
+const getErrorMessage = (error: unknown): string => {
+  if (typeof error === "string") return error
+  if (error instanceof Error && typeof error.message === "string") return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return ""
+}
+
+const extractBacklink = (note: unknown) => {
+  const record = isRecord(note) ? note : {}
+  const meta = isRecord(record.metadata) ? record.metadata : {}
+  const backlinks = isRecord(meta.backlinks) ? meta.backlinks : meta
   const conversation =
-    note?.conversation_id ??
-    backlinks?.conversation_id ??
-    backlinks?.conversationId ??
-    meta?.conversation_id ??
+    record.conversation_id ??
+    backlinks.conversation_id ??
+    backlinks.conversationId ??
+    meta.conversation_id ??
     null
   const message =
-    note?.message_id ??
-    backlinks?.message_id ??
-    backlinks?.messageId ??
-    meta?.message_id ??
+    record.message_id ??
+    backlinks.message_id ??
+    backlinks.messageId ??
+    meta.message_id ??
     null
   return {
-    conversation_id: conversation != null ? String(conversation) : null,
-    message_id: message != null ? String(message) : null
+    conversation_id: toNullableString(conversation),
+    message_id: toNullableString(message)
   }
 }
 
-const extractKeywords = (note: NoteWithKeywords | any): string[] => {
-  const rawKeywords = (Array.isArray(note?.metadata?.keywords)
-    ? note.metadata.keywords
-    : Array.isArray(note?.keywords)
-      ? note.keywords
-      : []) as any[]
+const extractKeywords = (note: NoteWithKeywords | unknown): string[] => {
+  const record = isRecord(note) ? note : {}
+  const meta = isRecord(record.metadata) ? record.metadata : {}
+  const rawKeywords = Array.isArray(meta.keywords)
+    ? meta.keywords
+    : Array.isArray(record.keywords)
+      ? record.keywords
+      : []
   return (rawKeywords || [])
-    .map((item: any) => {
-      const raw =
-        item?.keyword ??
-        item?.keyword_text ??
-        item?.text ??
-        item
-      return typeof raw === 'string' ? raw : null
+    .map((item) => {
+      if (typeof item === "string") return item
+      if (isRecord(item)) {
+        const raw = item.keyword ?? item.keyword_text ?? item.text
+        return typeof raw === "string" ? raw : null
+      }
+      return null
     })
     .filter((s): s is string => !!s && s.trim().length > 0)
 }
@@ -79,31 +113,21 @@ const extractKeywords = (note: NoteWithKeywords | any): string[] => {
 // 2. note.expected_version (fallback)
 // 3. note.expectedVersion (camelCase variant)
 // 4. note.metadata.* (nested variants)
-const toNoteVersion = (note: any): number | null => {
+const toNoteVersion = (note: unknown): number | null => {
+  const record = isRecord(note) ? note : {}
+  const meta = isRecord(record.metadata) ? record.metadata : {}
   const candidates = [
-    note?.version,
-    note?.expected_version,
-    note?.expectedVersion,
-    note?.metadata?.version,
-    note?.metadata?.expected_version,
-    note?.metadata?.expectedVersion
+    record.version,
+    record.expected_version,
+    record.expectedVersion,
+    meta.version,
+    meta.expected_version,
+    meta.expectedVersion
   ]
   const validVersions: number[] = []
   for (const candidate of candidates) {
-    if (
-      typeof candidate === 'number' &&
-      Number.isFinite(candidate) &&
-      Number.isInteger(candidate) &&
-      candidate >= 0
-    ) {
-      validVersions.push(candidate)
-    }
-    if (typeof candidate === 'string' && candidate.trim().length > 0) {
-      const parsed = Number(candidate)
-      if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 0) {
-        validVersions.push(parsed)
-      }
-    }
+    const parsed = toNonNegativeInteger(candidate)
+    if (parsed != null) validVersions.push(parsed)
   }
   if (validVersions.length > 1) {
     const allSame = validVersions.every((version) => version === validVersions[0])
@@ -112,6 +136,32 @@ const toNoteVersion = (note: any): number | null => {
     }
   }
   return validVersions[0] ?? null
+}
+
+const toNoteListItem = (note: unknown): NoteListItem | null => {
+  if (!isRecord(note)) return null
+  const idValue = note.id
+  if (typeof idValue !== "string" && typeof idValue !== "number") return null
+  const links = extractBacklink(note)
+  return {
+    id: idValue,
+    title: toOptionalString(note.title),
+    content: toOptionalString(note.content),
+    updated_at: toOptionalString(note.updated_at),
+    conversation_id: links.conversation_id,
+    message_id: links.message_id,
+    keywords: extractKeywords(note),
+    version: toNoteVersion(note) ?? undefined
+  }
+}
+
+const mapNoteListItems = (items: unknown[]): NoteListItem[] => {
+  const out: NoteListItem[] = []
+  for (const item of items) {
+    const parsed = toNoteListItem(item)
+    if (parsed) out.push(parsed)
+  }
+  return out
 }
 
 // 120px offset accounts for page header and padding
@@ -130,7 +180,6 @@ const NotesManagerPage: React.FC = () => {
   const [selectedId, setSelectedId] = React.useState<string | number | null>(null)
   const [title, setTitle] = React.useState('')
   const [content, setContent] = React.useState('')
-  const [loadingDetail, setLoadingDetail] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [keywordTokens, setKeywordTokens] = React.useState<string[]>([])
   const [keywordOptions, setKeywordOptions] = React.useState<string[]>([])
@@ -141,7 +190,7 @@ const NotesManagerPage: React.FC = () => {
   const [keywordPickerQuery, setKeywordPickerQuery] = React.useState('')
   const [keywordPickerSelection, setKeywordPickerSelection] = React.useState<string[]>([])
   const [editorKeywords, setEditorKeywords] = React.useState<string[]>([])
-  const [originalMetadata, setOriginalMetadata] = React.useState<Record<string, any> | null>(null)
+  const [originalMetadata, setOriginalMetadata] = React.useState<Record<string, unknown> | null>(null)
   const [selectedVersion, setSelectedVersion] = React.useState<number | null>(null)
   const [isDirty, setIsDirty] = React.useState(false)
   const [backlinkConversationId, setBacklinkConversationId] = React.useState<string | null>(null)
@@ -151,7 +200,6 @@ const NotesManagerPage: React.FC = () => {
   const keywordSearchTimeoutRef = React.useRef<number | null>(null)
   const isOnline = useServerOnline()
   const { demoEnabled } = useDemoMode()
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const titleInputRef = React.useRef<InputRef | null>(null)
@@ -189,7 +237,7 @@ const NotesManagerPage: React.FC = () => {
     toks: string[],
     page: number,
     pageSize: number
-  ): Promise<{ items: any[]; total: number }> => {
+  ): Promise<{ items: unknown[]; total: number }> => {
     const qstr = q.trim()
     if (!qstr && toks.length === 0) {
       return { items: [], total: 0 }
@@ -207,26 +255,27 @@ const NotesManagerPage: React.FC = () => {
       }
     })
 
-    const abs = await bgRequest<any>({
-      path: `/api/v1/notes/search/?${params.toString()}` as any,
-      method: 'GET' as any
+    const abs = await bgRequest<unknown>({
+      path: `/api/v1/notes/search/?${params.toString()}`,
+      method: "GET"
     })
 
-    let items: any[] = []
+    let items: unknown[] = []
     let total = 0
 
     if (Array.isArray(abs)) {
       items = abs
       total = abs.length
-    } else if (abs && typeof abs === 'object') {
-      if (Array.isArray((abs as any).items)) {
-        items = (abs as any).items
+    } else if (isRecord(abs)) {
+      if (Array.isArray(abs.items)) {
+        items = abs.items
       }
-      const pagination = (abs as any).pagination
-      if (pagination && typeof pagination.total_items === 'number') {
-        total = Number(pagination.total_items)
-      } else if (Array.isArray((abs as any).items)) {
-        total = (abs as any).items.length
+      const pagination = isRecord(abs.pagination) ? abs.pagination : null
+      const totalItems = toNumber(pagination?.total_items)
+      if (totalItems != null) {
+        total = totalItems
+      } else if (Array.isArray(abs.items)) {
+        total = abs.items.length
       }
     }
 
@@ -240,40 +289,22 @@ const NotesManagerPage: React.FC = () => {
     if (q || toks.length > 0) {
       const { items, total } = await fetchFilteredNotesRaw(q, toks, page, pageSize)
       setTotal(total)
-      return items.map((n: any) => {
-        const links = extractBacklink(n)
-        const keywords = extractKeywords(n)
-        return {
-          id: n?.id,
-          title: n?.title,
-          content: n?.content,
-          updated_at: n?.updated_at,
-          conversation_id: links.conversation_id,
-          message_id: links.message_id,
-          keywords,
-          version: toNoteVersion(n) ?? undefined
-        }
-      })
+      return mapNoteListItems(items)
     }
     // Browse list with pagination when no filters
-    const res = await bgRequest<any>({ path: `/api/v1/notes/?page=${page}&results_per_page=${pageSize}` as any, method: 'GET' as any })
-    const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : [])
-    const pagination = res?.pagination
-    setTotal(Number(pagination?.total_items || items.length || 0))
-    return items.map((n: any) => {
-      const links = extractBacklink(n)
-      const keywords = extractKeywords(n)
-      return {
-        id: n?.id,
-        title: n?.title,
-        content: n?.content,
-        updated_at: n?.updated_at,
-        conversation_id: links.conversation_id,
-        message_id: links.message_id,
-        keywords,
-        version: toNoteVersion(n) ?? undefined
-      }
+    const res = await bgRequest<unknown>({
+      path: `/api/v1/notes/?page=${page}&results_per_page=${pageSize}`,
+      method: "GET"
     })
+    const items = isRecord(res) && Array.isArray(res.items)
+      ? res.items
+      : Array.isArray(res)
+        ? res
+        : []
+    const pagination = isRecord(res) && isRecord(res.pagination) ? res.pagination : null
+    const totalItems = toNumber(pagination?.total_items) ?? items.length
+    setTotal(totalItems)
+    return mapNoteListItems(items)
   }
 
   const { data, isFetching, refetch } = useQuery({
@@ -355,25 +386,26 @@ const NotesManagerPage: React.FC = () => {
   }, [])
 
   const loadDetail = React.useCallback(async (id: string | number) => {
-    setLoadingDetail(true)
     try {
-      const d = await bgRequest<any>({ path: `/api/v1/notes/${id}` as any, method: 'GET' as any })
+      const d = await bgRequest<unknown>({
+        path: `/api/v1/notes/${id}`,
+        method: "GET"
+      })
+      const record = isRecord(d) ? d : {}
       setSelectedId(id)
-      setTitle(String(d?.title || ''))
-      setContent(String(d?.content || ''))
-      setEditorKeywords(extractKeywords(d))
-      setSelectedVersion(toNoteVersion(d))
-      const rawMeta = d && typeof d === "object" ? (d as any).metadata : null
-      setOriginalMetadata(
-        rawMeta && typeof rawMeta === "object" ? { ...(rawMeta as Record<string, any>) } : null
-      )
-      const links = extractBacklink(d)
+      setTitle(String(record.title ?? ''))
+      setContent(String(record.content ?? ''))
+      setEditorKeywords(extractKeywords(record))
+      setSelectedVersion(toNoteVersion(record))
+      const rawMeta = isRecord(record.metadata) ? record.metadata : null
+      setOriginalMetadata(rawMeta ? { ...rawMeta } : null)
+      const links = extractBacklink(record)
       setBacklinkConversationId(links.conversation_id)
       setBacklinkMessageId(links.message_id)
       setIsDirty(false)
-    } catch {
-      message.error('Failed to load note')
-    } finally { setLoadingDetail(false) }
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error) || 'Failed to load note')
+    }
   }, [message])
 
   const resetEditor = () => {
@@ -397,7 +429,7 @@ const NotesManagerPage: React.FC = () => {
       cancelText: 'Cancel'
     })
     return ok
-  }, [isDirty])
+  }, [confirmDanger, isDirty])
 
   const handleNewNote = React.useCallback(async () => {
     const ok = await confirmDiscardIfDirty()
@@ -417,10 +449,13 @@ const NotesManagerPage: React.FC = () => {
     [confirmDiscardIfDirty, loadDetail]
   )
 
-  const isVersionConflictError = (error: any) => {
-    const msg = String(error?.message || '')
+  const isVersionConflictError = (error: unknown) => {
+    const msg = getErrorMessage(error)
     const lower = msg.toLowerCase()
-    const status = error?.status ?? error?.response?.status
+    const status = toNumber(
+      (isRecord(error) ? error.status : undefined) ??
+        (isRecord(error) && isRecord(error.response) ? error.response.status : undefined)
+    )
     return (
       status === 409 ||
       lower.includes('expected-version') ||
@@ -464,13 +499,13 @@ const NotesManagerPage: React.FC = () => {
     if (!content.trim() && !title.trim()) { message.warning('Nothing to save'); return }
     setSaving(true)
     try {
-      const metadata: Record<string, any> = {
+      const metadata: Record<string, unknown> = {
         ...(originalMetadata || {}),
         keywords: editorKeywords
       }
       if (backlinkConversationId) metadata.conversation_id = backlinkConversationId
       if (backlinkMessageId) metadata.message_id = backlinkMessageId
-      const payload: Record<string, any> = {
+      const payload: Record<string, unknown> = {
         title: title || undefined,
         content,
         metadata,
@@ -479,19 +514,32 @@ const NotesManagerPage: React.FC = () => {
       if (backlinkConversationId) payload.conversation_id = backlinkConversationId
       if (backlinkMessageId) payload.message_id = backlinkMessageId
       if (selectedId == null) {
-        const created = await bgRequest<any>({ path: '/api/v1/notes/' as any, method: 'POST' as any, headers: { 'Content-Type': 'application/json' }, body: payload })
+        const created = await bgRequest<unknown>({
+          path: "/api/v1/notes/",
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload
+        })
         message.success('Note created')
         setIsDirty(false)
         await refetch()
-        if (created?.id != null) await loadDetail(created.id)
+        const createdId =
+          isRecord(created) &&
+          (typeof created.id === "string" || typeof created.id === "number")
+            ? created.id
+            : null
+        if (createdId != null) await loadDetail(createdId)
       } else {
         let expectedVersion = selectedVersion
         if (expectedVersion == null) {
           try {
-            const latest = await bgRequest<any>({ path: `/api/v1/notes/${selectedId}` as any, method: 'GET' as any })
+            const latest = await bgRequest<unknown>({
+              path: `/api/v1/notes/${selectedId}`,
+              method: "GET"
+            })
             expectedVersion = toNoteVersion(latest)
-          } catch (e: any) {
-            message.error(e?.message || 'Save failed')
+          } catch (error: unknown) {
+            message.error(getErrorMessage(error) || 'Save failed')
             return
           }
         }
@@ -499,12 +547,12 @@ const NotesManagerPage: React.FC = () => {
           message.error('Missing version; reload and try again')
           return
         }
-        const updated = await bgRequest<any>({
+        const updated = await bgRequest<unknown>({
           path: `/api/v1/notes/${selectedId}?expected_version=${encodeURIComponent(
             String(expectedVersion)
-          )}` as any,
-          method: 'PUT' as any,
-          headers: { 'Content-Type': 'application/json' },
+          )}`,
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
           body: payload
         })
         const updatedVersion = toNoteVersion(updated)
@@ -515,18 +563,21 @@ const NotesManagerPage: React.FC = () => {
           setSelectedVersion(updatedVersion)
         } else if (selectedId != null) {
           try {
-            const latest = await bgRequest<any>({ path: `/api/v1/notes/${selectedId}` as any, method: 'GET' as any })
+            const latest = await bgRequest<unknown>({
+              path: `/api/v1/notes/${selectedId}`,
+              method: "GET"
+            })
             setSelectedVersion(toNoteVersion(latest))
           } catch (err) {
             console.debug('[NotesManagerPage] Version refresh after save failed:', err)
           }
         }
       }
-    } catch (e: any) {
-      if (isVersionConflictError(e)) {
+    } catch (error: unknown) {
+      if (isVersionConflictError(error)) {
         handleVersionConflict(selectedId)
       } else {
-        message.error(String(e?.message || '') || 'Operation failed')
+        message.error(getErrorMessage(error) || 'Operation failed')
       }
     } finally { setSaving(false) }
   }
@@ -536,7 +587,10 @@ const NotesManagerPage: React.FC = () => {
     const target = noteId ?? selectedId
     if (target == null) return
     try {
-      const detail = await bgRequest<any>({ path: `/api/v1/notes/${target}` as any, method: 'GET' as any })
+      const detail = await bgRequest<unknown>({
+        path: `/api/v1/notes/${target}`,
+        method: "GET"
+      })
       const version = toNoteVersion(detail)
       if (version != null) setSelectedVersion(version)
     } catch {
@@ -561,10 +615,13 @@ const NotesManagerPage: React.FC = () => {
       }
       if (expectedVersion == null) {
         try {
-          const detail = await bgRequest<any>({ path: `/api/v1/notes/${target}` as any, method: 'GET' as any })
+          const detail = await bgRequest<unknown>({
+            path: `/api/v1/notes/${target}`,
+            method: "GET"
+          })
           expectedVersion = toNoteVersion(detail)
-        } catch (e: any) {
-          message.error(e?.message || 'Could not verify note version')
+        } catch (error: unknown) {
+          message.error(getErrorMessage(error) || 'Could not verify note version')
           return
         }
       }
@@ -572,20 +629,20 @@ const NotesManagerPage: React.FC = () => {
         message.error('Missing version; reload and try again')
         return
       }
-      await bgRequest<any>({
+      await bgRequest<void>({
         path: `/api/v1/notes/${target}?expected_version=${encodeURIComponent(
           String(expectedVersion)
-        )}` as any,
-        method: 'DELETE' as any
+        )}`,
+        method: "DELETE"
       })
       message.success('Note deleted')
       if (selectedId != null && String(selectedId) === targetId) resetEditor()
       await refetch()
-    } catch (e: any) {
-      if (isVersionConflictError(e)) {
+    } catch (error: unknown) {
+      if (isVersionConflictError(error)) {
         handleVersionConflict(target)
       } else {
-        message.error(String(e?.message || '') || 'Operation failed')
+        message.error(getErrorMessage(error) || 'Operation failed')
       }
     }
   }
@@ -609,27 +666,28 @@ const NotesManagerPage: React.FC = () => {
       const chat = await tldwClient.getChat(backlinkConversationId)
       setHistoryId(null)
       setServerChatId(String(backlinkConversationId))
-      setServerChatState(
-        (chat as any)?.state ??
-          (chat as any)?.conversation_state ??
-          "in-progress"
-      )
-      setServerChatTopic((chat as any)?.topic_label ?? null)
-      setServerChatClusterId((chat as any)?.cluster_id ?? null)
-      setServerChatSource((chat as any)?.source ?? null)
-      setServerChatExternalRef((chat as any)?.external_ref ?? null)
+      setServerChatState(chat.state ?? "in-progress")
+      setServerChatTopic(chat.topic_label ?? null)
+      setServerChatClusterId(chat.cluster_id ?? null)
+      setServerChatSource(chat.source ?? null)
+      setServerChatExternalRef(chat.external_ref ?? null)
       let assistantName = "Assistant"
-      if ((chat as any)?.character_id != null) {
+      if (chat.character_id != null) {
         try {
-          const c = await tldwClient.getCharacter((chat as any)?.character_id)
-          assistantName =
-            c?.name || c?.title || c?.slug || assistantName
+          const c = await tldwClient.getCharacter(chat.character_id)
+          if (isRecord(c)) {
+            assistantName =
+              (typeof c.name === "string" && c.name) ||
+              (typeof c.title === "string" && c.title) ||
+              (typeof c.slug === "string" && c.slug) ||
+              assistantName
+          }
         } catch {}
       }
 
       const messages = await tldwClient.listChatMessages(
         backlinkConversationId,
-        { include_deleted: "false" } as any
+        { include_deleted: "false" }
       )
       const historyArr = messages.map((m) => ({
         role: normalizeChatRole(m.role),
@@ -657,16 +715,16 @@ const NotesManagerPage: React.FC = () => {
       })
       setHistory(historyArr)
       setMessages(mappedMessages)
-      updatePageTitle((chat as any)?.title || "")
+      updatePageTitle(chat.title || "")
       navigate("/")
       setTimeout(() => {
         try {
           window.dispatchEvent(new CustomEvent("tldw:focus-composer"))
         } catch {}
       }, 0)
-    } catch (e: any) {
+    } catch (error: unknown) {
       message.error(
-        e?.message ||
+        getErrorMessage(error) ||
           t("option:notesSearch.openConversationError", {
             defaultValue: "Failed to open linked conversation."
           })
@@ -720,13 +778,7 @@ const NotesManagerPage: React.FC = () => {
         while (p <= MAX_EXPORT_PAGES) {
           const { items } = await fetchFilteredNotesRaw(q, toks, p, ps)
           if (!items.length) break
-          arr.push(
-            ...items.map((n: any) => ({
-              id: n?.id,
-              title: n?.title,
-              content: n?.content
-            }))
-          )
+          arr.push(...mapNoteListItems(items))
           if (items.length < ps) break
           p++
         }
@@ -736,11 +788,18 @@ const NotesManagerPage: React.FC = () => {
         let p = 1
         const ps = 100
         while (p <= MAX_EXPORT_PAGES) {
-          const res = await bgRequest<any>({ path: `/api/v1/notes/?page=${p}&results_per_page=${ps}` as any, method: 'GET' as any })
-          const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : [])
-          arr.push(...items.map((n: any) => ({ id: n?.id, title: n?.title, content: n?.content })))
-          const pagination = res?.pagination
-          const totalPages = Number(pagination?.total_pages || (items.length < ps ? p : p + 1))
+          const res = await bgRequest<unknown>({
+            path: `/api/v1/notes/?page=${p}&results_per_page=${ps}`,
+            method: "GET"
+          })
+          const items = isRecord(res) && Array.isArray(res.items)
+            ? res.items
+            : Array.isArray(res)
+              ? res
+              : []
+          arr.push(...mapNoteListItems(items))
+          const pagination = isRecord(res) && isRecord(res.pagination) ? res.pagination : null
+          const totalPages = toNumber(pagination?.total_pages) ?? (items.length < ps ? p : p + 1)
           if (p >= totalPages || items.length === 0) break
           p++
         }
@@ -768,8 +827,8 @@ const NotesManagerPage: React.FC = () => {
           { count: arr.length, size: sizeDisplay }
         )
       )
-    } catch (e: any) {
-      message.error(e?.message || 'Export failed')
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error) || 'Export failed')
     }
   }
 
@@ -785,15 +844,7 @@ const NotesManagerPage: React.FC = () => {
       while (p <= MAX_EXPORT_PAGES) {
         const { items } = await fetchFilteredNotesRaw(q, toks, p, ps)
         if (!items.length) break
-        arr.push(
-          ...items.map((n: any) => ({
-            id: n?.id,
-            title: n?.title,
-            content: n?.content,
-            updated_at: n?.updated_at,
-            keywords: extractKeywords(n)
-          }))
-        )
+        arr.push(...mapNoteListItems(items))
         if (items.length < ps) break
         p++
       }
@@ -803,19 +854,18 @@ const NotesManagerPage: React.FC = () => {
       let p = 1
       const ps = 100
       while (p <= MAX_EXPORT_PAGES) {
-        const res = await bgRequest<any>({ path: `/api/v1/notes/?page=${p}&results_per_page=${ps}` as any, method: 'GET' as any })
-        const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : [])
-        arr.push(
-          ...items.map((n: any) => ({
-            id: n?.id,
-            title: n?.title,
-            content: n?.content,
-            updated_at: n?.updated_at,
-            keywords: extractKeywords(n)
-          }))
-        )
-        const pagination = res?.pagination
-        const totalPages = Number(pagination?.total_pages || (items.length < ps ? p : p + 1))
+        const res = await bgRequest<unknown>({
+          path: `/api/v1/notes/?page=${p}&results_per_page=${ps}`,
+          method: "GET"
+        })
+        const items = isRecord(res) && Array.isArray(res.items)
+          ? res.items
+          : Array.isArray(res)
+            ? res
+            : []
+        arr.push(...mapNoteListItems(items))
+        const pagination = isRecord(res) && isRecord(res.pagination) ? res.pagination : null
+        const totalPages = toNumber(pagination?.total_pages) ?? (items.length < ps ? p : p + 1)
         if (p >= totalPages || items.length === 0) break
         p++
       }
@@ -831,7 +881,7 @@ const NotesManagerPage: React.FC = () => {
       if (limitReached) {
         message.warning(`Export limited to ${arr.length} notes. Some notes may be excluded.`)
       }
-      const escape = (s: any) => '"' + String(s ?? '').replace(/"/g, '""') + '"'
+      const escape = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"'
       const header = ['id','title','content','updated_at','keywords']
       const rows = [
         header.join(','),
@@ -863,8 +913,8 @@ const NotesManagerPage: React.FC = () => {
           { count: arr.length, size: sizeDisplay }
         )
       )
-    } catch (e: any) {
-      message.error(e?.message || 'Export failed')
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error) || 'Export failed')
     }
   }
 
@@ -891,8 +941,8 @@ const NotesManagerPage: React.FC = () => {
           { count: arr.length, size: sizeDisplay }
         )
       )
-    } catch (e: any) {
-      message.error(e?.message || 'Export failed')
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error) || 'Export failed')
     }
   }
 
@@ -1055,7 +1105,7 @@ const NotesManagerPage: React.FC = () => {
                   shape="circle"
                   onClick={() => void handleNewNote()}
                   className="flex items-center justify-center"
-                  icon={(<PlusIcon className="w-4 h-4" />) as any}
+                  icon={<PlusIcon className="w-4 h-4" />}
                   aria-label={t('option:notesSearch.new', {
                     defaultValue: 'New note'
                   })}
@@ -1068,7 +1118,7 @@ const NotesManagerPage: React.FC = () => {
                 placeholder={t('option:notesSearch.placeholder', {
                   defaultValue: 'Search notes...'
                 })}
-                prefix={(<SearchIcon className="w-4 h-4 text-text-subtle" />) as any}
+                prefix={<SearchIcon className="w-4 h-4 text-text-subtle" />}
                 value={query}
                 onChange={(e) => {
                   setQuery(e.target.value)

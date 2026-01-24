@@ -370,14 +370,20 @@ export class AgentLoop {
       }
       this.emit({ type: "complete", result })
       return result
-    } catch (e: any) {
+    } catch (e: unknown) {
       this.session.status = "error"
+      const message =
+        e instanceof Error
+          ? e.message
+          : typeof e === "string"
+            ? e
+            : "Unknown error"
       const result: AgentResult = {
         status: "error",
-        error: e.message,
+        error: message,
         stepsCompleted: this.session.currentStep
       }
-      this.emit({ type: "error", error: e.message })
+      this.emit({ type: "error", error: message })
       return result
     }
   }
@@ -526,8 +532,14 @@ export class AgentLoop {
         content: JSON.stringify(result)
       })
       this.emit({ type: "tool_complete", tool_call_id: tc.id, result })
-    } catch (e: any) {
-      const errorResult = { ok: false, error: e.message }
+    } catch (e: unknown) {
+      const message =
+        e instanceof Error
+          ? e.message
+          : typeof e === "string"
+            ? e
+            : "Tool execution failed"
+      const errorResult = { ok: false, error: message }
       this.session.messages.push({
         role: "tool",
         tool_call_id: tc.id,

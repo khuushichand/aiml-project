@@ -20,6 +20,9 @@ const { Text } = Typography
 
 type FlashcardModelType = Flashcard["model_type"]
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
 interface FlashcardEditDrawerProps {
   open: boolean
   onClose: () => void
@@ -97,9 +100,9 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
         (await form.validateFields()) as FlashcardUpdate
       )
       onSave(values)
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Validation errors handled by form
-      if (!e?.errorFields) {
+      if (!isRecord(e) || !("errorFields" in e)) {
         console.error("Save error:", e)
       }
     }

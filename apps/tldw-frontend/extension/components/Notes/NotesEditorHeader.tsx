@@ -103,7 +103,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
                   size="small"
                   loading={openingLinkedChat}
                   onClick={onOpenLinkedConversation}
-                  icon={(<LinkIcon className="w-4 h-4" />) as any}
+                  icon={<LinkIcon className="w-4 h-4" />}
                 >
                   {t('option:notesSearch.openConversation', {
                     defaultValue: 'Open conversation'
@@ -119,7 +119,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
               <Button
                 size="small"
                 onClick={onNewNote}
-                icon={(<PlusIcon className="w-4 h-4" />) as any}
+                icon={<PlusIcon className="w-4 h-4" />}
               >
                 {t('option:notesSearch.new', {
                   defaultValue: 'New note'
@@ -143,11 +143,11 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             size="small"
             onClick={onTogglePreview}
             icon={
-              (showPreview ? (
+              showPreview ? (
                 <EditIcon className="w-4 h-4" />
               ) : (
                 <EyeIcon className="w-4 h-4" />
-              )) as any
+              )
             }
             aria-label={
               showPreview
@@ -176,7 +176,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
           <Button
             size="small"
             onClick={onCopy}
-            icon={(<CopyIcon className="w-4 h-4" />) as any}
+            icon={<CopyIcon className="w-4 h-4" />}
             disabled={!hasContent}
             aria-label={t('option:notesSearch.toolbarCopyTooltip', {
               defaultValue: 'Copy note content'
@@ -191,7 +191,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
           <Button
             size="small"
             onClick={onExport}
-            icon={(<FileDownIcon className="w-4 h-4" />) as any}
+            icon={<FileDownIcon className="w-4 h-4" />}
             disabled={!canExport}
             aria-label={t('option:notesSearch.toolbarExportMdTooltip', {
               defaultValue: 'Export note as Markdown (.md)'
@@ -217,7 +217,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             onClick={onSave}
             loading={isSaving}
             disabled={!canSave}
-            icon={(<SaveIcon className="w-4 h-4" />) as any}
+            icon={<SaveIcon className="w-4 h-4" />}
             aria-label={t('option:notesSearch.toolbarSaveTooltip', {
               defaultValue: 'Save note'
             })}
@@ -234,7 +234,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             danger
             size="small"
             onClick={onDelete}
-            icon={(<TrashIcon className="w-4 h-4" />) as any}
+            icon={<TrashIcon className="w-4 h-4" />}
             disabled={!canDelete}
             aria-label={t('option:notesSearch.toolbarDeleteTooltip', {
               defaultValue: 'Delete note'

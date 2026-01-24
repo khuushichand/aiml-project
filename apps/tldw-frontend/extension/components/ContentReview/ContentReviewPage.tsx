@@ -43,6 +43,8 @@ import {
 import type { ContentDraft, DraftBatch, DraftSection } from "@/db/dexie/types"
 import { db } from "@/db/dexie/schema"
 
+type UnknownRecord = Record<string, unknown>
+
 const statusColor = (status?: ContentDraft["status"]) => {
   switch (status) {
     case "reviewed":
@@ -59,7 +61,7 @@ const statusColor = (status?: ContentDraft["status"]) => {
 }
 
 const extractMediaId = (
-  data: any,
+  data: unknown,
   visited?: WeakSet<object>,
   depth = 0
 ): string | null => {
@@ -69,44 +71,52 @@ const extractMediaId = (
   if (visited.has(data as object)) return null
   visited.add(data as object)
 
+  const record = data as UnknownRecord
   const direct =
-    (data as any).media_id ??
-    (data as any).id ??
-    (data as any).pk ??
-    (data as any).uuid
+    record.media_id ??
+    record.id ??
+    record.pk ??
+    record.uuid
   if (direct !== undefined && direct !== null) {
     return String(direct)
   }
-  if ((data as any).media && typeof (data as any).media === "object") {
-    return extractMediaId((data as any).media, visited, depth + 1)
+  if (record.media && typeof record.media === "object") {
+    return extractMediaId(record.media, visited, depth + 1)
   }
-  if ((data as any).result) {
-    return extractMediaId((data as any).result, visited, depth + 1)
+  if (record.result) {
+    return extractMediaId(record.result, visited, depth + 1)
   }
-  if (Array.isArray((data as any).results) && (data as any).results.length > 0) {
-    return extractMediaId((data as any).results[0], visited, depth + 1)
+  if (Array.isArray(record.results) && record.results.length > 0) {
+    return extractMediaId(record.results[0], visited, depth + 1)
   }
   return null
 }
 
 const buildFields = (draft: ContentDraft) => {
-  const fields: Record<string, any> = {
+  const fields: Record<string, unknown> = {
     media_type: normalizeMediaTypeForUpload(draft.mediaType),
     perform_analysis: Boolean(draft.processingOptions?.perform_analysis),
     perform_chunking: Boolean(draft.processingOptions?.perform_chunking),
     overwrite_existing: Boolean(draft.processingOptions?.overwrite_existing)
   }
-  const nested: Record<string, any> = {}
-  const assignPath = (obj: any, path: string[], val: any) => {
-    let cur = obj
+  const nested: UnknownRecord = {}
+  const assignPath = (obj: UnknownRecord, path: string[], val: unknown) => {
+    let cur: UnknownRecord = obj
     for (let i = 0; i < path.length; i++) {
       const seg = path[i]
-      if (i === path.length - 1) cur[seg] = val
-      else cur = (cur[seg] = cur[seg] || {})
+      if (i === path.length - 1) {
+        cur[seg] = val
+      } else {
+        const next = cur[seg]
+        if (!next || typeof next !== "object" || Array.isArray(next)) {
+          cur[seg] = {}
+        }
+        cur = cur[seg] as UnknownRecord
+      }
     }
   }
   for (const [key, value] of Object.entries(
-    draft.processingOptions?.advancedValues || {}
+    (draft.processingOptions?.advancedValues as UnknownRecord) || {}
   )) {
     if (key.includes(".")) assignPath(nested, key.split("."), value)
     else fields[key] = value
@@ -145,7 +155,7 @@ const commitDraftToServer = async (
 ): Promise<ContentDraft> => {
   const fields = buildFields(draft)
   let includeOriginalType = false
-  let uploadResp: any
+  let uploadResp: unknown
 
   if (draft.source.kind === "url" && draft.source.url) {
     fields.urls = [draft.source.url]
@@ -197,7 +207,7 @@ const commitDraftToServer = async (
     throw new Error("Media ID not returned from server.")
   }
 
-  const updatePayload: Record<string, any> = {}
+  const updatePayload: Record<string, unknown> = {}
   if (draft.title) updatePayload.title = draft.title
   if (draft.content) updatePayload.content = draft.content
   if (draft.keywords) updatePayload.keywords = draft.keywords
@@ -656,7 +666,7 @@ export const ContentReviewPage: React.FC = () => {
           { role: "user", content: wrapDraftForPrompt(content, instruction) }
         ]
       }
-      const resp = await bgRequest<any>({
+      const resp = await bgRequest({
         path: "/api/v1/chat/completions",
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -701,8 +711,13 @@ export const ContentReviewPage: React.FC = () => {
       messageApi.success(
         t("contentReview.aiApplied", "AI corrections applied.")
       )
-    } catch (err: any) {
-      const msg = err?.message || "AI corrections failed."
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "AI corrections failed."
       messageApi.error(msg)
     } finally {
       setAiBusy(false)
@@ -755,8 +770,13 @@ export const ContentReviewPage: React.FC = () => {
       messageApi.success(
         t("contentReview.templateApplied", "Template applied.")
       )
-    } catch (err: any) {
-      const msg = err?.message || "Template application failed."
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "Template application failed."
       messageApi.error(msg)
     } finally {
       setTemplateBusy(false)
@@ -851,8 +871,13 @@ export const ContentReviewPage: React.FC = () => {
       messageApi.success(
         t("contentReview.commitSuccess", "Draft committed.")
       )
-    } catch (err: any) {
-      const msg = err?.message || "Commit failed."
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "Commit failed."
       messageApi.error(msg)
     } finally {
       setIsCommitting(false)
@@ -898,11 +923,16 @@ export const ContentReviewPage: React.FC = () => {
       try {
         await handleCommitSingle(draft)
         successCount += 1
-      } catch (err: any) {
+      } catch (err: unknown) {
         failCount += 1
         errors.push({
           title: draft.title || draft.id,
-          error: err?.message || "Unknown error"
+          error:
+            err instanceof Error
+              ? err.message
+              : typeof err === "string"
+                ? err
+                : "Unknown error"
         })
       }
     }

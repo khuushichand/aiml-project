@@ -17,6 +17,9 @@ interface AnalysisModalProps {
   onAnalysisGenerated: () => void
 }
 
+type StorageOptions = ConstructorParameters<typeof Storage>[0]
+type UnknownRecord = Record<string, unknown>
+
 export function AnalysisModal({
   open,
   onClose,
@@ -83,11 +86,21 @@ export function AnalysisModal({
       let cancelled = false
       ;(async () => {
         try {
-          const storage = new Storage({ area: 'local', serde: safeStorageSerde } as any)
-          const data = (await storage.get('media:analysisPrompts').catch(() => null)) as any
+          const storage = new Storage({
+            area: 'local',
+            serde: safeStorageSerde
+          } as StorageOptions)
+          const data = await storage
+            .get('media:analysisPrompts')
+            .catch(() => null)
           if (!cancelled && data && typeof data === 'object') {
-            if (typeof data.systemPrompt === 'string') setSystemPrompt(data.systemPrompt)
-            if (typeof data.userPrefix === 'string') setUserPrefix(data.userPrefix)
+            const record = data as UnknownRecord
+            if (typeof record.systemPrompt === 'string') {
+              setSystemPrompt(record.systemPrompt)
+            }
+            if (typeof record.userPrefix === 'string') {
+              setUserPrefix(record.userPrefix)
+            }
           }
         } catch (err) {
           console.warn('Failed to load saved prompts:', err)
@@ -102,7 +115,10 @@ export function AnalysisModal({
 
   const handleSaveAsDefault = async () => {
     try {
-      const storage = new Storage({ area: 'local', serde: safeStorageSerde } as any)
+      const storage = new Storage({
+        area: 'local',
+        serde: safeStorageSerde
+      } as StorageOptions)
       await storage.set('media:analysisPrompts', { systemPrompt, userPrefix })
       message.success(t('mediaPage.savedAsDefault', 'Saved as default prompts'))
     } catch {
@@ -153,7 +169,7 @@ export function AnalysisModal({
         ]
       }
 
-      const resp = await bgRequest<any>({
+      const resp = await bgRequest({
         path: '/api/v1/chat/completions',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -170,7 +186,7 @@ export function AnalysisModal({
 
       // Save the analysis to the media item (MediaUpdateRequest)
       try {
-        await bgRequest<any>({
+        await bgRequest({
           path: `/api/v1/media/${mediaId}`,
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },

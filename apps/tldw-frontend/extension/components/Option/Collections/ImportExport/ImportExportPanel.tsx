@@ -65,14 +65,21 @@ const EXPORT_FORMATS: { value: CollectionExportFormat; label: string }[] = [
 ]
 
 export const ImportExportPanel: React.FC = () => {
-  const { t } = useTranslation(["collections", "common"])
-
   return (
     <div className="grid gap-6 md:grid-cols-2">
       <ImportSection />
       <ExportSection />
     </div>
   )
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
 }
 
 // Import Section
@@ -85,7 +92,6 @@ const ImportSection: React.FC = () => {
   const importError = useCollectionsStore((s) => s.importError)
   const importResult = useCollectionsStore((s) => s.importResult)
   const importJobId = useCollectionsStore((s) => s.importJobId)
-  const importJobStatus = useCollectionsStore((s) => s.importJobStatus)
   const importWizardStep = useCollectionsStore((s) => s.importWizardStep)
 
   const setImportSource = useCollectionsStore((s) => s.setImportSource)
@@ -97,8 +103,6 @@ const ImportSection: React.FC = () => {
   const setImportJobStatus = useCollectionsStore((s) => s.setImportJobStatus)
   const setImportWizardStep = useCollectionsStore((s) => s.setImportWizardStep)
   const resetImportWizard = useCollectionsStore((s) => s.resetImportWizard)
-
-  const activeSource = IMPORT_SOURCES.find((source) => source.value === importSource) || null
 
   const handleSourceSelect = (source: ImportSource) => {
     setImportSource(source)
@@ -132,9 +136,10 @@ const ImportSection: React.FC = () => {
       setImportJobStatus(job.status)
       jobStarted = true
       message.success(t("collections:import.started", "Import started"))
-    } catch (error: any) {
-      setImportError(error?.message || "Import failed")
-      message.error(error?.message || "Import failed")
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error, "Import failed")
+      setImportError(errorMessage)
+      message.error(errorMessage)
     } finally {
       setImportInProgress(jobStarted)
     }
@@ -168,9 +173,9 @@ const ImportSection: React.FC = () => {
           setImportError(job.error_message || "Import failed")
           setImportInProgress(false)
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         if (cancelled) return
-        setImportError(error?.message || "Failed to fetch import status")
+        setImportError(getErrorMessage(error, "Failed to fetch import status"))
         setImportInProgress(false)
       }
     }
@@ -432,9 +437,9 @@ const ExportSection: React.FC = () => {
         }
         if (!active) return
         setExportItems(allItems)
-      } catch (error: any) {
+      } catch (error: unknown) {
         if (!active) return
-        setExportItemsError(error?.message || "Failed to load reading items")
+        setExportItemsError(getErrorMessage(error, "Failed to load reading items"))
       } finally {
         if (active) {
           setExportItemsLoading(false)
@@ -572,8 +577,8 @@ const ExportSection: React.FC = () => {
       const response = await api.exportReadingList({ format: exportFormat })
       triggerDownload(response.blob, response.filename)
       message.success(t("collections:export.success", "Export ready for download"))
-    } catch (error: any) {
-      message.error(error?.message || "Export failed")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Export failed"))
     } finally {
       setExportInProgress(false)
     }
@@ -592,8 +597,8 @@ const ExportSection: React.FC = () => {
       const payload = buildJsonlPayload(items)
       await navigator.clipboard.writeText(payload)
       message.success(t("collections:export.copied", "Copied to clipboard"))
-    } catch (error: any) {
-      message.error(error?.message || "Copy failed")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Copy failed"))
     } finally {
       setCopying(false)
     }

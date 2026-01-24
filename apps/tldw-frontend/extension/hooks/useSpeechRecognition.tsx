@@ -7,8 +7,8 @@ type SpeechRecognitionEvent = {
 
 declare global {
   interface Window {
-    SpeechRecognition: any
-    webkitSpeechRecognition: any
+    SpeechRecognition?: SpeechRecognitionConstructor
+    webkitSpeechRecognition?: SpeechRecognitionConstructor
   }
 }
 
@@ -16,18 +16,20 @@ type SpeechRecognitionErrorEventLike = Event & {
   error?: string
 }
 
-type SpeechRecognition = {
+type SpeechRecognitionInstance = {
   lang: string
   interimResults: boolean
   continuous: boolean
   maxAlternatives: number
-  grammars: any
+  grammars?: SpeechGrammarList | null
   onresult: ((event: SpeechRecognitionEvent) => void) | null
   onerror: ((event: Event) => void) | null
   onend: (() => void) | null
   start: () => void
   stop: () => void
 }
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance
 
 type SpeechRecognitionProps = {
   onEnd?: () => void
@@ -43,7 +45,7 @@ type ListenArgs = {
   interimResults?: boolean
   continuous?: boolean
   maxAlternatives?: number
-  grammars?: any
+  grammars?: SpeechGrammarList | null
   autoStop?: boolean
   autoStopTimeout?: number
   autoSubmit?: boolean
@@ -58,15 +60,15 @@ type SpeechRecognitionHook = {
   resetTranscript: () => void
 }
 
-const useEventCallback = <T extends (...args: any[]) => any>(
+const useEventCallback = <T extends (...args: unknown[]) => unknown>(
   fn: T,
-  dependencies: any[]
+  dependencies: ReadonlyArray<unknown>
 ) => {
   const ref = useRef<T>()
 
   useEffect(() => {
     ref.current = fn
-  }, [fn, ...dependencies])
+  }, [fn, dependencies])
 
   return useCallback(
     (...args: Parameters<T>) => {
@@ -89,7 +91,7 @@ export const useSpeechRecognition = (
     autoSubmit = false
   } = props
 
-  const recognition = useRef<SpeechRecognition | null>(null)
+  const recognition = useRef<SpeechRecognitionInstance | null>(null)
   const [listening, setListening] = useState<boolean>(false)
   const [supported, setSupported] = useState<boolean>(false)
   const [liveTranscript, setLiveTranscript] = useState<string>("")
@@ -114,7 +116,8 @@ export const useSpeechRecognition = (
   const processResult = (
     event: SpeechRecognitionEvent,
     shouldAutoStop: boolean,
-    shouldAutoSubmit: boolean
+    shouldAutoSubmit: boolean,
+    stopTimeoutMs: number
   ) => {
     const transcript = Array.from(event.results)
       .map((result) => result[0])
@@ -137,7 +140,7 @@ export const useSpeechRecognition = (
           // Submit the final transcript
           onResult(transcript)
         }
-      }, autoStopTimeout)
+      }, stopTimeoutMs)
     }
   }
 
@@ -173,7 +176,7 @@ export const useSpeechRecognition = (
         recognition.current.lang = lang
         recognition.current.interimResults = interimResults
         recognition.current.onresult = (event) => {
-          processResult(event, argAutoStop, argAutoSubmit)
+          processResult(event, argAutoStop, argAutoSubmit, argAutoStopTimeout)
           const transcript = Array.from(event.results)
             .map((result) => result[0])
             .map((result) => result.transcript)

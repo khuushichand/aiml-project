@@ -58,7 +58,7 @@ export const AddColumnModal: React.FC<AddColumnModalProps> = ({
   }
 
   // Validate column name is unique
-  const validateUniqueName = (_: any, value: string) => {
+  const validateUniqueName = (_: unknown, value: string) => {
     if (!value) return Promise.resolve()
     const trimmed = value.trim().toLowerCase()
     const exists = existingColumns.some(

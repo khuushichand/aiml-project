@@ -7,14 +7,18 @@ export type TldwRequestPayload = {
   path: PathOrUrl
   method?: string
   headers?: Record<string, string>
-  body?: any
+  body?: unknown
   noAuth?: boolean
   timeoutMs?: number
   abortSignal?: AbortSignal
   responseType?: "json" | "text" | "arrayBuffer"
 }
 
-type TldwConfigLike = Record<string, any> | null | undefined
+type TldwConfigLike = Record<string, unknown> | null | undefined
+type UnknownRecord = Record<string, unknown>
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null
 
 type TldwRequestRuntime = {
   getConfig: () => Promise<TldwConfigLike>
@@ -93,7 +97,7 @@ export const tldwRequest = async (
   const hasContentType = Object.keys(h).some(
     (key) => key.toLowerCase() === "content-type"
   )
-  const isBinaryBody = (value: any) => {
+  const isBinaryBody = (value: unknown) => {
     if (!value || typeof value !== "object") return false
     if (typeof FormData !== "undefined" && value instanceof FormData) return true
     if (typeof Blob !== "undefined" && value instanceof Blob) return true
@@ -214,7 +218,7 @@ export const tldwRequest = async (
 
     const retryAfterMs = parseRetryAfter(resp.headers?.get?.("retry-after"))
     const contentType = resp.headers.get("content-type") || ""
-    let data: any = null
+    let data: unknown = null
     const readDefaultBody = async () => {
       if (contentType.includes("application/json")) {
         return await resp.json().catch(() => null)
@@ -232,10 +236,9 @@ export const tldwRequest = async (
     }
 
     if (!resp.ok) {
-      const detail =
-        typeof data === "object" &&
-        data &&
-        (data.detail || data.error || data.message)
+      const detail = isRecord(data)
+        ? data.detail ?? data.error ?? data.message
+        : null
       const errorMessage = formatErrorMessage(
         typeof detail !== "undefined" && detail !== null
           ? detail
@@ -253,7 +256,7 @@ export const tldwRequest = async (
     }
 
     return { ok: true, status: resp.status, data, headers: headersOut, retryAfterMs }
-  } catch (e: any) {
+  } catch (e: unknown) {
     return {
       ok: false,
       status: 0,

@@ -69,11 +69,11 @@ const extractVoices = (source: unknown): TldwVoice[] => {
 
 export const fetchTldwVoices = async (): Promise<TldwVoice[]> => {
   try {
-    const res = await bgRequestClient<any>({
+    const res = await bgRequestClient<unknown>({
       path: "/api/v1/audio/voices",
       method: "GET"
     })
-    if (!res) return []
+    if (res == null) return []
     return extractVoices(res)
   } catch {
     return []
@@ -86,11 +86,11 @@ export const fetchTldwVoiceCatalog = async (
   const p = String(provider || "").trim()
   if (!p) return []
   try {
-    const res = await bgRequestClient<any>({
+    const res = await bgRequestClient<unknown>({
       path: `/api/v1/audio/voices/catalog?provider=${encodeURIComponent(p)}`,
       method: "GET"
     })
-    if (!res) return []
+    if (res == null) return []
     return extractVoices(res)
   } catch {
     return []

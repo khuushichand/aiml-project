@@ -337,6 +337,7 @@ format_preferences:
   higgs: ["wav", "mp3", "opus", "flac", "pcm"]
   dia: ["wav", "mp3", "opus", "flac", "pcm"]
   chatterbox: ["wav", "mp3", "opus", "flac", "pcm"]
+  vibevoice_realtime: ["pcm", "wav", "mp3", "opus", "flac"]
   neutts: ["wav", "mp3", "opus", "flac", "pcm"]
   index_tts: ["mp3", "wav"]
   pocket_tts: ["wav", "mp3", "opus", "flac", "pcm", "aac"]

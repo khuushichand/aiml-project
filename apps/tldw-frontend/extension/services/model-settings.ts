@@ -40,7 +40,7 @@ type ModelSettings = {
   vocabOnly?: boolean
   minP?: number
   useMlock?: boolean
-  reasoningEffort?: any
+  reasoningEffort?: unknown
 }
 
 const MODEL_SETTING_KEYS = [

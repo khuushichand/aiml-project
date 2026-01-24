@@ -306,7 +306,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
 
   const resetToDefaults = useCallback(() => {
     const defaults = capabilities?.default_options ?? DEFAULT_CHUNKING_OPTIONS
-    const normalizeNumber = (value: any, fallback: number) => {
+    const normalizeNumber = (value: unknown, fallback: number) => {
       const num = Number(value)
       return Number.isFinite(num) ? num : fallback
     }

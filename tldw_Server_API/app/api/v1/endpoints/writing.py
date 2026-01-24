@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import json
+import os
+import re
+from collections import Counter
 from typing import Any, Dict, List, NoReturn, Optional, Tuple
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 from loguru import logger
+from fastapi.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
@@ -36,6 +42,12 @@ from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingTokenizeResponse,
     WritingTokenizeMeta,
     WritingTokenizerSupport,
+    WritingWordcloudMeta,
+    WritingWordcloudOptions,
+    WritingWordcloudRequest,
+    WritingWordcloudResponse,
+    WritingWordcloudResult,
+    WritingWordcloudWord,
     WritingVersionResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -178,6 +190,255 @@ def _tokenizer_support(provider: str, model: str) -> WritingTokenizerSupport:
         return WritingTokenizerSupport(available=False, error=str(exc))
 
 
+WORDCLOUD_ALGO_VERSION = 1
+WORDCLOUD_STATUS_QUEUED = "queued"
+WORDCLOUD_STATUS_RUNNING = "running"
+WORDCLOUD_STATUS_READY = "ready"
+WORDCLOUD_STATUS_FAILED = "failed"
+WORDCLOUD_TOKEN_RE = re.compile(r"[\w'-]+", flags=re.UNICODE)
+DEFAULT_WORDCLOUD_STOPWORDS = {
+    "a",
+    "about",
+    "above",
+    "after",
+    "again",
+    "against",
+    "all",
+    "am",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "because",
+    "been",
+    "before",
+    "being",
+    "below",
+    "between",
+    "both",
+    "but",
+    "by",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "doing",
+    "down",
+    "during",
+    "each",
+    "few",
+    "for",
+    "from",
+    "further",
+    "had",
+    "has",
+    "have",
+    "having",
+    "he",
+    "her",
+    "here",
+    "hers",
+    "herself",
+    "him",
+    "himself",
+    "his",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "itself",
+    "just",
+    "me",
+    "more",
+    "most",
+    "my",
+    "myself",
+    "no",
+    "nor",
+    "not",
+    "now",
+    "of",
+    "off",
+    "on",
+    "once",
+    "only",
+    "or",
+    "other",
+    "our",
+    "ours",
+    "ourselves",
+    "out",
+    "over",
+    "own",
+    "same",
+    "she",
+    "should",
+    "so",
+    "some",
+    "such",
+    "than",
+    "that",
+    "the",
+    "their",
+    "theirs",
+    "them",
+    "themselves",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "through",
+    "to",
+    "too",
+    "under",
+    "until",
+    "up",
+    "very",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "who",
+    "whom",
+    "why",
+    "will",
+    "with",
+    "you",
+    "your",
+    "yours",
+    "yourself",
+    "yourselves",
+}
+
+
+def _is_test_mode() -> bool:
+    return bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TEST_MODE", "").lower() == "true")
+
+
+def _normalize_wordcloud_options(options: Optional[WritingWordcloudOptions]) -> WritingWordcloudOptions:
+    return options or WritingWordcloudOptions()
+
+
+def _wordcloud_options_payload(options: WritingWordcloudOptions) -> Dict[str, Any]:
+    payload = options.model_dump() if hasattr(options, "model_dump") else options.dict()
+    payload["algo_version"] = WORDCLOUD_ALGO_VERSION
+    return payload
+
+
+def _resolve_stopwords(options: WritingWordcloudOptions) -> set[str]:
+    if options.stopwords is None:
+        return set(DEFAULT_WORDCLOUD_STOPWORDS)
+    custom = {word.strip().casefold() for word in options.stopwords if isinstance(word, str) and word.strip()}
+    return custom
+
+
+def _hash_wordcloud_input(text: str, options_payload: Dict[str, Any]) -> Tuple[str, str]:
+    options_json = json.dumps(options_payload, sort_keys=True, ensure_ascii=True)
+    digest = hashlib.sha256()
+    digest.update(text.encode("utf-8"))
+    digest.update(b"\n")
+    digest.update(options_json.encode("utf-8"))
+    return digest.hexdigest(), options_json
+
+
+def _compute_wordcloud(text: str, options: WritingWordcloudOptions) -> Tuple[List[WritingWordcloudWord], WritingWordcloudMeta]:
+    normalized = text.casefold()
+    tokens = WORDCLOUD_TOKEN_RE.findall(normalized)
+    stopwords = _resolve_stopwords(options)
+    counts: Counter[str] = Counter()
+    for token in tokens:
+        if not token or len(token) < options.min_word_length:
+            continue
+        if not options.keep_numbers and token.isnumeric():
+            continue
+        if not token.strip("-_"):
+            continue
+        if stopwords and token in stopwords:
+            continue
+        counts[token] += 1
+    most_common = counts.most_common(options.max_words)
+    words = [WritingWordcloudWord(text=word, weight=count) for word, count in most_common]
+    total_tokens = sum(counts.values())
+    meta = WritingWordcloudMeta(
+        input_chars=len(text),
+        total_tokens=total_tokens,
+        top_n=len(words),
+    )
+    return words, meta
+
+
+def _model_dump(obj: Any) -> Dict[str, Any]:
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        return dump()
+    dump = getattr(obj, "dict", None)
+    if callable(dump):
+        return dump()
+    return dict(obj)
+
+
+def _run_wordcloud_job(
+    db: CharactersRAGDB,
+    wordcloud_id: str,
+    text: str,
+    options: WritingWordcloudOptions,
+) -> None:
+    try:
+        db.set_writing_wordcloud_status(wordcloud_id, WORDCLOUD_STATUS_RUNNING)
+        words, meta = _compute_wordcloud(text, options)
+        words_payload = [_model_dump(word) for word in words]
+        meta_payload = _model_dump(meta)
+        db.set_writing_wordcloud_result(
+            wordcloud_id,
+            status=WORDCLOUD_STATUS_READY,
+            words=words_payload,
+            meta=meta_payload,
+            error=None,
+        )
+    except Exception as exc:
+        logger.exception("Wordcloud job failed for {}: {}", wordcloud_id, exc)
+        try:
+            db.set_writing_wordcloud_result(
+                wordcloud_id,
+                status=WORDCLOUD_STATUS_FAILED,
+                error=str(exc),
+            )
+        except Exception:
+            logger.exception("Failed to persist wordcloud failure for {}", wordcloud_id)
+
+
+def _build_wordcloud_response_from_row(row: Dict[str, Any], *, cached: bool) -> WritingWordcloudResponse:
+    status_value = row.get("status") or WORDCLOUD_STATUS_QUEUED
+    result = None
+    words_payload = row.get("words")
+    meta_payload = row.get("meta")
+    if isinstance(words_payload, list) and isinstance(meta_payload, dict):
+        words = [WritingWordcloudWord(**word) for word in words_payload if isinstance(word, dict)]
+        meta = WritingWordcloudMeta(**meta_payload)
+        result = WritingWordcloudResult(words=words, meta=meta)
+    return WritingWordcloudResponse(
+        id=str(row.get("id") or ""),
+        status=status_value,
+        cached=cached,
+        result=result,
+        error=row.get("error"),
+    )
+
+
 @router.get(
     "/version",
     response_model=WritingVersionResponse,
@@ -218,6 +479,7 @@ async def get_writing_capabilities(
         themes=True,
         tokenize=True,
         token_count=True,
+        wordclouds=True,
     )
 
     providers_payload: Optional[List[WritingProviderCapabilities]] = None
@@ -844,3 +1106,94 @@ async def count_writing_tokens(
         warnings=[],
     )
     return WritingTokenCountResponse(count=len(token_ids), meta=meta)
+
+
+@router.post(
+    "/wordclouds",
+    response_model=WritingWordcloudResponse,
+    summary="Create a wordcloud from text",
+    tags=["writing"],
+)
+async def create_wordcloud(
+    payload: WritingWordcloudRequest,
+    background_tasks: BackgroundTasks,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("writing.wordclouds.create")),
+) -> WritingWordcloudResponse:
+    """Queue or return a cached wordcloud for the provided text."""
+    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.wordclouds.create")
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Text cannot be empty")
+
+    options = _normalize_wordcloud_options(payload.options)
+    options_payload = _wordcloud_options_payload(options)
+    cache_key, _ = _hash_wordcloud_input(text, options_payload)
+
+    try:
+        existing = db.get_writing_wordcloud(cache_key)
+    except Exception as exc:
+        _handle_db_errors(exc, "writing wordcloud")
+
+    if existing:
+        status_value = existing.get("status") or WORDCLOUD_STATUS_QUEUED
+        words_payload = existing.get("words")
+        meta_payload = existing.get("meta")
+        if status_value == WORDCLOUD_STATUS_READY and isinstance(words_payload, list) and isinstance(meta_payload, dict):
+            return _build_wordcloud_response_from_row(existing, cached=True)
+        if status_value == WORDCLOUD_STATUS_FAILED:
+            return _build_wordcloud_response_from_row(existing, cached=False)
+        response = _build_wordcloud_response_from_row(existing, cached=False)
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=_model_dump(response))
+
+    try:
+        db.add_writing_wordcloud_job(
+            cache_key,
+            options_payload,
+            input_chars=len(text),
+            status=WORDCLOUD_STATUS_QUEUED,
+        )
+    except Exception as exc:
+        _handle_db_errors(exc, "writing wordcloud")
+
+    if _is_test_mode():
+        _run_wordcloud_job(db, cache_key, text, options)
+        try:
+            refreshed = db.get_writing_wordcloud(cache_key)
+            if refreshed:
+                return _build_wordcloud_response_from_row(refreshed, cached=False)
+        except Exception as exc:
+            _handle_db_errors(exc, "writing wordcloud")
+        return WritingWordcloudResponse(id=cache_key, status=WORDCLOUD_STATUS_FAILED, error="Wordcloud job failed")
+
+    background_tasks.add_task(_run_wordcloud_job, db, cache_key, text, options)
+    response = WritingWordcloudResponse(id=cache_key, status=WORDCLOUD_STATUS_QUEUED, cached=False)
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=_model_dump(response))
+
+
+@router.get(
+    "/wordclouds/{wordcloud_id}",
+    response_model=WritingWordcloudResponse,
+    summary="Get a wordcloud job status/result",
+    tags=["writing"],
+)
+async def get_wordcloud(
+    wordcloud_id: str,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
+    _: None = Depends(rbac_rate_limit("writing.wordclouds.get")),
+) -> WritingWordcloudResponse:
+    """Fetch a wordcloud job by ID."""
+    await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.wordclouds.get")
+    try:
+        existing = db.get_writing_wordcloud(wordcloud_id)
+        if not existing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wordcloud not found")
+        return _build_wordcloud_response_from_row(existing, cached=False)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _handle_db_errors(exc, "writing wordcloud")

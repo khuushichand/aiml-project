@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from functools import lru_cache
 from pathlib import Path as PathLib
 import sqlite3  # for DB-specific exception handling in limits endpoints
-from typing import AsyncGenerator, Optional, Dict, Any, List, Callable, Awaitable
+from typing import AsyncGenerator, Optional, Dict, Any, List, Callable, Awaitable, Set
 import numpy as np
 import soundfile as sf
 
@@ -4436,11 +4436,47 @@ async def websocket_tts_realtime(
         else:
             await websocket.send_json(payload)
 
-    async def _send_error(code: str, message: str) -> None:
+    done_sent = False
+    error_sent = False
+
+    def _allowed_formats_for(provider_name: Optional[str]) -> Set[str]:
+        try:
+            from tldw_Server_API.app.core.TTS.tts_validation import ProviderLimits
+
+            limits = ProviderLimits.get_limits(str(provider_name).lower()) if provider_name else ProviderLimits.get_limits("default")
+            return set(limits.get("valid_formats", {"pcm", "wav", "mp3"}))
+        except Exception:
+            return {"pcm", "wav", "mp3", "opus", "flac"}
+
+    async def _send_error(code: str, message: str, *, close: bool = False, close_code: Optional[int] = None) -> None:
+        nonlocal error_sent
+        payload = {
+            "type": "error",
+            "code": code,
+            "message": message,
+            "error_type": code,
+            "request_id": request_id,
+            "data": {"request_id": request_id},
+        }
         if _outer_stream:
-            await _outer_stream.error(code, message, data={"request_id": request_id})
+            await _outer_stream.send_json(payload)
         else:
-            await websocket.send_json({"type": "error", "code": code, "message": message})
+            await websocket.send_json(payload)
+        error_sent = True
+        if not close:
+            return
+        if close_code is None:
+            if code == "quota_exceeded":
+                close_code = _policy_close_code()
+            else:
+                try:
+                    close_code = _outer_stream._map_close_code(code) if _outer_stream else 1011
+                except Exception:
+                    close_code = 1011
+        try:
+            await websocket.close(code=close_code)
+        except Exception:
+            pass
 
     auth_ok, jwt_user_id = await _audio_ws_authenticate(
         websocket,
@@ -4479,12 +4515,12 @@ async def websocket_tts_realtime(
         try:
             ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
             if not ok_stream:
-                await _send_error("quota_exceeded", msg_stream or "Concurrent audio streams limit reached")
+                await _send_error("quota_exceeded", msg_stream or "Concurrent audio streams limit reached", close=False)
                 await websocket.close(code=_policy_close_code())
                 return
             acquired_stream = True
         except Exception:
-            await _send_error("quota_error", "Unable to evaluate audio stream quota or concurrency")
+            await _send_error("quota_error", "Unable to evaluate audio stream quota or concurrency", close=False)
             await websocket.close(code=_policy_close_code())
             return
 
@@ -4494,13 +4530,13 @@ async def websocket_tts_realtime(
             first = json.loads(raw_msg)
         except Exception as exc:
             logger.debug(f"TTS realtime WS initial frame parse failed: {exc}")
-            await _send_error("bad_request", "Initial config or text frame required")
+            await _send_error("bad_request", "Initial config or text frame required", close=False)
             await websocket.close(code=4400)
             return
 
         msg_type = (first.get("type") or "").lower()
         if msg_type not in {"config", "prompt", "text"}:
-            await _send_error("bad_request", "First frame must be type=config, prompt, or text")
+            await _send_error("bad_request", "First frame must be type=config, prompt, or text", close=False)
             await websocket.close(code=4400)
             return
 
@@ -4517,6 +4553,7 @@ async def websocket_tts_realtime(
         model = first.get("model") or default_model
         voice = first.get("voice") or default_voice
         response_format = first.get("format") or first.get("response_format") or default_format
+        response_format = str(response_format).lower()
         speed = _coerce_float(first.get("speed", default_speed), default_speed)
         lang_code = first.get("lang") or first.get("lang_code")
         extra_params = first.get("extra_params")
@@ -4530,7 +4567,7 @@ async def websocket_tts_realtime(
         if auto_flush_tokens < 0:
             auto_flush_tokens = 0
 
-        allowed_formats = {"mp3", "opus", "aac", "flac", "wav", "pcm"}
+        allowed_formats = _allowed_formats_for(str(provider_hint) if provider_hint else None)
         if response_format not in allowed_formats:
             await _send_error("bad_request", f"Unsupported format '{response_format}'")
             await websocket.close(code=4400)
@@ -4553,6 +4590,20 @@ async def websocket_tts_realtime(
             user_id=user_id_for_usage,
         )
         session = handle.session
+        if handle.provider:
+            provider_allowed = _allowed_formats_for(handle.provider)
+            if response_format not in provider_allowed:
+                await _send_error(
+                    "bad_request",
+                    f"Unsupported format '{response_format}' for provider '{handle.provider}'",
+                    close=True,
+                    close_code=4400,
+                )
+                try:
+                    await session.finish()
+                except Exception:
+                    pass
+                return
 
         await _send_json(
             {
@@ -4612,7 +4663,7 @@ async def websocket_tts_realtime(
             try:
                 data = json.loads(raw_msg)
             except Exception:
-                await _send_error("bad_request", "Invalid JSON frame")
+                await _send_error("bad_request", "Invalid JSON frame", close=False)
                 await websocket.close(code=4400)
                 return
 
@@ -4648,14 +4699,19 @@ async def websocket_tts_realtime(
         if sender_task:
             await sender_task
         if getattr(session, "error", None):
-            await _send_error("internal_error", "Realtime TTS session failed")
-        await _send_json({"type": "done"})
+            await _send_error("internal_error", "Realtime TTS session failed", close=True)
+        if not error_sent:
+            if _outer_stream:
+                await _outer_stream.done()
+            else:
+                await _send_json({"type": "done"})
+            done_sent = True
     except WebSocketDisconnect:
         logger.info("TTS realtime WS disconnected")
     except Exception as exc:
         logger.error(f"TTS realtime WS error: {exc}", exc_info=True)
         try:
-            await _send_error("internal_error", "Internal error")
+            await _send_error("internal_error", "Internal error", close=True)
         except Exception:
             pass
     finally:
@@ -4679,7 +4735,7 @@ async def websocket_tts_realtime(
                     f"user_id={user_id_for_usage}, error={e}"
                 )
         try:
-            if _outer_stream:
+            if _outer_stream and not done_sent and not error_sent:
                 await _outer_stream.done()
         except Exception as outer_exc:
             try:

@@ -40,14 +40,14 @@ export class TldwAuthService {
     formData.append('username', credentials.username)
     formData.append('password', credentials.password)
 
-    const response = await bgRequest<any>({
+    const response = await bgRequest<TokenResponse>({
       path: '/api/v1/auth/login',
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formData.toString(),
       noAuth: true
     })
-    const tokens = response as TokenResponse
+    const tokens = response
     
     // Update config with tokens
     await tldwClient.updateConfig({
@@ -75,7 +75,7 @@ export class TldwAuthService {
 
     // Try to logout on server
     try {
-      await bgRequest<any>({ path: '/api/v1/auth/logout', method: 'POST' })
+      await bgRequest<unknown>({ path: '/api/v1/auth/logout', method: 'POST' })
     } catch (error) {
       console.error('Server logout failed:', error)
     }
@@ -138,14 +138,14 @@ export class TldwAuthService {
   /**
    * Register a new user (if registration is enabled)
    */
-  async register(username: string, password: string, email?: string, registrationCode?: string): Promise<any> {
+  async register(username: string, password: string, email?: string, registrationCode?: string): Promise<unknown> {
     const config = await tldwClient.getConfig()
     if (!config) {
       throw new Error('tldw server not configured')
     }
 
     try {
-      const data = await bgRequest<any>({
+      const data = await bgRequest<unknown>({
         path: '/api/v1/auth/register',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -153,8 +153,14 @@ export class TldwAuthService {
         noAuth: true
       })
       return data
-    } catch (e: any) {
-      throw new Error(e?.message || 'Registration failed')
+    } catch (e: unknown) {
+      const message =
+        e instanceof Error
+          ? e.message
+          : typeof e === "string"
+            ? e
+            : "Registration failed"
+      throw new Error(message)
     }
   }
 
@@ -166,10 +172,21 @@ export class TldwAuthService {
     const base = String(serverUrl).replace(/\/$/, '')
     try {
       // Use /api/v1/users/me which requires valid authentication
-      await bgRequest<any>({ path: `${base}/api/v1/users/me` as any, method: 'GET' as any, headers: { 'X-API-KEY': apiKey }, noAuth: true })
+      await bgRequest<unknown>({
+        path: `${base}/api/v1/users/me`,
+        method: 'GET',
+        headers: { 'X-API-KEY': apiKey },
+        noAuth: true
+      })
       return true
-    } catch (error: any) {
-      console.error('API key test failed:', error?.message || error)
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : String(error)
+      console.error('API key test failed:', message)
       return false
     }
   }

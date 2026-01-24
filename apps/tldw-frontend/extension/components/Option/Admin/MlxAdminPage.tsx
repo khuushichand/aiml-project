@@ -26,8 +26,8 @@ const { TextArea } = Input
 
 type ProviderConfig = {
   name?: string
-  models_info?: Array<Record<string, any>>
-  [key: string]: any
+  models_info?: Array<Record<string, unknown>>
+  [key: string]: unknown
 }
 
 const DTYPE_OPTIONS = [
@@ -49,11 +49,19 @@ const QUANTIZATION_OPTIONS = [
   { label: "8bit", value: "8bit" }
 ]
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
+}
+
 const coerceModelLabel = (value: unknown): string => {
   if (typeof value === "string" || typeof value === "number") return String(value)
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>
-    const candidate = record.name ?? record.id ?? record.title
+  if (isRecord(value)) {
+    const candidate = value.name ?? value.id ?? value.title
     if (typeof candidate === "string" || typeof candidate === "number") {
       return String(candidate)
     }
@@ -68,9 +76,8 @@ const coerceModelLabel = (value: unknown): string => {
 
 const coerceModelNotes = (value: unknown): string | null => {
   if (typeof value === "string") return value
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>
-    const parts = [record.title, record.description, record.content]
+  if (isRecord(value)) {
+    const parts = [value.title, value.description, value.content]
       .filter((entry) => typeof entry === "string" && entry.trim().length > 0) as string[]
     if (parts.length > 0) return parts.join(" - ")
   }
@@ -119,8 +126,8 @@ export const MlxAdminPage: React.FC = () => {
   // Admin guard
   const [adminGuard, setAdminGuard] = React.useState<"forbidden" | "notFound" | null>(null)
 
-  const markAdminGuardFromError = (err: any) => {
-    const msg = String(err?.message || "")
+  const markAdminGuardFromError = (err: unknown) => {
+    const msg = getErrorMessage(err, "")
     if (msg.includes("Request failed: 403")) {
       setAdminGuard("forbidden")
     } else if (msg.includes("Request failed: 404")) {
@@ -147,9 +154,9 @@ export const MlxAdminPage: React.FC = () => {
       if (typeof data?.max_concurrent === "number") {
         setMaxConcurrent(data.max_concurrent)
       }
-    } catch (e: any) {
-      setStatusError(e?.message || "Failed to load MLX status.")
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      setStatusError(getErrorMessage(error, "Failed to load MLX status."))
+      markAdminGuardFromError(error)
     } finally {
       setStatusLoading(false)
     }
@@ -169,8 +176,8 @@ export const MlxAdminPage: React.FC = () => {
             p.name?.toLowerCase() === "mlx_lm"
         ) || null
       setMlxProvider(match)
-    } catch (e: any) {
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      markAdminGuardFromError(error)
     } finally {
       setLoadingProvider(false)
     }
@@ -215,9 +222,9 @@ export const MlxAdminPage: React.FC = () => {
       const data = await tldwClient.loadMlxModel(payload)
       setStatus(data)
       setStatusError(null)
-    } catch (e: any) {
-      setStatusError(e?.message || "Failed to load MLX model.")
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      setStatusError(getErrorMessage(error, "Failed to load MLX model."))
+      markAdminGuardFromError(error)
     } finally {
       setActionLoading(false)
     }
@@ -228,9 +235,9 @@ export const MlxAdminPage: React.FC = () => {
       setActionLoading(true)
       await tldwClient.unloadMlxModel()
       await loadStatus()
-    } catch (e: any) {
-      setStatusError(e?.message || "Failed to unload MLX model.")
-      markAdminGuardFromError(e)
+    } catch (error: unknown) {
+      setStatusError(getErrorMessage(error, "Failed to unload MLX model."))
+      markAdminGuardFromError(error)
     } finally {
       setActionLoading(false)
     }
@@ -238,7 +245,7 @@ export const MlxAdminPage: React.FC = () => {
 
   // Build autocomplete options from provider models
   const modelOptions = React.useMemo(() => {
-    const models = (mlxProvider?.models_info || []) as Array<Record<string, any>>
+    const models = Array.isArray(mlxProvider?.models_info) ? mlxProvider.models_info : []
     return models
       .map((m) => {
         const label = coerceModelLabel(m.id ?? m.name ?? m.model_id ?? "")
@@ -249,7 +256,7 @@ export const MlxAdminPage: React.FC = () => {
   }, [mlxProvider])
 
   const effectiveState = status?.active ? "active" : "inactive"
-  const providerModels = (mlxProvider?.models_info || []) as Array<Record<string, any>>
+  const providerModels = Array.isArray(mlxProvider?.models_info) ? mlxProvider.models_info : []
 
   return (
     <PageShell>
@@ -664,7 +671,7 @@ export const MlxAdminPage: React.FC = () => {
                   renderItem={(m) => {
                     const idLabel = coerceModelLabel(m.id ?? m.name ?? m.model_id ?? "") || "model"
                     const notes = coerceModelNotes(m.notes)
-                    const capabilities = m.capabilities as Record<string, boolean> | undefined
+                    const capabilities = isRecord(m.capabilities) ? m.capabilities : null
                     return (
                       <List.Item
                         actions={[
@@ -681,17 +688,17 @@ export const MlxAdminPage: React.FC = () => {
                         <div className="flex flex-col gap-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <Text code>{idLabel}</Text>
-                            {capabilities?.vision && (
+                            {Boolean(capabilities?.vision) && (
                               <Tag color="purple">
                                 {t("settings:admin.mlxVision", "Vision")}
                               </Tag>
                             )}
-                            {capabilities?.tool_use && (
+                            {Boolean(capabilities?.tool_use) && (
                               <Tag color="geekblue">
                                 {t("settings:admin.mlxTools", "Tools")}
                               </Tag>
                             )}
-                            {capabilities?.audio_input && (
+                            {Boolean(capabilities?.audio_input) && (
                               <Tag color="volcano">
                                 {t("settings:admin.mlxAudio", "Audio")}
                               </Tag>

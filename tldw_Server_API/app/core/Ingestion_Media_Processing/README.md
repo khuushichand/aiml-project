@@ -8,7 +8,7 @@ The ingestion and media processing hub for video, audio, PDF, EPUB, documents (t
 - Purpose: Safe, pluggable ingestion for heterogeneous media; consistent outputs for downstream RAG, search, and storage.
 - Capabilities:
   - Video/audio: yt‑dlp downloads; ffmpeg conversion; STT via faster‑whisper and NVIDIA NeMo/Parakeet; optional diarization/VAD; timestamps; batch processing.
-  - PDFs: PyMuPDF/pymupdf4llm and Docling parsing; optional OCR (Tesseract, dots.ocr, POINTS‑Reader) and VLM table extraction; robust metadata extraction.
+  - PDFs: PyMuPDF/pymupdf4llm and Docling parsing; optional OCR (Tesseract, dots.ocr, POINTS-Reader, HunyuanOCR, Nemotron-Parse) and VLM table extraction; robust metadata extraction.
   - Documents: txt/md/html/xml/docx/rtf conversion (pandoc for RTF/DOCX); HTML/XML sanitized; consistent text output.
   - Books: EPUB extraction; TOC → Markdown; bulk ZIP of EPUBs.
   - MediaWiki: streaming dump parsing with NDJSON events; optional persistence and checkpointing.
@@ -54,6 +54,15 @@ The ingestion and media processing hub for video, audio, PDF, EPUB, documents (t
     In tests, hostname-based DNS checks are relaxed to avoid flaky resolution; literal IP checks remain enforced.
 - Configuration:
   - Env vars: `MAGIC_FILE_PATH` (libmagic), `YARA_RULES_PATH` (malware rules); set via `.env`/env.
+  - OCR backends (env): `OCR_PAGE_CONCURRENCY` and backend-specific settings. Nemotron-Parse uses:
+    `NEMOTRON_MODE`, `NEMOTRON_PROMPT`, `NEMOTRON_VLLM_URL`, `NEMOTRON_VLLM_MODEL`,
+    `NEMOTRON_VLLM_TIMEOUT`, `NEMOTRON_VLLM_USE_DATA_URL`, `NEMOTRON_MODEL_PATH`,
+    `NEMOTRON_DEVICE`, `NEMOTRON_DTYPE`, `NEMOTRON_MAX_NEW_TOKENS`, `NEMOTRON_TEMPERATURE`,
+    `NEMOTRON_REPETITION_PENALTY`, `NEMOTRON_TOP_P`, `NEMOTRON_TOP_K`, `NEMOTRON_DO_SAMPLE`,
+    `NEMOTRON_SKIP_SPECIAL_TOKENS`, `NEMOTRON_TEXT_FORMAT`, `NEMOTRON_TABLE_FORMAT`,
+    `NEMOTRON_KEEP_RAW_OUTPUT`, `NEMOTRON_RESIZE_MODE`, `NEMOTRON_POSTPROCESSOR_MODULE`.
+    `NEMOTRON_SKIP_SPECIAL_TOKENS` defaults to false to preserve layout tags for structured output.
+  - Request-level OCR params (per job): `ocr_output_format` and `ocr_prompt_preset` influence structured OCR output and prompt selection when supported by the backend; env defaults are used if these are omitted.
   - `loaded_config_data['media_processing']` keys honored by validator, e.g.: `max_audio_file_size_mb`, `max_video_file_size_mb`, `max_document_file_size_mb`, `max_archive_file_size_mb`, `max_archive_internal_files`, `max_archive_uncompressed_size_mb`, `max_archive_member_uncompressed_size_mb`, `max_archive_nesting_depth`, `yara_fail_open`.
   - Chunking defaults via `chunking_config` in config; see `app/core/Chunking/__init__.py:1`.
 - Concurrency & Performance:

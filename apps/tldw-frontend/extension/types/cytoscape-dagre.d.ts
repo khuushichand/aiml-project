@@ -1,4 +1,4 @@
 declare module "cytoscape-dagre" {
-  const dagre: any
+  const dagre: unknown
   export default dagre
 }

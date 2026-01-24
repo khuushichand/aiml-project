@@ -7,7 +7,7 @@ export type TldwTtsVoiceInfo = {
   gender?: string
   description?: string | null
   preview_url?: string | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export type TldwTtsProviderCapabilities = {
@@ -18,7 +18,7 @@ export type TldwTtsProviderCapabilities = {
   supports_ssml?: boolean
   supports_speech_rate?: boolean
   supports_emotion_control?: boolean
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export type TldwTtsProvidersInfo = {
@@ -26,33 +26,38 @@ export type TldwTtsProvidersInfo = {
   voices: Record<string, TldwTtsVoiceInfo[]>
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
 export const fetchTtsProviders = async (): Promise<TldwTtsProvidersInfo | null> => {
   try {
-    const res = await bgRequestClient<any>({
+    const res = await bgRequestClient<unknown>({
       path: "/api/v1/audio/providers",
       method: "GET"
     })
 
-    if (!res) {
+    if (!isRecord(res)) {
       return null
     }
 
-    const rawProviders = res.providers ?? res
-    const rawVoices = res.voices ?? {}
+    const rawProviders =
+      isRecord(res.providers) ? res.providers : res
+    const rawVoices =
+      isRecord(res.voices) ? res.voices : {}
 
     const providers: Record<string, TldwTtsProviderCapabilities> = {}
     const voices: Record<string, TldwTtsVoiceInfo[]> = {}
 
-    if (rawProviders && typeof rawProviders === "object") {
+    if (isRecord(rawProviders)) {
       for (const key of Object.keys(rawProviders)) {
         const value = rawProviders[key]
-        if (value && typeof value === "object") {
+        if (isRecord(value)) {
           providers[key] = value as TldwTtsProviderCapabilities
         }
       }
     }
 
-    if (rawVoices && typeof rawVoices === "object") {
+    if (isRecord(rawVoices)) {
       for (const key of Object.keys(rawVoices)) {
         const list = Array.isArray(rawVoices[key]) ? rawVoices[key] : []
         voices[key] = list as TldwTtsVoiceInfo[]

@@ -16,7 +16,6 @@ import {
   Star,
   ExternalLink,
   Trash2,
-  Archive,
   Clock,
   Calendar,
   Globe,
@@ -39,7 +38,6 @@ import type {
 } from "@/types/collections"
 import type { ReadingProgress } from "@/services/reading-progress"
 import { clearReadingProgress, getReadingProgress, setReadingProgress } from "@/services/reading-progress"
-import { StatusBadge } from "../common/StatusBadge"
 import { TagSelector } from "../common/TagSelector"
 import { HighlightCard } from "../Highlights/HighlightCard"
 
@@ -47,6 +45,15 @@ const { TextArea } = Input
 
 interface ReadingItemDetailProps {
   onRefresh?: () => void
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return fallback
 }
 
 export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
@@ -123,8 +130,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         setEditingNotes(false)
         setNotesDirty(false)
         setNotesSaveError(null)
-      } catch (error: any) {
-        message.error(error?.message || "Failed to load article details")
+      } catch (error: unknown) {
+        message.error(getErrorMessage(error, "Failed to load article details"))
         closeItemDetail()
       } finally {
         setCurrentItemLoading(false)
@@ -149,7 +156,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     try {
       const selection = window.getSelection()
       selection?.removeAllRanges()
-    } catch (error) {
+    } catch {
       // Ignore selection reset failures (non-critical).
     }
   }, [])
@@ -165,14 +172,14 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     setItemHighlightsLoading(true)
     setItemHighlightsError(null)
     try {
-      const highlights = await api.getHighlights(selectedItemId)
-      const enriched = highlights.map((highlight: any) => ({
+      const highlights = (await api.getHighlights(selectedItemId)) as Highlight[]
+      const enriched = highlights.map((highlight) => ({
         ...highlight,
         item_title: highlight.item_title || currentItem?.title
       }))
       setItemHighlights(enriched)
-    } catch (error: any) {
-      const errorMsg = error?.message || "Failed to load highlights"
+    } catch (error: unknown) {
+      const errorMsg = getErrorMessage(error, "Failed to load highlights")
       setItemHighlightsError(errorMsg)
     } finally {
       setItemHighlightsLoading(false)
@@ -213,8 +220,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       const updated = { ...currentItem, favorite: !currentItem.favorite }
       setCurrentItem(updated)
       updateItemInList(currentItem.id, { favorite: updated.favorite })
-    } catch (error: any) {
-      message.error(error?.message || "Failed to update favorite status")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to update favorite status"))
     } finally {
       setActionLoading(false)
     }
@@ -246,8 +253,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
           lastProgressRef.current = null
           setProgressPercent(0)
         }
-      } catch (error: any) {
-        message.error(error?.message || "Failed to update status")
+      } catch (error: unknown) {
+        message.error(getErrorMessage(error, "Failed to update status"))
       } finally {
         setActionLoading(false)
       }
@@ -263,8 +270,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         const updated = { ...currentItem, tags }
         setCurrentItem(updated)
         updateItemInList(currentItem.id, { tags })
-      } catch (error: any) {
-        message.error(error?.message || "Failed to update tags")
+      } catch (error: unknown) {
+        message.error(getErrorMessage(error, "Failed to update tags"))
       }
     },
     [api, currentItem, setCurrentItem, updateItemInList]
@@ -284,10 +291,11 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       setNotesDirty(false)
       setEditingNotes(false)
       message.success(t("collections:reading.notesSaved", "Notes saved"))
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (notesSaveTokenRef.current !== token) return
-      setNotesSaveError(error?.message || "Failed to save notes")
-      message.error(error?.message || "Failed to save notes")
+      const errorMessage = getErrorMessage(error, "Failed to save notes")
+      setNotesSaveError(errorMessage)
+      message.error(errorMessage)
     } finally {
       if (notesSaveTokenRef.current === token) {
         setNotesSaving(false)
@@ -323,9 +331,9 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         setCurrentItem(updated)
         updateItemInList(currentItem.id, { notes: notesValue })
         setNotesDirty(false)
-      } catch (error: any) {
+      } catch (error: unknown) {
         if (notesSaveTokenRef.current !== token) return
-        setNotesSaveError(error?.message || "Failed to save notes")
+        setNotesSaveError(getErrorMessage(error, "Failed to save notes"))
       } finally {
         if (notesSaveTokenRef.current === token) {
           setNotesSaving(false)
@@ -344,8 +352,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       const updated = { ...currentItem, summary: result.summary }
       setCurrentItem(updated)
       message.success(t("collections:reading.summarized", "Summary generated"))
-    } catch (error: any) {
-      message.error(error?.message || "Failed to generate summary")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to generate summary"))
     } finally {
       setSummarizing(false)
     }
@@ -359,8 +367,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       const updated = { ...currentItem, tts_audio_url: result.audio_url }
       setCurrentItem(updated)
       message.success(t("collections:reading.ttsGenerated", "Audio generated"))
-    } catch (error: any) {
-      message.error(error?.message || "Failed to generate audio")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to generate audio"))
     } finally {
       setGeneratingTts(false)
     }
@@ -432,8 +440,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       message.success(t("collections:reading.deleted", "Article deleted"))
       handleClose()
       onRefresh?.()
-    } catch (error: any) {
-      message.error(error?.message || "Failed to delete article")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to delete article"))
     } finally {
       setActionLoading(false)
       setDeleteModalOpen(false)
@@ -626,8 +634,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       setHighlightAnchorStrategy("fuzzy_quote")
       clearSelection()
       message.success(t("collections:highlights.created", "Highlight created"))
-    } catch (error: any) {
-      message.error(error?.message || "Failed to create highlight")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to create highlight"))
     } finally {
       setHighlightSaving(false)
     }
@@ -668,8 +676,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
       message.success(t("collections:highlights.deleted", "Highlight deleted"))
       setHighlightDeleteOpen(false)
       setHighlightDeleteId(null)
-    } catch (error: any) {
-      message.error(error?.message || "Failed to delete highlight")
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, "Failed to delete highlight"))
     } finally {
       setHighlightDeleteLoading(false)
     }
