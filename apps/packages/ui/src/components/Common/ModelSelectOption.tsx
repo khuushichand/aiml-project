@@ -45,7 +45,7 @@ export const ModelSelectOption: React.FC<Props> = ({ iconClassName = "size-5" })
         </div>
       )
       const item = {
-        key: d.name,
+        key: d.model,
         label: labelNode,
         onClick: () => {
           if (selectedModel === d.model) {
@@ -62,9 +62,9 @@ export const ModelSelectOption: React.FC<Props> = ({ iconClassName = "size-5" })
     for (const [groupKey, children] of groups) {
       const labelText =
         groupKey === "default"
-          ? "Default"
+          ? t("modelSelect.group.default", "Default")
           : groupKey === "custom"
-            ? "Custom"
+            ? t("modelSelect.group.custom", "Custom")
             : getProviderDisplayName(groupKey)
       const iconKey = groupKey === "default" ? "chrome" : groupKey
       items.push({
@@ -90,7 +90,7 @@ export const ModelSelectOption: React.FC<Props> = ({ iconClassName = "size-5" })
             items: groupedItems,
             style: { maxHeight: 500, overflowY: "scroll" },
             className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
-            activeKey: selectedModel
+            selectedKeys: [selectedModel]
           }}
           placement={"topLeft"}
           trigger={["click"]}>

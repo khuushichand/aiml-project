@@ -15,14 +15,20 @@ export const PageAssistProvider = ({
   const [embeddingController, setEmbeddingController] =
     React.useState<AbortController | null>(null)
 
-  // Expose store accessors for debugging (messages now come from Zustand store)
-  if (typeof window !== "undefined") {
+  React.useEffect(() => {
+    if (process.env.NODE_ENV === "production") return
+    if (typeof window === "undefined") return
+
     const w = window as any
     w.__tldw_pageAssist = {
       setMessages: useStoreMessageOption.getState().setMessages,
       getMessages: () => useStoreMessageOption.getState().messages
     }
-  }
+
+    return () => {
+      delete w.__tldw_pageAssist
+    }
+  }, [])
 
   return (
     <PageAssistContext.Provider

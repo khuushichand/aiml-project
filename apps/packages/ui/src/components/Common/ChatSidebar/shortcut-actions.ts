@@ -48,8 +48,14 @@ const SIDEBAR_SHORTCUT_CONFIG: Record<SidebarShortcutId, SidebarShortcutAction> 
   ...headerShortcutEntries
 }
 
+const isShortcutAction = (
+  value: SidebarShortcutAction | undefined
+): value is SidebarShortcutAction => Boolean(value)
+
 export const SIDEBAR_SHORTCUT_ACTIONS: SidebarShortcutAction[] =
-  SIDEBAR_SHORTCUT_IDS.map((id) => SIDEBAR_SHORTCUT_CONFIG[id])
+  SIDEBAR_SHORTCUT_IDS
+    .map((id) => SIDEBAR_SHORTCUT_CONFIG[id])
+    .filter(isShortcutAction)
 
 export const normalizeSidebarShortcutSelection = (
   selection: SidebarShortcutId[]

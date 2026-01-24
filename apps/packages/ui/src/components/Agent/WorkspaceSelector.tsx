@@ -149,8 +149,11 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
         path: newPath.trim()
       }
 
-      setWorkspaces([...(workspaces || []), workspace])
+      setWorkspaces(prev => [...(prev || []), workspace])
       setSelectedId(workspace.id)
+      void recordUsage(workspace).catch((error) => {
+        console.warn("[WorkspaceSelector] Failed to record workspace usage:", error)
+      })
       setShowAddModal(false)
       setNewPath("")
       setNewName("")
@@ -169,7 +172,7 @@ export const WorkspaceSelector: FC<WorkspaceSelectorProps> = ({
   // Handle removing workspace
   const handleRemove = (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    setWorkspaces((workspaces || []).filter(w => w.id !== id))
+    setWorkspaces(prev => (prev || []).filter(w => w.id !== id))
     if (selectedId === id) {
       setSelectedId(null)
     }

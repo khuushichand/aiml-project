@@ -177,13 +177,15 @@ const formatFullArgs = (
     const parsed = JSON.parse(argsStr)
     return JSON.stringify(parsed, null, 2)
   } catch {
-    return invalidFallback || argsStr
+    return invalidFallback
+      ? `${invalidFallback}\n${argsStr}`
+      : argsStr
   }
 }
 
 // Format result for display (compact preview)
 const formatResult = (result: unknown): string => {
-  if (!result) return ""
+  if (result == null) return ""
 
   try {
     if (typeof result === "string") {
@@ -283,7 +285,7 @@ const formatFullResult = (result: unknown): string => {
       },
       2
     )
-    return serialized
+    return serialized ?? String(result)
   } catch {
     try {
       if (typeof result === "string") {
@@ -347,6 +349,7 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
             className="rounded-lg border border-border bg-surface2"
           >
             <button
+              type="button"
               onClick={() => onToggleExpand?.(entry.id)}
               aria-expanded={onToggleExpand ? isExpanded : undefined}
               aria-label={`${getToolDisplayName(entry.toolCall.function.name)} - ${getStatusLabel(entry.status, t)}`}
@@ -415,7 +418,7 @@ export const ToolCallLog: FC<ToolCallLogProps> = ({
                 </div>
 
                 {/* Result */}
-                {entry.result && (
+                {entry.result != null && (
                   <div>
                     <span className="text-xs font-medium text-text-subtle">
                       {t("result", "Result")}:

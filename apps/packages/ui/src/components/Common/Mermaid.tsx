@@ -38,7 +38,51 @@ const resolveMermaidTheme = () => {
 export const Mermaid: React.FC<MermaidProps> = ({ code, className }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [theme, setTheme] = useState(() => resolveMermaidTheme())
   const renderIdRef = useRef(0)
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const updateTheme = () => {
+      setTheme(resolveMermaidTheme())
+    }
+
+    updateTheme()
+
+    const mql = window.matchMedia?.("(prefers-color-scheme: dark)")
+    const handleChange = () => updateTheme()
+    const cleanupMql = () => {
+      if (!mql) return
+      if (mql.removeEventListener) {
+        mql.removeEventListener("change", handleChange)
+      } else if (mql.removeListener) {
+        mql.removeListener(handleChange)
+      }
+    }
+    if (mql) {
+      if (mql.addEventListener) {
+        mql.addEventListener("change", handleChange)
+      } else if (mql.addListener) {
+        mql.addListener(handleChange)
+      }
+    }
+
+    if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+      return cleanupMql
+    }
+
+    const observer = new MutationObserver(handleChange)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"]
+    })
+
+    return () => {
+      cleanupMql()
+      observer.disconnect()
+    }
+  }, [])
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -48,13 +92,16 @@ export const Mermaid: React.FC<MermaidProps> = ({ code, className }) => {
     let active = true
     const renderDiagram = async () => {
       if (!code?.trim()) {
+        setError(null)
+        if (containerRef.current) {
+          containerRef.current.innerHTML = ""
+        }
         return
       }
 
       try {
         const mermaidModule = await import("mermaid")
         const mermaid = mermaidModule.default
-        const theme = resolveMermaidTheme()
 
         mermaid.initialize({
           startOnLoad: false,
@@ -86,7 +133,7 @@ export const Mermaid: React.FC<MermaidProps> = ({ code, className }) => {
     return () => {
       active = false
     }
-  }, [code])
+  }, [code, theme])
 
   if (typeof window === "undefined") {
     return (

@@ -42,26 +42,49 @@ export const useVoiceChatSettings = () => {
     [voiceChatTriggerPhrases]
   )
 
-  return {
-    voiceChatEnabled,
-    setVoiceChatEnabled,
-    voiceChatModel,
-    setVoiceChatModel,
-    voiceChatPauseMs,
-    setVoiceChatPauseMs,
-    voiceChatTriggerPhrases: normalizedTriggerPhrases,
-    setVoiceChatTriggerPhrases: (value: string[] | ((prev: string[]) => string[])) => {
+  const wrappedSetVoiceChatTriggerPhrases = React.useCallback(
+    (value: string[] | ((prev: string[]) => string[])) => {
       if (typeof value === "function") {
         setVoiceChatTriggerPhrases((prev) => value(prev || []))
         return
       }
       setVoiceChatTriggerPhrases(value)
     },
-    voiceChatAutoResume,
-    setVoiceChatAutoResume,
-    voiceChatBargeIn,
-    setVoiceChatBargeIn,
-    voiceChatTtsMode: voiceChatTtsMode as VoiceChatTtsMode,
-    setVoiceChatTtsMode
-  }
+    [setVoiceChatTriggerPhrases]
+  )
+
+  return React.useMemo(
+    () => ({
+      voiceChatEnabled,
+      setVoiceChatEnabled,
+      voiceChatModel,
+      setVoiceChatModel,
+      voiceChatPauseMs,
+      setVoiceChatPauseMs,
+      voiceChatTriggerPhrases: normalizedTriggerPhrases,
+      setVoiceChatTriggerPhrases: wrappedSetVoiceChatTriggerPhrases,
+      voiceChatAutoResume,
+      setVoiceChatAutoResume,
+      voiceChatBargeIn,
+      setVoiceChatBargeIn,
+      voiceChatTtsMode: voiceChatTtsMode as VoiceChatTtsMode,
+      setVoiceChatTtsMode
+    }),
+    [
+      voiceChatEnabled,
+      setVoiceChatEnabled,
+      voiceChatModel,
+      setVoiceChatModel,
+      voiceChatPauseMs,
+      setVoiceChatPauseMs,
+      normalizedTriggerPhrases,
+      wrappedSetVoiceChatTriggerPhrases,
+      voiceChatAutoResume,
+      setVoiceChatAutoResume,
+      voiceChatBargeIn,
+      setVoiceChatBargeIn,
+      voiceChatTtsMode,
+      setVoiceChatTtsMode
+    ]
+  )
 }

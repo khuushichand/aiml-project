@@ -48,6 +48,23 @@ function Markdown({
     codeBlockVariant === "plain" || codeBlockVariant === "compact"
       ? "mb-2 last:mb-0 whitespace-pre-wrap"
       : "mb-2 last:mb-0"
+  const renderHighlightedChildren = React.useCallback(
+    (children: React.ReactNode): React.ReactNode => {
+      if (!searchQuery) return children
+      return React.Children.map(children, (child) => {
+        if (typeof child === "string") {
+          return highlightText(child, searchQuery)
+        }
+        if (React.isValidElement(child) && child.props?.children) {
+          const nextChildren = renderHighlightedChildren(child.props.children)
+          if (nextChildren === child.props.children) return child
+          return React.cloneElement(child, { ...child.props }, nextChildren)
+        }
+        return child
+      })
+    },
+    [searchQuery]
+  )
   message = preprocessLaTeX(message)
   return (
     <React.Fragment>
@@ -56,71 +73,74 @@ function Markdown({
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
-          pre({ children }) {
-            return children
-          },
-          code({ node, inline, className, children, ...props }) {
-            const match = /language-(\w+)/.exec(className || "")
+          pre({ children, ...props }) {
+            const childArray = React.Children.toArray(children)
+            const codeChild = childArray.find(
+              (child) => React.isValidElement(child) && child.type === "code"
+            ) as React.ReactElement | undefined
+
+            if (!codeChild) {
+              return <pre {...props}>{children}</pre>
+            }
+
+            const codeClassName = codeChild.props?.className as string | undefined
+            const match = /language-(\w+)/.exec(codeClassName || "")
             const blockIndex = blockIndexRef.current++
-            const value = String(children).replace(/\n$/, "")
-            if (!inline) {
-              if (codeBlockVariant === "plain") {
-                return (
-                  <div className="my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 text-xs font-mono leading-relaxed text-text whitespace-pre overflow-x-auto">
-                    {value}
-                  </div>
-                )
-              }
-              if (codeBlockVariant === "compact") {
-                const rawLanguage = match ? match[1] : ""
-                const normalizedLanguage = normalizeLanguage(rawLanguage)
-                const highlightLanguage = rawLanguage
-                  ? normalizedLanguage
-                  : "markdown"
-                return (
-                  <div className="not-prose my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 overflow-x-auto">
-                    <Highlight
-                      code={value}
-                      language={safeLanguage(highlightLanguage)}
-                      theme={resolveTheme(codeTheme || "dracula")}>
-                      {({
-                        className: highlightClassName,
-                        style,
-                        tokens,
-                        getLineProps,
-                        getTokenProps
-                      }) => (
-                        <pre
-                          className={`${highlightClassName} m-0 text-xs font-mono leading-relaxed`}
-                          style={{
-                            ...style,
-                            backgroundColor: "transparent",
-                            fontFamily: "var(--font-mono)"
-                          }}>
-                          {tokens.map((line, i) => (
-                            <div key={i} {...getLineProps({ line, key: i })}>
-                              {line.map((token, key) => (
-                                <span
-                                  key={key}
-                                  {...getTokenProps({ token, key })}
-                                />
-                              ))}
-                            </div>
-                          ))}
-                        </pre>
-                      )}
-                    </Highlight>
-                  </div>
-                )
-              }
+            const value = String(codeChild.props?.children ?? "").replace(/\n$/, "")
+
+            if (codeBlockVariant === "plain") {
               return (
-                <CodeBlock
-                  language={match ? match[1] : ""}
-                  value={value}
-                  blockIndex={blockIndex}
-                />
+                <div className="my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 text-xs font-mono leading-relaxed text-text whitespace-pre overflow-x-auto">
+                  {value}
+                </div>
               )
             }
+            if (codeBlockVariant === "compact") {
+              const rawLanguage = match ? match[1] : ""
+              const normalizedLanguage = normalizeLanguage(rawLanguage)
+              const highlightLanguage = rawLanguage ? normalizedLanguage : "markdown"
+              return (
+                <div className="not-prose my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 overflow-x-auto">
+                  <Highlight
+                    code={value}
+                    language={safeLanguage(highlightLanguage)}
+                    theme={resolveTheme(codeTheme || "dracula")}>
+                    {({
+                      className: highlightClassName,
+                      style,
+                      tokens,
+                      getLineProps,
+                      getTokenProps
+                    }) => (
+                      <pre
+                        className={`${highlightClassName} m-0 text-xs font-mono leading-relaxed`}
+                        style={{
+                          ...style,
+                          backgroundColor: "transparent",
+                          fontFamily: "var(--font-mono)"
+                        }}>
+                        {tokens.map((line, i) => (
+                          <div key={i} {...getLineProps({ line, key: i })}>
+                            {line.map((token, key) => (
+                              <span key={key} {...getTokenProps({ token, key })} />
+                            ))}
+                          </div>
+                        ))}
+                      </pre>
+                    )}
+                  </Highlight>
+                </div>
+              )
+            }
+            return (
+              <CodeBlock
+                language={match ? match[1] : ""}
+                value={value}
+                blockIndex={blockIndex}
+              />
+            )
+          },
+          code({ className, children, ...props }) {
             return (
               <code className={`${className} font-semibold`} {...props}>
                 {children}
@@ -175,15 +195,43 @@ function Markdown({
           table({ children }) {
             return <TableBlock>{children}</TableBlock>
           },
-          p({ children }) {
-            return <p className={paragraphClass}>{children}</p>
+          p({ children, className, ...props }) {
+            const content = renderHighlightedChildren(children)
+            const mergedClassName = [paragraphClass, className]
+              .filter(Boolean)
+              .join(" ")
+            return (
+              <p className={mergedClassName} {...props}>
+                {content}
+              </p>
+            )
           },
-          // Apply search highlighting to text nodes
-          text({ children }) {
-            if (searchQuery && typeof children === "string") {
-              return highlightText(children, searchQuery)
-            }
-            return <>{children}</>
+          li({ children, ...props }) {
+            return <li {...props}>{renderHighlightedChildren(children)}</li>
+          },
+          td({ children, ...props }) {
+            return <td {...props}>{renderHighlightedChildren(children)}</td>
+          },
+          th({ children, ...props }) {
+            return <th {...props}>{renderHighlightedChildren(children)}</th>
+          },
+          h1({ children, ...props }) {
+            return <h1 {...props}>{renderHighlightedChildren(children)}</h1>
+          },
+          h2({ children, ...props }) {
+            return <h2 {...props}>{renderHighlightedChildren(children)}</h2>
+          },
+          h3({ children, ...props }) {
+            return <h3 {...props}>{renderHighlightedChildren(children)}</h3>
+          },
+          h4({ children, ...props }) {
+            return <h4 {...props}>{renderHighlightedChildren(children)}</h4>
+          },
+          h5({ children, ...props }) {
+            return <h5 {...props}>{renderHighlightedChildren(children)}</h5>
+          },
+          h6({ children, ...props }) {
+            return <h6 {...props}>{renderHighlightedChildren(children)}</h6>
           }
         }}>
         {message}

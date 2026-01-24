@@ -11,6 +11,7 @@ import {
 } from "@/utils/actor"
 import { ActorEditor } from "@/components/Common/Settings/ActorEditor"
 import { useActorEditorPrefs, useActorStore } from "@/store/actor"
+import { shallow } from "zustand/shallow"
 import type { Character } from "@/types/character"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 
@@ -32,7 +33,16 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
     preview,
     tokenCount,
     setPreviewAndTokens
-  } = useActorStore()
+  } = useActorStore(
+    (state) => ({
+      settings: state.settings,
+      setSettings: state.setSettings,
+      preview: state.preview,
+      tokenCount: state.tokenCount,
+      setPreviewAndTokens: state.setPreviewAndTokens
+    }),
+    shallow
+  )
   const { editorMode, setEditorMode } = useActorEditorPrefs()
   const [loading, setLoading] = React.useState(false)
   const [newAspectTarget, setNewAspectTarget] =
@@ -44,6 +54,9 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
 
   React.useEffect(() => {
     if (!open || settings) return
+    if (import.meta.env.DEV) {
+      console.count("ActorPopout/initSettings")
+    }
     const base = createDefaultActorSettings()
     setSettings(base)
     const baseFields: Record<string, any> = {
@@ -108,6 +121,9 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
 
   React.useEffect(() => {
     if (open && !hydratedRef.current) {
+      if (import.meta.env.DEV) {
+        console.count("ActorPopout/hydrate")
+      }
       hydratedRef.current = true
       void hydrate()
     }

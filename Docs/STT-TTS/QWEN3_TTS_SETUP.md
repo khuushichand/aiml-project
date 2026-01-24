@@ -133,17 +133,10 @@ Tokenizer endpoints require the `audio.tokenizer` scope.
 
 ## Troubleshooting
 
-**Import error: qwen_tts missing**
-- Install `qwen-tts` or use the upstream repo for your environment.
-
-**Streaming MP3/OPUS/AAC fails**
-- Ensure `av` is installed (PyAV). Without it, streaming transcoding is disabled.
-
-**Base model rejects request**
-- Base requires `voice_reference`. Use `extra_params.x_vector_only_mode=true` only to skip `reference_text`.
-
-**model="auto" rejected**
-- Auto model selection is only for CustomVoice. Set a VoiceDesign/Base model explicitly.
+- **Import error: qwen_tts missing**: Install `qwen-tts` or use the upstream repo for your environment.
+- **Streaming MP3/OPUS/AAC fails**: Ensure `av` is installed (PyAV). Without it, streaming transcoding is disabled.
+- **Base model rejects request**: Base requires `voice_reference`. Use `extra_params.x_vector_only_mode=true` only to skip `reference_text`.
+- **`model="auto"` rejected**: Auto model selection is only for CustomVoice. Set a VoiceDesign/Base model explicitly.
 
 ## Useful Files
 - Adapter: `tldw_Server_API/app/core/TTS/adapters/qwen3_tts_adapter.py`

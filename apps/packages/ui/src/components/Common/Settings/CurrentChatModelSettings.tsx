@@ -13,6 +13,7 @@ import {
 } from "antd"
 import React, { useCallback, useMemo } from "react"
 import { useTranslation } from "react-i18next"
+import { shallow } from "zustand/shallow"
 import { SaveButton } from "../SaveButton"
 import { getOCRLanguage } from "@/services/ocr"
 import { ocrLanguages } from "@/data/ocr-language"
@@ -128,7 +129,70 @@ export const CurrentChatModelSettings = ({
 }: Props) => {
   const { t } = useTranslation("common")
   const [form] = Form.useForm<CurrentChatModelFormValues>()
-  const cUserSettings = useStoreChatModelSettings()
+  const {
+    temperature,
+    topK,
+    topP,
+    keepAlive,
+    numCtx,
+    seed,
+    numGpu,
+    numPredict,
+    useMMap,
+    minP,
+    repeatLastN,
+    repeatPenalty,
+    useMlock,
+    tfsZ,
+    numKeep,
+    numThread,
+    reasoningEffort,
+    thinking,
+    historyMessageLimit,
+    historyMessageOrder,
+    slashCommandInjectionMode,
+    apiProvider,
+    extraHeaders,
+    extraBody,
+    jsonMode,
+    systemPrompt,
+    ocrLanguage,
+    updateSetting,
+    setOcrLanguage
+  } = useStoreChatModelSettings(
+    (state) => ({
+      temperature: state.temperature,
+      topK: state.topK,
+      topP: state.topP,
+      keepAlive: state.keepAlive,
+      numCtx: state.numCtx,
+      seed: state.seed,
+      numGpu: state.numGpu,
+      numPredict: state.numPredict,
+      useMMap: state.useMMap,
+      minP: state.minP,
+      repeatLastN: state.repeatLastN,
+      repeatPenalty: state.repeatPenalty,
+      useMlock: state.useMlock,
+      tfsZ: state.tfsZ,
+      numKeep: state.numKeep,
+      numThread: state.numThread,
+      reasoningEffort: state.reasoningEffort,
+      thinking: state.thinking,
+      historyMessageLimit: state.historyMessageLimit,
+      historyMessageOrder: state.historyMessageOrder,
+      slashCommandInjectionMode: state.slashCommandInjectionMode,
+      apiProvider: state.apiProvider,
+      extraHeaders: state.extraHeaders,
+      extraBody: state.extraBody,
+      jsonMode: state.jsonMode,
+      systemPrompt: state.systemPrompt,
+      ocrLanguage: state.ocrLanguage,
+      updateSetting: state.updateSetting,
+      setOcrLanguage: state.setOcrLanguage
+    }),
+    shallow
+  )
   const {
     historyId,
     selectedSystemPrompt,
@@ -156,7 +220,16 @@ export const CurrentChatModelSettings = ({
     preview: actorPreview,
     tokenCount: actorTokenCount,
     setPreviewAndTokens
-  } = useActorStore()
+  } = useActorStore(
+    (state) => ({
+      settings: state.settings,
+      setSettings: state.setSettings,
+      preview: state.preview,
+      tokenCount: state.tokenCount,
+      setPreviewAndTokens: state.setPreviewAndTokens
+    }),
+    shallow
+  )
   const [newAspectTarget, setNewAspectTarget] =
     React.useState<ActorTarget>("user")
   const [newAspectName, setNewAspectName] = React.useState<string>("")
@@ -164,9 +237,9 @@ export const CurrentChatModelSettings = ({
 
   const savePrompt = useCallback(
     (value: string) => {
-      cUserSettings.updateSetting("systemPrompt", value)
+      updateSetting("systemPrompt", value)
     },
-    [cUserSettings]
+    [updateSetting]
   )
 
   const recomputeActorPreview = useCallback(() => {
@@ -209,7 +282,7 @@ export const CurrentChatModelSettings = ({
     (values: CurrentChatModelFormValues) => {
       Object.keys(values).forEach((key) => {
         if (!isChatModelSettingKey(key)) return
-        cUserSettings.updateSetting(key, values[key])
+        updateSetting(key, values[key])
       })
 
       const base = actorSettings ?? createDefaultActorSettings()
@@ -224,39 +297,66 @@ export const CurrentChatModelSettings = ({
         })
       )
     },
-    [actorSettings, cUserSettings, historyId, serverChatId, setActorSettings]
+    [actorSettings, historyId, serverChatId, setActorSettings, updateSetting]
   )
 
   const buildBaseValues = useCallback(
     (data?: ModelConfigData | null, promptFallback?: string) => ({
-      temperature: cUserSettings.temperature ?? data?.temperature,
-      topK: cUserSettings.topK ?? data?.topK,
-      topP: cUserSettings.topP ?? data?.topP,
-      keepAlive: cUserSettings.keepAlive ?? data?.keepAlive,
-      numCtx: cUserSettings.numCtx ?? data?.numCtx,
-      seed: cUserSettings.seed,
-      numGpu: cUserSettings.numGpu ?? data?.numGpu,
-      numPredict: cUserSettings.numPredict ?? data?.numPredict,
-      systemPrompt: cUserSettings.systemPrompt ?? promptFallback ?? "",
-      useMMap: cUserSettings.useMMap ?? data?.useMMap,
-      minP: cUserSettings.minP ?? data?.minP,
-      repeatLastN: cUserSettings.repeatLastN ?? data?.repeatLastN,
-      repeatPenalty: cUserSettings.repeatPenalty ?? data?.repeatPenalty,
-      useMlock: cUserSettings.useMlock ?? data?.useMlock,
-      tfsZ: cUserSettings.tfsZ ?? data?.tfsZ,
-      numKeep: cUserSettings.numKeep ?? data?.numKeep,
-      numThread: cUserSettings.numThread ?? data?.numThread,
-      reasoningEffort: cUserSettings?.reasoningEffort,
-      thinking: cUserSettings?.thinking,
-      historyMessageLimit: cUserSettings.historyMessageLimit,
-      historyMessageOrder: cUserSettings.historyMessageOrder,
-      slashCommandInjectionMode: cUserSettings.slashCommandInjectionMode,
-      apiProvider: cUserSettings.apiProvider,
-      extraHeaders: cUserSettings.extraHeaders,
-      extraBody: cUserSettings.extraBody,
-      jsonMode: cUserSettings.jsonMode
+      temperature: temperature ?? data?.temperature,
+      topK: topK ?? data?.topK,
+      topP: topP ?? data?.topP,
+      keepAlive: keepAlive ?? data?.keepAlive,
+      numCtx: numCtx ?? data?.numCtx,
+      seed,
+      numGpu: numGpu ?? data?.numGpu,
+      numPredict: numPredict ?? data?.numPredict,
+      systemPrompt: systemPrompt ?? promptFallback ?? "",
+      useMMap: useMMap ?? data?.useMMap,
+      minP: minP ?? data?.minP,
+      repeatLastN: repeatLastN ?? data?.repeatLastN,
+      repeatPenalty: repeatPenalty ?? data?.repeatPenalty,
+      useMlock: useMlock ?? data?.useMlock,
+      tfsZ: tfsZ ?? data?.tfsZ,
+      numKeep: numKeep ?? data?.numKeep,
+      numThread: numThread ?? data?.numThread,
+      reasoningEffort,
+      thinking,
+      historyMessageLimit,
+      historyMessageOrder,
+      slashCommandInjectionMode,
+      apiProvider,
+      extraHeaders,
+      extraBody,
+      jsonMode
     }),
-    [cUserSettings]
+    [
+      temperature,
+      topK,
+      topP,
+      keepAlive,
+      numCtx,
+      seed,
+      numGpu,
+      numPredict,
+      systemPrompt,
+      useMMap,
+      minP,
+      repeatLastN,
+      repeatPenalty,
+      useMlock,
+      tfsZ,
+      numKeep,
+      numThread,
+      reasoningEffort,
+      thinking,
+      historyMessageLimit,
+      historyMessageOrder,
+      slashCommandInjectionMode,
+      apiProvider,
+      extraHeaders,
+      extraBody,
+      jsonMode
+    ]
   )
 
   const { isLoading } = useQuery({
@@ -266,8 +366,8 @@ export const CurrentChatModelSettings = ({
 
       const ocrLang = await getOCRLanguage()
 
-      if (isOCREnabled) {
-        cUserSettings.setOcrLanguage(ocrLang)
+      if (isOCREnabled && ocrLang) {
+        setOcrLanguage(ocrLang)
       }
       let tempSystemPrompt = ""
 
@@ -481,9 +581,9 @@ export const CurrentChatModelSettings = ({
             modelOptions={modelOptions}
             modelsLoading={modelsLoading}
             isOCREnabled={isOCREnabled}
-            ocrLanguage={cUserSettings.ocrLanguage}
+            ocrLanguage={ocrLanguage}
             ocrLanguages={ocrLanguages}
-            onOcrLanguageChange={(value) => cUserSettings.setOcrLanguage(value)}
+            onOcrLanguageChange={(value) => setOcrLanguage(value)}
           />
         )
       },
@@ -546,7 +646,8 @@ export const CurrentChatModelSettings = ({
       modelOptions,
       modelsLoading,
       isOCREnabled,
-      cUserSettings,
+      ocrLanguage,
+      setOcrLanguage,
       useDrawer,
       selectedSystemPrompt,
       savePrompt,

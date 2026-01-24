@@ -130,11 +130,44 @@ export const useVoiceChatMessages = () => {
     currentTurnRef.current = null
   }, [])
 
+  const abandonTurn = React.useCallback(
+    (options?: { includeInHistory?: boolean }) => {
+      const turn = currentTurnRef.current
+      if (!turn) return
+      const finalText = turn.assistantText.trim()
+      if (!finalText) {
+        setMessages((prev) =>
+          prev.filter((message) => message.id !== turn.assistantId)
+        )
+      } else {
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === turn.assistantId
+              ? updateActiveVariant(message, { message: finalText })
+              : message
+          )
+        )
+        if (options?.includeInHistory ?? true) {
+          setHistory((prev) => {
+            const last = prev[prev.length - 1]
+            if (last?.role === "assistant" && last.content === finalText) {
+              return prev
+            }
+            return [...prev, { role: "assistant", content: finalText }]
+          })
+        }
+      }
+      currentTurnRef.current = null
+    },
+    [setHistory, setMessages]
+  )
+
   return {
     beginTurn,
     appendAssistantDelta,
     finalizeAssistant,
     resetTurn,
+    abandonTurn,
     activeAssistantId: currentTurnRef.current?.assistantId || null
   }
 }

@@ -200,7 +200,19 @@ export const ActorEditor: React.FC<Props> = ({
       onRecompute()
     }
 
-    setLoreWarnings(nextWarnings)
+    setLoreWarnings((prev) => {
+      const prevKeys = Object.keys(prev)
+      const nextKeys = Object.keys(nextWarnings)
+      if (prevKeys.length !== nextKeys.length) {
+        return nextWarnings
+      }
+      for (const key of nextKeys) {
+        if (prev[key] !== nextWarnings[key]) {
+          return nextWarnings
+        }
+      }
+      return prev
+    })
   }, [
     entriesByWorldBook,
     onRecompute,

@@ -500,6 +500,10 @@ export function LocalChatList({
                 placement="top"
               >
                 <button
+                  type="button"
+                  aria-label={`${t("common:delete", {
+                    defaultValue: "Delete"
+                  })}: ${t(`common:date:${group.label}`)}`}
                   onClick={() => handleDeleteHistoriesByRange(group.label)}
                   className="p-1 rounded hover:bg-surface2"
                 >

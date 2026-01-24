@@ -202,11 +202,15 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
 
     return result
   }, [approvals, t])
-  const allIds = useMemo(() => approvals.map(a => a.toolCallId), [approvals])
-  const pendingCount = useMemo(
-    () => approvals.filter(a => a.status === "pending").length,
+  const pendingApprovals = useMemo(
+    () => approvals.filter(approval => approval.status === "pending"),
     [approvals]
   )
+  const allIds = useMemo(
+    () => pendingApprovals.map(approval => approval.toolCallId),
+    [pendingApprovals]
+  )
+  const pendingCount = pendingApprovals.length
 
   // Confirm before rejecting all pending actions
   const handleRejectAll = useCallback(() => {
@@ -322,7 +326,7 @@ export const ApprovalBanner: FC<ApprovalBannerProps> = ({
       {/* Expanded view with individual items */}
       {expanded && (
         <div className="max-h-48 space-y-2 overflow-y-auto border-t border-warn/30 px-4 py-2">
-          {approvals.map((approval) => {
+          {pendingApprovals.map((approval) => {
             const Icon = getToolIcon(approval.toolName)
             const isRisky = approval.tier === "individual"
 

@@ -151,10 +151,15 @@ export const SessionRestoreDialog: FC<SessionRestoreDialogProps> = ({
 
         {/* Description */}
         <p className="text-sm text-text-muted">
-          {t(
-            "restoreSessionDesc",
-            "You have an unfinished session with pending approvals. Would you like to restore it and continue where you left off, or start fresh?"
-          )}
+          {approvalSummary
+            ? t(
+                "restoreSessionDesc",
+                "You have an unfinished session with pending approvals. Would you like to restore it and continue where you left off, or start fresh?"
+              )
+            : t(
+                "restoreSessionDescNoApprovals",
+                "You have a previous session. Would you like to restore it and continue where you left off, or start fresh?"
+              )}
         </p>
 
         {/* Actions */}

@@ -37,15 +37,14 @@ export const useActorStore = createWithEqualityFn<ActorUiStoreState>((set) => ({
   preview: "",
   tokenCount: 0,
   setSettings: (next: ActorSettings | null) => {
-    set({
-      settings: next
-    })
+    set((state) => (state.settings === next ? state : { settings: next }))
   },
   setPreviewAndTokens: (preview: string, tokenCount: number) =>
-    set({
-      preview,
-      tokenCount
-    }),
+    set((state) =>
+      state.preview === preview && state.tokenCount === tokenCount
+        ? state
+        : { preview, tokenCount }
+    ),
   reset: () =>
     set({
       settings: createDefaultActorSettings(),

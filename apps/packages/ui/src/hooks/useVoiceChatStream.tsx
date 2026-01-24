@@ -115,6 +115,7 @@ export const useVoiceChatStream = ({
 
   const wsRef = React.useRef<WebSocket | null>(null)
   const connectingRef = React.useRef(false)
+  const closingRef = React.useRef(false)
   const triggeredRef = React.useRef(false)
   const pendingResumeRef = React.useRef(false)
   const resolvedTtsFormatRef = React.useRef<string | null>(null)
@@ -254,31 +255,12 @@ export const useVoiceChatStream = ({
     resolveTtsFormat
   ])
 
-  const handleError = React.useCallback(
-    (message: string) => {
-      errorRef.current = message
-      setError(message)
-      callbacksRef.current.onError?.(message)
-      updateState("error")
-    },
-    [updateState]
-  )
-
-  const stop = React.useCallback(() => {
+  const cleanupSession = React.useCallback(() => {
     try {
       micStop()
     } catch {}
     try {
       audioStop()
-    } catch {}
-    const ws = wsRef.current
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      try {
-        ws.send(JSON.stringify({ type: "stop" }))
-      } catch {}
-    }
-    try {
-      ws?.close()
     } catch {}
     wsRef.current = null
     connectingRef.current = false
@@ -287,6 +269,34 @@ export const useVoiceChatStream = ({
     resolvedTtsFormatRef.current = null
     setConnected(false)
   }, [audioStop, micStop])
+
+  const stop = React.useCallback(() => {
+    const ws = wsRef.current
+    closingRef.current = Boolean(ws)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ type: "stop" }))
+      } catch {}
+    }
+    try {
+      ws?.close()
+    } catch {}
+    cleanupSession()
+    if (!ws) {
+      closingRef.current = false
+    }
+  }, [cleanupSession])
+
+  const handleError = React.useCallback(
+    (message: string) => {
+      errorRef.current = message
+      setError(message)
+      callbacksRef.current.onError?.(message)
+      updateState("error")
+      stop()
+    },
+    [stop, updateState]
+  )
 
   const sendCommit = React.useCallback(() => {
     const ws = wsRef.current
@@ -316,6 +326,10 @@ export const useVoiceChatStream = ({
         const raw = String(data.text || "")
         const cleaned = stripTriggerPhrases(raw, normalizedTriggers)
         triggeredRef.current = false
+        if (!cleaned) {
+          updateState("listening")
+          return
+        }
         callbacks.onTranscript?.(cleaned, { autoCommit: Boolean(data.auto_commit) })
         updateState("thinking")
         if (!voiceChatBargeIn) {
@@ -429,11 +443,18 @@ export const useVoiceChatStream = ({
       }
 
       ws.onclose = () => {
-        setConnected(false)
-        connectingRef.current = false
-        if (activeRef.current && !errorRef.current) {
-          updateState("idle")
+        const wasClosing = closingRef.current
+        closingRef.current = false
+        cleanupSession()
+        if (!wasClosing && activeRef.current && !errorRef.current) {
+          const message = "Voice chat disconnected"
+          errorRef.current = message
+          setError(message)
+          callbacksRef.current.onError?.(message)
+          updateState("error")
+          return
         }
+        updateState("idle")
       }
 
       ws.onopen = () => {
@@ -513,17 +534,16 @@ export const useVoiceChatStream = ({
             updateState("listening")
           } catch (err: any) {
             handleError(err?.message || "Voice chat failed to start")
-            stop()
           }
         })()
       }
     } catch (err: any) {
       handleError(err?.message || "Unable to connect to voice chat")
-      stop()
     }
   }, [
     audioAppend,
     buildTtsConfig,
+    cleanupSession,
     handleError,
     handleMessage,
     micStart,
@@ -543,7 +563,6 @@ export const useVoiceChatStream = ({
     sttSettings.segUtteranceExpansionWidth,
     sttSettings.segEmbeddingsProvider,
     sttSettings.segEmbeddingsModel,
-    stop,
     updateState,
     voiceChatModel,
     voiceChatPauseMs

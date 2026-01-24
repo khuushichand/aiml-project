@@ -72,6 +72,7 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
 
   React.useEffect(() => {
     if (!trimmedQuery) {
+      latestRequestId.current += 1
       setResponse(null)
       setOpen(false)
       setLoading(false)
@@ -92,7 +93,7 @@ export const OmniSearchBar: React.FC<Props> = ({ deps }) => {
         }
         setResponse(res)
         const hasResults = res.sections.some((s) => s.results.length > 0)
-        setOpen(hasResults)
+        setOpen(true)
         if (hasResults) {
           const firstSectionIndex = res.sections.findIndex(
             (s) => s.results.length > 0

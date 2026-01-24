@@ -423,11 +423,17 @@ export function CommandPalette({
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault()
-        setSelectedIndex((i) => Math.min(i + 1, filteredCommands.length - 1))
+        setSelectedIndex((i) =>
+          filteredCommands.length === 0
+            ? 0
+            : Math.min(i + 1, filteredCommands.length - 1)
+        )
         break
       case "ArrowUp":
         e.preventDefault()
-        setSelectedIndex((i) => Math.max(i - 1, 0))
+        setSelectedIndex((i) =>
+          filteredCommands.length === 0 ? 0 : Math.max(i - 1, 0)
+        )
         break
       case "Enter":
         e.preventDefault()

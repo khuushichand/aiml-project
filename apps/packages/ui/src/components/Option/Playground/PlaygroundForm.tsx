@@ -231,7 +231,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     voiceChatTriggerPhrases.join(", ")
   )
   React.useEffect(() => {
-    setVoiceChatTriggerInput(voiceChatTriggerPhrases.join(", "))
+    const next = voiceChatTriggerPhrases.join(", ")
+    if (import.meta.env.DEV) {
+      console.count("PlaygroundForm/voiceChatTriggerPhrases")
+    }
+    setVoiceChatTriggerInput((prev) => (prev === next ? prev : next))
   }, [voiceChatTriggerPhrases])
 
   const { phase, isConnected } = useConnectionState()
@@ -264,6 +268,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         message: t("playground:voiceChat.errorTitle", "Voice chat error"),
         description: msg
       })
+      voiceChatMessages.abandonTurn()
       setVoiceChatEnabled(false)
     },
     onWarning: (msg) => {
@@ -1199,10 +1204,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [textAreaFocus])
 
   React.useEffect(() => {
-    if (defaultInternetSearchOn) {
+    if (import.meta.env.DEV) {
+      console.count("PlaygroundForm/defaultInternetSearchOn")
+    }
+    if (defaultInternetSearchOn && !webSearch) {
       setWebSearch(true)
     }
-  }, [defaultInternetSearchOn, setWebSearch])
+  }, [defaultInternetSearchOn, webSearch, setWebSearch])
 
   React.useEffect(() => {
     if (isConnectionReady) {
@@ -1211,12 +1219,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [isConnectionReady])
 
   React.useEffect(() => {
-    if (queuedMessages.length > 0) {
-      setShowQueuedBanner(true)
-    } else {
-      setShowQueuedBanner(false)
+    if (import.meta.env.DEV) {
+      console.count("PlaygroundForm/queuedMessagesBanner")
     }
-  }, [queuedMessages])
+    const next = queuedMessages.length > 0
+    setShowQueuedBanner((prev) => (prev === next ? prev : next))
+  }, [queuedMessages.length])
 
   const onFileInputChange = React.useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2710,6 +2718,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       if (isListening) stopSpeechRecognition()
       if (isServerDictating) stopServerDictation()
     }
+    if (voiceChatEnabled) {
+      voiceChatMessages.abandonTurn()
+    }
     setVoiceChatEnabled(!voiceChatEnabled)
   }, [
     voiceChatAvailable,
@@ -2720,7 +2731,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setVoiceChatEnabled,
     stopSpeechRecognition,
     stopServerDictation,
-    t
+    t,
+    voiceChatMessages
   ])
 
   const persistChatMetadata = React.useCallback(

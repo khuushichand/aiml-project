@@ -64,17 +64,17 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
               <div className="mt-0.5 flex flex-wrap gap-1 text-[10px]">
                 {hasVision && (
                   <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-primary">
-                    Vision
+                    {t("modelSelect.capability.vision", "Vision")}
                   </span>
                 )}
                 {hasTools && (
                   <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-accent">
-                    Tools
+                    {t("modelSelect.capability.tools", "Tools")}
                   </span>
                 )}
                 {hasFast && (
                   <span className="rounded-full bg-success/10 px-1.5 py-0.5 text-success">
-                    Fast
+                    {t("modelSelect.capability.fast", "Fast")}
                   </span>
                 )}
               </div>
@@ -83,7 +83,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
         </div>
       )
       const item = {
-        key: d.name,
+        key: d.model,
         label: labelNode,
         onClick: () => {
           if (selectedModel === d.model) {
@@ -101,9 +101,9 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
     for (const [groupKey, children] of groups) {
       const labelText =
         groupKey === "default"
-          ? "Default"
+          ? t("modelSelect.group.default", "Default")
           : groupKey === "custom"
-            ? "Custom"
+            ? t("modelSelect.group.custom", "Custom")
             : getProviderDisplayName(groupKey)
       const iconKey = groupKey === "default" ? "chrome" : groupKey
       items.push({
@@ -143,7 +143,7 @@ export const ModelSelect: React.FC<Props> = ({iconClassName = "size-5", showSele
               overflowY: "scroll"
             },
             className: `no-scrollbar ${menuDensity === 'compact' ? 'menu-density-compact' : 'menu-density-comfortable'}`,
-            activeKey: selectedModel
+            selectedKeys: [selectedModel]
           }}
           placement={"topLeft"}
           trigger={["click"]}>

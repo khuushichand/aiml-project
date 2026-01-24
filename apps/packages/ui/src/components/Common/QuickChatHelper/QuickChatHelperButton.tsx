@@ -17,6 +17,7 @@ type QuickChatHelperButtonProps = {
   className?: string
   tooltipPlacement?: TooltipProps["placement"]
   appearance?: "primary" | "ghost"
+  ariaLabel?: string
 }
 
 export const QuickChatHelperButton: React.FC<QuickChatHelperButtonProps> = ({
@@ -24,7 +25,8 @@ export const QuickChatHelperButton: React.FC<QuickChatHelperButtonProps> = ({
   showToggle,
   className,
   tooltipPlacement,
-  appearance = "primary"
+  appearance = "primary",
+  ariaLabel
 }) => {
   const { t } = useTranslation("option")
   const [hideQuickChatHelper, setHideQuickChatHelper] = useStorage(
@@ -42,7 +44,8 @@ export const QuickChatHelperButton: React.FC<QuickChatHelperButtonProps> = ({
     setIsOpen(false)
   }, [setIsOpen])
 
-  const tooltip = t("option:quickChatHelper.tooltip", "Quick Chat Helper")
+  const tooltip =
+    ariaLabel ?? t("option:quickChatHelper.tooltip", "Quick Chat Helper")
   const toggleLabel = hideQuickChatHelper
     ? t(
         "settings:generalSettings.settings.hideQuickChatHelper.showLabel",

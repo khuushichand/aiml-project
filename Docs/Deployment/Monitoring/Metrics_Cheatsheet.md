@@ -65,17 +65,17 @@ Cardinality note: `chapter_id` creates a unique series per chapter per metric. A
 - Applying Prometheus relabeling/aggregation to strip `chapter_id` while retaining `book_id` at scrape time.
 If you must keep chapter-level labels, budget for series roughly `chapters × metrics × label combinations` and size Prometheus accordingly.
 
-- `audiobook_audio_convert_attempt{from_format,to_format,chapter_id}`: Counter of audio conversion attempts.
-- `audiobook_audio_convert_success{from_format,to_format,chapter_id}`: Counter of successful conversions.
-- `audiobook_audio_convert_error{from_format,to_format,chapter_id,error}`: Counter of failed conversions.
+- `audiobook_audio_convert_attempt_total{from_format,to_format,chapter_id}`: Counter of audio conversion attempts.
+- `audiobook_audio_convert_success_total{from_format,to_format,chapter_id}`: Counter of successful conversions.
+- `audiobook_audio_convert_error_total{from_format,to_format,chapter_id,error}`: Counter of failed conversions.
 - `audiobook_audio_convert_duration_seconds{from_format,to_format,chapter_id}`: Histogram of conversion duration.
 - `audiobook_audio_convert_bytes{from_format,to_format,chapter_id}`: Histogram of output byte size.
 
 Example PromQL:
-- Conversion error rate (5m): `sum(rate(audiobook_audio_convert_error[5m])) / (sum(rate(audiobook_audio_convert_attempt[5m])) + 1e-9)`
+- Conversion error rate (5m): `sum(rate(audiobook_audio_convert_error_total[5m])) / (sum(rate(audiobook_audio_convert_attempt_total[5m])) + 1e-9)`
 - P95 conversion duration by format: `histogram_quantile(0.95, sum by (le,from_format,to_format) (rate(audiobook_audio_convert_duration_seconds_bucket[5m])))`
 - P95 output size by format: `histogram_quantile(0.95, sum by (le,from_format,to_format) (rate(audiobook_audio_convert_bytes_bucket[5m])))`
-- Top error formats (5m): `topk(5, sum by (from_format,to_format,error) (increase(audiobook_audio_convert_error[5m])))`
+- Top error formats (5m): `topk(5, sum by (from_format,to_format,error) (increase(audiobook_audio_convert_error_total[5m])))`
 
 ## Embeddings v5 endpoint
 - `embedding_requests_total{provider,model,status}`: Counter of embedding requests.

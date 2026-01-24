@@ -313,7 +313,14 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         )}
 
         {/* Quick Chat Helper floating button (legacy layout only) */}
-        {!hideHeader && !showChatSidebar && <QuickChatHelperButton />}
+        {!hideHeader && !showChatSidebar && (
+          <QuickChatHelperButton
+            ariaLabel={t(
+              "option:quickChatHelper.tooltipFloating",
+              "Open Quick Chat Helper"
+            )}
+          />
+        )}
 
         {/* Timeline Modal - lazy-loaded */}
         {!hideHeader && (

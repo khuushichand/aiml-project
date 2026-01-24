@@ -352,6 +352,7 @@ export const SidepanelForm = ({
         message: t("playground:voiceChat.errorTitle", "Voice chat error"),
         description: msg
       })
+      voiceChatMessages.abandonTurn()
       setVoiceChatEnabled(false)
     },
     onWarning: (msg) => {
@@ -1356,6 +1357,9 @@ export const SidepanelForm = ({
       if (isListening) stopListening()
       if (isServerDictating) stopServerDictation()
     }
+    if (voiceChatEnabled) {
+      voiceChatMessages.abandonTurn()
+    }
     setVoiceChatEnabled(!voiceChatEnabled)
   }, [
     voiceChatAvailable,
@@ -1366,7 +1370,8 @@ export const SidepanelForm = ({
     setVoiceChatEnabled,
     stopListening,
     stopServerDictation,
-    t
+    t,
+    voiceChatMessages
   ])
 
   const handleLiveCaptionsToggle = React.useCallback(async () => {

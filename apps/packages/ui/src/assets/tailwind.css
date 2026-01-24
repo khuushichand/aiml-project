@@ -444,7 +444,6 @@ body {
 /* For Firefox */
 .custom-scrollbar {
   scrollbar-color: var(--color-border) var(--color-surface-2);
-  scrollbar-width: thin;
 }
 
 .dark .custom-scrollbar {

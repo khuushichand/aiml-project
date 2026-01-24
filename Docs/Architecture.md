@@ -318,11 +318,11 @@ See:
 
 ## 8. Frontend and Clients
 
-**Next.js WebUI (`apps/tldw-frontend/`)**
+### Next.js WebUI (`apps/tldw-frontend/`)
 - Primary web client, talking to the same FastAPI APIs (`/api/v1`).
 - Focused on interactive media ingestion, search, chat, and evaluations.
 
-#### Legacy WebUI (`/webui`)
+### Legacy WebUI (`/webui`)
 - Served from `tldw_Server_API/WebUI/`.
 - Useful for basic workflows and debugging, but considered legacy compared to the Next.js WebUI (`apps/tldw-frontend/`).
 

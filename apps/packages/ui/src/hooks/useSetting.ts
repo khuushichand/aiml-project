@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react"
+import { useCallback, useEffect, useMemo } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
 import type { SettingDef } from "@/services/settings/registry"
 import {
@@ -20,7 +20,10 @@ export const useSetting = <T>(setting: SettingDef<T>) => {
     void getSetting(setting)
   }, [meta?.isLoading, setting])
 
-  const value = normalizeSettingValue(setting, rawValue)
+  const value = useMemo(
+    () => normalizeSettingValue(setting, rawValue),
+    [setting, rawValue]
+  )
 
   const setValue = useCallback(
     async (next: T | ((prev: T) => T)) => {

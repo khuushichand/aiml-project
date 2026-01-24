@@ -102,6 +102,7 @@ export function ChatSidebar({
   const renderShortcutIcon = (item: SidebarShortcutAction) => (
     <Tooltip title={t(item.labelKey, item.labelDefault)} placement="right">
       <button
+        aria-label={t(item.labelKey, item.labelDefault)}
         onClick={() => handleShortcutAction(item)}
         className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text"
       >
@@ -190,6 +191,7 @@ export function ChatSidebar({
           placement="right"
         >
           <button
+            aria-label={t("common:chatSidebar.expand", "Expand sidebar")}
             data-testid="chat-sidebar-toggle"
             onClick={onToggleCollapse}
             className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text"
@@ -205,6 +207,7 @@ export function ChatSidebar({
           placement="right"
         >
           <button
+            aria-label={t("common:chatSidebar.newChat", "New Chat")}
             data-testid="chat-sidebar-new-chat"
             onClick={handleNewChat}
             className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-primary"
@@ -228,6 +231,10 @@ export function ChatSidebar({
           showToggle={false}
           appearance="ghost"
           tooltipPlacement="right"
+          ariaLabel={t(
+            "option:quickChatHelper.tooltipSidebar",
+            "Open Quick Chat Helper (sidebar)"
+          )}
         />
 
         <Tooltip
@@ -235,6 +242,7 @@ export function ChatSidebar({
           placement="right"
         >
           <button
+            aria-label={t("common:chatSidebar.settings", "Settings")}
             onClick={() => navigate("/settings")}
             className="p-2 rounded-lg text-text-muted hover:bg-surface hover:text-text"
           >
@@ -262,6 +270,7 @@ export function ChatSidebar({
         <div className="flex items-center gap-1">
           <Tooltip title={t("common:chatSidebar.newChat", "New Chat")}>
             <button
+              aria-label={t("common:chatSidebar.newChat", "New Chat")}
               data-testid="chat-sidebar-new-chat"
               onClick={handleNewChat}
               className="p-2 rounded text-text-muted hover:bg-surface hover:text-primary"
@@ -301,6 +310,7 @@ export function ChatSidebar({
             title={t("common:chatSidebar.collapse", "Collapse sidebar")}
           >
             <button
+              aria-label={t("common:chatSidebar.collapse", "Collapse sidebar")}
               data-testid="chat-sidebar-toggle"
               onClick={onToggleCollapse}
               className="p-2 rounded text-text-muted hover:bg-surface hover:text-text"
@@ -415,6 +425,10 @@ export function ChatSidebar({
               showToggle={false}
               appearance="ghost"
               className="shrink-0"
+              ariaLabel={t(
+                "option:quickChatHelper.tooltipSidebar",
+                "Open Quick Chat Helper (sidebar)"
+              )}
             />
           </div>
         </div>

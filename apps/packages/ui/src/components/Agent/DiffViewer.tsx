@@ -171,7 +171,7 @@ export function parseDiff(diffText: string): FileDiff[] {
           content: line.slice(1),
           oldLineNum: oldLineNum++
         })
-      } else if (line.startsWith(" ") || line === "") {
+      } else if (line.startsWith(" ")) {
         currentHunk.lines.push({
           type: "context",
           content: line.slice(1) || "",

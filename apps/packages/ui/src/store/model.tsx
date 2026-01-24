@@ -164,7 +164,8 @@ export const useStoreChatModelSettings = createWithEqualityFn<ChatModelSettingsS
     ...INITIAL_STATE,
 
     // Generic typed update methods
-    updateSetting: (key, value) => set({ [key]: value }),
+    updateSetting: (key, value) =>
+      set((state) => (state[key] === value ? state : { [key]: value })),
     updateSettings: (updates) => set(updates),
     reset: () => set(INITIAL_STATE),
 
@@ -203,7 +204,10 @@ export const useStoreChatModelSettings = createWithEqualityFn<ChatModelSettingsS
     setSystemPrompt: (value) => set({ systemPrompt: value }),
     setReasoningEffort: (value) => set({ reasoningEffort: value }),
     setThinking: (value) => set({ thinking: value }),
-    setOcrLanguage: (value) => set({ ocrLanguage: value }),
+    setOcrLanguage: (value) =>
+      set((state) =>
+        state.ocrLanguage === value ? state : { ocrLanguage: value }
+      ),
     setHistoryMessageLimit: (value) => set({ historyMessageLimit: value }),
     setHistoryMessageOrder: (value) => set({ historyMessageOrder: value }),
     setSlashCommandInjectionMode: (value) =>

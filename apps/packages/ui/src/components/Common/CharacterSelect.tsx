@@ -136,7 +136,7 @@ export const CharacterSelect: React.FC<Props> = ({
   )
   const [isImporting, setIsImporting] = React.useState(false)
 
-  const { data, refetch, isFetching, error } = useQuery<CharacterSummary[]>({
+  const { data, refetch, isFetching, isLoading, error } = useQuery<CharacterSummary[]>({
     queryKey: ["tldw:listCharacters"],
     queryFn: async () => {
       await tldwClient.initialize()
@@ -748,6 +748,15 @@ export const CharacterSelect: React.FC<Props> = ({
 
   if (characterItems && characterItems.length > 0) {
     menuItems.push(dividerItem("__divider_items__"), ...characterItems)
+  } else if (isLoading) {
+    menuItems.push({
+      key: "__loading__",
+      label: (
+        <div className="w-56 px-2 py-2 text-xs text-text-muted">
+          {t("common:loading", "Loading…") as string}
+        </div>
+      )
+    })
   } else if (!data || (Array.isArray(data) && data.length === 0)) {
     menuItems.push(
       dividerItem("__divider_empty__"),

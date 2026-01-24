@@ -24,6 +24,8 @@ export type ActorWorldBooksState = {
   loadEntriesForWorldBook: (worldBookId: string) => Promise<void>
 }
 
+const EMPTY_WORLD_BOOKS: ActorWorldBook[] = []
+
 export function useActorWorldBooks(): ActorWorldBooksState {
   const isOnline = useServerOnline()
   const [entriesByWorldBook, setEntriesByWorldBook] =
@@ -87,7 +89,7 @@ export function useActorWorldBooks(): ActorWorldBooksState {
   }, [isOnline])
 
   return {
-    worldBooks: worldBooks || [],
+    worldBooks: worldBooks ?? EMPTY_WORLD_BOOKS,
     worldBooksLoading,
     entriesByWorldBook,
     entriesLoading,

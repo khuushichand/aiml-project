@@ -5,7 +5,7 @@ import { Alert } from "antd"
 const isDevMode = typeof import.meta !== "undefined" && (
   Boolean(import.meta.env?.DEV) ||
   import.meta.env?.MODE === "development" ||
-  process.env.NODE_ENV === "development"
+  (typeof window !== "undefined" && process.env.NODE_ENV === "development")
 )
 
 type LocaleIssue = {
@@ -77,7 +77,7 @@ export const LocaleJsonDiagnostics: React.FC = () => {
             {issues.map((issue) => (
               <div key={issue.path} className="break-all">
                 <span className="font-mono">{issue.path}</span>
-                {issue.line && issue.column
+                {issue.line != null && issue.column != null
                   ? ` (line ${issue.line}, col ${issue.column})`
                   : ""}
                 {": "}

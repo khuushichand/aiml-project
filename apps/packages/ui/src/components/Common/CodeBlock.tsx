@@ -155,7 +155,16 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `code_${new Date().toISOString().replace(/[:.]/g, "-")}.${programmingLanguages[language] || language}`
+    const rawExtension =
+      programmingLanguages[normalizedLanguage] || normalizedLanguage || "txt"
+    const sanitizedExtension = rawExtension
+      .toString()
+      .trim()
+      .replace(/^\.+/, "")
+      .replace(/[^a-zA-Z0-9_-]+/g, "")
+      .toLowerCase()
+    const finalExtension = sanitizedExtension || "txt"
+    a.download = `code_${new Date().toISOString().replace(/[:.]/g, "-")}.${finalExtension}`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -199,11 +208,19 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
         if (prevCollapsed !== collapsed) setCollapsed(prevCollapsed)
       }
     }
-  }, [normalizedLanguage, value, blockIndex, previewStateMap, collapsedStateMap])
+  }, [
+    normalizedLanguage,
+    value,
+    blockIndex,
+    previewStateMap,
+    collapsedStateMap,
+    showPreview,
+    collapsed
+  ])
 
   useEffect(() => {
     if (!isPreviewable && showPreview) setShowPreview(false)
-  }, [isPreviewable])
+  }, [isPreviewable, showPreview])
 
   useEffect(() => {
     if (!isProMode) {

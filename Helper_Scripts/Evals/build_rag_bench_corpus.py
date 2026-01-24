@@ -7,12 +7,12 @@ import argparse
 import json
 import mimetypes
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import httpx
+from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
@@ -83,11 +83,11 @@ def ingest_files(
     for i in range(0, len(paths), batch_size):
         batch = paths[i : i + batch_size]
         files: List[Tuple[str, Tuple[str, object, str]]] = []
-        for path in batch:
-            mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-            files.append(("files", (path.name, path.open("rb"), mime)))
         data = {"media_type": media_type, **form_fields}
         try:
+            for path in batch:
+                mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+                files.append(("files", (path.name, path.open("rb"), mime)))
             response = client.post(
                 f"{base_url.rstrip('/')}/api/v1/media/add",
                 headers=headers,
@@ -96,15 +96,15 @@ def ingest_files(
             )
             response.raise_for_status()
             ingested += len(batch)
-        except Exception as exc:
+        except (httpx.HTTPError, OSError) as exc:
             failures += len(batch)
-            print(f"[WARN] Ingest batch failed ({media_type}): {exc}", file=sys.stderr)
+            logger.warning("Ingest batch failed ({}): {}", media_type, exc)
         finally:
             for _, file_tuple in files:
                 try:
                     file_tuple[1].close()
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug("Failed to close file: {}", exc)
     return ingested, failures
 
 

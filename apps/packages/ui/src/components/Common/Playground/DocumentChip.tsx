@@ -72,10 +72,10 @@ export const DocumentChip: React.FC<DocumentChipProps> = ({
             <Globe className={`${iconSizeClass} ${iconColorClass}`} />
           )}
         </div>
-        <div className={isCompact ? "max-w-56 truncate" : "flex flex-col max-w-60 truncate"}>
-          <span className={titleClass}>{document.title}</span>
+        <div className={isCompact ? "max-w-56 truncate" : "flex flex-col max-w-60"}>
+          <span className={`${titleClass} truncate`}>{document.title}</span>
           {!isCompact && showUrl && document.url ? (
-            <span className="text-xs text-text-muted">{document.url}</span>
+            <span className="text-xs text-text-muted truncate">{document.url}</span>
           ) : null}
         </div>
       </div>
