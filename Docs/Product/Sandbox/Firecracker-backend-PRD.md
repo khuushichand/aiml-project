@@ -4,6 +4,47 @@
 
 Deliver a real Firecracker backend with net=off, microVM lifecycle, host-shared workspace, artifact capture, exit-code/logging via workspace files, and image digest reporting. Keep the existing scaffold as the default and gate real execution behind feature flags.
 
+## Current Status (as of 2026-01-24)
+
+Stage-level progress against this PRD:
+
+- Stage 0 (Feature flags & gating): **Done**
+  - Real execution is gated by `SANDBOX_FIRECRACKER_ENABLE_REAL`.
+  - Preflight checks exist (Linux, `/dev/kvm`, `firecracker`, `virtiofsd` when enabled).
+  - When disabled/unavailable, Firecracker requests return 503 `runtime_unavailable` with `suggested=["docker"]`.
+- Stage 1 (Kernel/rootfs + digest): **Mostly done**
+  - Kernel/rootfs paths are resolved from env and/or `spec.base_image` path.
+  - Rootfs SHA‑256 digest is computed and returned as `image_digest`.
+  - Invalid kernel/rootfs paths map to 400 with field-level details.
+  - **Gap**: Kernel digest not captured.
+- Stage 2 (Workspace & devices): **Partial**
+  - Per‑run workdir and host workspace are created.
+  - Inline files and `.env` are written to workspace; `entry.sh` is created.
+  - **Gap**: No ext4 workspace fallback; virtiofs is required and disabling it currently fails.
+- Stage 3 (MicroVM boot, net=off): **Done**
+  - Firecracker API socket, machine config, boot source, rootfs drive, and virtiofs config are set.
+  - No network devices are configured (net=off).
+- Stage 4 (Command execution & exit): **Partial**
+  - `entry.sh` executes the command and writes `run.log` + `.sandbox_status.json`.
+  - **Gaps**:
+    - `run.log` does not prepend timestamps or fsync per line.
+    - `.sandbox_status.json` lacks the optional `signal` field and is not schema‑validated.
+    - No rc.local/systemd fallback if `init=/workspace/entry.sh` cannot run.
+- Stage 5 (Log streaming & metrics): **Partial**
+  - `run.log` is tailed via virtiofs for stdout streaming.
+  - **Gaps**: No non‑virtiofs fallback, no cgroup metrics, no FIFO/metrics parsing.
+- Stage 6 (Timeouts, cancel, cleanup): **Partial**
+  - Timeout enforcement exists; Firecracker and virtiofsd are terminated; run dir cleaned up.
+  - **Gaps**: No SIGTERM→SIGKILL escalation sequence, no explicit cancel path, end‑frame “exactly once” guarantees not enforced.
+- Stage 7 (Service wiring & discovery): **Done**
+  - `runtime_version` is populated; service wiring calls the runner in foreground/background.
+  - 503 `runtime_unavailable` behavior is enforced when Firecracker is disabled/unavailable.
+- Stage 8 (Tests & fake mode): **Partial**
+  - Fake mode exists; Firecracker‑specific tests have not been added.
+- Stage 9 (Docs & examples): **Partial**
+  - Firecracker host checklist added and linked; API doc now references it.
+  - **Gap**: remaining docs updates (kernel/rootfs prep details, limitations) not fully written.
+
 ## Scope
 
 - Files:
@@ -110,6 +151,7 @@ Deliver a real Firecracker backend with net=off, microVM lifecycle, host-shared 
 ### Stage 9: Docs & Examples
 
 - `Docs/API-related/Sandbox_API.md`: prerequisites, flags, rootfs/kernel prep, example run, log/exit file semantics, limitations.
+- `Docs/Deployment/Operations/Firecracker_Host_Checklist.md`: host prerequisites, boot flow, and smoke-test checklist.
 - `Docs/Design/Code_Interpreter_Sandbox_PRD.md`: update status, constraints, discovery flags.
 
 ## Implementation Notes

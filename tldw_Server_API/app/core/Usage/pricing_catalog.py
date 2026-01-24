@@ -79,9 +79,46 @@ DEFAULT_PRICING: Dict[str, Dict[str, Dict[str, float]]] = {
     },
     # Additional providers (approximate defaults; override via config for accuracy)
     "google": {
+        "gemini-3-pro-preview": {"prompt": 2e-3, "completion": 12e-3},
+        "gemini-3-flash-preview": {"prompt": 0.5e-3, "completion": 3e-3},
+        "gemini-3-pro-image-preview": {"prompt": 2e-3, "completion": 120e-3},
+
+        "gemini-2.5-pro": {"prompt": 1.25e-3, "completion": 10e-3},
+        "gemini-2.5-pro-high": {"prompt": 2.5e-3, "completion": 15e-3},
+        "gemini-2.5-flash": {"prompt": 0.3e-3, "completion": 2.5e-3},
+        "gemini-2.5-flash-preview": {"prompt": 0.3e-3, "completion": 2.5e-3},
+        "gemini-2.5-flash-preview-09-2025": {"prompt": 0.3e-3, "completion": 2.5e-3},
+        "gemini-2.5-flash-lite": {"prompt": 0.1e-3, "completion": 0.4e-3},
+        "gemini-2.5-flash-lite-preview": {"prompt": 0.1e-3, "completion": 0.4e-3},
+        "gemini-2.5-flash-lite-preview-09-2025": {"prompt": 0.1e-3, "completion": 0.4e-3},
+        "gemini-2.5-flash-native-audio-preview-12-2025": {"prompt": 3e-3, "completion": 12e-3},
+        "gemini-2.5-flash-image": {"prompt": 0.3e-3, "completion": 30e-3},
+        "gemini-2.5-flash-preview-tts": {"prompt": 0.5e-3, "completion": 10e-3},
+        "gemini-2.5-pro-preview-tts": {"prompt": 1e-3, "completion": 20e-3},
+        "gemini-2.5-computer-use-preview-10-2025": {"prompt": 1.25e-3, "completion": 10e-3},
+
+        "gemini-2.0-flash": {"prompt": 0.1e-3, "completion": 0.4e-3},
+        "gemini-2.0-flash-exp": {"prompt": 0.1e-3, "completion": 0.4e-3},
+        "gemini-2.0-flash-lite": {"prompt": 0.075e-3, "completion": 0.3e-3},
+
         "gemini-1.5-pro": {"prompt": 2e-3, "completion": 5e-3},
+        "gemini-1.5-pro-latest": {"prompt": 2e-3, "completion": 5e-3},
         "gemini-1.5-flash": {"prompt": 0.5e-3, "completion": 1e-3},
+        "gemini-1.5-flash-latest": {"prompt": 0.5e-3, "completion": 1e-3},
+
+        "imagen-4.0-generate-001": {"prompt": 0.0, "completion": 0.0},
+        "imagen-4.0-ultra-generate-001": {"prompt": 0.0, "completion": 0.0},
+        "imagen-4.0-fast-generate-001": {"prompt": 0.0, "completion": 0.0},
+
+        "veo-3.1-generate-preview": {"prompt": 0.0, "completion": 0.0},
+        "veo-3.1-fast-generate-preview": {"prompt": 0.0, "completion": 0.0},
+        "veo-3.0-generate-001": {"prompt": 0.0, "completion": 0.0},
+        "veo-3.0-fast-generate-001": {"prompt": 0.0, "completion": 0.0},
+        "veo-2.0-generate-001": {"prompt": 0.0, "completion": 0.0},
+
         "text-embedding-004": {"prompt": 0.05e-3, "completion": 0.05e-3},
+        "gemini-embedding-001": {"prompt": 0.15e-3, "completion": 0.15e-3},
+        "gemini-robotics-er-1.5-preview": {"prompt": 0.3e-3, "completion": 2.5e-3},
     },
     "cohere": {
         "command": {"prompt": 0.5e-3, "completion": 1.2e-3},
@@ -144,9 +181,22 @@ class PricingCatalog:
             for model, rates in models.items():
                 if not isinstance(rates, dict):
                     continue
+                placeholder = bool(rates.get("placeholder", False))
+                note = rates.get("note")
+                if placeholder:
+                    entry = {"prompt": 0.0, "completion": 0.0, "placeholder": True}
+                    if note is not None:
+                        entry["note"] = str(note)
+                    base[model] = entry
+                    continue
                 pr = float(rates.get("prompt", rates.get("in", 0.0)) or 0.0)
                 cr = float(rates.get("completion", rates.get("out", 0.0)) or 0.0)
-                base[model] = {"prompt": pr, "completion": cr}
+                entry = {"prompt": pr, "completion": cr}
+                if "placeholder" in rates:
+                    entry["placeholder"] = bool(rates.get("placeholder"))
+                if note is not None:
+                    entry["note"] = str(note)
+                base[model] = entry
 
     def get_rates(self, provider: str, model: str) -> Tuple[float, float, bool]:
         """
@@ -161,11 +211,15 @@ class PricingCatalog:
         # Exact match
         if mdl in prov_map:
             r = prov_map[mdl]
+            if isinstance(r, dict) and r.get("placeholder"):
+                return 0.0, 0.0, True
             return float(r.get("prompt", 0.0)), float(r.get("completion", 0.0)), False
 
         # Partial match (substring)
         for mk, r in prov_map.items():
             if mk in mdl or mdl in mk:
+                if isinstance(r, dict) and r.get("placeholder"):
+                    return 0.0, 0.0, True
                 return float(r.get("prompt", 0.0)), float(r.get("completion", 0.0)), True
 
         # Provider baseline fallback (conservative): avoid under-estimating unknown models
@@ -206,6 +260,12 @@ def list_provider_models(provider: str) -> List[str]:
         # use the loaded catalog directly.
         # _catalog structure: { provider: { model: {prompt, completion} } }
         models_map = getattr(cat, "_catalog", {}).get(prov, {})
-        return sorted(list(models_map.keys()))
+        return sorted(
+            [
+                name
+                for name, meta in models_map.items()
+                if not (isinstance(meta, dict) and meta.get("placeholder"))
+            ]
+        )
     except Exception:
         return []

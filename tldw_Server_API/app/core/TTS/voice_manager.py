@@ -80,6 +80,14 @@ PROVIDER_REQUIREMENTS = {
         "duration": {"min": 1, "max": 60},
         "sample_rate": 24000,
         "convert_to": "wav"
+    },
+    "qwen3_tts": {
+        "formats": [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".opus"],
+        "max_size_mb": 50,
+        # Qwen3-TTS highlights rapid voice cloning from ~3s references in the README.
+        "duration": {"min": 3, "max": 30},
+        "sample_rate": 24000,
+        "convert_to": "wav"
     }
 }
 
@@ -150,6 +158,8 @@ class VoiceReferenceMetadata(BaseModel):
     """Stored metadata and provider artifacts for a voice reference."""
     voice_id: str
     reference_text: Optional[str] = None
+    voice_clone_prompt_b64: Optional[str] = None
+    voice_clone_prompt_format: Optional[str] = None
     provider_artifacts: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

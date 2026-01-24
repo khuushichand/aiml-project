@@ -125,6 +125,7 @@ async def test_redis_fanout_cross_worker_real(monkeypatch):
     if frame["encoding"] == "utf8":
         assert frame["data"] == "ping"
 
+@pytest.mark.sandbox_no_reload
 def test_health_includes_redis_ping(monkeypatch):
 
      # Setup app with sandbox routes and fake redis
@@ -135,6 +136,12 @@ def test_health_includes_redis_ping(monkeypatch):
     monkeypatch.setenv("SANDBOX_WS_REDIS_CHANNEL", chan)
     fake_mod = types.SimpleNamespace(Redis=FakeRedis)
     monkeypatch.setitem(__import__("sys").modules, "redis", fake_mod)
+    # Reinitialize hub after fake redis injection so fan-out is enabled
+    try:
+        from tldw_Server_API.app.core.Sandbox import streams as sb_streams
+        sb_streams._HUB = sb_streams.RunStreamHub()  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
     import importlib
     if "tldw_Server_API.app.main" in importlib.sys.modules:

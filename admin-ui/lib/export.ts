@@ -114,9 +114,9 @@ export function exportData<T>(options: ExportOptions<T>): void {
 /**
  * Pre-configured export for audit logs
  */
-export function exportAuditLogs(logs: Array<Record<string, unknown>>, format: ExportFormat = 'csv'): void {
+export function exportAuditLogs<T extends object>(logs: T[], format: ExportFormat = 'csv'): void {
   exportData({
-    data: logs,
+    data: logs as unknown as Record<string, unknown>[],
     filename: 'audit-logs',
     format,
     columns: [

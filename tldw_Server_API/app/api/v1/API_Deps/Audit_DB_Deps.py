@@ -127,7 +127,8 @@ def _shared_audit_db_path() -> str:
 def _is_test_context() -> bool:
     try:
         return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to determine test context; defaulting to False: {}", exc)
         return False
 
 
@@ -150,8 +151,8 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
     evicted_at = time.monotonic()
     try:
         service._tldw_evicted_at = evicted_at  # type: ignore[attr-defined]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to set eviction timestamp for user {}: {}", user_id, exc)
     service_key = id(service)
 
     with _services_stopping_lock:
@@ -165,14 +166,23 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
             _services_stopping.discard(service_key)
         try:
             service._tldw_stop_scheduled = False  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to clear stop-scheduled flag on audit service: {}", exc)
 
     async def _stop():
         try:
+            eviction_deadline = time.monotonic() + EVICTION_MAX_WAIT_SECONDS
             while True:
+                if time.monotonic() >= eviction_deadline:
+                    logger.warning(
+                        "Audit service for user {} eviction wait exceeded ({}s); forcing stop.",
+                        user_id,
+                        EVICTION_MAX_WAIT_SECONDS,
+                    )
+                    break
                 if EVICTION_GRACE_SECONDS > 0:
-                    await asyncio.sleep(EVICTION_GRACE_SECONDS)
+                    remaining = eviction_deadline - time.monotonic()
+                    await asyncio.sleep(min(EVICTION_GRACE_SECONDS, max(0.0, remaining)))
                 else:
                     # Yield control to avoid a tight loop if grace is disabled.
                     await asyncio.sleep(0)
@@ -185,8 +195,19 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
                 ):
                     try:
                         service._tldw_evicted_at = last_used  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(
+                            "Failed to update eviction timestamp for user {}: {}",
+                            user_id,
+                            exc,
+                        )
+                    if time.monotonic() >= eviction_deadline:
+                        logger.warning(
+                            "Audit service for user {} eviction wait exceeded ({}s); forcing stop.",
+                            user_id,
+                            EVICTION_MAX_WAIT_SECONDS,
+                        )
+                        break
                     logger.debug(
                         "Audit service for user {} reused after eviction; delaying stop.",
                         user_id,
@@ -358,6 +379,12 @@ EVICTION_GRACE_SECONDS = _settings_float(
     2.0,
     min_value=0.0,
     max_value=300.0,
+)
+EVICTION_MAX_WAIT_SECONDS = _settings_float(
+    "AUDIT_EVICTION_MAX_WAIT_SECONDS",
+    max(EVICTION_GRACE_SECONDS * 5.0, 10.0),
+    min_value=1.0,
+    max_value=600.0,
 )
 
 _CACHE_IMPL = "cachetools.LRUCache" if _HAS_CACHETOOLS else "_SmallLRUCache"
@@ -611,14 +638,14 @@ async def get_or_create_audit_service_for_user_id_optional(
         if isinstance(user_id, bool):
             raise TypeError("bool is not a valid user id")
         uid_int = int(user_id)
-        return await get_or_create_audit_service_for_user_id(uid_int)
-    except Exception:
+    except (TypeError, ValueError):
         if _is_test_context():
             # In tests we allow non-numeric ids to map to per-user storage paths.
             return await _get_or_create_audit_service_for_key(str(user_id))
         msg = f"Invalid non-numeric user_id {user_id!r} for audit service"
         logger.error(msg)
         raise ServiceInitializationError(msg) from None
+    return await get_or_create_audit_service_for_user_id(uid_int)
 
 # --- Main Dependency Function ---
 
@@ -640,7 +667,7 @@ async def get_audit_service_for_user(
     Raises:
         HTTPException: If the service cannot be initialized.
     """
-    if not current_user:
+    if current_user is None:
         logger.error("get_audit_service_for_user called without a valid User object.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -648,11 +675,7 @@ async def get_audit_service_for_user(
         )
 
     try:
-        raw_id: Optional[Union[int, str]] = None
-        try:
-            raw_id = current_user.id_int  # type: ignore[attr-defined]
-        except Exception:
-            raw_id = None
+        raw_id: Optional[Union[int, str]] = getattr(current_user, "id_int", None)
         if raw_id is None:
             raw_id = getattr(current_user, "id", None)
         return await get_or_create_audit_service_for_user_id_optional(raw_id)

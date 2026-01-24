@@ -12,7 +12,7 @@
 - Regression coverage added in `tldw_Server_API/tests/Privileges/test_privilege_introspection.py`, `test_privilege_service_sqlite.py`, `test_privilege_endpoints.py`, and `test_privilege_snapshot_retention.py`; all suites pass on the latest run, validating the new backend flow.
 - Distributed cache now persists summaries to Redis (or the in-memory fallback), tracks cache generations per process, and emits pub/sub invalidations so multi-worker deployments stay coherent (`tldw_Server_API/app/core/PrivilegeMaps/cache.py`).
 - Snapshot export endpoints (`/export.json` + `/export.csv`) and streaming serializers landed alongside store helpers and tests (`test_privilege_endpoints.py::test_export_snapshot_json` / `test_export_snapshot_csv`).
-- WebUI privileges hub lives at `tldw-frontend/pages/privileges.tsx`, delivering virtualized tables, drill-downs, export buttons, and in-line “request access” CTAs powered by `components/ui/VirtualizedTable.tsx`.
+- WebUI privileges hub lives at `apps/tldw-frontend/pages/privileges.tsx`, delivering virtualized tables, drill-downs, export buttons, and in-line “request access” CTAs powered by `components/ui/VirtualizedTable.tsx`.
 
 ## Background & Problem Statement
 - Current RBAC modes (single-user API key, multi-user JWT, scopes, feature flags) lack a consolidated view for effective access.

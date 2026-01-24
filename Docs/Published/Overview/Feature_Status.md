@@ -135,5 +135,5 @@ Legend
 | Watchlists: notifications | Experimental | Email/chatbook delivery | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Watchlist_PRD.md) |
 | Workflows engine & scheduler | WIP | Defs CRUD, runs, scheduler | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Workflows_PRD.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/workflows.py) |
 | VLM backends listing | Experimental | `/api/v1/vlm/backends` | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/vlm.py) |
-| Next.js WebUI | Working | Primary client | [code](https://github.com/rmusser01/tldw_server/tree/main/tldw-frontend/) |
+| Next.js WebUI | Working | Primary web client (`apps/tldw-frontend`) | [code](https://github.com/rmusser01/tldw_server/tree/main/apps/tldw-frontend/) |
 | Legacy WebUI (/webui) | Working | Feature-frozen legacy | [code](https://github.com/rmusser01/tldw_server/tree/main/tldw_Server_API/WebUI/) |

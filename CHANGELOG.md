@@ -115,7 +115,7 @@ Slides Module
 ## [0.1.13] - 2025-12-29
 
 ### Added
-- tldw-frontend
+- Next.js WebUI (apps/tldw-frontend)
 - admin-ui - Full Admin UI: dashboard, users/orgs/teams, roles & permissions, API keys, jobs, usage analytics, budgets, BYOK, flags, incidents, logs, monitoring panels.
 - Content Review: draft editor, sidebar, reattach-source flow, commit/review workflows.
 - BYOK improvements: scoped resolution, validation, dashboard and key management.

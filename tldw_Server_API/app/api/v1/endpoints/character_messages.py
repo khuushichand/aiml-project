@@ -229,6 +229,10 @@ async def send_message(
                 e,
                 exc_info=True,
             )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Unable to validate chat message limit right now.",
+            )
 
         # Validate parent message if provided
         if message_data.parent_message_id:
@@ -438,7 +442,13 @@ async def get_chat_messages(
                     return ""
                 try:
                     return replace_placeholders(text, character_name, user_name)
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "Placeholder replacement failed for chat_id={} value_type={}: {}",
+                        chat_id,
+                        type(value).__name__,
+                        exc,
+                    )
                     return text
 
             if format_for_completions:
@@ -634,7 +644,13 @@ async def get_chat_messages(
                 return ""
             try:
                 return replace_placeholders(text, character_name, user_name)
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "Placeholder replacement failed for chat_id={} value_type={}: {}",
+                    chat_id,
+                    type(value).__name__,
+                    exc,
+                )
                 return text
 
         for m in paginated:
@@ -706,8 +722,12 @@ async def get_message(
                     resp = resp.model_copy(update={"tool_calls": md.get('tool_calls')})
                 if include_metadata and md and md.get('extra') is not None:
                     resp = resp.model_copy(update={"metadata_extra": md.get('extra')})
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "Non-fatal: failed to load metadata for message {}: {}",
+                    message_id,
+                    exc,
+                )
         return resp
 
     except HTTPException:

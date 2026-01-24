@@ -202,11 +202,11 @@ export default function FlagsPage() {
     if (changed) {
       const confirmed = await confirm({
         title: maintenanceEnabled ? 'Enable maintenance mode?' : 'Disable maintenance mode?',
-        description: maintenanceEnabled
+        message: maintenanceEnabled
           ? 'This will block non-allowlisted users.'
           : 'Service traffic will resume for all users.',
         confirmText: maintenanceEnabled ? 'Enable' : 'Disable',
-        variant: 'destructive',
+        variant: 'danger',
       });
       if (!confirmed) return;
     }
@@ -300,9 +300,9 @@ export default function FlagsPage() {
   const handleDeleteFlag = async (flag: FeatureFlagItem) => {
     const confirmed = await confirm({
       title: `Delete flag ${flag.key}?`,
-      description: 'This removes the flag override for the selected scope.',
+      message: 'This removes the flag override for the selected scope.',
       confirmText: 'Delete',
-      variant: 'destructive',
+      variant: 'danger',
     });
     if (!confirmed) return;
     try {

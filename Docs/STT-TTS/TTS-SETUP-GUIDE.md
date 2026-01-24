@@ -103,6 +103,106 @@ Behavior when disabled:
 
 Tip (CI/Dev): The test suite sets `TTS_AUTO_DOWNLOAD=0` to avoid network during tests.
 
+### Qwen3-TTS Setup
+
+Qwen3-TTS is a local multilingual TTS model family with CustomVoice, VoiceDesign, and Base (voice clone) modes.
+Full runbook: `Docs/STT-TTS/QWEN3_TTS_SETUP.md`.
+
+#### Installation
+```bash
+# Install the Qwen3-TTS Python package and core dependencies
+pip install qwen-tts torch soundfile
+```
+
+If the package name differs for your environment, install from the upstream repo instead.
+
+#### Configuration (YAML)
+Enable Qwen3-TTS in `tldw_Server_API/Config_Files/tts_providers_config.yaml`:
+
+```yaml
+providers:
+  qwen3_tts:
+    enabled: true
+    model: "auto"  # or an explicit model id
+    device: "cuda" # cpu | cuda | mps
+    dtype: "float16"
+    auto_download: false
+    max_text_length: 5000
+```
+
+#### Usage Examples
+
+CustomVoice (speaker + optional instruction):
+```json
+{
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+  "input": "Hello from Qwen3-TTS.",
+  "voice": "Vivian",
+  "response_format": "mp3",
+  "stream": true,
+  "extra_params": {
+    "instruct": "Warm and calm delivery."
+  }
+}
+```
+
+VoiceDesign (instruction required):
+```json
+{
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "input": "Design a new voice sample.",
+  "response_format": "wav",
+  "stream": false,
+  "extra_params": {
+    "instruct": "A soft, narrative voice with light rasp."
+  }
+}
+```
+
+Base voice clone (reference audio + optional reference text):
+```json
+{
+  "model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "input": "Cloned voice output.",
+  "response_format": "mp3",
+  "stream": true,
+  "voice_reference": "<base64 audio>",
+  "extra_params": {
+    "reference_text": "Transcript of the reference clip."
+  }
+}
+```
+Notes:
+- `voice_reference` is always required for Base models.
+- `extra_params.x_vector_only_mode=true` allows omitting `reference_text` (quality may degrade).
+- `reference_duration_min` (seconds) can be provided to enforce a minimum reference clip duration.
+- Base models enforce a default 3s minimum reference duration when `reference_duration_min` is omitted.
+
+#### Tokenizer API Endpoints
+
+Encode audio to tokens:
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/audio/tokenizer/encode" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -F "file=@/path/to/audio.wav" \
+  -F "tokenizer_model=Qwen/Qwen3-TTS-Tokenizer-12Hz"
+```
+
+Decode tokens to audio:
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/audio/tokenizer/decode" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"tokens":[1,2,3], "tokenizer_model":"Qwen/Qwen3-TTS-Tokenizer-12Hz", "response_format":"wav"}'
+```
+
+Note: tokenizer endpoints require the `audio.tokenizer` scope.
+
+### LuxTTS Setup
+
+LuxTTS is a ZipVoice-based 48kHz voice‑cloning TTS model. Full runbook:
+`Docs/STT-TTS/LUXTTS_TTS_SETUP.md`.
+
 ### Kokoro Setup
 
 Kokoro is a lightweight, high-quality TTS model that runs locally using ONNX Runtime or PyTorch. We recommend the v1.0 ONNX artifacts for most users.

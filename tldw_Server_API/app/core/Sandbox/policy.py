@@ -104,22 +104,44 @@ class SandboxPolicy:
                 # Do not silently fallback; surface unavailability to caller
                 raise SandboxPolicy.RuntimeUnavailable(requested)
             return requested
+        # No explicit request: honor default, but still enforce availability
+        if self.cfg.default_runtime == RuntimeType.firecracker and not firecracker_available:
+            raise SandboxPolicy.RuntimeUnavailable(self.cfg.default_runtime)
         return self.cfg.default_runtime
 
     def apply_to_session(self, spec: SessionSpec, firecracker_available: bool) -> SessionSpec:
         spec.runtime = self.select_runtime(spec.runtime, firecracker_available)
         if not spec.network_policy:
             spec.network_policy = self.cfg.network_default
+        # Clamp resources to policy maxima
+        try:
+            if spec.cpu_limit is not None and spec.cpu_limit > self.cfg.max_cpu:
+                spec.cpu_limit = float(self.cfg.max_cpu)
+        except Exception:
+            pass
+        try:
+            if spec.memory_mb is not None and spec.memory_mb > self.cfg.max_mem_mb:
+                spec.memory_mb = int(self.cfg.max_mem_mb)
+        except Exception:
+            pass
         return spec
 
     def apply_to_run(self, spec: RunSpec, firecracker_available: bool) -> RunSpec:
-        if spec.runtime is None:
-            spec.runtime = self.cfg.default_runtime
-        else:
-            # Honor explicit request; surface unavailability
-            spec.runtime = self.select_runtime(spec.runtime, firecracker_available)
+        # Always go through selection to enforce availability on defaults
+        spec.runtime = self.select_runtime(spec.runtime, firecracker_available)
         if not spec.network_policy:
             spec.network_policy = self.cfg.network_default
+        # Clamp resources to policy maxima
+        try:
+            if spec.cpu is not None and spec.cpu > self.cfg.max_cpu:
+                spec.cpu = float(self.cfg.max_cpu)
+        except Exception:
+            pass
+        try:
+            if spec.memory_mb is not None and spec.memory_mb > self.cfg.max_mem_mb:
+                spec.memory_mb = int(self.cfg.max_mem_mb)
+        except Exception:
+            pass
         return spec
 
 

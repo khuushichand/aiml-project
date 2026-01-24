@@ -213,7 +213,7 @@ Notes:
 - PDF bbox variability → constrain to 4-point quads only
 
 ## Open Questions
-- Do we want a dedicated UI overlay for table cell/row citations? - In tldw-frontend yes
+- Do we want a dedicated UI overlay for table cell/row citations? - In Next.js WebUI: yes
 - Should we persist contextualized text in Chroma’s documents or keep only original + header? - 
 
 ## Rollout Checklist

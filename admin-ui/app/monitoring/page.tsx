@@ -77,7 +77,7 @@ const SYSTEM_STATUS_DETAILS: Record<SystemStatusKey, Record<SystemHealthStatus, 
   },
 };
 
-export const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
+const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
   const value = (status || '').toLowerCase();
   if (['ok', 'healthy', 'ready', 'alive'].includes(value)) {
     return 'healthy';

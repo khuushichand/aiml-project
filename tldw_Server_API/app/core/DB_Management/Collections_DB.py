@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
-from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config import load_comprehensive_config, settings
 from tldw_Server_API.app.core.exceptions import (
     InvalidStoragePathError,
     InvalidStorageUserIdError,
@@ -354,6 +354,33 @@ class CollectionsDatabase:
         if postgres:
             return bool(value)
         return 1 if value else 0
+
+    @staticmethod
+    def _coerce_bool_setting(value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        raw = str(value).strip().lower()
+        if raw in {"1", "true", "yes", "on", "y"}:
+            return True
+        if raw in {"0", "false", "no", "off", "n"}:
+            return False
+        return default
+
+    @staticmethod
+    def _seeded_template_hash(body: str, description: Optional[str], fmt: str, type_: str) -> Optional[str]:
+        payload = json.dumps(
+            {
+                "body": body or "",
+                "description": description or "",
+                "format": fmt or "",
+                "type": type_ or "",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return hash_text_sha256(payload)
 
     def _sqlite_columns(self, table: str) -> set[str]:
         if self.backend.backend_type != BackendType.SQLITE:
@@ -1176,6 +1203,12 @@ class CollectionsDatabase:
         self._fts_available = fts_available
 
     def _seed_watchlists_output_templates(self) -> None:
+        seed_setting = settings.get("WATCHLISTS_SEED_OUTPUT_TEMPLATES")
+        if seed_setting is None:
+            seed_setting = os.getenv("WATCHLISTS_SEED_OUTPUT_TEMPLATES")
+        if not self._coerce_bool_setting(seed_setting, True):
+            return
+
         try:
             from tldw_Server_API.app.core.Watchlists import template_store
         except Exception as exc:
@@ -1205,7 +1238,12 @@ class CollectionsDatabase:
                 continue
             fmt = record.format.lower()
             type_ = self._infer_output_template_type(record.name, fmt)
-            desired_meta = {"seeded_from": "watchlists_templates"}
+            seeded_hash = self._seeded_template_hash(record.content, record.description, fmt, type_)
+            desired_meta = {
+                "seeded_from": "watchlists_templates",
+                "seeded_hash": seeded_hash,
+                "seeded_mtime": record.updated_at,
+            }
             metadata_json = json.dumps(desired_meta, ensure_ascii=False)
 
             if name not in existing:
@@ -1241,6 +1279,27 @@ class CollectionsDatabase:
 
             if current_meta.get("seeded_from") != "watchlists_templates":
                 continue
+            if current_meta.get("seeded_locked"):
+                continue
+
+            current_seed_hash = current_meta.get("seeded_hash")
+            if not current_seed_hash:
+                continue
+
+            current_row_hash = self._seeded_template_hash(
+                current.body,
+                current.description,
+                current.format,
+                current.type,
+            )
+            if current_row_hash and current_seed_hash != current_row_hash:
+                continue
+
+            if (
+                current_seed_hash == seeded_hash
+                and current_meta.get("seeded_mtime") == record.updated_at
+            ):
+                continue
 
             patch: Dict[str, Any] = {}
             if current.body != record.content:
@@ -1251,8 +1310,12 @@ class CollectionsDatabase:
                 patch["format"] = fmt
             if current.type != type_:
                 patch["type"] = type_
-            if current_meta.get("seeded_from") != desired_meta["seeded_from"]:
-                patch["metadata_json"] = metadata_json
+
+            new_meta = dict(current_meta)
+            new_meta.update(desired_meta)
+            new_metadata_json = json.dumps(new_meta, ensure_ascii=False)
+            if current.metadata_json != new_metadata_json:
+                patch["metadata_json"] = new_metadata_json
 
             if patch:
                 try:

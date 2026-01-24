@@ -4,7 +4,9 @@ import json
 import threading
 import time
 import uuid
+import shutil
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
@@ -60,6 +62,7 @@ class SandboxOrchestrator:
         self.policy = policy or SandboxPolicy(cfg)
         self._lock = threading.RLock()
         self._sessions: Dict[str, Session] = {}
+        self._session_owners: Dict[str, str] = {}
         # Store backend for runs/idempotency/usage
         self._store = get_store()
         # in-memory run queue of (run_id, enqueue_timestamp)
@@ -122,17 +125,42 @@ class SandboxOrchestrator:
             with self._lock:
                 if sid and sid in self._sessions:
                     return self._sessions[sid]
+                if sid:
+                    try:
+                        self._session_owners.setdefault(sid, self._user_key(user_id))
+                    except Exception:
+                        pass
+            if sid:
+                try:
+                    self._ensure_workspace(user_id, sid)
+                except Exception:
+                    pass
             # If missing from sessions map (unlikely), synthesize from stored
             return Session(id=stored.get("id", ""), runtime=spec.runtime or self.policy.cfg.default_runtime, base_image=spec.base_image, expires_at=None)
 
         # Create a new session (workspace optional in scaffold)
         sid = str(uuid.uuid4())
-        sess = Session(id=sid, runtime=spec.runtime or self.policy.cfg.default_runtime, base_image=spec.base_image, expires_at=None)
+        expires_at: Optional[datetime] = None
+        try:
+            ttl_sec = int(getattr(app_settings, "SANDBOX_SESSION_TTL_SEC", 0))
+        except Exception:
+            ttl_sec = 0
+        if ttl_sec and ttl_sec > 0:
+            expires_at = datetime.utcnow() + timedelta(seconds=int(ttl_sec))
+        sess = Session(id=sid, runtime=spec.runtime or self.policy.cfg.default_runtime, base_image=spec.base_image, expires_at=expires_at)
         with self._lock:
             self._sessions[sid] = sess
+            try:
+                self._session_owners[sid] = self._user_key(user_id)
+            except Exception:
+                pass
             # Store idempotent response body
-            resp = {"id": sid, "runtime": sess.runtime.value, "base_image": sess.base_image, "expires_at": None}
+            resp = {"id": sid, "runtime": sess.runtime.value, "base_image": sess.base_image, "expires_at": (sess.expires_at.isoformat() if sess.expires_at else None)}
             self._store_idem("sessions", user_id, idem_key, body, sid, resp)
+        try:
+            self._ensure_workspace(user_id, sid)
+        except Exception:
+            pass
         return sess
 
     # -----------------
@@ -276,8 +304,50 @@ class SandboxOrchestrator:
             if status.phase != RunPhase.queued:
                 with self._lock:
                     self._enqueue_index.pop(run_id, None)
+                    if self._queue:
+                        self._queue = [(rid, ts) for (rid, ts) in self._queue if rid != run_id]
         except Exception:
             pass
+
+    def get_run_owner(self, run_id: str) -> Optional[str]:
+        try:
+            return self._store.get_run_owner(run_id)
+        except Exception as e:
+            logger.debug(f"store.get_run_owner failed: {e}")
+            return None
+
+    def get_session_owner(self, session_id: str) -> Optional[str]:
+        with self._lock:
+            return self._session_owners.get(session_id)
+
+    def _prune_expired_sessions(self) -> None:
+        now = datetime.utcnow()
+        expired: list[str] = []
+        with self._lock:
+            for sid, sess in list(self._sessions.items()):
+                if sess.expires_at and sess.expires_at <= now:
+                    expired.append(sid)
+        for sid in expired:
+            try:
+                self.destroy_session(sid)
+            except Exception:
+                continue
+
+    def destroy_session(self, session_id: str) -> bool:
+        ws_path = None
+        removed = False
+        with self._lock:
+            if session_id in self._sessions:
+                self._sessions.pop(session_id, None)
+                removed = True
+            ws_path = self._session_roots.pop(session_id, None)
+            self._session_owners.pop(session_id, None)
+        if ws_path:
+            try:
+                shutil.rmtree(ws_path, ignore_errors=True)
+            except Exception:
+                pass
+        return removed
 
     # -----------------
     # Artifacts
@@ -368,7 +438,7 @@ class SandboxOrchestrator:
         with self._lock:
             self._artifacts[run_id] = selected
         try:
-            self._store.increment_user_artifact_bytes(owner, 0)  # noop ensures row exists
+            self._store.increment_user_artifact_bytes(owner, int(total_run))
         except Exception:
             pass
 
@@ -437,6 +507,10 @@ class SandboxOrchestrator:
         return str(ws)
 
     def get_session_workspace_path(self, session_id: str) -> Optional[str]:
+        try:
+            self._prune_expired_sessions()
+        except Exception:
+            pass
         with self._lock:
             return self._session_roots.get(session_id)
 

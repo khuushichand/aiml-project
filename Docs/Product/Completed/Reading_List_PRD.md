@@ -117,7 +117,7 @@ Directory and module plan aligning with current repository:
   - `importers/pocket.py`, `importers/instapaper.py`
 - DB Abstractions: integrate via `app/core/DB_Management/Media_DB_v2.py` (per-user Media DB v2)
 - Background Services: reuse `services/` for embedding/summarize queues
-- WebUI: `tldw-frontend/` (Next.js) under a new `reading/` feature (list + detail + read view); legacy `tldw_Server_API/WebUI/` is out of scope.
+- Next.js WebUI (`apps/tldw-frontend/`) under a new `reading/` feature (list + detail + read view); legacy `tldw_Server_API/WebUI/` is out of scope.
 
 ### 7.1 Data Model (Conceptual)
 
@@ -207,7 +207,7 @@ Rate limiting: align with chat/evals rate limiters; tighter limits on `/save` an
 
 ## 9. WebUI (MVP)
 
-- API-first: backend delivers the Reading List API; frontend team owns UX implementation in `tldw-frontend/`.
+- API-first: backend delivers the Reading List API; Next.js WebUI UX implementation lives in `apps/tldw-frontend/`.
 - Reading List page: table/list with quick filters (status, tags, domain), search box, sort control.
 - Item view: distraction-free reader; top bar actions (Back, Tag, Favorite, Mark Read, Summarize, Listen).
 - Tag editor: multi-select with suggestions.
@@ -258,7 +258,7 @@ Phase 1 (MVP Core): Data model, `/save`, `/items`, FTS, dedupe, ingestion pipeli
 Phase 2: Tags, favorites, status management, import/export
 Phase 3: Embeddings + RAG exposure, summarize + TTS actions
 Phase 4: Highlights/notes, suggestions/digest, bookmarklet, extension scaffolding
-Frontend: API-first delivery; `tldw-frontend/` UX implementation tracked separately.
+Frontend: API-first delivery; Next.js WebUI UX implementation tracked separately in `apps/tldw-frontend/`.
 
 Migration: Provide DB migration helpers in `Config_Files/` and `DB_Management` utilities.
 

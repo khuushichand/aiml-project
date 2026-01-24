@@ -46,7 +46,7 @@ from tldw_Server_API.app.core.Usage.usage_tracker import (
     backfill_legacy_tokens_to_ledger,
     log_llm_usage,
 )
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.exceptions import BadRequestError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import (
     afetch as _http_afetch,
     create_async_client as _create_async_client,
@@ -1238,7 +1238,9 @@ def tokens_to_texts(
                 len(arr),
                 exc,
             )
-            texts.append("")
+            raise BadRequestError(
+                f"Failed to decode token array for model '{model_name}' (index 0, tokens={len(arr)})."
+            ) from exc
         return texts, total_tokens, token_counts
 
     # Batch of token arrays
@@ -1258,7 +1260,9 @@ def tokens_to_texts(
                     len(arr),
                     exc,
                 )
-                texts.append("")
+                raise BadRequestError(
+                    f"Failed to decode token array for model '{model_name}' (index {idx}, tokens={len(arr)})."
+                ) from exc
         return texts, total_tokens, token_counts
 
     raise ValueError("Invalid token array input")
@@ -2055,6 +2059,13 @@ async def create_embedding_endpoint(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown provider: {provider}"
             )
+
+        if embedding_request.dimensions is not None:
+            if provider.lower() != "openai" or not _supports_openai_dimensions(model):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="dimensions is only supported for OpenAI text-embedding-3 models",
+                )
 
         # Parse and validate input FIRST (before policy checks)
         texts_to_embed: List[str] = []

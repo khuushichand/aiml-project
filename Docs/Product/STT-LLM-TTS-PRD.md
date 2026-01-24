@@ -43,7 +43,7 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
   - Conversation text history for each session.
   - Optional audio + transcripts for later retrieval, evaluation, and RAG.
 - Make it easy for:
-  - `tldw-frontend` to add a “voice chat” UI.
+  - Next.js WebUI (`apps/tldw-frontend`) to add a “voice chat” UI.
   - External clients to integrate via OpenAI-like patterns.
 
 ## 4. Non-Goals
@@ -281,7 +281,7 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
 
 ## 10. WebUI Integration Requirements
 
-- Add “Voice Chat” mode to `tldw-frontend`:
+- Add “Voice Chat” mode to the Next.js WebUI (`apps/tldw-frontend`):
   - Mic button:
     - Tap-to-record (non-streaming first).
     - Future: hold-to-talk or auto-VAD.
@@ -371,7 +371,7 @@ This plan tracks staged implementation for the Speech-to-Speech pipeline as spec
 **Status**: Not Started
 
 ### Stage 3: v1 Session Persistence, Context & WebUI Integration
-**Goal**: Wire speech turns into existing chat/session storage and expose a usable “press to talk” experience in `tldw-frontend`.
+**Goal**: Wire speech turns into existing chat/session storage and expose a usable “press to talk” experience in the Next.js WebUI (`apps/tldw-frontend`).
 
 **Success Criteria**:
 - Speech chat sessions reuse existing chat/notes storage:

@@ -180,7 +180,11 @@ async def _ensure_mfa_cache_available(session_manager: SessionManager, settings:
             await session_manager.initialize()
     except Exception:
         # If initialization fails, we'll fall through to the redis_client check below.
-        pass
+        logger.debug(
+            "MFA cache init: session_manager.initialize() failed (redis_url={}); continuing to redis_client check.",
+            settings.REDIS_URL,
+            exc_info=True,
+        )
     if getattr(session_manager, "redis_client", None) is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -691,8 +695,8 @@ async def login(
         # Attach user_id for downstream middleware (e.g., CSRF binding) on successful auth.
         try:
             request.state.user_id = int(user["id"])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to set request.state.user_id during login: {}", exc)
 
         # Determine whether MFA is required (multi-user + PostgreSQL only).
         mfa_required = False
@@ -1245,8 +1249,8 @@ async def refresh_token(
         # Attach user_id for middleware that binds CSRF tokens on refresh responses.
         try:
             request.state.user_id = int(user.get("id")) if isinstance(user, dict) else None
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to set request.state.user_id during refresh: {}", exc)
 
         # Generate new tokens based on auth mode and session linkage
         if settings.AUTH_MODE == "single_user":
@@ -1743,8 +1747,8 @@ async def resend_verification(
             )
             if not allowed:
                 return {"message": "If the account exists and needs verification, an email has been sent"}
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("resend_verification rate limit check failed: {}", exc)
         # Check if user exists and needs verification
         is_pg = await is_postgres_backend()
         if is_pg:

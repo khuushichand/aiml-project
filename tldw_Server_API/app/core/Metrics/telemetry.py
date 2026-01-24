@@ -160,6 +160,8 @@ class TelemetryConfig:
 
     def __init__(self):
         """Initialize telemetry configuration from environment variables."""
+        # Allow explicit disable in tests/CI without requiring SDK uninstall.
+        self.sdk_disabled = os.getenv("OTEL_SDK_DISABLED", "false").lower() == "true"
         # Service identification
         self.service_name = os.getenv("OTEL_SERVICE_NAME", "tldw_server")
         self.service_version = os.getenv("OTEL_SERVICE_VERSION", "1.0.0")
@@ -206,6 +208,15 @@ class TelemetryConfig:
         if self.enable_console_metrics_exporter and "console" not in self.metrics_exporters:
             self.metrics_exporters.append("console")
 
+        if self.sdk_disabled:
+            # Force-disable all OTEL work to avoid background threads in tests.
+            self.enable_metrics = False
+            self.enable_tracing = False
+            self.enable_logging = False
+            self.enable_console_metrics_exporter = False
+            self.metrics_exporters = []
+            self.traces_exporters = []
+
         # Additional metadata
         self.hostname = socket.gethostname()
         self.pod_name = os.getenv("POD_NAME", self.hostname)
@@ -242,6 +253,12 @@ class TelemetryManager:
         self.initialized = False
         # Hold pending views if provider not yet available
         self._pending_views = []  # list[tuple[str, list[float]]]
+
+        if getattr(self.config, "sdk_disabled", False):
+            logger.info("OpenTelemetry SDK disabled via OTEL_SDK_DISABLED")
+            self.tracer = DummyTracer()
+            self.meter = DummyMeter()
+            return
 
         if not OTEL_AVAILABLE:
             logger.info("OpenTelemetry not available, using fallback implementations")

@@ -585,8 +585,12 @@ async def complete_chat_legacy(
             if response is not None:
                 for k, v in dep_headers.items():
                     response.headers[k] = v
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "Non-fatal: failed to set deprecation headers for chat {}: {}",
+                chat_id,
+                exc,
+            )
 
         # If a non-empty body was provided, reject with 422 and include deprecation headers
         if isinstance(body, dict) and body:
@@ -1823,8 +1827,10 @@ async def persist_streamed_assistant_message(
             validated_tool_calls = _validate_and_truncate_tool_calls(getattr(body, 'tool_calls', None))
             if validated_tool_calls is not None or extra is not None:
                 db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls, extra=extra)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                f"Non-fatal: failed to persist metadata for message {assistant_msg_id}: {exc}"
+            )
 
         # Optionally update chat rating
         if getattr(body, 'chat_rating', None) is not None:

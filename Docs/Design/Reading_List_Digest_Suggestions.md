@@ -83,7 +83,7 @@ This avoids a schema migration and keeps backward compatibility.
 Update `ReadingDigestScheduleFilters` to allow the optional `suggestions` field.
 No new endpoints needed.
 
-## UI/UX (tldw-frontend)
+## UI/UX (Next.js WebUI)
 - In the digest schedule editor: add a "Suggestions" toggle.
 - Show fields when enabled: limit, status list, optional exclude tags.
 - Provide a short hint that suggestions are local-only and heuristic-based.

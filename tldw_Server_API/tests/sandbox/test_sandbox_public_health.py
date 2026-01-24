@@ -4,6 +4,10 @@ import os
 from fastapi.testclient import TestClient
 
 
+import pytest
+
+
+@pytest.mark.sandbox_no_reload
 def test_sandbox_public_health_no_auth(monkeypatch):
 
 

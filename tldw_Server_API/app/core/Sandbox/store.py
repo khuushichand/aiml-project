@@ -1482,7 +1482,13 @@ def _resolve_pg_dsn() -> Optional[str]:
             dsn = getattr(app_settings, "DATABASE_URL", None)
         except Exception:
             dsn = None
-    return str(dsn) if dsn else None
+    if not dsn:
+        return None
+    dsn_str = str(dsn)
+    # Ignore sqlite URLs for cluster mode; require a real Postgres DSN.
+    if dsn_str.strip().lower().startswith("sqlite"):
+        return None
+    return dsn_str
 
 
 def get_store() -> SandboxStore:

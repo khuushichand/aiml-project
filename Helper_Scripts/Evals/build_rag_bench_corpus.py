@@ -5,13 +5,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import httpx
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
 
 @dataclass(frozen=True)
 class ManifestEntry:
@@ -29,6 +33,126 @@ def _resolve_path(repo_root: Path, raw_path: str) -> Path:
 def _normalize_title(value: str) -> str:
     """Normalize titles for case-insensitive matching."""
     return value.strip().lower()
+
+
+MEDIA_TYPE_BY_EXT = {
+    ".pdf": "pdf",
+    ".epub": "ebook",
+    ".eml": "email",
+    ".mbox": "email",
+    ".pst": "email",
+    ".ost": "email",
+    ".mp3": "audio",
+    ".wav": "audio",
+    ".m4a": "audio",
+    ".ogg": "audio",
+    ".mp4": "video",
+    ".mkv": "video",
+    ".mov": "video",
+}
+
+
+def _media_type_for_path(path: Path) -> str:
+    return MEDIA_TYPE_BY_EXT.get(path.suffix.lower(), "document")
+
+
+def group_files_by_type(corpus_dir: Path) -> Dict[str, List[Path]]:
+    files: Dict[str, List[Path]] = {}
+    for p in corpus_dir.rglob("*"):
+        if not p.is_file():
+            continue
+        media_type = _media_type_for_path(p)
+        files.setdefault(media_type, []).append(p)
+    return files
+
+
+def ingest_files(
+    client: httpx.Client,
+    base_url: str,
+    headers: Dict[str, str],
+    media_type: str,
+    paths: List[Path],
+    form_fields: Dict[str, str],
+    batch_size: int,
+) -> Tuple[int, int]:
+    ingested = 0
+    failures = 0
+    if not paths:
+        return ingested, failures
+
+    for i in range(0, len(paths), batch_size):
+        batch = paths[i : i + batch_size]
+        files: List[Tuple[str, Tuple[str, object, str]]] = []
+        for path in batch:
+            mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+            files.append(("files", (path.name, path.open("rb"), mime)))
+        data = {"media_type": media_type, **form_fields}
+        try:
+            response = client.post(
+                f"{base_url.rstrip('/')}/api/v1/media/add",
+                headers=headers,
+                data=data,
+                files=files,
+            )
+            response.raise_for_status()
+            ingested += len(batch)
+        except Exception as exc:
+            failures += len(batch)
+            print(f"[WARN] Ingest batch failed ({media_type}): {exc}", file=sys.stderr)
+        finally:
+            for _, file_tuple in files:
+                try:
+                    file_tuple[1].close()
+                except Exception:
+                    pass
+    return ingested, failures
+
+
+def ingest_corpus(
+    corpus_root: Path,
+    base_url: str,
+    headers: Dict[str, str],
+    generate_embeddings: bool,
+    embedding_provider: Optional[str],
+    embedding_model: Optional[str],
+    keywords: Optional[str],
+    perform_analysis: bool,
+    batch_size: int,
+    timeout: int,
+) -> Dict[str, int]:
+    if not corpus_root.exists():
+        raise FileNotFoundError(f"Corpus directory not found: {corpus_root}")
+
+    files_by_type = group_files_by_type(corpus_root)
+    if not files_by_type:
+        raise ValueError(f"No files found under corpus directory: {corpus_root}")
+
+    form_fields: Dict[str, str] = {
+        "perform_analysis": "true" if perform_analysis else "false",
+        "generate_embeddings": "true" if generate_embeddings else "false",
+    }
+    if keywords:
+        form_fields["keywords"] = keywords
+    if embedding_provider:
+        form_fields["embedding_provider"] = embedding_provider
+    if embedding_model:
+        form_fields["embedding_model"] = embedding_model
+
+    results = {"ingested": 0, "failed": 0}
+    with httpx.Client(timeout=timeout) as client:
+        for media_type, paths in sorted(files_by_type.items()):
+            ingested, failures = ingest_files(
+                client=client,
+                base_url=base_url,
+                headers=headers,
+                media_type=media_type,
+                paths=paths,
+                form_fields=form_fields,
+                batch_size=batch_size,
+            )
+            results["ingested"] += ingested
+            results["failed"] += failures
+    return results
 
 
 def load_manifest(manifest_path: Path, repo_root: Path) -> List[ManifestEntry]:
@@ -147,7 +271,7 @@ def write_retrieval_dataset(
 
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build the basic RAG benchmark corpus and regenerate retrieval JSONL."
+        description="Build the basic RAG benchmark corpus, optionally ingest it, and regenerate retrieval JSONL."
     )
     parser.add_argument(
         "--manifest",
@@ -185,6 +309,63 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Namespace to include in the retrieval dataset (default: null).",
     )
     parser.add_argument(
+        "--ingest",
+        action="store_true",
+        help="Ingest the corpus via /api/v1/media/add after building.",
+    )
+    parser.add_argument(
+        "--base",
+        default="http://127.0.0.1:8000",
+        help="Base URL for the API when --ingest is enabled.",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="API key for single-user auth (X-API-KEY header).",
+    )
+    parser.add_argument(
+        "--jwt",
+        default=None,
+        help="JWT for multi-user auth (Authorization: Bearer).",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="Batch size for ingestion uploads.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=60,
+        help="Timeout in seconds for ingest requests.",
+    )
+    parser.add_argument(
+        "--generate-embeddings",
+        action="store_true",
+        help="Enable embeddings generation during ingestion.",
+    )
+    parser.add_argument(
+        "--embedding-provider",
+        default=None,
+        help="Embedding provider to use during ingestion.",
+    )
+    parser.add_argument(
+        "--embedding-model",
+        default=None,
+        help="Embedding model to use during ingestion.",
+    )
+    parser.add_argument(
+        "--keywords",
+        default=None,
+        help="Comma-separated keywords to tag each ingested item.",
+    )
+    parser.add_argument(
+        "--perform-analysis",
+        action="store_true",
+        help="Run analysis during ingestion (default: false).",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Overwrite corpus files if they already exist.",
@@ -215,6 +396,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not args.skip_build:
         results = build_corpus(entries, corpus_root, overwrite=args.overwrite)
         print(f"Corpus build: {results['copied']} copied, {results['skipped']} skipped -> {corpus_root}")
+
+    if args.ingest:
+        if args.api_key and args.jwt:
+            raise ValueError("Provide only one of --api-key or --jwt.")
+        if not args.api_key and not args.jwt:
+            raise ValueError("Provide --api-key or --jwt when --ingest is enabled.")
+
+        headers: Dict[str, str] = {}
+        if args.api_key:
+            headers["X-API-KEY"] = args.api_key
+        if args.jwt:
+            headers["Authorization"] = f"Bearer {args.jwt}"
+
+        generate_embeddings = args.generate_embeddings or bool(args.embedding_provider or args.embedding_model)
+        ingest_results = ingest_corpus(
+            corpus_root=corpus_root,
+            base_url=args.base,
+            headers=headers,
+            generate_embeddings=generate_embeddings,
+            embedding_provider=args.embedding_provider,
+            embedding_model=args.embedding_model,
+            keywords=args.keywords,
+            perform_analysis=args.perform_analysis,
+            batch_size=args.batch_size,
+            timeout=args.timeout,
+        )
+        print(
+            "Corpus ingest: "
+            f"{ingest_results['ingested']} ingested, {ingest_results['failed']} failed -> {args.base}"
+        )
 
     if not args.skip_dataset:
         if args.media_db:

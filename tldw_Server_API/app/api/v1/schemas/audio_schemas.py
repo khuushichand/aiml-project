@@ -132,6 +132,52 @@ class VoiceEncodeResponse(BaseModel):
     reference_text: Optional[str] = None
 
 
+class AudioTokenizerEncodeRequest(BaseModel):
+    """Request schema for audio tokenizer encode endpoint (JSON body)."""
+    audio_base64: str = Field(
+        ...,
+        description="Base64-encoded audio payload (no data URI prefix).",
+    )
+    tokenizer_model: Optional[str] = Field(
+        default=None,
+        description="Tokenizer model identifier (defaults to configured Qwen3 tokenizer).",
+    )
+    sample_rate: Optional[int] = Field(
+        default=None,
+        description="Optional sample rate hint when audio format does not encode it.",
+    )
+    token_format: Optional[Literal["list", "base64"]] = Field(
+        default="list",
+        description="Output token encoding: list of ints or base64-encoded bytes.",
+    )
+
+
+class AudioTokenizerEncodeResponse(BaseModel):
+    """Response schema for audio tokenizer encode endpoint."""
+    tokens: Any
+    token_format: Literal["list", "base64"]
+    sample_rate: int
+    frame_rate: Optional[float] = None
+    tokenizer_model: str
+    duration_seconds: float
+
+
+class AudioTokenizerDecodeRequest(BaseModel):
+    """Request schema for audio tokenizer decode endpoint."""
+    tokens: Any = Field(
+        ...,
+        description="Token payload (list[int] or base64-encoded bytes).",
+    )
+    tokenizer_model: Optional[str] = Field(
+        default=None,
+        description="Tokenizer model identifier (defaults to configured Qwen3 tokenizer).",
+    )
+    response_format: Literal["wav", "pcm"] = Field(
+        default="wav",
+        description="Desired audio output format.",
+    )
+
+
 class OpenAITranscriptionRequest(BaseModel):
     """Request schema for OpenAI-compatible transcription endpoint"""
 

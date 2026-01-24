@@ -15,6 +15,8 @@ pytestmark = pytest.mark.timeout(10)
 def _client(monkeypatch) -> TestClient:
 
     monkeypatch.setenv("TEST_MODE", "1")
+    # Disable synthetic frames for this test so heartbeats aren't suppressed by early end
+    monkeypatch.setenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", "false")
     # Disable real execution so WS doesn't end immediately (to receive heartbeats)
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "false")
     monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "true")

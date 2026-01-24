@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSGenerationError,
     TTSRateLimitError
 )
+from tldw_Server_API.app.core.TTS.voice_manager import VoiceReferenceMetadata
 
 # ========================================================================
 # Service Initialization Tests
@@ -454,6 +455,85 @@ async def test_convert_request_language_override(tts_service):
     )
     tts_request = tts_service._convert_request(req)
     assert tts_request.language == "ja"
+
+
+@pytest.mark.unit
+async def test_custom_voice_loads_qwen3_prompt_metadata(tts_service, monkeypatch):
+    class _FakeVoiceManager:
+        async def load_voice_reference_audio(self, user_id, voice_id):
+            return b"audio-bytes"
+
+        async def load_reference_metadata(self, user_id, voice_id):
+            return VoiceReferenceMetadata(
+                voice_id=voice_id,
+                voice_clone_prompt_b64="BASE64PROMPT",
+                voice_clone_prompt_format="qwen3_tts_prompt_v1",
+            )
+
+    def _fake_get_voice_manager():
+        return _FakeVoiceManager()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
+        _fake_get_voice_manager,
+        raising=True,
+    )
+
+    req = OpenAISpeechRequest(
+        model="qwen/qwen3-tts-12hz-1.7b-base",
+        input="hello",
+        voice="custom:voice-1",
+        response_format="mp3",
+        stream=False,
+    )
+    tts_request = tts_service._convert_request(req)
+    await tts_service._apply_custom_voice_reference(tts_request, user_id=1, provider_hint="qwen3_tts")
+
+    assert tts_request.voice_reference == b"audio-bytes"
+    assert tts_request.extra_params.get("voice_clone_prompt") == {
+        "format": "qwen3_tts_prompt_v1",
+        "data_b64": "BASE64PROMPT",
+    }
+
+
+@pytest.mark.unit
+async def test_custom_voice_stores_qwen3_prompt_metadata(tts_service, monkeypatch):
+    saved = {}
+
+    class _FakeVoiceManager:
+        async def load_reference_metadata(self, user_id, voice_id):
+            return None
+
+        async def save_reference_metadata(self, user_id, metadata):
+            saved["metadata"] = metadata
+
+    def _fake_get_voice_manager():
+        return _FakeVoiceManager()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
+        _fake_get_voice_manager,
+        raising=True,
+    )
+
+    request = TTSRequest(
+        text="hello",
+        voice="custom:voice-1",
+        format=AudioFormat.MP3,
+        extra_params={
+            "voice_clone_prompt": {
+                "format": "qwen3_tts_prompt_v1",
+                "data_b64": "PROMPTDATA",
+            }
+        },
+    )
+
+    await tts_service._maybe_store_qwen3_voice_prompt(request, user_id=1, provider_key="qwen3_tts")
+
+    metadata = saved.get("metadata")
+    assert metadata is not None
+    assert metadata.voice_clone_prompt_b64 == "PROMPTDATA"
+    assert metadata.voice_clone_prompt_format == "qwen3_tts_prompt_v1"
 
 # ========================================================================
 # Caching Tests

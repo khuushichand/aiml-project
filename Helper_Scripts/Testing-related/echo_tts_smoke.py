@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 import time
@@ -119,12 +120,17 @@ def main() -> int:
         "--output",
         type=Path,
         default=None,
-        help="Output audio file path (defaults to /tmp/echo_tts_smoke.<format>)",
+        help="Output audio file path (defaults to a unique temp file)",
     )
     args = parser.parse_args()
 
     if args.output is None:
-        args.output = Path(f"/tmp/echo_tts_smoke.{args.response_format}")
+        with tempfile.NamedTemporaryFile(
+            prefix="echo_tts_smoke_",
+            suffix=f".{args.response_format}",
+            delete=False,
+        ) as tmp_file:
+            args.output = Path(tmp_file.name)
 
     headers = _resolve_headers(args)
     if not headers:

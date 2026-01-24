@@ -22,7 +22,7 @@ At a high level, tldw_server is:
 - A set of **core domain modules** under `tldw_Server_API/app/core/` (AuthNZ, Media Ingestion, Chunking, Embeddings, RAG, Chat, Evaluations, MCP, etc.).
 - A **storage layer** using SQLite by default (PostgreSQL supported) plus ChromaDB for vectors, with per-user content and metadata.
 - A **provider layer** for commercial/local LLMs, STT/TTS backends, OCR, and connectors.
-- Optional **Next.js WebUI** in `tldw-frontend/` and external clients (CLI tools, MCP-aware IDE integrations).
+- Optional **Next.js WebUI** at `apps/tldw-frontend/` and external clients (CLI tools, MCP-aware IDE integrations).
 
 Think of the architecture as:
 
@@ -53,7 +53,7 @@ From the repo root:
 │   ├── Databases/                # Runtime DBs (some paths deprecated)
 │   ├── tests/                    # Pytest suite (mirrors app structure)
 │   └── WebUI/                    # Legacy integrated WebUI served at /webui
-├── tldw-frontend/                # Next.js WebUI (current client)
+├── apps/tldw-frontend/                # Next.js WebUI (primary web client)
 ├── Docs/                         # Architecture, API, design, and developer docs
 ├── Dockerfiles/                  # Docker images and compose files
 ├── Databases/                    # AuthNZ + per-user content DB roots
@@ -74,7 +74,7 @@ For a file-by-file code map of the backend, see `Docs/Code_Documentation/Code_Ma
 ### 3.1 Components
 
 #### Clients
-- `tldw-frontend/` Next.js app (primary WebUI).
+- Next.js WebUI at `apps/tldw-frontend/` (primary web client).
 - Legacy WebUI at `/webui` (served from `tldw_Server_API/WebUI/`).
 - Any HTTP client (curl, Postman, other backends) and MCP-aware tools.
 
@@ -318,13 +318,13 @@ See:
 
 ## 8. Frontend and Clients
 
-**Next.js WebUI (`tldw-frontend/`)**
+**Next.js WebUI (`apps/tldw-frontend/`)**
 - Primary web client, talking to the same FastAPI APIs (`/api/v1`).
 - Focused on interactive media ingestion, search, chat, and evaluations.
 
 #### Legacy WebUI (`/webui`)
 - Served from `tldw_Server_API/WebUI/`.
-- Useful for basic workflows and debugging, but considered legacy compared to `tldw-frontend/`.
+- Useful for basic workflows and debugging, but considered legacy compared to the Next.js WebUI (`apps/tldw-frontend/`).
 
 #### Programmatic clients
 - Any HTTP client can call the OpenAI-compatible Chat, Embeddings, Audio, and RAG endpoints.

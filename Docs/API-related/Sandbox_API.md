@@ -8,6 +8,11 @@ Auth: Standard tldw AuthNZ
 - Single user: `X-API-KEY: <key>`
 - Multi user (JWT): `Authorization: Bearer <token>`
 
+## Firecracker host prep
+
+If you plan to use the Firecracker runtime, follow the host prerequisites and
+smoke-test steps in `Docs/Deployment/Operations/Firecracker_Host_Checklist.md`.
+
 ## Feature discovery
 GET `/api/v1/sandbox/runtimes`
 Response (example):

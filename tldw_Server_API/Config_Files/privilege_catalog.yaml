@@ -225,6 +225,36 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/audio-tokenizer
+  - id: audio.tokenizer.encode
+    description: Encode audio tokens for debugging and tooling.
+    resource_tags:
+      - audio
+      - tokenizer
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-tokenizer-encode
+  - id: audio.tokenizer.decode
+    description: Decode audio tokens for debugging and tooling.
+    resource_tags:
+      - audio
+      - tokenizer
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-tokenizer-decode
   - id: audio.transcriptions
     description: Submit audio for transcription or translation.
     resource_tags:

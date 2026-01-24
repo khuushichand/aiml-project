@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -31,7 +31,7 @@ type SavedKeyView = {
 
 const SAVED_VIEWS_STORAGE_KEY = 'admin_api_keys_saved_views';
 
-export default function ApiKeysPage() {
+function ApiKeysPageContent() {
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
@@ -358,5 +358,26 @@ export default function ApiKeysPage() {
           </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+// Wrap with Suspense for useSearchParams
+export default function ApiKeysPage() {
+  return (
+    <Suspense fallback={
+      <PermissionGuard variant="route" requireAuth role="admin">
+        <ResponsiveLayout>
+          <div className="p-4 lg:p-8">
+            <div className="mb-8">
+              <div className="h-8 w-32 bg-muted rounded animate-pulse mb-2" />
+              <div className="h-4 w-64 bg-muted rounded animate-pulse" />
+            </div>
+            <div className="h-96 bg-muted rounded animate-pulse" />
+          </div>
+        </ResponsiveLayout>
+      </PermissionGuard>
+    }>
+      <ApiKeysPageContent />
+    </Suspense>
   );
 }

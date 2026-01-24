@@ -385,6 +385,12 @@ def _cleanup_lingering_threads(log: logging.Logger, context: str = "teardown") -
             if t is current or t.daemon:
                 continue
             try:
+                # Cancel timers so they don't keep the interpreter alive
+                if isinstance(t, threading.Timer):
+                    try:
+                        t.cancel()
+                    except Exception:
+                        pass
                 t.join(timeout=1.0)
             except Exception:
                 pass
@@ -404,6 +410,12 @@ def _cleanup_lingering_threads(log: logging.Logger, context: str = "teardown") -
             print(msg, file=sys.stderr)
             try:
                 log.warning("%s stack=%s", msg, stack)
+            except Exception:
+                pass
+            try:
+                if isinstance(t, threading.Timer):
+                    t.cancel()
+                    t.join(timeout=1.0)
             except Exception:
                 pass
             try:
@@ -631,6 +643,12 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
                             t.join(timeout=2.0)
                         except Exception:
                             pass
+                except Exception:
+                    pass
+                try:
+                    if isinstance(t, threading.Timer):
+                        t.cancel()
+                        t.join(timeout=1.0)
                 except Exception:
                     pass
             # Re-check after stopping attempts; only log remaining threads

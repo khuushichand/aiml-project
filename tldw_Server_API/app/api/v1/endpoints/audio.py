@@ -10,6 +10,7 @@ import io
 import base64
 import time
 import configparser
+import importlib
 from types import SimpleNamespace
 from functools import lru_cache
 from pathlib import Path as PathLib
@@ -47,6 +48,9 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     OpenAITranslationRequest,
     VoiceEncodeRequest,
     VoiceEncodeResponse,
+    AudioTokenizerEncodeRequest,
+    AudioTokenizerEncodeResponse,
+    AudioTokenizerDecodeRequest,
     TranscriptSegmentationRequest,
     TranscriptSegmentationResponse,
     SpeechChatRequest,
@@ -58,6 +62,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.TTS.tts_config import get_tts_config_manager
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
@@ -174,6 +179,222 @@ def _ws_error_payload(
         reserved = {"type", "message", "error_type", "request_id", "details"}
         payload.update({key: value for key, value in extra.items() if key not in reserved})
     return payload
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_qwen3_tokenizer_settings() -> Dict[str, Any]:
+    cfg_mgr = get_tts_config_manager()
+    provider_cfg = cfg_mgr.get_provider_config("qwen3_tts")
+    defaults = {
+        "tokenizer_model": "Qwen/Qwen3-TTS-Tokenizer-12Hz",
+        "tokenizer_max_audio_seconds": 300,
+        "tokenizer_max_tokens": 20000,
+        "tokenizer_max_payload_mb": 20,
+        "auto_download": False,
+    }
+    if provider_cfg is None:
+        return defaults
+    return {
+        "tokenizer_model": provider_cfg.tokenizer_model or defaults["tokenizer_model"],
+        "tokenizer_max_audio_seconds": _coerce_int(
+            provider_cfg.tokenizer_max_audio_seconds, defaults["tokenizer_max_audio_seconds"]
+        ),
+        "tokenizer_max_tokens": _coerce_int(provider_cfg.tokenizer_max_tokens, defaults["tokenizer_max_tokens"]),
+        "tokenizer_max_payload_mb": _coerce_int(
+            provider_cfg.tokenizer_max_payload_mb, defaults["tokenizer_max_payload_mb"]
+        ),
+        "auto_download": bool(provider_cfg.auto_download),
+    }
+
+
+def _decode_base64_payload(raw: str) -> bytes:
+    payload = raw
+    if "," in payload:
+        payload = payload.split(",", 1)[1]
+    return base64.b64decode(payload, validate=True)
+
+
+def _enforce_payload_limit(payload_bytes: bytes, max_payload_mb: int, request_id: Optional[str]) -> None:
+    if max_payload_mb <= 0:
+        return
+    max_bytes = max_payload_mb * 1024 * 1024
+    if len(payload_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Payload too large ({len(payload_bytes)} bytes, max {max_bytes})",
+                request_id,
+            ),
+        )
+
+
+def _enforce_payload_size(size_bytes: int, max_payload_mb: int, request_id: Optional[str]) -> None:
+    if max_payload_mb <= 0:
+        return
+    max_bytes = max_payload_mb * 1024 * 1024
+    if size_bytes > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Payload too large ({size_bytes} bytes, max {max_bytes})",
+                request_id,
+            ),
+        )
+
+
+def _read_audio_from_bytes(
+    audio_bytes: bytes,
+    sample_rate_hint: Optional[int],
+    request_id: Optional[str],
+) -> tuple[np.ndarray, int, float]:
+    try:
+        audio_data, sample_rate = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+    except Exception:
+        if sample_rate_hint is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_http_error_detail(
+                    "Unable to decode audio; provide sample_rate for raw PCM",
+                    request_id,
+                ),
+            )
+        pcm = np.frombuffer(audio_bytes, dtype=np.int16)
+        audio_data = pcm.astype(np.float32) / 32768.0
+        sample_rate = int(sample_rate_hint)
+
+    if audio_data.ndim > 1:
+        audio_data = np.mean(audio_data, axis=1)
+    duration_seconds = float(len(audio_data)) / float(sample_rate or 24000)
+    return audio_data, int(sample_rate), duration_seconds
+
+
+def _resolve_tokenizer_sample_rate(tokenizer: Any, fallback: int) -> int:
+    for attr in ("sample_rate", "sampling_rate", "sr"):
+        value = getattr(tokenizer, attr, None)
+        try:
+            if value:
+                return int(value)
+        except Exception:
+            continue
+    return fallback
+
+
+def _resolve_tokenizer_frame_rate(tokenizer: Any) -> Optional[float]:
+    for attr in ("frame_rate", "tps", "token_rate"):
+        value = getattr(tokenizer, attr, None)
+        try:
+            if value:
+                return float(value)
+        except Exception:
+            continue
+    return None
+
+
+def _instantiate_tokenizer(tokenizer_cls: Any, model_id: str, allow_download: bool) -> Any:
+    if hasattr(tokenizer_cls, "from_pretrained"):
+        try:
+            return tokenizer_cls.from_pretrained(model_id, local_files_only=not allow_download)
+        except TypeError:
+            return tokenizer_cls.from_pretrained(model_id)
+    try:
+        return tokenizer_cls(model_id)
+    except TypeError:
+        return tokenizer_cls()
+
+
+def _load_qwen3_tokenizer(model_id: str, allow_download: bool) -> Any:
+    try:
+        module = importlib.import_module("qwen_tts")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=f"qwen-tts package not available: {exc}",
+        ) from exc
+
+    for name in ("Qwen3TTSTokenizer", "QwenTTSTokenizer", "TTSTokenizer"):
+        tokenizer_cls = getattr(module, name, None)
+        if tokenizer_cls is not None:
+            return _instantiate_tokenizer(tokenizer_cls, model_id, allow_download)
+
+    for fn_name in ("load_tokenizer", "get_tokenizer", "create_tokenizer"):
+        fn = getattr(module, fn_name, None)
+        if callable(fn):
+            try:
+                return fn(model_id)
+            except Exception:
+                return fn()
+
+    try:
+        tokenizer_mod = importlib.import_module("qwen_tts.tokenizer")
+        tokenizer_cls = getattr(tokenizer_mod, "Qwen3TTSTokenizer", None)
+        if tokenizer_cls is not None:
+            return _instantiate_tokenizer(tokenizer_cls, model_id, allow_download)
+    except Exception:
+        pass
+
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Qwen3-TTS tokenizer backend is not available in this build",
+    )
+
+
+def _normalize_tokens(tokens: Any) -> tuple[List[int], Optional[float]]:
+    frame_rate = None
+    if isinstance(tokens, dict):
+        frame_rate = tokens.get("frame_rate") or tokens.get("tps")
+        tokens = tokens.get("tokens") or tokens.get("codes") or tokens.get("ids")
+    if isinstance(tokens, tuple) and len(tokens) == 2:
+        tokens, frame_rate = tokens
+    if isinstance(tokens, np.ndarray):
+        tokens = tokens.tolist()
+    if not isinstance(tokens, list):
+        tokens = list(tokens)
+    return [int(tok) for tok in tokens], frame_rate
+
+
+def _serialize_tokens(tokens: List[int], token_format: str) -> Any:
+    if token_format == "base64":
+        token_bytes = np.asarray(tokens, dtype=np.int32).tobytes()
+        return base64.b64encode(token_bytes).decode("ascii")
+    return tokens
+
+
+def _coerce_tokens_payload(payload: Any) -> List[int]:
+    if isinstance(payload, list):
+        return [int(tok) for tok in payload]
+    if isinstance(payload, str):
+        data = _decode_base64_payload(payload)
+        tokens = np.frombuffer(data, dtype=np.int32).tolist()
+        return [int(tok) for tok in tokens]
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="tokens must be a list of ints or base64-encoded bytes",
+    )
+
+
+def _serialize_audio_output(audio: Any, sample_rate: int, response_format: str) -> bytes:
+    if isinstance(audio, (bytes, bytearray)):
+        return bytes(audio)
+
+    audio_np = np.asarray(audio)
+    if audio_np.ndim > 1:
+        audio_np = np.mean(audio_np, axis=1)
+    if audio_np.dtype != np.int16:
+        audio_np = np.clip(audio_np, -1.0, 1.0)
+        audio_np = (audio_np * 32767.0).astype(np.int16)
+    if response_format == "pcm":
+        return audio_np.tobytes()
+    buffer = io.BytesIO()
+    sf.write(buffer, audio_np, sample_rate, format="WAV", subtype="PCM_16")
+    return buffer.getvalue()
 
 
 async def _stream_tts_to_websocket(
@@ -518,6 +739,9 @@ def _map_openai_audio_model_to_whisper(model: Optional[str]) -> str:
             "large-v2",
             "large-v3",
             "large",
+            "distil-large-v3",
+            "distil-medium.en",
+            "distil-small.en",
         }
 
     # Pass through known internal sizes and HF ids
@@ -990,10 +1214,22 @@ async def create_speech_metadata(
     except Exception as exc:
         logger.debug(f"usage_log audio.tts.metadata failed: error={exc}")
 
-    try:
-        request_data.stream = False
-    except Exception:
-        pass
+    if hasattr(request_data, "stream"):
+        try:
+            request_data.stream = False
+        except (AttributeError, TypeError) as exc:
+            logger.warning(
+                "audio.speech.metadata: failed to set request_data.stream=False (model={}, request_id={}): {}",
+                getattr(request_data, "model", None),
+                request_id,
+                exc,
+            )
+    else:
+        logger.warning(
+            "audio.speech.metadata: request_data missing stream attribute (model={}, request_id={})",
+            getattr(request_data, "model", None),
+            request_id,
+        )
 
     try:
         speech_iter = tts_service.generate_speech(
@@ -1003,12 +1239,15 @@ async def create_speech_metadata(
             provider_overrides=tts_overrides,
             voice_to_voice_route="audio.speech.metadata",
             user_id=user_id_int,
+            metadata_only=True,
         )
     except Exception as exc:
         _raise_for_tts_error(exc, request_id)
 
     try:
-        async for _ in speech_iter:
+        try:
+            await speech_iter.__anext__()
+        except StopAsyncIteration:
             pass
     except Exception as exc:
         _raise_for_tts_error(exc, request_id)
@@ -1026,6 +1265,208 @@ async def create_speech_metadata(
     if not alignment_payload:
         return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"X-Request-Id": request_id})
     return JSONResponse(content={"alignment": alignment_payload}, headers={"X-Request-Id": request_id})
+
+
+@router.post(
+    "/tokenizer/encode",
+    summary="Encode audio into Qwen3-TTS tokens",
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(
+            require_token_scope(
+                "audio.tokenizer",
+                require_if_present=True,
+                endpoint_id="audio.tokenizer.encode",
+                count_as="call",
+            )
+        ),
+    ],
+)
+async def encode_audio_tokenizer(
+    request: Request,
+    current_user: User = Depends(get_request_user),
+):
+    request_id = ensure_request_id(request)
+    settings = _get_qwen3_tokenizer_settings()
+    tokenizer_model = settings["tokenizer_model"]
+    token_format = "list"
+    sample_rate_hint: Optional[int] = None
+
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        upload = form.get("file") or form.get("audio")
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_http_error_detail("Missing audio file in multipart form", request_id),
+            )
+        audio_bytes = await upload.read()
+        tokenizer_model = str(form.get("tokenizer_model") or tokenizer_model)
+        token_format = str(form.get("token_format") or token_format)
+        try:
+            if form.get("sample_rate") is not None:
+                sample_rate_hint = int(form.get("sample_rate"))
+        except Exception:
+            sample_rate_hint = None
+    else:
+        payload = AudioTokenizerEncodeRequest(**(await request.json()))
+        audio_bytes = _decode_base64_payload(payload.audio_base64)
+        tokenizer_model = payload.tokenizer_model or tokenizer_model
+        token_format = payload.token_format or token_format
+        sample_rate_hint = payload.sample_rate
+
+    if token_format not in {"list", "base64"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("token_format must be 'list' or 'base64'", request_id),
+        )
+
+    _enforce_payload_limit(audio_bytes, settings["tokenizer_max_payload_mb"], request_id)
+    audio_data, sample_rate, duration_seconds = _read_audio_from_bytes(
+        audio_bytes, sample_rate_hint, request_id
+    )
+
+    max_audio_seconds = settings["tokenizer_max_audio_seconds"]
+    if max_audio_seconds > 0 and duration_seconds > max_audio_seconds:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Audio too long ({duration_seconds:.2f}s, max {max_audio_seconds}s)",
+                request_id,
+            ),
+        )
+
+    tokenizer = _load_qwen3_tokenizer(tokenizer_model, settings["auto_download"])
+    encode_fn = getattr(tokenizer, "encode", None)
+    if not callable(encode_fn):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Tokenizer backend does not expose encode()",
+        )
+
+    try:
+        tokens_raw = encode_fn(audio_data, sample_rate=sample_rate)
+    except TypeError:
+        try:
+            tokens_raw = encode_fn(audio_data, sample_rate)
+        except TypeError:
+            tokens_raw = encode_fn(audio_data)
+
+    tokens, frame_rate = _normalize_tokens(tokens_raw)
+    max_tokens = settings["tokenizer_max_tokens"]
+    if max_tokens > 0 and len(tokens) > max_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Token payload too large ({len(tokens)} tokens, max {max_tokens})",
+                request_id,
+            ),
+        )
+
+    if frame_rate is None:
+        frame_rate = _resolve_tokenizer_frame_rate(tokenizer)
+
+    payload_tokens = _serialize_tokens(tokens, token_format)
+    response = AudioTokenizerEncodeResponse(
+        tokens=payload_tokens,
+        token_format=token_format,
+        sample_rate=sample_rate,
+        frame_rate=frame_rate,
+        tokenizer_model=tokenizer_model,
+        duration_seconds=duration_seconds,
+    )
+    return JSONResponse(content=response.model_dump(), headers={"X-Request-Id": request_id})
+
+
+@router.post(
+    "/tokenizer/decode",
+    summary="Decode Qwen3-TTS tokens into audio",
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(
+            require_token_scope(
+                "audio.tokenizer",
+                require_if_present=True,
+                endpoint_id="audio.tokenizer.decode",
+                count_as="call",
+            )
+        ),
+    ],
+)
+async def decode_audio_tokenizer(
+    payload: AudioTokenizerDecodeRequest,
+    request: Request,
+    current_user: User = Depends(get_request_user),
+):
+    request_id = ensure_request_id(request)
+    settings = _get_qwen3_tokenizer_settings()
+    tokenizer_model = payload.tokenizer_model or settings["tokenizer_model"]
+
+    if isinstance(payload.tokens, str):
+        token_bytes = _decode_base64_payload(payload.tokens)
+        _enforce_payload_limit(token_bytes, settings["tokenizer_max_payload_mb"], request_id)
+        tokens = np.frombuffer(token_bytes, dtype=np.int32).tolist()
+    elif isinstance(payload.tokens, list):
+        token_bytes_len = len(payload.tokens) * 4
+        _enforce_payload_size(token_bytes_len, settings["tokenizer_max_payload_mb"], request_id)
+        tokens = [int(tok) for tok in payload.tokens]
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_http_error_detail("tokens must be list[int] or base64 string", request_id),
+        )
+
+    max_tokens = settings["tokenizer_max_tokens"]
+    if max_tokens > 0 and len(tokens) > max_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=_http_error_detail(
+                f"Token payload too large ({len(tokens)} tokens, max {max_tokens})",
+                request_id,
+            ),
+        )
+
+    tokenizer = _load_qwen3_tokenizer(tokenizer_model, settings["auto_download"])
+    decode_fn = getattr(tokenizer, "decode", None)
+    if not callable(decode_fn):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Tokenizer backend does not expose decode()",
+        )
+
+    try:
+        decoded = decode_fn(tokens)
+    except TypeError:
+        decoded = decode_fn(tokens=tokens)
+
+    sample_rate = _resolve_tokenizer_sample_rate(tokenizer, 24000)
+    audio = decoded
+    if isinstance(decoded, tuple) and len(decoded) == 2:
+        audio, sample_rate = decoded
+    elif isinstance(decoded, dict):
+        audio = decoded.get("audio") or decoded.get("samples") or decoded.get("pcm")
+        sample_rate = int(decoded.get("sample_rate") or sample_rate)
+
+    audio_bytes = _serialize_audio_output(audio, sample_rate, payload.response_format)
+    duration_seconds = 0.0
+    try:
+        if payload.response_format == "pcm":
+            duration_seconds = len(audio_bytes) / 2.0 / float(sample_rate or 24000)
+        else:
+            with sf.SoundFile(io.BytesIO(audio_bytes)) as info:
+                duration_seconds = float(len(info)) / float(info.samplerate or sample_rate)
+    except Exception:
+        duration_seconds = 0.0
+
+    media_type = "audio/wav" if payload.response_format == "wav" else "application/octet-stream"
+    headers = {
+        "X-Request-Id": request_id,
+        "X-Audio-Sample-Rate": str(sample_rate),
+        "X-Audio-Duration-Seconds": str(duration_seconds),
+        "X-Tokenizer-Model": tokenizer_model,
+    }
+    return Response(content=audio_bytes, media_type=media_type, headers=headers)
 
 
 @router.post(
@@ -2419,12 +2860,7 @@ async def _audio_ws_authenticate(
 
     settings = get_settings()
     expected_key = settings.SINGLE_USER_API_KEY
-    client_ip = None
-    try:
-        client_ip = getattr(websocket.client, "host", None)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug(f"Failed to resolve client IP for single-user auth: {exc}")
-        client_ip = None
+    client_ip = resolve_client_ip(websocket, settings)
 
     def _ip_allowed_single_user(ip: Optional[str]) -> bool:
         try:

@@ -1,6 +1,6 @@
 # tldw Admin UI
 
-Admin and operations dashboard for `tldw_server`. This UI is intended for sysadmin/ops workflows and is separate from the end-user `tldw-frontend`.
+Admin and operations dashboard for `tldw_server`. This UI is intended for sysadmin/ops workflows and is separate from the end-user Next.js WebUI (`apps/tldw-frontend`).
 
 ## Features
 

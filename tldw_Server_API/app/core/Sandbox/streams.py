@@ -47,11 +47,19 @@ class RunStreamHub:
         self._maybe_enable_redis_fanout()
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        # Always update to the current running loop. In test environments,
+        # TestClient may create transient loops per connection; using the
+        # latest loop ensures call_soon_threadsafe targets a live loop.
         with self._lock:
-            # Always update to the current running loop. In test environments,
-            # TestClient may create transient loops per connection; using the
-            # latest loop ensures call_soon_threadsafe targets a live loop.
             self._loop = loop
+            pending = list(self._dispatching)
+        # If frames were queued while no live loop was available (or a prior loop
+        # was closed), re-schedule dispatch now that we have a fresh loop.
+        for run_id in pending:
+            try:
+                self._schedule_dispatch(run_id)
+            except Exception:
+                continue
 
     def _get_queue(self, run_id: str) -> asyncio.Queue:
         """Create a new subscriber queue for the given run_id and register it.
@@ -167,13 +175,20 @@ class RunStreamHub:
         # Choose a loop to trigger the dispatcher; prefer last known loop or any subscriber loop
         with self._lock:
             loop = self._loop
+            try:
+                if loop is not None and loop.is_closed():
+                    loop = None
+            except Exception:
+                pass
             if not loop:
                 subs = self._queues.get(run_id) or []
                 loop = subs[0][0] if subs else None
         if loop is None:
             # No loop available yet; retry shortly from a timer thread
             try:
-                threading.Timer(0.005, lambda: self._schedule_dispatch(run_id)).start()
+                t = threading.Timer(0.005, lambda: self._schedule_dispatch(run_id))
+                t.daemon = True
+                t.start()
             except Exception:
                 pass
             return

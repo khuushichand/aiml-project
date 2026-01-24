@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, Suspense } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,7 +26,7 @@ const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
 const formatIncidentDate = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
 
-export default function IncidentsPage() {
+function IncidentsPageContent() {
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
@@ -170,9 +170,9 @@ export default function IncidentsPage() {
   const handleDeleteIncident = async (incidentId: string) => {
     const confirmed = await confirm({
       title: 'Delete incident?',
-      description: 'This removes the incident from the timeline.',
+      message: 'This removes the incident from the timeline.',
       confirmText: 'Delete',
-      variant: 'destructive',
+      variant: 'danger',
     });
     if (!confirmed) return;
     try {
@@ -486,5 +486,26 @@ export default function IncidentsPage() {
         </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+// Wrap with Suspense for useSearchParams
+export default function IncidentsPage() {
+  return (
+    <Suspense fallback={
+      <PermissionGuard variant="route" requireAuth role="admin">
+        <ResponsiveLayout>
+          <div className="flex flex-col gap-6 p-6">
+            <div className="mb-8">
+              <div className="h-8 w-32 bg-muted rounded animate-pulse mb-2" />
+              <div className="h-4 w-64 bg-muted rounded animate-pulse" />
+            </div>
+            <div className="h-96 bg-muted rounded animate-pulse" />
+          </div>
+        </ResponsiveLayout>
+      </PermissionGuard>
+    }>
+      <IncidentsPageContent />
+    </Suspense>
   );
 }

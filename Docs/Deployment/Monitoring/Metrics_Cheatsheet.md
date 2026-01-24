@@ -61,8 +61,8 @@ Example PromQL:
 ## Audio (Audiobooks/TTS conversions)
 Cardinality note: `chapter_id` creates a unique series per chapter per metric. At scale (many books/chapters), this can explode series count and memory usage. For production, consider:
 - Dropping `chapter_id` on high-volume metrics (keep it only on error metrics if needed).
-- Using `book_id` (or project id) instead when chapter-level granularity is not required.
-- Applying Prometheus relabeling/aggregation to strip `chapter_id` at scrape time.
+- Using `book_id` instead when chapter-level granularity is not required.
+- Applying Prometheus relabeling/aggregation to strip `chapter_id` while retaining `book_id` at scrape time.
 If you must keep chapter-level labels, budget for series roughly `chapters × metrics × label combinations` and size Prometheus accordingly.
 
 - `audiobook_audio_convert_attempt{from_format,to_format,chapter_id}`: Counter of audio conversion attempts.

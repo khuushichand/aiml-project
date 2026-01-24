@@ -78,14 +78,14 @@ export default function ConfigPage() {
     ]);
 
     if (statusData.status === 'fulfilled') {
-      setStatus(statusData.value);
+      setStatus(statusData.value as SetupStatus);
     } else {
       console.error('Failed to load status:', statusData.reason);
     }
 
     if (configData.status === 'fulfilled' && configData.value) {
-      setConfig(configData.value);
-      setOriginalConfig(configData.value);
+      setConfig(configData.value as Record<string, unknown>);
+      setOriginalConfig(configData.value as Record<string, unknown>);
     } else if (configData.status === 'rejected') {
       console.error('Failed to load configuration:', configData.reason);
       setError(
@@ -206,7 +206,7 @@ export default function ConfigPage() {
           <input
             type="checkbox"
             id={field.key}
-            checked={value ?? false}
+            checked={Boolean(value)}
             onChange={(e) => updateConfigValue(field.key, e.target.checked)}
             className="h-4 w-4 rounded border-primary"
           />

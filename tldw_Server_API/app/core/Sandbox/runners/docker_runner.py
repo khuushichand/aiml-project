@@ -243,7 +243,8 @@ class DockerRunner:
                 logger.info("Sandbox Docker egress allowlist (coarse): applying network=none")
                 cmd += ["--network", "none"]
             else:
-                logger.info("Sandbox Docker egress allowlist requested but enforcement disabled; using default bridge network")
+                logger.info("Sandbox Docker egress allowlist requested but enforcement disabled; applying network=none")
+                cmd += ["--network", "none"]
         # Resources
         try:
             pids_limit = int(getattr(app_settings, "SANDBOX_PIDS_LIMIT", 256))

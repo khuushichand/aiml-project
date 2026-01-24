@@ -54,8 +54,8 @@ class CharacterLimits:
         )
         max_chats_per_user = _env_int(
             "MAX_CHATS_PER_USER",
-            overrides.get("MAX_CHATS_PER_USER", settings.get("MAX_CHATS_PER_USER", 100)),
-            100,
+            overrides.get("MAX_CHATS_PER_USER", settings.get("MAX_CHATS_PER_USER", 100000)),
+            100000,
         )
         max_messages_per_chat = _env_int(
             "MAX_MESSAGES_PER_CHAT",

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -89,7 +89,7 @@ const areFiltersEqual = (left: LogFilters, right: LogFilters) => (
   && left.userId === right.userId
 );
 
-export default function LogsPage() {
+function LogsPageContent() {
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
   const [logs, setLogs] = useState<SystemLogEntry[]>([]);
   const [total, setTotal] = useState(0);
@@ -397,5 +397,26 @@ export default function LogsPage() {
         </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+// Wrap with Suspense for useSearchParams
+export default function LogsPage() {
+  return (
+    <Suspense fallback={
+      <PermissionGuard variant="route" requireAuth role="admin">
+        <ResponsiveLayout>
+          <div className="flex flex-col gap-6 p-6">
+            <div className="mb-8">
+              <div className="h-8 w-40 bg-muted rounded animate-pulse mb-2" />
+              <div className="h-4 w-64 bg-muted rounded animate-pulse" />
+            </div>
+            <div className="h-96 bg-muted rounded animate-pulse" />
+          </div>
+        </ResponsiveLayout>
+      </PermissionGuard>
+    }>
+      <LogsPageContent />
+    </Suspense>
   );
 }

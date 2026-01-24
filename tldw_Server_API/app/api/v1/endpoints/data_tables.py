@@ -401,8 +401,8 @@ async def generate_data_table(
     jm: JobManager = Depends(get_job_manager),
 ) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
     """Queue a data table generation job and optionally wait for completion."""
-    rid = ensure_request_id(request) if request is not None else None
-    tp = ensure_traceparent(request) if request is not None else ""
+    rid = ensure_request_id(request)
+    tp = ensure_traceparent(request)
     table_id = None
     table_uuid = None
     owner_user_id = _resolve_owner_id(principal, current_user)
@@ -723,7 +723,7 @@ async def export_data_table(
         export=export_req,
         options=options,
     )
-    request_id = ensure_request_id(request) if request is not None else None
+    request_id = ensure_request_id(request)
     service = FileArtifactsService(cdb, user_id=current_user.id)
     should_async = async_mode == "async" or (
         async_mode == "auto"
@@ -967,8 +967,8 @@ async def regenerate_data_table(
     jm: JobManager = Depends(get_job_manager),
 ) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
     """Queue a data table regeneration job."""
-    rid = ensure_request_id(request) if request is not None else None
-    tp = ensure_traceparent(request) if request is not None else ""
+    rid = ensure_request_id(request)
+    tp = ensure_traceparent(request)
 
     owner_user_id = _resolve_owner_id(principal, current_user)
     table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)

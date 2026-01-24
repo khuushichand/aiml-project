@@ -25,6 +25,7 @@ from .tts_exceptions import (
     validation_error
 )
 from .adapters.base import AudioFormat, TTSRequest
+from .utils import parse_bool
 #
 #######################################################################################################################
 #
@@ -109,6 +110,13 @@ class ProviderLimits:
             "max_text_length": 5000,
             "languages": ["en"],
             "valid_formats": {"mp3", "wav", "opus", "flac", "pcm", "aac"},
+            "min_speed": 0.25,
+            "max_speed": 4.0
+        },
+        "lux_tts": {
+            "max_text_length": 5000,
+            "languages": ["en"],
+            "valid_formats": {"mp3", "wav", "flac", "opus", "aac", "pcm"},
             "min_speed": 0.25,
             "max_speed": 4.0
         },
@@ -216,6 +224,7 @@ class TTSInputValidator:
         "supertonic2": 15000,
         "pocket_tts": 5000,
         "echo_tts": 768,
+        "lux_tts": 5000,
         "qwen3_tts": 5000,
         "default": 5000,
     }
@@ -228,6 +237,7 @@ class TTSInputValidator:
     # Providers that require a voice reference audio input
     REQUIRES_VOICE_REFERENCE = {
         "echo_tts",
+        "lux_tts",
     }
 
     # Supported languages by provider
@@ -245,6 +255,7 @@ class TTSInputValidator:
         "supertonic2": {"en", "ko", "es", "pt", "fr"},
         "pocket_tts": {"en"},
         "echo_tts": {"en"},
+        "lux_tts": {"en"},
         "qwen3_tts": {"auto", "zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"},
     }
 
@@ -263,6 +274,7 @@ class TTSInputValidator:
         "supertonic2": {AudioFormat.MP3, AudioFormat.WAV},
         "pocket_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM, AudioFormat.AAC},
         "echo_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
+        "lux_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
         "qwen3_tts": {AudioFormat.MP3, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.WAV, AudioFormat.PCM},
     }
 
@@ -276,6 +288,17 @@ class TTSInputValidator:
     }
     EMO_REF_MAX_SIZE = 20 * 1024 * 1024  # 20MB limit for emotion references
     VOICE_CLONE_PROMPT_MAX_KB_DEFAULT = 256
+    QWEN3_CUSTOMVOICE_SPEAKERS = {
+        "vivian",
+        "serena",
+        "uncle_fu",
+        "dylan",
+        "eric",
+        "ryan",
+        "aiden",
+        "ono_anna",
+        "sohee",
+    }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
@@ -311,6 +334,14 @@ class TTSInputValidator:
         except (TypeError, ValueError):
             return None
         return coerced
+
+    def _coerce_float(self, value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _decode_base64_payload(self, payload: str) -> bytes:
         """Decode base64 payload with optional data URL prefix."""
@@ -353,6 +384,12 @@ class TTSInputValidator:
             raise TTSInvalidInputError(
                 f"voice_clone_prompt too large: {len(decoded)} bytes (max {max_bytes})"
             )
+
+    def _normalize_qwen3_speaker(self, speaker: str) -> str:
+        normalized = speaker.strip().lower()
+        normalized = normalized.replace(" ", "_").replace("-", "_")
+        normalized = re.sub(r"_+", "_", normalized)
+        return normalized
 
     def sanitize_text(self, text: str, provider: Optional[str] = None) -> str:
         """
@@ -494,6 +531,46 @@ class TTSInputValidator:
             if request.voice:
                 self._validate_voice(request.voice, provider)
 
+            min_duration = None
+            if isinstance(request.extra_params, dict):
+                min_duration = self._coerce_float(request.extra_params.get("reference_duration_min"))
+
+            # Provider-specific validations for Qwen3-TTS
+            if provider == "qwen3_tts":
+                model_name = (getattr(request, "model", None) or "").strip().lower()
+                extras = request.extra_params or {}
+                if model_name == "auto" or "customvoice" in model_name:
+                    if request.voice and isinstance(request.voice, str) and not request.voice.startswith("custom:"):
+                        normalized = self._normalize_qwen3_speaker(request.voice)
+                        if normalized not in self.QWEN3_CUSTOMVOICE_SPEAKERS:
+                            raise TTSVoiceNotFoundError(
+                                f"Invalid Qwen3 CustomVoice speaker: {request.voice}",
+                                provider=provider,
+                            )
+                if model_name.endswith("base") or model_name.endswith("-base"):
+                    if not request.voice_reference:
+                        raise TTSInvalidVoiceReferenceError(
+                            "Voice reference is required for Qwen3 Base models",
+                            provider=provider,
+                        )
+                    x_vector_only = False
+                    if isinstance(extras, dict):
+                        x_vector_only = parse_bool(extras.get("x_vector_only_mode"), default=False)
+                    ref_text = None
+                    if isinstance(extras, dict):
+                        ref_text = (
+                            extras.get("reference_text")
+                            or extras.get("ref_text")
+                            or extras.get("voice_reference_text")
+                        )
+                    if not x_vector_only and not (isinstance(ref_text, str) and ref_text.strip()):
+                        raise TTSInvalidInputError(
+                            "reference_text is required for Qwen3 Base models unless x_vector_only_mode is true",
+                            provider=provider,
+                        )
+                    if min_duration is None:
+                        min_duration = 3.0
+
             # Validate parameters (provider-aware)
             self._validate_parameters(request, provider)
 
@@ -506,7 +583,7 @@ class TTSInputValidator:
 
             # Validate voice reference if provided
             if request.voice_reference:
-                self._validate_voice_reference(request.voice_reference)
+                self._validate_voice_reference(request.voice_reference, min_duration=min_duration)
 
             return True, None
 
@@ -723,7 +800,7 @@ class TTSInputValidator:
             if voice_clone_prompt is not None:
                 self._validate_voice_clone_prompt(voice_clone_prompt, provider)
 
-    def _validate_voice_reference(self, voice_ref_data: bytes):
+    def _validate_voice_reference(self, voice_ref_data: bytes, min_duration: Optional[float] = None):
         """Validate voice reference audio for cloning"""
         if len(voice_ref_data) == 0:
             raise TTSInvalidVoiceReferenceError("Voice reference data is empty")
@@ -739,6 +816,29 @@ class TTSInputValidator:
             raise TTSInvalidVoiceReferenceError(
                 "Voice reference file is not a valid audio format"
             )
+
+        if min_duration is not None and min_duration > 0:
+            try:
+                import io
+                import soundfile as sf
+            except Exception as exc:
+                raise TTSInvalidVoiceReferenceError(
+                    "Reference duration validation requires soundfile",
+                    details={"error": str(exc)},
+                ) from exc
+            try:
+                with sf.SoundFile(io.BytesIO(voice_ref_data)) as info:
+                    duration = float(len(info)) / float(info.samplerate or 1)
+            except Exception as exc:
+                raise TTSInvalidVoiceReferenceError(
+                    "Unable to read voice reference audio for duration validation",
+                    details={"error": str(exc)},
+                ) from exc
+            if duration < min_duration:
+                raise TTSInvalidVoiceReferenceError(
+                    f"Voice reference audio too short: {duration:.2f}s (min {min_duration}s)",
+                    details={"duration_seconds": duration, "min_seconds": min_duration},
+                )
 
     def _sanitize_html(self, text: str) -> str:
         """Sanitize HTML content while preserving safe tags"""
@@ -766,7 +866,7 @@ class TTSInputValidator:
         elif provider == "elevenlabs":
             # ElevenLabs specific rules
             return text
-        elif provider in ["kokoro", "higgs", "dia", "chatterbox", "vibevoice", "pocket_tts"]:
+        elif provider in ["kokoro", "higgs", "dia", "chatterbox", "vibevoice", "pocket_tts", "lux_tts"]:
             # Local model specific rules - more conservative
             # Remove URLs and email addresses
             text = re.sub(r'https?://\S+', '[URL]', text)

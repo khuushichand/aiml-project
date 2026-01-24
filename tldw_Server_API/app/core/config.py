@@ -822,7 +822,7 @@ def load_settings():
         _max_characters_per_user = _cc_int('MAX_CHARACTERS_PER_USER', 1000)
         _max_character_import_size_mb = _cc_int('MAX_CHARACTER_IMPORT_SIZE_MB', 10)
         # Optional chat-specific knobs if present
-        _max_chats_per_user = _cc_int('MAX_CHATS_PER_USER', 100)
+        _max_chats_per_user = _cc_int('MAX_CHATS_PER_USER', 100000)
         _max_messages_per_chat = _cc_int('MAX_MESSAGES_PER_CHAT', 1000)
         _max_messages_per_chat_soft = _cc_int('MAX_MESSAGES_PER_CHAT_SOFT', _max_messages_per_chat)
         _max_chat_completions_per_minute = _cc_int('MAX_CHAT_COMPLETIONS_PER_MINUTE', 20)

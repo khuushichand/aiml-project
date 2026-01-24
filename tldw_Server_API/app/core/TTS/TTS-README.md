@@ -9,8 +9,8 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 ## Features
 
 ### Core Capabilities
-- **Multi-Provider Support**: OpenAI, ElevenLabs, and eight local adapters (Kokoro, PocketTTS, Higgs, Chatterbox, Dia, VibeVoice, IndexTTS2, NeuTTS) with a mock adapter for testing.
-- **Voice Cloning**: Voice reference audio accepted by PocketTTS, Higgs, Chatterbox, Dia, VibeVoice, NeuTTS, and IndexTTS2 (ElevenLabs supports user voices via API).
+- **Multi-Provider Support**: OpenAI, ElevenLabs, and nine local adapters (Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, IndexTTS2, NeuTTS) with a mock adapter for testing.
+- **Voice Cloning**: Voice reference audio accepted by PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, NeuTTS, and IndexTTS2 (ElevenLabs supports user voices via API).
 - **Streaming Audio**: Real-time chunked streaming across adapters; NeuTTS enables streaming when a quantized (GGUF) backbone is loaded.
 - **Format Support**: Adapter-specific coverage spanning MP3, WAV, OPUS, FLAC, PCM, AAC, and OGG via the shared `AudioFormat` enum.
 - **OpenAI Compatibility**: Drop-in replacement for OpenAI TTS API
@@ -27,12 +27,14 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 | **ElevenLabs** | Commercial API | 29 | ✅ (Pro/user voices) | Premium quality, emotion control |
 | **Kokoro** | Local ONNX | EN (US/GB) | ❌ | Lightweight, CPU-friendly, offline |
 | **PocketTTS** | Local ONNX | EN | ✅ (reference) | Zero-shot cloning, streaming ONNX |
+| **LuxTTS** | Local PyTorch | EN | ✅ (reference) | 48kHz voice cloning (ZipVoice) |
 | **Higgs** | Local PyTorch | 50+ | ✅ (3-10s) | Music generation, multi-lingual |
 | **Chatterbox** | Local PyTorch | EN | ✅ (5-20s) | Emotion exaggeration control |
 | **Dia** | Local PyTorch | EN | ✅ (dialogue prompts) | Multi-speaker dialogue specialist |
 | **VibeVoice** | Local PyTorch | 12 | ✅ (Any) | Long-form (90min), spontaneous music |
 | **IndexTTS2** | Local PyTorch | EN/zh | ✅ (reference) | Zero-shot cloning, emotion prompts, low-latency streaming |
 | **NeuTTS** | Local (Hybrid) | EN | ✅ (3-15s) | Instant voice cloning, optional GGUF streaming |
+| **EchoTTS** | Local PyTorch | EN | ✅ (reference) | CUDA-only voice cloning |
 
 \* Current adapter configuration targets English (`tts-1` / `tts-1-hd`). Additional languages depend on OpenAI model availability.
 
@@ -61,6 +63,31 @@ providers:
 - **Emotion Controls**: Provide `extra_params` such as `emo_audio_reference`, `emo_alpha`, `emo_vector`, or `emo_text` to tap into QwenEmotion-guided delivery.
 
 > **Manual GPU smoke test**: See `TTS-DEPLOYMENT.md` for a short checklist covering environment validation and end-to-end streaming playback on real hardware.
+
+### EchoTTS Adapter
+
+EchoTTS provides local voice cloning with a required reference clip and optional text chunking for long inputs.
+
+- **Chunking controls** live under `extra_params` in requests (or `providers.echo_tts.extra_params` in config):
+  - `chunk_text` (bool, default auto): enable/disable chunking.
+  - `chunk_max_chars` / `chunk_max_bytes`: per-chunk limits (clamped to 768 chars / 767 bytes).
+  - `interval_silence`: milliseconds of silence inserted between chunks.
+
+Configuration snippet:
+
+```yaml
+providers:
+  echo_tts:
+    enabled: true
+    module_path: "../echo-tts"
+    device: "cuda"
+    sample_rate: 44100
+    extra_params:
+      chunk_text: true
+      chunk_max_chars: 768
+      chunk_max_bytes: 767
+      interval_silence: 200
+```
 
 ## One-Command Installers
 Run these from the project root to install a single TTS backend (deps + models where applicable):

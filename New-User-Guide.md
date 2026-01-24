@@ -253,9 +253,9 @@ docker compose -f Dockerfiles/docker-compose.yml exec app \
 ---
 
 ## 6. Connect the Next.js Web UI (Optional but Friendly)
-The `tldw-frontend/` directory hosts the current Next.js client.
+The `apps/tldw-frontend/` directory hosts the Next.js WebUI.
 ```bash
-cd tldw-frontend
+cd apps/tldw-frontend
 cp .env.local.example .env.local        # set NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 echo "NEXT_PUBLIC_X_API_KEY=CHANGE_ME_TO_SECURE_API_KEY" >> .env.local  # replace with your actual API key
 npm install

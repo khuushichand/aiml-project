@@ -98,8 +98,8 @@ Exercise the system under different authentication modes and provider configurat
 
 Confirm that the Web UI integrates correctly with the backend and that core user flows work.
 
-- [ ] Run the `tldw-frontend` dev build and verify it can connect to the backend in at least single-user mode (and multi-user, if supported).
-- [ ] Run the production build for `tldw-frontend` (for example `npm run build`) and ensure it completes without errors.
+- [ ] Run the `apps/tldw-frontend` dev build and verify it can connect to the backend in at least single-user mode (and multi-user, if supported).
+- [ ] Run the production build for `apps/tldw-frontend` (for example `npm run build`) and ensure it completes without errors.
 - [ ] From the Web UI, upload and process media (video, audio, or documents) and confirm processing completes successfully.
 - [ ] Use the Web UI to search ingested content and verify results match expectations.
 - [ ] Start a chat session from the Web UI and confirm messages stream or complete as expected.

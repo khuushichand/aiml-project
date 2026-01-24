@@ -37,6 +37,7 @@ def _non_admin_dep():
 
 
 @pytest.mark.unit
+@pytest.mark.sandbox_no_auth
 def test_admin_endpoints_require_admin_role(monkeypatch) -> None:
     with _client(monkeypatch) as client:
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user

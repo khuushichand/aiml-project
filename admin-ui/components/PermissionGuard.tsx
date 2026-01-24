@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, Suspense, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api-client';
 import { User } from '@/types';
@@ -354,7 +354,12 @@ export function PermissionGuard({
   };
 
   if (variant === 'route') {
-    return <RoutePermissionGuard {...resolvedProps} />;
+    // Wrap in Suspense for useSearchParams (Next.js 15 requirement)
+    return (
+      <Suspense fallback={renderRouteLoading()}>
+        <RoutePermissionGuard {...resolvedProps} />
+      </Suspense>
+    );
   }
 
   return <InlinePermissionGuard {...resolvedProps} />;

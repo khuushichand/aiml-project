@@ -93,7 +93,7 @@ def _print_server_log(label: str) -> None:
 def _find_repo_root() -> Path:
     here = Path(__file__).resolve()
     for cand in [here.parent, *here.parents]:
-        if (cand / "tldw-frontend").exists() and (cand / "tldw_Server_API").exists():
+        if (cand / "apps" / "tldw-frontend").exists() and (cand / "tldw_Server_API").exists():
             return cand
     return here.parents[4]
 
@@ -176,12 +176,12 @@ def _ensure_frontend_running(repo_root: Path, base_url: str, server_url: str, ap
             "Set TLDW_FRONTEND_URL to the correct host/port."
         )
 
-    frontend_dir = repo_root / "tldw-frontend"
+    frontend_dir = repo_root / "apps" / "tldw-frontend"
     if not frontend_dir.exists():
-        pytest.skip("tldw-frontend directory not found; cannot auto-start frontend.")
+        pytest.skip("apps/tldw-frontend directory not found; cannot auto-start frontend.")
     if not (frontend_dir / "package.json").exists():
         pytest.skip(
-            "tldw-frontend/package.json not found; cannot auto-start frontend. "
+            "apps/tldw-frontend/package.json not found; cannot auto-start frontend. "
             "Set TLDW_FRONTEND_URL to a running instance or restore the frontend package.json."
         )
 

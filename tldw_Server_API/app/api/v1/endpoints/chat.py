@@ -698,10 +698,11 @@ async def _process_content_for_db_sync(
             if hasattr(part, "model_dump"):
                 try:
                     part = part.model_dump(exclude_none=True)
-                except Exception:
+                except Exception as e:
                     logger.debug(
-                        "model_dump failed for part type=%s, falling back to string",
+                        "model_dump failed for part type=%s, falling back to string: %s",
                         type(part).__name__,
+                        e,
                     )
                     part = {"type": "text", "text": str(part)}
             else:
@@ -714,8 +715,8 @@ async def _process_content_for_db_sync(
                     if hasattr(image_url_obj, "model_dump"):
                         try:
                             image_url_obj = image_url_obj.model_dump(exclude_none=True)
-                        except Exception:
-                            logger.debug("model_dump failed for image_url_obj, setting to None")
+                        except Exception as e:
+                            logger.debug("model_dump failed for image_url_obj, setting to None: %s", e)
                             image_url_obj = None
                     if not isinstance(image_url_obj, dict):
                         image_url_obj = {"url": getattr(image_url_obj, "url", "") if image_url_obj is not None else ""}
@@ -1174,7 +1175,7 @@ async def _persist_system_message_if_needed(
     ]
 )
 async def create_chat_completion(
-    request: Request,  # Optional Request object for audit logging and rate limiting
+    request: Request,  # Request object for audit logging, rate limiting, and provider state access
     request_data: ChatCompletionRequest = Body(...),
     chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
@@ -1501,20 +1502,13 @@ async def create_chat_completion(
                                             part.text = (cmd_args or '').strip()
                                             break
                                 try:
-                                    try:
-                                        sys_msg = ChatCompletionSystemMessageParam(
-                                            role="system",
-                                            content=moderated_content_text,
-                                            name="system-command",
-                                        )
-                                    except Exception:
-                                        # Use model_construct to avoid validation errors in the injection path;
-                                        # payload-level validation runs after injection.
-                                        sys_msg = ChatCompletionSystemMessageParam.model_construct(
-                                            role="system",
-                                            content=moderated_content_text,
-                                            name="system-command",
-                                        )
+                                    # Use model_construct to bypass schema validation for system-command injections;
+                                    # the full payload is validated after mutation.
+                                    sys_msg = ChatCompletionSystemMessageParam.model_construct(
+                                        role="system",
+                                        content=moderated_content_text,
+                                        name="system-command",
+                                    )
                                     # Attach metadata if possible
                                     try:
                                         setattr(sys_msg, "metadata", {"tldw_injection": inj_meta, "moderation": inj_mod})

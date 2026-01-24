@@ -6,6 +6,7 @@ provider_priority:
   - openai      # Reliable, high quality
   - kokoro      # Local, fast
   - pocket_tts  # Local ONNX voice cloning
+  - lux_tts     # Local ZipVoice voice cloning (48kHz)
   - supertonic  # Local Supertonic ONNX (requires assets)
   - supertonic2 # Local Supertonic2 ONNX (requires assets)
   - neutts      # Local, instant voice cloning (requires setup)
@@ -75,6 +76,23 @@ providers:
     stream_target_buffer_sec: 0.2
     stream_max_chunk_frames: 15
     sample_rate: 24000
+
+  # LuxTTS Configuration (ZipVoice-based voice cloning)
+  lux_tts:
+    enabled: false  # Disabled by default; requires LuxTTS checkout + dependencies
+    model: "YatharthS/LuxTTS"  # HF repo id or local path
+    module_path: "LuxTTS"     # Path to LuxTTS checkout (zipvoice package)
+    device: "auto"            # "auto" | "cpu" | "cuda"
+    threads: 4
+    sample_rate: 48000
+    reference_sample_rate: 24000
+    extra_params:
+      prompt_duration: 5
+      prompt_rms: 0.001
+      num_steps: 4
+      guidance_scale: 3.0
+      t_shift: 0.5
+      return_smooth: false
 
   # Higgs Audio V2 Configuration
   higgs:
@@ -221,7 +239,7 @@ providers:
     model_path: null
     tokenizer_model: "Qwen/Qwen3-TTS-Tokenizer-12Hz"
     device: "cpu"  # "cpu" | "cuda" | "mps"
-    dtype: "float16"  # "float16" | "bfloat16" | "float32"
+    dtype: "float32"  # "float16" | "bfloat16" | "float32" (use float16/bfloat16 with cuda/mps)
     attn_implementation: "default"  # "flash_attention_2" | "default"
     auto_download: false
     max_concurrent_generations: 1
@@ -248,6 +266,7 @@ voice_mappings:
       chatterbox: "default"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      lux_tts: "clone_required"
     female:
       openai: "nova"
       kokoro: "af_bella"
@@ -256,6 +275,7 @@ voice_mappings:
       chatterbox: "default"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      lux_tts: "clone_required"
     neutral:
       openai: "alloy"
       kokoro: "af_sky"
@@ -264,6 +284,7 @@ voice_mappings:
       chatterbox: "calm"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      lux_tts: "clone_required"
 
   # Emotion-based voice selection
   emotions:
@@ -273,24 +294,28 @@ voice_mappings:
       chatterbox: "energetic"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      lux_tts: "clone_required"
     sad:
       openai: "shimmer"
       kokoro: "af_heart"
       chatterbox: "calm"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      lux_tts: "clone_required"
     angry:
       openai: "onyx"
       kokoro: "am_michael"
       chatterbox: "default"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      lux_tts: "clone_required"
     excited:
       openai: "fable"
       kokoro: "af_bella"
       chatterbox: "energetic"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      lux_tts: "clone_required"
 
 # Audio format preferences by provider
 format_preferences:
@@ -302,6 +327,8 @@ format_preferences:
   neutts: ["wav", "mp3", "opus", "flac", "pcm"]
   index_tts: ["mp3", "wav"]
   pocket_tts: ["wav", "mp3", "opus", "flac", "pcm", "aac"]
+  lux_tts: ["wav", "mp3", "opus", "flac", "pcm", "aac"]
+  qwen3_tts: ["wav", "mp3", "opus", "flac", "pcm"]
 
 # Performance settings
 performance:

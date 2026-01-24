@@ -224,8 +224,8 @@ async def oauth_callback(
                     close = getattr(resp, "close", None)
                     if callable(close):
                         close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to fetch userinfo for drive account (non-fatal): {e}")
     elif provider == 'notion':
         notion_workspace_id = tokens.get('workspace_id')
     # Enforce additional org policy constraints at callback across modes using

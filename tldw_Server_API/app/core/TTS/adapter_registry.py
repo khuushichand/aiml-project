@@ -52,6 +52,7 @@ class TTSProvider(Enum):
     POCKET_TTS = "pocket_tts"
     ECHO_TTS = "echo_tts"
     QWEN3_TTS = "qwen3_tts"
+    LUX_TTS = "lux_tts"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -79,6 +80,7 @@ class TTSAdapterRegistry:
         TTSProvider.POCKET_TTS: "tldw_Server_API.app.core.TTS.adapters.pocket_tts_adapter.PocketTTSOnnxAdapter",
         TTSProvider.ECHO_TTS: "tldw_Server_API.app.core.TTS.adapters.echo_tts_adapter.EchoTTSAdapter",
         TTSProvider.QWEN3_TTS: "tldw_Server_API.app.core.TTS.adapters.qwen3_tts_adapter.Qwen3TTSAdapter",
+        TTSProvider.LUX_TTS: "tldw_Server_API.app.core.TTS.adapters.luxtts_adapter.LuxTTSAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

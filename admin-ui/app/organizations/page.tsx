@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -43,7 +43,7 @@ const organizationSchema = z.object({
 
 type OrganizationFormData = z.infer<typeof organizationSchema>;
 
-export default function OrganizationsPage() {
+function OrganizationsPageContent() {
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -470,5 +470,26 @@ export default function OrganizationsPage() {
           </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+// Wrap with Suspense for useSearchParams
+export default function OrganizationsPage() {
+  return (
+    <Suspense fallback={
+      <PermissionGuard variant="route" requireAuth role="admin">
+        <ResponsiveLayout>
+          <div className="p-4 lg:p-8">
+            <div className="mb-8">
+              <div className="h-8 w-48 bg-muted rounded animate-pulse mb-2" />
+              <div className="h-4 w-64 bg-muted rounded animate-pulse" />
+            </div>
+            <div className="h-96 bg-muted rounded animate-pulse" />
+          </div>
+        </ResponsiveLayout>
+      </PermissionGuard>
+    }>
+      <OrganizationsPageContent />
+    </Suspense>
   );
 }

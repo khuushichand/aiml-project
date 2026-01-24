@@ -1,18 +1,66 @@
 from __future__ import annotations
 
+import fnmatch
+import hashlib
+import json
 import os
 import shutil
-from typing import Optional, Dict
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, List, Tuple
 
 from loguru import logger
 
 from ..models import RunSpec, RunStatus, RunPhase
 from ..streams import get_hub
-from datetime import datetime
-import hashlib
-import time
-from typing import List
-import fnmatch
+
+
+def _truthy(v: Optional[str]) -> bool:
+    return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def _real_enabled() -> bool:
+    return _truthy(os.getenv("SANDBOX_FIRECRACKER_ENABLE_REAL"))
+
+
+def firecracker_real_enabled() -> bool:
+    return _real_enabled()
+
+
+def _virtiofs_enabled() -> bool:
+    val = os.getenv("SANDBOX_FC_USE_VIRTIOFS")
+    if val is None:
+        return True
+    return _truthy(val)
+
+
+def _fc_bin() -> str:
+    return os.getenv("SANDBOX_FC_BIN") or "firecracker"
+
+
+def _virtiofsd_bin() -> str:
+    return os.getenv("SANDBOX_FC_VIRTIOFSD") or "virtiofsd"
+
+
+def _preflight_errors() -> List[str]:
+    errors: List[str] = []
+    if not sys.platform.startswith("linux"):
+        errors.append("linux_required")
+    if not os.path.exists("/dev/kvm"):
+        errors.append("/dev/kvm_missing")
+    fc = _fc_bin()
+    if shutil.which(fc) is None and not os.path.exists(fc):
+        errors.append("firecracker_binary_missing")
+    if _virtiofs_enabled():
+        vbin = _virtiofsd_bin()
+        if shutil.which(vbin) is None and not os.path.exists(vbin):
+            errors.append("virtiofsd_missing")
+    return errors
 
 
 def firecracker_available() -> bool:
@@ -20,8 +68,10 @@ def firecracker_available() -> bool:
     env = os.getenv("TLDW_SANDBOX_FIRECRACKER_AVAILABLE")
     if env is not None:
         return env.lower() in {"1", "true", "yes", "on"}
-    # Heuristic: check for known binaries; actual setup may vary
-    return shutil.which("firecracker") is not None
+    if _real_enabled():
+        return len(_preflight_errors()) == 0
+    # When real mode is disabled, do not advertise availability by default.
+    return False
 
 
 def firecracker_version() -> Optional[str]:
@@ -29,8 +79,7 @@ def firecracker_version() -> Optional[str]:
     if env:
         return env
     try:
-        import subprocess
-        out = subprocess.check_output(["firecracker", "--version"], text=True, timeout=2).strip()
+        out = subprocess.check_output([_fc_bin(), "--version"], text=True, timeout=2).strip()
         # Example: Firecracker v1.6.0
         parts = out.split()
         for tok in parts:
@@ -41,35 +90,362 @@ def firecracker_version() -> Optional[str]:
         return None
 
 
-class FirecrackerRunner:
-    """Stub Firecracker runner (direct integration).
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as rf:
+        for chunk in iter(lambda: rf.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-    Ignite is EOL; future implementation should use direct Firecracker SDK/CLI
-    with microVM images/snapshots. This scaffold raises NotImplementedError when invoked.
+
+def _fc_api_request(sock_path: str, method: str, path: str, payload: Optional[dict] = None) -> None:
+    body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+    req = (
+        f"{method} {path} HTTP/1.1\r\n"
+        f"Host: localhost\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        f"\r\n"
+    ).encode("utf-8") + body
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(3)
+        sock.connect(sock_path)
+        sock.sendall(req)
+        chunks: List[bytes] = []
+        while True:
+            data = sock.recv(4096)
+            if not data:
+                break
+            chunks.append(data)
+        raw = b"".join(chunks)
+        if not raw:
+            return
+        # Parse status line
+        try:
+            line = raw.split(b"\r\n", 1)[0].decode("utf-8", "ignore")
+            parts = line.split()
+            if len(parts) >= 2:
+                code = int(parts[1])
+                if code >= 300:
+                    raise RuntimeError(f"firecracker API error: {line}")
+        except Exception as e:
+            raise RuntimeError(f"firecracker API parse failed: {e}")
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _write_entry_script(workspace: str, command: List[str]) -> None:
+    import shlex
+
+    log_path = "/workspace/run.log"
+    status_path = "/workspace/.sandbox_status.json"
+    user_cmd = " ".join(shlex.quote(x) for x in command)
+    script = f"""#!/bin/sh
+set -e
+if [ -f /workspace/.env ]; then
+  . /workspace/.env
+fi
+start_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+start_ms=$(date +%s%3N 2>/dev/null || date +%s)
+# Run command, capture stdout/stderr
+/bin/sh -lc "{user_cmd}" > {log_path} 2>&1
+exit_code=$?
+end_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+end_ms=$(date +%s%3N 2>/dev/null || date +%s)
+duration_ms=$((end_ms - start_ms))
+cat > {status_path} <<EOF_STATUS
+{{\"exit_code\": $exit_code, \"reason\": \"exit\", \"duration_ms\": $duration_ms, \"timestamp\": \"$end_ts\"}}
+EOF_STATUS
+sync {status_path} 2>/dev/null || true
+exit $exit_code
+"""
+    entry = Path(workspace) / "entry.sh"
+    entry.write_text(script, encoding="utf-8")
+    os.chmod(entry, 0o755)
+
+
+def _write_env_file(workspace: str, env: Dict[str, str]) -> None:
+    if not env:
+        return
+    lines = []
+    for k, v in env.items():
+        key = str(k).strip()
+        if not key:
+            continue
+        val = str(v).replace("\n", " ")
+        lines.append(f"{key}={val}")
+    if lines:
+        Path(workspace, ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _copy_tree(src: str, dst: str) -> None:
+    for root, dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        tgt_root = dst if rel == "." else os.path.join(dst, rel)
+        os.makedirs(tgt_root, exist_ok=True)
+        for d in dirs:
+            os.makedirs(os.path.join(tgt_root, d), exist_ok=True)
+        for fn in files:
+            s = os.path.join(root, fn)
+            t = os.path.join(tgt_root, fn)
+            try:
+                shutil.copy2(s, t)
+            except Exception:
+                pass
+
+
+def _tail_log(run_id: str, log_path: str, stop_flag: Dict[str, bool]) -> None:
+    hub = get_hub()
+    max_log = None
+    try:
+        max_log = int(os.getenv("SANDBOX_MAX_LOG_BYTES", "10485760"))
+    except Exception:
+        max_log = 10 * 1024 * 1024
+    try:
+        with open(log_path, "rb") as fh:
+            while not stop_flag.get("stop"):
+                line = fh.readline()
+                if not line:
+                    time.sleep(0.05)
+                    continue
+                hub.publish_stdout(run_id, line, max_log)
+    except Exception:
+        return
+
+
+class FirecrackerRunner:
+    """Firecracker runner (real + fake modes).
+
+    Real mode is gated behind SANDBOX_FIRECRACKER_ENABLE_REAL=1 and requires
+    a prepared kernel/rootfs plus host prerequisites. Fake mode is used by
+    default and in tests.
     """
 
     def __init__(self) -> None:
         pass
 
-    def _truthy(self, v: Optional[str]) -> bool:
-        return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
-
     def start_run(self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None) -> RunStatus:
-        """Execute a run in a Firecracker microVM (scaffolded).
+        if _truthy(os.getenv("TLDW_SANDBOX_FIRECRACKER_FAKE_EXEC")) or not _real_enabled():
+            return self._run_fake(run_id, spec)
+        # Real mode preflight
+        errs = _preflight_errors()
+        if errs:
+            raise RuntimeError(f"Firecracker preflight failed: {errs}")
+        return self._run_real(run_id, spec, session_workspace=session_workspace)
 
-        This v0 implementation provides a structured lifecycle without booting a real VM:
-        - Emits start/end events to the hub
-        - Computes a deterministic image "digest" from the base_image (string or file)
-        - Honors deny-all network default (policy enforces; we just log intent)
-        - Captures placeholder artifacts based on capture_patterns
-        - Records basic resource usage (wall time, log bytes, artifact bytes)
+    def _run_real(self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None) -> RunStatus:
+        started = datetime.utcnow()
+        hub = get_hub()
+        try:
+            hub.publish_event(run_id, "start", {"ts": started.isoformat(), "runtime": "firecracker", "net": "off"})
+        except Exception:
+            pass
 
-        When integrating a real microVM, replace the middle section with:
-        - Prepare VM directory, kernel, rootfs, and drives
-        - Launch firecracker with a unix socket; drive API to set machine/drives/boot
-        - Configure vsock/serial for logs; collect stdout/stderr and metrics
-        - Copy artifacts from a shared volume (virtiofs) matching capture_patterns
-        """
+        kernel_path = os.getenv("SANDBOX_FC_KERNEL_PATH")
+        rootfs_path = None
+        if spec.base_image and os.path.exists(spec.base_image) and os.path.isfile(spec.base_image):
+            rootfs_path = spec.base_image
+        if not rootfs_path:
+            rootfs_path = os.getenv("SANDBOX_FC_ROOTFS_PATH")
+        if not kernel_path or not rootfs_path:
+            raise RuntimeError("Firecracker kernel/rootfs not configured")
+        if not os.path.exists(kernel_path) or not os.path.exists(rootfs_path):
+            raise RuntimeError("Firecracker kernel/rootfs path invalid")
+
+        image_digest = None
+        try:
+            image_digest = f"sha256:{_sha256_file(rootfs_path)}"
+        except Exception:
+            image_digest = None
+
+        run_dir = tempfile.mkdtemp(prefix="tldw_fc_")
+        workspace = os.path.join(run_dir, "workspace")
+        os.makedirs(workspace, exist_ok=True)
+        if session_workspace and os.path.isdir(session_workspace):
+            _copy_tree(session_workspace, workspace)
+        # Inline files
+        for (path, data) in (spec.files_inline or []):
+            safe_path = path.lstrip("/\\").replace("..", "_")
+            full = os.path.join(workspace, safe_path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "wb") as f:
+                f.write(data)
+
+        _write_env_file(workspace, spec.env or {})
+        _write_entry_script(workspace, list(spec.command or []))
+
+        api_sock = os.path.join(run_dir, "fc.sock")
+        fc_proc = subprocess.Popen([
+            _fc_bin(),
+            "--api-sock",
+            api_sock,
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=run_dir)
+
+        # Wait for socket
+        deadline = time.time() + 3.0
+        while not os.path.exists(api_sock) and time.time() < deadline:
+            time.sleep(0.05)
+        if not os.path.exists(api_sock):
+            fc_proc.terminate()
+            raise RuntimeError("Firecracker API socket not available")
+
+        # Configure VM
+        vcpu = int(max(1, int(spec.cpu) if spec.cpu else 1))
+        mem_mb = int(spec.memory_mb or int(os.getenv("SANDBOX_MAX_MEM_MB", "512")))
+        _fc_api_request(api_sock, "PUT", "/machine-config", {
+            "vcpu_count": vcpu,
+            "mem_size_mib": mem_mb,
+            "ht_enabled": False,
+        })
+        boot_args = os.getenv("SANDBOX_FC_BOOT_ARGS") or "console=ttyS0 reboot=k panic=1 pci=off"
+        boot_args = f"{boot_args} init=/workspace/entry.sh"
+        _fc_api_request(api_sock, "PUT", "/boot-source", {
+            "kernel_image_path": kernel_path,
+            "boot_args": boot_args,
+        })
+        _fc_api_request(api_sock, "PUT", "/drives/rootfs", {
+            "drive_id": "rootfs",
+            "path_on_host": rootfs_path,
+            "is_root_device": True,
+            "is_read_only": True,
+        })
+
+        virtiofs_proc = None
+        if _virtiofs_enabled():
+            vfs_sock = os.path.join(run_dir, "virtiofs.sock")
+            virtiofs_proc = subprocess.Popen([
+                _virtiofsd_bin(),
+                "--socket-path", vfs_sock,
+                "-o", f"source={workspace}",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _fc_api_request(api_sock, "PUT", "/fs", {
+                "mount_tag": "workspace",
+                "socket": vfs_sock,
+            })
+        else:
+            raise RuntimeError("Firecracker virtiofs disabled; no workspace mount available")
+
+        _fc_api_request(api_sock, "PUT", "/actions", {"action_type": "InstanceStart"})
+
+        # Tail logs (best-effort) until status appears
+        stop_flag = {"stop": False}
+        log_path = os.path.join(workspace, "run.log")
+        tail_thread = None
+        try:
+            import threading
+            tail_thread = threading.Thread(target=_tail_log, args=(run_id, log_path, stop_flag), daemon=True)
+            tail_thread.start()
+        except Exception:
+            tail_thread = None
+
+        timeout_sec = int(spec.timeout_sec or 300)
+        status_path = os.path.join(workspace, ".sandbox_status.json")
+        deadline = time.time() + timeout_sec
+        exit_code = None
+        reason = None
+        duration_ms = None
+        while time.time() < deadline:
+            if os.path.exists(status_path):
+                try:
+                    with open(status_path, "r", encoding="utf-8") as rf:
+                        payload = json.load(rf)
+                    exit_code = payload.get("exit_code")
+                    reason = payload.get("reason")
+                    duration_ms = payload.get("duration_ms")
+                except Exception:
+                    pass
+                break
+            time.sleep(0.1)
+
+        if exit_code is None:
+            # Timeout: kill VM
+            reason = "execution_timeout"
+            try:
+                fc_proc.terminate()
+            except Exception:
+                pass
+            phase = RunPhase.timed_out
+        else:
+            phase = RunPhase.completed if int(exit_code or 0) == 0 else RunPhase.failed
+
+        stop_flag["stop"] = True
+        if tail_thread is not None:
+            try:
+                tail_thread.join(timeout=1)
+            except Exception:
+                pass
+
+        try:
+            hub.publish_event(run_id, "end", {"exit_code": exit_code})
+        except Exception:
+            pass
+
+        finished = datetime.utcnow()
+        # Collect artifacts
+        artifacts_map: Dict[str, bytes] = {}
+        try:
+            if spec.capture_patterns:
+                for root, _dirs, files in os.walk(workspace):
+                    for fn in files:
+                        rel = os.path.relpath(os.path.join(root, fn), workspace)
+                        rel_posix = rel.replace(os.sep, "/")
+                        if any(fnmatch.fnmatchcase(rel_posix, pat) for pat in (spec.capture_patterns or [])):
+                            try:
+                                with open(os.path.join(root, fn), "rb") as rf:
+                                    artifacts_map[rel_posix] = rf.read()
+                            except Exception:
+                                pass
+        except Exception:
+            artifacts_map = {}
+
+        # Usage
+        try:
+            log_bytes_total = int(hub.get_log_bytes(run_id))
+        except Exception:
+            log_bytes_total = 0
+        art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
+        usage: Dict[str, int] = {
+            "cpu_time_sec": 0,
+            "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
+            "peak_rss_mb": 0,
+            "log_bytes": int(log_bytes_total),
+            "artifact_bytes": int(art_bytes),
+        }
+
+        # Cleanup
+        try:
+            if virtiofs_proc is not None:
+                virtiofs_proc.terminate()
+        except Exception:
+            pass
+        try:
+            fc_proc.terminate()
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(run_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        return RunStatus(
+            id="",
+            phase=phase,
+            started_at=started,
+            finished_at=finished,
+            exit_code=exit_code,
+            message=(reason or "Firecracker execution"),
+            image_digest=image_digest,
+            runtime_version=firecracker_version(),
+            resource_usage=usage,
+            artifacts=(artifacts_map or None),
+        )
+
+    def _run_fake(self, run_id: str, spec: RunSpec) -> RunStatus:
+        """Execute a run in a Firecracker microVM (scaffolded)."""
         started = datetime.utcnow()
         hub = get_hub()
         # Publish start

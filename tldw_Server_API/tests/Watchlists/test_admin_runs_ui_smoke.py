@@ -12,7 +12,7 @@ def test_admin_runs_ui_includes_include_tallies_param_in_server_csv_links():
     a configured test runner in this repo. It prevents regressions where
     the toggle is forgotten in the server CSV URLs.
     """
-    p = Path("tldw-frontend/pages/admin/watchlists-runs.tsx")
+    p = Path("apps/tldw-frontend/pages/admin/watchlists-runs.tsx")
     assert p.exists(), "watchlists-runs.tsx not found"
     text = p.read_text(encoding="utf-8")
     # Expect include_tallies in both global and by-job server CSV link hrefs

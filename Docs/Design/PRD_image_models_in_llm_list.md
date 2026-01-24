@@ -120,7 +120,7 @@ Other backends (future):
 - Default to `enabled_backends` membership if no detailed checks exist.
 
 ## Frontend / Client Considerations
-- The extension currently infers model type via name heuristics in `tldw-frontend/extension/services/tldw/TldwModels.ts`.
+- The extension currently infers model type via name heuristics in `apps/tldw-frontend/extension/services/tldw/TldwModels.ts`.
 - With image entries included by default, update to:
   - Prefer `type` or `modalities.output` to classify (`image` vs `chat` vs `embedding`).
   - Avoid listing `type=image` in chat dropdowns.

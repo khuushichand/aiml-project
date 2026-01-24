@@ -91,7 +91,7 @@ Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
 - Workflows
 - Browser extension ([tldw_Browser_Assistant](https://github.com/rmusser01/tldw_browser_assistant))
 - Unified Admin Dashboard ([admin-ui](./admin-ui))
-- front-end webapp ([tldw-frontend](./tldw-frontend))
+- front-end webapp ([apps/tldw-frontend](./apps/tldw-frontend))
 - Watchlists
 - Collections (read-it-later)
 - Documentation
@@ -194,12 +194,12 @@ EOF
 
 # First-time initialization (validates config, sets up DBs)
 python -m tldw_Server_API.app.core.AuthNZ.initialize
-# This will also generate MCP_JWT_SECRET and MCP_API_KEY_SALT if they are missing, using
-# Python's secrets.token_urlsafe(32) for quickstart-only defaults.
-# Replace these auto-generated values before production: set your own strong secrets,
-# rotate regularly, and store them in a secret manager (e.g., Vault, AWS Secrets Manager).
+# This will also auto-generate MCP_JWT_SECRET and MCP_API_KEY_SALT if they are missing,
+# using Python's secrets.token_urlsafe(32) for quickstart-only defaults.
+# These auto-generated values must be replaced and managed securely before production
+# deployment (rotate regularly and store in a secret manager such as Vault or AWS Secrets Manager).
 # Example: set MCP_JWT_SECRET and MCP_API_KEY_SALT to your own values and manage them
-# following your organization's secure secret-management practices.
+# following secure secret-management practices.
 # Add provider API keys in .env or tldw_Server_API/Config_Files/config.txt
 ```
 3) Run the API
@@ -232,7 +232,7 @@ Requires Node.js and npm (or yarn/pnpm).
 
 1) From the repo root:
 ```bash
-cd tldw-frontend
+cd apps/tldw-frontend
 cp .env.local.example .env.local
 ```
 2) Set your API URL (defaults shown):
@@ -291,7 +291,7 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.p
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
-- The legacy WebUI is served at `/webui`; the primary UI is the Next.js client in `tldw-frontend/`.
+- The legacy WebUI is served at `/webui`; the primary UI is the Next.js WebUI in `apps/tldw-frontend/`.
   - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
 
 ### Supporting Services via Docker
@@ -520,7 +520,7 @@ Examples
 │   ├── tests/                    # Pytest suite
 │   └── requirements.txt          # Legacy pin set (prefer pyproject extras)
 ├── admin-ui/                     # Admin dashboard
-├── tldw-frontend/                # Next.js WebUI (current client)
+├── apps/tldw-frontend/                # Next.js WebUI (primary web client)
 ├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
 ├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
 ├── mock_openai_server/           # Mock OpenAI-compatible API server for tests/dev
@@ -536,7 +536,7 @@ Examples
 ```
 
 Notes
-- The FastAPI app serves a legacy UI at `/webui` (deprecated); the Next.js UI in `tldw-frontend/` is the current client.
+- The FastAPI app serves a legacy UI at `/webui` (deprecated); the Next.js WebUI in `apps/tldw-frontend/` is the primary web client.
 - SQLite is default for local dev; PostgreSQL supported for AuthNZ and content DBs.
 - `mock_openai_server/` is handy for local OpenAI-compatible API testing.
 
@@ -547,7 +547,7 @@ Notes
 ```mermaid
 flowchart LR
   subgraph CLIENTS [Clients]
-    WebUI[Next.js WebUI (current)]:::client
+    WebUI[Next.js WebUI (primary web client)]:::client
     LegacyUI[Legacy WebUI (/webui, deprecated)]:::client
     MCPClients[MCP Clients (IDE/tools)]:::client
     APIClients[CLI/HTTP Clients]:::client
@@ -689,7 +689,7 @@ All limits are designed to be conservative by default and can be tuned using the
 Use the helper script to run frontend unit tests plus smoke checks against a live backend:
 
 ```bash
-cd tldw-frontend
+cd apps/tldw-frontend
 npm run test:integration
 ```
 

@@ -5,12 +5,14 @@
 import asyncio
 import hashlib
 import importlib
+import re
 import sys
 import tempfile
 import time
 from collections import OrderedDict
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 #
 # Third-party Imports
 import numpy as np
@@ -34,7 +36,7 @@ from ..tts_exceptions import (
     TTSUnsupportedFormatError,
     TTSValidationError,
 )
-from ..tts_validation import validate_tts_request
+from ..tts_validation import TTSInputValidator, validate_tts_request
 from ..tts_resource_manager import get_resource_manager
 from ..utils import parse_bool
 from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
@@ -59,6 +61,7 @@ class EchoTTSAdapter(TTSAdapter):
     SUPPORTED_LANGUAGES = {"en"}
     DEFAULT_SAMPLE_RATE = 44100
     MAX_TEXT_LENGTH = 768
+    MAX_TEXT_BYTES = 767
     DEFAULT_BLOCK_SIZE = 160
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -198,8 +201,42 @@ class EchoTTSAdapter(TTSAdapter):
                 provider=self.PROVIDER_KEY,
             )
 
-        try:
+        extras = request.extra_params or {}
+        if not isinstance(extras, dict):
+            extras = {}
+
+        max_chars, max_bytes = self._resolve_chunk_limits(extras)
+        chunk_flag = self._resolve_chunking_flag(extras)
+        text_exceeds = self._text_exceeds_limits(request.text, max_chars, max_bytes)
+
+        if chunk_flag is False and text_exceeds:
+            # Force validation error for oversized text when chunking explicitly disabled.
             validate_tts_request(request, provider=self.PROVIDER_KEY)
+
+        chunking_enabled = text_exceeds if chunk_flag is None else bool(chunk_flag)
+        text_chunks = (
+            self._split_text_chunks(request.text, max_chars=max_chars, max_bytes=max_bytes)
+            if chunking_enabled
+            else [request.text]
+        )
+
+        if not text_chunks:
+            raise TTSValidationError(
+                "Validation failed for Echo-TTS request: text cannot be empty",
+                provider=self.PROVIDER_KEY,
+            )
+
+        try:
+            if len(text_chunks) > 1:
+                validation_request = replace(request, text=text_chunks[0])
+                validate_tts_request(validation_request, provider=self.PROVIDER_KEY)
+                self._validate_text_chunks(
+                    text_chunks,
+                    max_chars=max_chars,
+                    max_bytes=max_bytes,
+                )
+            else:
+                validate_tts_request(request, provider=self.PROVIDER_KEY)
         except TTSValidationError:
             raise
         except Exception as exc:
@@ -215,10 +252,6 @@ class EchoTTSAdapter(TTSAdapter):
             )
 
         await self._ensure_models_loaded()
-
-        extras = request.extra_params or {}
-        if not isinstance(extras, dict):
-            extras = {}
 
         voice_bytes = self._extract_voice_reference(request.voice_reference)
         voice_bytes = await self._prepare_voice_reference(voice_bytes, extras)
@@ -238,14 +271,54 @@ class EchoTTSAdapter(TTSAdapter):
             )
 
         try:
+            speaker_latent = speaker_latent.to(self._model.device)
+            speaker_mask = speaker_mask.to(self._model.device)
+
+            if len(text_chunks) > 1:
+                if request.stream:
+                    audio_stream = self._stream_chunked_audio(
+                        request=request,
+                        text_chunks=text_chunks,
+                        extras=extras,
+                        inference=inference,
+                        speaker_latent=speaker_latent,
+                        speaker_mask=speaker_mask,
+                    )
+                    return TTSResponse(
+                        audio_stream=audio_stream,
+                        format=request.format,
+                        sample_rate=self.sample_rate,
+                        channels=1,
+                        text_processed=request.text,
+                        voice_used=request.voice,
+                        provider=self.PROVIDER_KEY,
+                        model=request.model or self.model_repo,
+                    )
+
+                audio_bytes = await self._generate_chunked_audio(
+                    request=request,
+                    text_chunks=text_chunks,
+                    extras=extras,
+                    inference=inference,
+                    speaker_latent=speaker_latent,
+                    speaker_mask=speaker_mask,
+                )
+                return TTSResponse(
+                    audio_data=audio_bytes,
+                    format=request.format,
+                    sample_rate=self.sample_rate,
+                    channels=1,
+                    text_processed=request.text,
+                    voice_used=request.voice,
+                    provider=self.PROVIDER_KEY,
+                    model=request.model or self.model_repo,
+                )
+
             text_input_ids, text_mask, normalized_text_value = self._prepare_text_inputs(
                 request,
                 extras,
                 inference,
             )
-            speaker_latent = speaker_latent.to(self._model.device)
-            speaker_mask = speaker_mask.to(self._model.device)
-
             if request.stream:
                 audio_stream = self._stream_audio(
                     request=request,
@@ -588,15 +661,22 @@ class EchoTTSAdapter(TTSAdapter):
         latent_out: Any,
         request_format: AudioFormat,
     ) -> bytes:
-        audio_out = inference.ae_decode(self._fish_ae, self._pca_state, latent_out)
-        audio_out = inference.crop_audio_to_flattening_point(audio_out, latent_out[0])
-        audio_np = audio_out[0].detach().cpu().numpy().astype(np.float32)
+        audio_np = await self._latent_to_audio_np(
+            inference=inference,
+            latent_out=latent_out,
+        )
         return await self.convert_audio_format(
             audio_np,
             source_format=AudioFormat.PCM,
             target_format=request_format,
             sample_rate=self.sample_rate,
         )
+
+    async def _latent_to_audio_np(self, *, inference: Any, latent_out: Any) -> np.ndarray:
+        audio_out = inference.ae_decode(self._fish_ae, self._pca_state, latent_out)
+        audio_out = inference.crop_audio_to_flattening_point(audio_out, latent_out[0])
+        audio_np = np.asarray(audio_out[0].detach().cpu().numpy(), dtype=np.float32).reshape(-1)
+        return audio_np
 
     def _stream_audio(
         self,
@@ -761,6 +841,119 @@ class EchoTTSAdapter(TTSAdapter):
 
         return stream()
 
+    async def _generate_chunked_audio(
+        self,
+        *,
+        request: TTSRequest,
+        text_chunks: List[str],
+        extras: Dict[str, Any],
+        inference: Any,
+        speaker_latent: Any,
+        speaker_mask: Any,
+    ) -> bytes:
+        interval_silence_ms = self._coerce_int(extras.get("interval_silence"), 0)
+        silence_samples = max(0, int(self.sample_rate * interval_silence_ms / 1000.0))
+        silence = np.zeros(silence_samples, dtype=np.float32) if silence_samples > 0 else None
+
+        audio_segments: List[np.ndarray] = []
+        for idx, chunk_text in enumerate(text_chunks):
+            chunk_request = replace(request, text=chunk_text)
+            text_input_ids, text_mask, _ = self._prepare_text_inputs(
+                chunk_request,
+                extras,
+                inference,
+            )
+            latent_out = self._run_full_generation(
+                inference=inference,
+                text_input_ids=text_input_ids,
+                text_mask=text_mask,
+                speaker_latent=speaker_latent,
+                speaker_mask=speaker_mask,
+                extras=extras,
+            )
+            audio_np = await self._latent_to_audio_np(
+                inference=inference,
+                latent_out=latent_out,
+            )
+            if audio_np.size > 0:
+                audio_segments.append(audio_np)
+            if silence is not None and idx < len(text_chunks) - 1:
+                audio_segments.append(silence)
+
+        if not audio_segments:
+            raise TTSGenerationError(
+                "Echo-TTS generation produced no audio",
+                provider=self.PROVIDER_KEY,
+            )
+
+        full_audio = np.concatenate(audio_segments).astype(np.float32)
+        return await self.convert_audio_format(
+            full_audio,
+            source_format=AudioFormat.PCM,
+            target_format=request.format,
+            sample_rate=self.sample_rate,
+        )
+
+    def _stream_chunked_audio(
+        self,
+        *,
+        request: TTSRequest,
+        text_chunks: List[str],
+        extras: Dict[str, Any],
+        inference: Any,
+        speaker_latent: Any,
+        speaker_mask: Any,
+    ):
+        interval_silence_ms = self._coerce_int(extras.get("interval_silence"), 0)
+        silence_samples = max(0, int(self.sample_rate * interval_silence_ms / 1000.0))
+        silence_i16 = np.zeros(silence_samples, dtype=np.int16) if silence_samples > 0 else None
+
+        audio_normalizer = AudioNormalizer()
+        writer = StreamingAudioWriter(
+            format=request.format.value,
+            sample_rate=self.sample_rate,
+            channels=1,
+        )
+
+        async def stream():
+            try:
+                for idx, chunk_text in enumerate(text_chunks):
+                    chunk_request = replace(request, text=chunk_text)
+                    text_input_ids, text_mask, _ = self._prepare_text_inputs(
+                        chunk_request,
+                        extras,
+                        inference,
+                    )
+                    latent_out = self._run_full_generation(
+                        inference=inference,
+                        text_input_ids=text_input_ids,
+                        text_mask=text_mask,
+                        speaker_latent=speaker_latent,
+                        speaker_mask=speaker_mask,
+                        extras=extras,
+                    )
+                    audio_np = await self._latent_to_audio_np(
+                        inference=inference,
+                        latent_out=latent_out,
+                    )
+                    if audio_np.size > 0:
+                        audio_i16 = audio_normalizer.normalize(audio_np, target_dtype=np.int16)
+                        data = writer.write_chunk(audio_i16)
+                        if data:
+                            yield data
+                    if silence_i16 is not None and idx < len(text_chunks) - 1:
+                        data = writer.write_chunk(silence_i16)
+                        if data:
+                            yield data
+
+                final_bytes = writer.write_chunk(finalize=True)
+                if final_bytes:
+                    yield final_bytes
+            finally:
+                writer.close()
+
+        return stream()
+
     def _extract_voice_reference(self, voice_reference: Any) -> bytes:
         if voice_reference is None:
             raise TTSInvalidVoiceReferenceError(
@@ -833,6 +1026,155 @@ class EchoTTSAdapter(TTSAdapter):
 
     def _resolve_sequence_length(self, extras: Dict[str, Any]) -> int:
         return self._coerce_int(extras.get("sequence_length"), 640)
+
+    def _resolve_chunking_flag(self, extras: Dict[str, Any]) -> Optional[bool]:
+        for key in ("chunk_text", "enable_chunking", "chunking"):
+            if key in extras:
+                return self._coerce_bool(extras.get(key), default=False)
+        cfg = self.config or {}
+        cfg_extras = cfg.get("extra_params") if isinstance(cfg.get("extra_params"), dict) else {}
+        for key in ("echo_tts_chunk_text", "chunk_text", "enable_chunking"):
+            if key in cfg:
+                return self._coerce_bool(cfg.get(key), default=False)
+        for key in ("chunk_text", "enable_chunking", "chunking"):
+            if key in cfg_extras:
+                return self._coerce_bool(cfg_extras.get(key), default=False)
+        return None
+
+    def _resolve_chunk_limits(self, extras: Dict[str, Any]) -> Tuple[int, int]:
+        cfg = self.config or {}
+        cfg_extras = cfg.get("extra_params") if isinstance(cfg.get("extra_params"), dict) else {}
+        max_chars = self._coerce_int(
+            extras.get("chunk_max_chars")
+            or extras.get("max_chunk_chars")
+            or cfg.get("echo_tts_chunk_max_chars")
+            or cfg.get("chunk_max_chars")
+            or cfg_extras.get("chunk_max_chars"),
+            self.MAX_TEXT_LENGTH,
+        )
+        max_bytes = self._coerce_int(
+            extras.get("chunk_max_bytes")
+            or extras.get("max_chunk_bytes")
+            or cfg.get("echo_tts_chunk_max_bytes")
+            or cfg.get("chunk_max_bytes")
+            or cfg_extras.get("chunk_max_bytes"),
+            self.MAX_TEXT_BYTES,
+        )
+        max_chars = max(1, min(max_chars, self.MAX_TEXT_LENGTH))
+        max_bytes = max(1, min(max_bytes, self.MAX_TEXT_BYTES))
+        return max_chars, max_bytes
+
+    def _text_exceeds_limits(self, text: str, max_chars: int, max_bytes: int) -> bool:
+        if len(text) > max_chars:
+            return True
+        try:
+            if len(text.encode("utf-8")) > max_bytes:
+                return True
+        except Exception:
+            return True
+        return False
+
+    def _fits_text_limits(self, text: str, max_chars: int, max_bytes: int) -> bool:
+        if len(text) > max_chars:
+            return False
+        try:
+            return len(text.encode("utf-8")) <= max_bytes
+        except Exception:
+            return False
+
+    def _split_text_chunks(self, text: str, *, max_chars: int, max_bytes: int) -> List[str]:
+        text = (text or "").strip()
+        if not text:
+            return []
+        if self._fits_text_limits(text, max_chars, max_bytes):
+            return [text]
+
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        chunks: List[str] = []
+        current = ""
+
+        for sentence in sentences:
+            if not sentence:
+                continue
+            candidate = sentence if not current else f"{current} {sentence}"
+            if self._fits_text_limits(candidate, max_chars, max_bytes):
+                current = candidate
+                continue
+
+            if current:
+                chunks.append(current.strip())
+                current = ""
+
+            if self._fits_text_limits(sentence, max_chars, max_bytes):
+                current = sentence
+            else:
+                chunks.extend(self._split_text_by_words(sentence, max_chars=max_chars, max_bytes=max_bytes))
+
+        if current:
+            chunks.append(current.strip())
+
+        return [chunk for chunk in chunks if chunk.strip()]
+
+    def _split_text_by_words(self, text: str, *, max_chars: int, max_bytes: int) -> List[str]:
+        words = text.split()
+        if not words:
+            return []
+        chunks: List[str] = []
+        current = ""
+
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if self._fits_text_limits(candidate, max_chars, max_bytes):
+                current = candidate
+                continue
+
+            if current:
+                chunks.append(current.strip())
+                current = ""
+
+            if self._fits_text_limits(word, max_chars, max_bytes):
+                current = word
+            else:
+                chunks.extend(self._split_text_by_bytes(word, max_bytes=max_bytes, max_chars=max_chars))
+
+        if current:
+            chunks.append(current.strip())
+        return chunks
+
+    def _split_text_by_bytes(self, text: str, *, max_bytes: int, max_chars: Optional[int] = None) -> List[str]:
+        if max_bytes <= 0:
+            max_bytes = self.MAX_TEXT_BYTES
+        if max_chars is None or max_chars <= 0:
+            max_chars = self.MAX_TEXT_LENGTH
+        chunks: List[str] = []
+        current_chars: List[str] = []
+        current_bytes = 0
+
+        for ch in text:
+            try:
+                ch_bytes = len(ch.encode("utf-8"))
+            except Exception:
+                ch_bytes = 1
+            if current_chars and (current_bytes + ch_bytes > max_bytes or len(current_chars) + 1 > max_chars):
+                chunks.append("".join(current_chars))
+                current_chars = []
+                current_bytes = 0
+            current_chars.append(ch)
+            current_bytes += ch_bytes
+
+        if current_chars:
+            chunks.append("".join(current_chars))
+        return chunks
+
+    def _validate_text_chunks(self, chunks: List[str], *, max_chars: int, max_bytes: int) -> None:
+        validator = TTSInputValidator()
+        for chunk in chunks:
+            validator.validate_text_length(chunk, provider=self.PROVIDER_KEY, max_length=max_chars)
+            if len(chunk.encode("utf-8")) > max_bytes:
+                raise TTSValidationError(
+                    f"Text byte length exceeds chunk limit of {max_bytes} bytes",
+                    provider=self.PROVIDER_KEY,
+                )
 
     def _coerce_bool(self, value: Any, default: bool) -> bool:
         try:

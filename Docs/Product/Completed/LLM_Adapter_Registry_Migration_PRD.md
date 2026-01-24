@@ -14,7 +14,7 @@ Consolidate all LLM chat and summarization flows onto the adapter registry while
 - Improve maintainability: fewer code paths, fewer test doubles, simpler provider onboarding.
 
 ## Non-Goals
-- UI changes (no Admin UI or `tldw-frontend` work).
+- UI changes (no Admin UI or Next.js WebUI work).
 - Rewriting the RAG pipeline, chunking strategies, or ingestion workflows.
 - Changing the response schema returned by public APIs.
 - Switching the configuration system away from `config.txt`.

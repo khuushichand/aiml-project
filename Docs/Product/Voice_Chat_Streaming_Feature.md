@@ -89,7 +89,7 @@ audio_chat_allowed_actions = tool1,tool2
 5. Logging: action failures are emitted as status payloads; they do not tear down the stream.
 
 ## WebUI Consumer
-- `tldw-frontend/pages/audio.tsx` has a “Voice Chat (WS)” tab that:
+- `apps/tldw-frontend/pages/audio.tsx` has a “Voice Chat (WS)” tab that:
   - Connects to `/audio/chat/stream`
   - Streams mic audio, shows partials/LLM deltas, plays streaming TTS (mp3/opus/pcm)
   - Accepts optional `action` name in the config form and surfaces `action_result`

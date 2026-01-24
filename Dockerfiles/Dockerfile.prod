@@ -33,7 +33,7 @@ RUN pip install --upgrade pip && \
 
 # Now copy the full source
 COPY tldw_Server_API /app/tldw_Server_API
-COPY tldw-frontend /app/tldw-frontend
+COPY apps/tldw-frontend /app/apps/tldw-frontend
 COPY Docs /app/Docs
 COPY Helper_Scripts /app/Helper_Scripts
 COPY Databases /app/Databases

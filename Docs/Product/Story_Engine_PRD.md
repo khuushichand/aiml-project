@@ -21,7 +21,7 @@ Interactive fiction workflows require structured state (characters, locations, i
 5. Support streaming story generation using existing LLM provider infrastructure.
 
 ### Non-Goals
-- Frontend UI/UX (tldw-frontend, desktop clients, or mobile).
+- Frontend UI/UX (Next.js WebUI, desktop clients, or mobile).
 - Local sync servers, QR pairing, or desktop updaters.
 - Grammar checking or client-only writing tools (e.g., Harper WASM).
 - Replacing existing Character Chat flows; this is a separate module.

@@ -48,6 +48,8 @@ This directory contains the end-to-end, integration, and unit tests for `tldw_se
 | Setting | Default | Effect | Notes |
 | --- | --- | --- | --- |
 | `RUN_TTS_LEGACY_INTEGRATION` | disabled | Runs legacy TTS adapter tests under `tests/TTS/`. | Requires provider-specific keys (e.g., `ELEVENLABS_API_KEY`, local model paths). |
+| `ECHO_TTS_MODULE_PATH` | unset | Points to an Echo-TTS checkout for the CUDA initialization test under `tests/TTS_NEW/integration/`. | If unset, the test looks for `../echo-tts` next to the repo. |
+| `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` | unset | Force offline mode for the Echo-TTS CUDA generation test under `tests/TTS_NEW/integration/`. | The test only runs when the Echo-TTS model repos are already cached locally. |
 | `ALLOW_HEAVY_AUDIO_SMOKE` | disabled | Enables the audio worker smoke test (`tests/AudioJobs/test_audio_worker_smoke.py`). | Install `ffmpeg` and ensure audio models are available. |
 | `RUN_AUDIO_E2E` | disabled | Allows the optional WebUI audio upload E2E test. | Requires a running server plus audio processing dependencies. |
 

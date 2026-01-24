@@ -7,6 +7,7 @@ import copy
 import inspect
 import os
 import time
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional, Dict, Any, List, Set
 #
 # Third-party Imports
@@ -145,6 +146,8 @@ class TTSServiceV2:
             )
         self._active_request_counts: Dict[str, int] = {}
         self._active_requests_lock = asyncio.Lock()
+        self._provider_semaphores: Dict[str, asyncio.Semaphore] = {}
+        self._provider_limits: Dict[str, int] = {}
 
         # Initialize metrics
         self.metrics = get_metrics_registry()
@@ -164,6 +167,44 @@ class TTSServiceV2:
         except Exception:
             return None
         return None
+
+    def _get_provider_concurrency_limit(self, provider_key: str) -> Optional[int]:
+        """Resolve provider-specific concurrency limit from config (if set)."""
+        cfg = self._get_validation_config()
+        if not isinstance(cfg, dict):
+            return None
+        providers_cfg = cfg.get("providers")
+        if not isinstance(providers_cfg, dict):
+            return None
+        provider_cfg = providers_cfg.get(provider_key)
+        if not isinstance(provider_cfg, dict):
+            return None
+        raw_limit = provider_cfg.get("max_concurrent_generations")
+        if raw_limit is None:
+            return None
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return None
+        if limit <= 0:
+            return None
+        return limit
+
+    @asynccontextmanager
+    async def _provider_concurrency_guard(self, provider_key: str):
+        """Optional provider-specific semaphore guard."""
+        limit = self._get_provider_concurrency_limit(provider_key)
+        if limit is None:
+            yield
+            return
+        current_limit = self._provider_limits.get(provider_key)
+        semaphore = self._provider_semaphores.get(provider_key)
+        if semaphore is None or current_limit != limit:
+            semaphore = asyncio.Semaphore(limit)
+            self._provider_semaphores[provider_key] = semaphore
+            self._provider_limits[provider_key] = limit
+        async with semaphore:
+            yield
 
     # ---------------------------------------------------------------------------------
     # Backwards-compatibility methods expected by older unit tests
@@ -517,6 +558,7 @@ class TTSServiceV2:
         voice_to_voice_start: Optional[float] = None,
         voice_to_voice_route: str = "audio.speech",
         user_id: Optional[int] = None,
+        metadata_only: bool = False,
     ) -> AsyncGenerator[bytes, None]:
         """
         Generate speech from text using the best available provider.
@@ -525,6 +567,7 @@ class TTSServiceV2:
             request: OpenAI-compatible speech request
             provider: Optional specific provider to use
             fallback: Whether to fallback to other providers on failure
+            metadata_only: When true, populate request metadata without streaming audio
 
         Yields:
             Audio chunks in the requested format
@@ -640,87 +683,51 @@ class TTSServiceV2:
         # Generate speech with circuit breaker and comprehensive error handling
         try:
             async with self._semaphore:
-                logger.info(f"Generating speech with {provider_key}")
+                async with self._provider_concurrency_guard(provider_key):
+                    logger.info(f"Generating speech with {provider_key}")
 
-                # Get circuit breaker if available
-                circuit_breaker = None
-                if self.circuit_manager:
-                    circuit_breaker = await self.circuit_manager.get_breaker(provider_key)
+                    # Get circuit breaker if available
+                    circuit_breaker = None
+                    if self.circuit_manager:
+                        circuit_breaker = await self.circuit_manager.get_breaker(provider_key)
 
-                # Generate response (with or without circuit breaker)
-                response: Optional[TTSResponse] = None
-                if circuit_breaker:
-                    try:
-                        response = await circuit_breaker.call(adapter.generate, request_for_provider)
-                    except CircuitOpenError as e:
-                        logger.warning(f"Circuit open for {provider_key}: {e}")
-                        if fallback:
-                            # Record fallback attempt
-                            self.metrics.increment(
-                                "tts_fallback_attempts",
-                                labels={"from_provider": provider_key, "to_provider": "any", "success": "pending"}
-                            )
-                            await self._decrement_active_requests(provider_key)
-                            released_active_slot = True
-                            fallback_plan = (self._build_exclude_tokens(adapter), provider_key)
-                        else:
-                            raise TTSProviderError(
-                                f"Circuit open for {provider_key}",
-                                provider=provider_key,
-                                details={"circuit_state": "open"}
-                            )
-                else:
-                    response = await adapter.generate(request_for_provider)
-
-                if fallback_plan is None and response is not None:
-                    if response.metadata:
+                    # Generate response (with or without circuit breaker)
+                    response: Optional[TTSResponse] = None
+                    if circuit_breaker:
                         try:
-                            setattr(request, "_tts_metadata", response.metadata)
-                        except Exception:
-                            pass
-                    if response.audio_stream:
-                        async for chunk in response.audio_stream:
-                            # Record TTFB on first emitted chunk
-                            if chunks_count == 0:
+                            response = await circuit_breaker.call(adapter.generate, request_for_provider)
+                        except CircuitOpenError as e:
+                            logger.warning(f"Circuit open for {provider_key}: {e}")
+                            if fallback:
+                                # Record fallback attempt
+                                self.metrics.increment(
+                                    "tts_fallback_attempts",
+                                    labels={"from_provider": provider_key, "to_provider": "any", "success": "pending"}
+                                )
+                                await self._decrement_active_requests(provider_key)
+                                released_active_slot = True
+                                fallback_plan = (self._build_exclude_tokens(adapter), provider_key)
+                            else:
+                                raise TTSProviderError(
+                                    f"Circuit open for {provider_key}",
+                                    provider=provider_key,
+                                    details={"circuit_state": "open"}
+                                )
+                    else:
+                        response = await adapter.generate(request_for_provider)
+
+                    if fallback_plan is None and response is not None:
+                        if response.metadata:
+                            try:
+                                setattr(request, "_tts_metadata", response.metadata)
+                            except Exception:
+                                pass
+                        if metadata_only:
+                            if response.audio_stream and hasattr(response.audio_stream, "aclose"):
                                 try:
-                                    self.metrics.observe(
-                                        "tts_ttfb_seconds",
-                                        max(0.0, time.time() - start_time),
-                                        labels={
-                                            "provider": provider_key,
-                                            "voice": request_for_provider.voice or "default",
-                                            "format": request_for_provider.format.value,
-                                        },
-                                    )
-                                    _record_voice_to_voice(provider_key)
+                                    await response.audio_stream.aclose()
                                 except Exception:
                                     pass
-                            chunks_count += 1
-                            audio_size += len(chunk)
-                            yield chunk
-                    elif response.audio_data:
-                        chunks_count = 1
-                        # Record TTFB when first audio bytes are available
-                        try:
-                            self.metrics.observe(
-                                "tts_ttfb_seconds",
-                                max(0.0, time.time() - start_time),
-                                labels={
-                                    "provider": provider_key,
-                                    "voice": request_for_provider.voice or "default",
-                                    "format": request_for_provider.format.value,
-                                },
-                            )
-                            _record_voice_to_voice(provider_key)
-                        except Exception:
-                            pass
-                        audio_size = len(response.audio_data)
-                        yield response.audio_data
-                    else:
-                        error_msg = f"No audio data returned by {provider_key}"
-                        logger.error(error_msg)
-                        if fallback:
-                            # Record a soft failure for observability before falling back.
                             try:
                                 self._record_tts_metrics(
                                     provider=provider_key,
@@ -728,22 +735,91 @@ class TTSServiceV2:
                                     voice=request_for_provider.voice or "default",
                                     format=request_for_provider.format.value,
                                     text_length=len(request_for_provider.text),
-                                    audio_size=audio_size,
-                                    duration=max(0.0, time.time() - start_time),
-                                    success=False,
-                                    error=error_msg,
+                                    audio_size=0,
+                                    duration=time.time() - start_time,
+                                    success=True,
                                 )
                             except Exception:
                                 pass
-                            await self._handle_provider_fallback(request_for_provider, provider_key, error_msg)
-                            await self._decrement_active_requests(provider_key)
-                            released_active_slot = True
-                            fallback_plan = (self._build_exclude_tokens(adapter), provider_key)
+                            return
+                        if response.audio_stream:
+                            async for chunk in response.audio_stream:
+                                # Record TTFB on first emitted chunk
+                                if chunks_count == 0:
+                                    try:
+                                        self.metrics.observe(
+                                            "tts_ttfb_seconds",
+                                            max(0.0, time.time() - start_time),
+                                            labels={
+                                                "provider": provider_key,
+                                                "voice": request_for_provider.voice or "default",
+                                                "format": request_for_provider.format.value,
+                                            },
+                                        )
+                                        _record_voice_to_voice(provider_key)
+                                    except Exception:
+                                        pass
+                                chunks_count += 1
+                                audio_size += len(chunk)
+                                yield chunk
+                            try:
+                                await self._maybe_store_qwen3_voice_prompt(
+                                    request_for_provider, user_id, provider_key
+                                )
+                            except Exception:
+                                pass
+                        elif response.audio_data:
+                            chunks_count = 1
+                            # Record TTFB when first audio bytes are available
+                            try:
+                                self.metrics.observe(
+                                    "tts_ttfb_seconds",
+                                    max(0.0, time.time() - start_time),
+                                    labels={
+                                        "provider": provider_key,
+                                        "voice": request_for_provider.voice or "default",
+                                        "format": request_for_provider.format.value,
+                                    },
+                                )
+                                _record_voice_to_voice(provider_key)
+                            except Exception:
+                                pass
+                            audio_size = len(response.audio_data)
+                            yield response.audio_data
+                            try:
+                                await self._maybe_store_qwen3_voice_prompt(
+                                    request_for_provider, user_id, provider_key
+                                )
+                            except Exception:
+                                pass
                         else:
-                            if self._stream_errors_as_audio:
-                                yield f"ERROR: {error_msg}".encode()
+                            error_msg = f"No audio data returned by {provider_key}"
+                            logger.error(error_msg)
+                            if fallback:
+                                # Record a soft failure for observability before falling back.
+                                try:
+                                    self._record_tts_metrics(
+                                        provider=provider_key,
+                                        model=request_for_provider.model or "default",
+                                        voice=request_for_provider.voice or "default",
+                                        format=request_for_provider.format.value,
+                                        text_length=len(request_for_provider.text),
+                                        audio_size=audio_size,
+                                        duration=max(0.0, time.time() - start_time),
+                                        success=False,
+                                        error=error_msg,
+                                    )
+                                except Exception:
+                                    pass
+                                await self._handle_provider_fallback(request_for_provider, provider_key, error_msg)
+                                await self._decrement_active_requests(provider_key)
+                                released_active_slot = True
+                                fallback_plan = (self._build_exclude_tokens(adapter), provider_key)
                             else:
-                                raise TTSGenerationError(error_msg, provider=provider_key)
+                                if self._stream_errors_as_audio:
+                                    yield f"ERROR: {error_msg}".encode()
+                                else:
+                                    raise TTSGenerationError(error_msg, provider=provider_key)
 
                 if fallback_plan is None:
                     self._record_tts_metrics(
@@ -834,10 +910,22 @@ class TTSServiceV2:
                 pass
 
         if fallback_plan:
+            if metadata_only:
+                async for _ in self._try_fallback_providers(
+                    tts_request,
+                    fallback_plan[0],
+                    fallback_plan[1],
+                    metadata_only=True,
+                    metadata_target=request,
+                ):
+                    pass
+                return
             async for chunk in self._try_fallback_providers(
                 tts_request,
                 fallback_plan[0],
                 fallback_plan[1],
+                metadata_only=False,
+                metadata_target=request,
             ):
                 yield chunk
             return
@@ -845,7 +933,9 @@ class TTSServiceV2:
     async def _generate_with_adapter(
         self,
         adapter: TTSAdapter,
-        request: TTSRequest
+        request: TTSRequest,
+        metadata_only: bool = False,
+        metadata_target: Optional[Any] = None,
     ) -> AsyncGenerator[bytes, None]:
         """Generate audio with a specific adapter"""
         provider_key = self._resolve_provider_key(adapter)
@@ -895,6 +985,22 @@ class TTSServiceV2:
         try:
             async with self._semaphore:
                 response = await adapter.generate(request_for_provider)
+
+                if response.metadata:
+                    target = metadata_target if metadata_target is not None else request_for_provider
+                    try:
+                        setattr(target, "_tts_metadata", response.metadata)
+                    except Exception:
+                        pass
+
+                if metadata_only:
+                    success = True
+                    if response.audio_stream and hasattr(response.audio_stream, "aclose"):
+                        try:
+                            await response.audio_stream.aclose()
+                        except Exception:
+                            pass
+                    return
 
                 if response.audio_stream:
                     first_emitted = False
@@ -1008,6 +1114,8 @@ class TTSServiceV2:
                     coerced_language = None
                 if coerced_language:
                     language = coerced_language
+            if getattr(request, "reference_duration_min", None) is not None:
+                extras["reference_duration_min"] = request.reference_duration_min
 
         tts_request = TTSRequest(
             text=request.input,
@@ -1025,6 +1133,23 @@ class TTSServiceV2:
         setattr(tts_request, "model", getattr(request, "model", None))
 
         return tts_request
+
+    def _extract_voice_clone_prompt_payload(self, payload: Any) -> tuple[Optional[str], Optional[str]]:
+        """Normalize voice_clone_prompt payload for storage (base64 + optional format)."""
+        if payload is None:
+            return None, None
+        if isinstance(payload, (bytes, bytearray)):
+            return base64.b64encode(bytes(payload)).decode("ascii"), None
+        if isinstance(payload, str):
+            return payload, None
+        if isinstance(payload, dict):
+            data_b64 = payload.get("data_b64") or payload.get("data")
+            if isinstance(data_b64, str) and data_b64.strip():
+                fmt = payload.get("format")
+                if fmt is not None:
+                    fmt = str(fmt)
+                return data_b64, fmt
+        return None, None
 
     async def _apply_custom_voice_reference(
         self,
@@ -1069,11 +1194,61 @@ class TTSServiceV2:
                 elif not has_ref_text and metadata.reference_text:
                     extras["reference_text"] = metadata.reference_text
 
+                if provider_key == "qwen3_tts" and "voice_clone_prompt" not in extras:
+                    if metadata.voice_clone_prompt_b64:
+                        if metadata.voice_clone_prompt_format:
+                            extras["voice_clone_prompt"] = {
+                                "format": metadata.voice_clone_prompt_format,
+                                "data_b64": metadata.voice_clone_prompt_b64,
+                            }
+                        else:
+                            extras["voice_clone_prompt"] = metadata.voice_clone_prompt_b64
+
             request.extra_params = extras
         except VoiceProcessingError as e:
             logger.warning(f"Custom voice resolution failed for {raw_id}: {e}")
         except Exception as e:
             logger.warning(f"Custom voice resolution error for {raw_id}: {e}")
+
+    async def _maybe_store_qwen3_voice_prompt(
+        self,
+        request: TTSRequest,
+        user_id: Optional[int],
+        provider_key: str,
+    ) -> None:
+        """Persist Qwen3 voice_clone_prompt metadata for custom voices."""
+        if not user_id or provider_key != "qwen3_tts":
+            return
+        voice_id = request.voice or ""
+        if not isinstance(voice_id, str) or not voice_id.startswith("custom:"):
+            return
+        raw_id = voice_id.split("custom:", 1)[-1].strip()
+        if not raw_id:
+            return
+        extras = request.extra_params or {}
+        if not isinstance(extras, dict):
+            return
+        payload = extras.get("voice_clone_prompt")
+        data_b64, fmt = self._extract_voice_clone_prompt_payload(payload)
+        if not data_b64:
+            return
+        try:
+            from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager, VoiceReferenceMetadata
+
+            voice_manager = get_voice_manager()
+            metadata = await voice_manager.load_reference_metadata(user_id, raw_id)
+            if metadata is None:
+                metadata = VoiceReferenceMetadata(voice_id=raw_id)
+            if (
+                metadata.voice_clone_prompt_b64 == data_b64
+                and metadata.voice_clone_prompt_format == fmt
+            ):
+                return
+            metadata.voice_clone_prompt_b64 = data_b64
+            metadata.voice_clone_prompt_format = fmt
+            await voice_manager.save_reference_metadata(user_id, metadata)
+        except Exception as exc:
+            logger.debug(f"Failed to persist Qwen3 voice_clone_prompt for {raw_id}: {exc}")
 
     async def _get_adapter(
         self,
@@ -1394,7 +1569,10 @@ class TTSServiceV2:
         self,
         request: TTSRequest,
         exclude_providers: List[str],
-        failed_provider: Optional[str]
+        failed_provider: Optional[str],
+        *,
+        metadata_only: bool = False,
+        metadata_target: Optional[Any] = None,
     ) -> AsyncGenerator[bytes, None]:
         """
         Try fallback providers in priority order.
@@ -1420,7 +1598,12 @@ class TTSServiceV2:
                 )
                 setattr(request, "model", fallback_model)
                 try:
-                    async for chunk in self._generate_with_adapter(fallback_adapter, request):
+                    async for chunk in self._generate_with_adapter(
+                        fallback_adapter,
+                        request,
+                        metadata_only=metadata_only,
+                        metadata_target=metadata_target,
+                    ):
                         yield chunk
                 finally:
                     setattr(request, "model", original_model)
@@ -1465,7 +1648,12 @@ class TTSServiceV2:
                             )
                             setattr(request, "model", secondary_model)
                             try:
-                                async for chunk in self._generate_with_adapter(final_fallback, request):
+                                async for chunk in self._generate_with_adapter(
+                                    final_fallback,
+                                    request,
+                                    metadata_only=metadata_only,
+                                    metadata_target=metadata_target,
+                                ):
                                     yield chunk
                             finally:
                                 setattr(request, "model", secondary_original_model)

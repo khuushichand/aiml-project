@@ -411,11 +411,11 @@ export const api = {
   // Monitoring
   // ============================================
   getWatchlists: () => requestJson('/monitoring/watchlists'),
-  createWatchlist: (data: Record<string, unknown>) => requestJson('/monitoring/watchlists', {
+  createWatchlist: <T extends object>(data: T) => requestJson('/monitoring/watchlists', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  updateWatchlist: (watchlistId: string, data: Record<string, unknown>) => requestJson(`/monitoring/watchlists/${watchlistId}`, {
+  updateWatchlist: <T extends object>(watchlistId: string, data: T) => requestJson(`/monitoring/watchlists/${watchlistId}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   }),

@@ -171,7 +171,11 @@ def _load_alignment_from_output(
     if row.type != "audiobook_alignment":
         raise HTTPException(status_code=400, detail="invalid_alignment_output")
     outputs_dir = DatabasePaths.get_user_outputs_dir(user_id)
-    alignment_path = outputs_dir / row.storage_path
+    # Defense-in-depth: validate storage_path doesn't escape outputs_dir
+    storage_path = str(row.storage_path or "")
+    if ".." in PathlibPath(storage_path).parts or PathlibPath(storage_path).is_absolute():
+        raise HTTPException(status_code=400, detail="invalid_storage_path")
+    alignment_path = outputs_dir / storage_path
     if not alignment_path.exists():
         raise HTTPException(status_code=404, detail="alignment_file_not_found")
     try:
@@ -602,6 +606,7 @@ async def get_audiobook_job_status(
     "/jobs/{job_id}/artifacts",
     response_model=AudiobookArtifactsResponse,
     summary="List audiobook job artifacts",
+    dependencies=[Depends(check_rate_limit)],
 )
 async def get_audiobook_job_artifacts(
     job_id: int = Path(..., ge=1, description="Audiobook job id"),
@@ -659,6 +664,7 @@ async def get_audiobook_job_artifacts(
     "/projects",
     response_model=AudiobookProjectListResponse,
     summary="List audiobook projects",
+    dependencies=[Depends(check_rate_limit)],
 )
 async def list_audiobook_projects(
     limit: int = Query(100, ge=1, le=500),
@@ -699,6 +705,7 @@ async def get_audiobook_project(
     "/projects/{project_ref}/chapters",
     response_model=AudiobookChapterListResponse,
     summary="List audiobook project chapters",
+    dependencies=[Depends(check_rate_limit)],
 )
 async def list_audiobook_project_chapters(
     project_ref: str = Path(..., min_length=1, description="Project id or database id"),
@@ -742,6 +749,7 @@ async def list_audiobook_project_chapters(
     "/projects/{project_ref}/artifacts",
     response_model=AudiobookArtifactsResponse,
     summary="List audiobook project artifacts",
+    dependencies=[Depends(check_rate_limit)],
 )
 async def list_audiobook_project_artifacts(
     project_ref: str = Path(..., min_length=1, description="Project id or database id"),
@@ -783,6 +791,7 @@ async def list_audiobook_project_artifacts(
     "/voices/profiles",
     response_model=VoiceProfileResponse,
     summary="Create a voice profile",
+    dependencies=[Depends(check_rate_limit)],
 )
 async def create_voice_profile(
     request: VoiceProfileCreateRequest,
@@ -816,6 +825,7 @@ async def create_voice_profile(
     "/voices/profiles",
     response_model=VoiceProfileListResponse,
     summary="List voice profiles",
+    dependencies=[Depends(check_rate_limit)],
 )
 async def list_voice_profiles(
     _current_user: User = Depends(get_request_user),

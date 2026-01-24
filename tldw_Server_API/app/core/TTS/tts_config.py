@@ -41,10 +41,22 @@ class ProviderConfig(BaseModel):
     timeout: int = 60
     max_retries: int = 3
     sample_rate: int = 24000
+    max_concurrent_generations: Optional[int] = None
     use_fp16: bool = False
     use_bf16: bool = False
     use_onnx: bool = False
     batch_size: int = 1
+    # Qwen3-TTS and tokenizer-related settings (optional)
+    tokenizer_model: Optional[str] = None
+    dtype: Optional[str] = None
+    attn_implementation: Optional[str] = None
+    stream_chunk_size_ms: Optional[int] = None
+    auto_min_vram_gb: Optional[int] = None
+    max_text_length: Optional[int] = None
+    tokenizer_max_audio_seconds: Optional[int] = None
+    tokenizer_max_tokens: Optional[int] = None
+    tokenizer_max_payload_mb: Optional[int] = None
+    voice_clone_prompt_max_kb: Optional[int] = None
     # Allow providers (esp. local ones) to declare auto-download behavior
     auto_download: bool = True
     # Optional: for HTTP/API providers like OpenAI, perform a lightweight
@@ -219,7 +231,7 @@ class TTSConfigManager:
                     if 'providers' not in config_dict:
                         config_dict['providers'] = {}
 
-                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice', 'neutts']:
+                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice', 'neutts', 'lux_tts']:
                         if provider not in config_dict['providers']:
                             config_dict['providers'][provider] = {}
                         config_dict['providers'][provider]['device'] = tts_section['local_tts_device']
@@ -230,7 +242,7 @@ class TTSConfigManager:
                     auto_dl = val in ("1", "true", "yes", "on")
                     if 'providers' not in config_dict:
                         config_dict['providers'] = {}
-                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice', 'neutts']:
+                    for provider in ['kokoro', 'higgs', 'dia', 'chatterbox', 'vibevoice', 'neutts', 'lux_tts']:
                         config_dict['providers'].setdefault(provider, {})['auto_download'] = auto_dl
 
                 # Provider-specific auto-download toggles
@@ -247,6 +259,7 @@ class TTSConfigManager:
                     ('higgs', 'higgs_auto_download'),
                     ('chatterbox', 'chatterbox_auto_download'),
                     ('neutts', 'neutts_auto_download'),
+                    ('lux_tts', 'lux_tts_auto_download'),
                 ):
                     bv = _bool_from_section(key)
                     if bv is not None:

@@ -34,7 +34,7 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 ├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
 ├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
 ├── mock_openai_server/           # Mock server for OpenAI-compatible API tests
-├── tldw-frontend/                # Next.js WebUI (current client)
+├── apps/tldw-frontend/                # Next.js WebUI (primary web client)
 ├── Databases/                    # DBs (AuthNZ defaults here; Media DB is per-user under user_databases/)
 ├── models/                       # Optional model assets (if used)
 ├── pyproject.toml                # Project configuration

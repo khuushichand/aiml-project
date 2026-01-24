@@ -127,7 +127,7 @@ Base voice clone (model ends with Base):
 - language: resolve from request.lang_code or request.extra_params.language
 - ref_audio: request.voice_reference OR stored voice (custom:<voice_id>)
 - ref_text: request.extra_params.reference_text OR stored metadata
-- x_vector_only_mode: request.extra_params.x_vector_only_mode (optional, true allows missing ref_text but degrades quality)
+- x_vector_only_mode: request.extra_params.x_vector_only_mode (optional, true allows missing ref_text but degrades quality; ref_audio is always required)
 - voice_clone_prompt: request.extra_params.voice_clone_prompt (optional cached prompt)
 - function: generate_voice_clone(text, language, ref_audio, ref_text, x_vector_only_mode, voice_clone_prompt)
 
@@ -145,12 +145,12 @@ Tokenizer (exposed via API):
 - When request.stream is true, use the Qwen3-TTS streaming interface (if exposed) or incremental chunking from decoded audio as a fallback.
 - Default streaming output format for the adapter is pcm (s16le) at 24kHz mono. If response_format requests mp3/opus/aac and streaming is enabled, attempt real-time transcoding from PCM.
 - Note: the OpenAI speech schema defaults response_format to mp3; treat this as an explicit mp3 request and attempt real-time transcoding when stream=true.
-- Fail fast if streaming is requested for a format that cannot be streamed by the current pipeline (or when real-time transcoding is unavailable).
+- If real-time transcoding is unavailable, fall back to buffered streaming (generate full PCM, transcode, then stream in chunks).
 
 ### 7) Validation Rules
 
 - Validate speaker names against the 9 CustomVoice speakers for CustomVoice models (case-insensitive; normalize spaces/hyphens to underscores).
-- Validate that Base models have reference audio, unless x_vector_only_mode is true.
+- Validate that Base models always include reference audio; x_vector_only_mode only relaxes the reference_text requirement.
 - Enforce max_text_length via provider limits (start with a conservative default, configurable in YAML).
 - Validate voice_clone_prompt type/size (see API contracts).
 - Validate supported language set (or allow "auto").
@@ -206,6 +206,7 @@ Tokenizer API endpoints:
 
 - Store reference audio and metadata under user voices path.
 - Metadata fields for Qwen3-TTS: reference_text, voice_clone_prompt (optional), voice_clone_prompt_format.
+  - voice_clone_prompt is stored as base64 with an optional format tag for reuse with custom: voices.
 
 ## Dependencies
 
