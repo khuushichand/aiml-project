@@ -101,7 +101,7 @@ export const GenerationPanel: React.FC = () => {
   }
 
   // Use example prompt
-  const useExamplePrompt = (example: string) => {
+  const handleExamplePrompt = (example: string) => {
     setPrompt(example)
   }
 
@@ -164,7 +164,7 @@ export const GenerationPanel: React.FC = () => {
           {EXAMPLE_PROMPTS.map((example, index) => (
             <button
               key={index}
-              onClick={() => useExamplePrompt(example)}
+              onClick={() => handleExamplePrompt(example)}
               className="text-xs px-2 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors"
             >
               {example.slice(0, 40)}...

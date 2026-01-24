@@ -17,6 +17,7 @@ import { useServerChatLoader } from "@/hooks/chat/useServerChatLoader"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useChatActions } from "@/hooks/chat/useChatActions"
 import { MAX_COMPARE_MODELS } from "@/hooks/chat/compare-constants"
+import * as compareModeState from "@/hooks/chat/useCompareMode"
 import type { Character } from "@/types/character"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useSetting } from "@/hooks/useSetting"
@@ -25,10 +26,6 @@ import type { UseMessageOptionReturn } from "./useMessageOptionTypes"
 
 const useMessageOptionImpl = () => {
   // Controllers come from Context (for aborting streaming requests)
-  const compareModeState = require(
-    "@/hooks/chat/useCompareMode"
-  ) as typeof import("@/hooks/chat/useCompareMode")
-
   const {
     controller: abortController,
     setController: setAbortController

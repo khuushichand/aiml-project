@@ -964,7 +964,7 @@ export const WritingPlayground: React.FC = () => {
         const mergeUserChunks = (
           chunks: WritingPromptChunk[],
           content: string
-        ) => {
+        ): WritingPromptChunk[] => {
           let lastChunk = chunks[chunks.length - 1]
           let mergedContent = content
           while (lastChunk && lastChunk.type === "user") {
@@ -977,7 +977,11 @@ export const WritingPlayground: React.FC = () => {
               return chunks
             }
           }
-          return [...chunks, { type: "user", content: mergedContent }]
+          const mergedChunk: WritingPromptChunk = {
+            type: "user",
+            content: mergedContent
+          }
+          return [...chunks, mergedChunk]
         }
 
         let newPrompt = [...start]

@@ -2,7 +2,7 @@ import React, { Dispatch, SetStateAction, createContext } from "react"
 
 // Note: messages state has been moved to useStoreMessageOption (Zustand store)
 // This context now only handles abort controllers for streaming requests
-interface PageAssistContext {
+interface PageAssistContextValue {
   controller: AbortController | null
   setController: Dispatch<SetStateAction<AbortController | null>>
 
@@ -10,7 +10,7 @@ interface PageAssistContext {
   setEmbeddingController: Dispatch<SetStateAction<AbortController | null>>
 }
 
-export const PageAssistContext = createContext<PageAssistContext>({
+export const PageAssistContext = createContext<PageAssistContextValue>({
   controller: null,
   setController: () => {},
 

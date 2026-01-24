@@ -584,15 +584,16 @@ export const ActorEditor: React.FC<Props> = ({
     ]
   )
 
+  const notesValue: string = Form.useWatch("actorNotes", form) || ""
+  const chatPositionRaw = Form.useWatch("actorChatPosition", form)
+  const chatDepthRaw = Form.useWatch("actorChatDepth", form)
+  const chatRoleRaw = Form.useWatch("actorChatRole", form)
+
   if (!settings) return null
 
-  const notesValue: string = Form.useWatch("actorNotes", form) || ""
-  const chatPositionValue: string =
-    Form.useWatch("actorChatPosition", form) || settings.chatPosition
-  const chatDepthValue: number =
-    Form.useWatch("actorChatDepth", form) ?? settings.chatDepth
-  const chatRoleValue: string =
-    Form.useWatch("actorChatRole", form) || settings.chatRole
+  const chatPositionValue: string = chatPositionRaw || settings.chatPosition
+  const chatDepthValue: number = chatDepthRaw ?? settings.chatDepth
+  const chatRoleValue: string = chatRoleRaw || settings.chatRole
   const aspectCount = settings.aspects?.length ?? 0
   const tokensOverLimit = actorTokenCount > ACTOR_TOKENS_WARNING_THRESHOLD
   const actorDictionaryTokens = buildActorDictionaryTokens(settings)

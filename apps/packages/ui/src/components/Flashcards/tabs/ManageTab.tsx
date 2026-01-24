@@ -235,7 +235,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const selectedOnPageCount = selectAllAcross
     ? pageCount
     : pageItems.filter((item) => selectedIds.has(item.uuid)).length
-  const totalCount = manageQuery.data?.count || 0
+  const totalCount = manageQuery.data?.total ?? manageQuery.data?.count ?? 0
   const selectedCount = selectAllAcross ? totalCount : selectedIds.size
   const anySelection = selectedCount > 0
   const allOnPageSelected = pageCount > 0 && selectedOnPageCount === pageCount
@@ -1221,7 +1221,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               setPage(p)
               setPageSize(ps)
             }}
-            total={manageQuery.data?.count || 0}
+            total={totalCount}
             showSizeChanger
             pageSizeOptions={[10, 20, 50, 100]}
           />

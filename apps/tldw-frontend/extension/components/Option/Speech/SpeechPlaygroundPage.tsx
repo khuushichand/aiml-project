@@ -1245,7 +1245,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   </Button>
                   <Tooltip
                     title={downloadDisabledReason as string}
-                    open={Boolean(downloadDisabledReason) ? undefined : false}
+                    open={downloadDisabledReason ? undefined : false}
                   >
                     <span>
                       <Dropdown menu={downloadMenu} disabled={Boolean(downloadDisabledReason)}>

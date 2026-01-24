@@ -1,4 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import type { WritingPromptChunk } from "../types/writing"
+import {
+  applyFimTemplate,
+  assembleWorldInfo,
+  normalizeSessionPayload
+} from "../utils/writing"
+import { DEFAULT_SESSION } from "../components/Option/WritingPlayground/presets"
 
 // TODO: These utilities need to be extracted from WritingPlayground/index.tsx
 // and exported from @/utils/writing before these tests can run.

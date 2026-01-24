@@ -282,15 +282,19 @@ export function useDueCountsQuery(deckId?: number | null, options?: UseFlashcard
     queryKey: ["flashcards:due-counts", deckId],
     queryFn: async () => {
       const [due, newCards, learning] = await Promise.all([
-        listFlashcards({ deck_id: deckId ?? undefined, due_status: "due", limit: 0, offset: 0 }),
-        listFlashcards({ deck_id: deckId ?? undefined, due_status: "new", limit: 0, offset: 0 }),
-        listFlashcards({ deck_id: deckId ?? undefined, due_status: "learning", limit: 0, offset: 0 })
+        listFlashcards({ deck_id: deckId ?? undefined, due_status: "due", limit: 1, offset: 0 }),
+        listFlashcards({ deck_id: deckId ?? undefined, due_status: "new", limit: 1, offset: 0 }),
+        listFlashcards({ deck_id: deckId ?? undefined, due_status: "learning", limit: 1, offset: 0 })
       ])
+      const getTotal = (res: { total?: number | null; count?: number }) => (res.total ?? res.count ?? 0)
+      const dueTotal = getTotal(due)
+      const newTotal = getTotal(newCards)
+      const learningTotal = getTotal(learning)
       return {
-        due: due.count,
-        new: newCards.count,
-        learning: learning.count,
-        total: due.count + newCards.count + learning.count
+        due: dueTotal,
+        new: newTotal,
+        learning: learningTotal,
+        total: dueTotal + newTotal + learningTotal
       }
     },
     enabled: options?.enabled ?? flashcardsEnabled
@@ -306,8 +310,8 @@ export function useHasCardsQuery(options?: UseFlashcardQueriesOptions) {
   return useQuery({
     queryKey: ["flashcards:has-cards"],
     queryFn: async () => {
-      const res = await listFlashcards({ limit: 0, offset: 0 })
-      return res.count > 0
+      const res = await listFlashcards({ limit: 1, offset: 0 })
+      return (res.total ?? res.count ?? 0) > 0
     },
     enabled: options?.enabled ?? flashcardsEnabled
   })

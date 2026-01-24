@@ -222,7 +222,7 @@ const SidepanelAgent: FC = () => {
         ])
         break
 
-      case "tool_complete":
+      case "tool_complete": {
         setToolCalls(prev =>
           prev.map(tc =>
             tc.id === event.tool_call_id
@@ -285,6 +285,7 @@ const SidepanelAgent: FC = () => {
           ])
         }
         break
+      }
 
       case "approval_needed":
         setPendingApprovals(event.approvals)

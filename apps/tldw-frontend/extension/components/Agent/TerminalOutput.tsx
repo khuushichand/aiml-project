@@ -40,6 +40,7 @@ interface TerminalOutputProps {
 }
 
 // ANSI escape code patterns and color mappings
+// eslint-disable-next-line no-control-regex -- ANSI escape sequences use control codes.
 const ANSI_REGEX = new RegExp("\\x1b\\[([0-9;]+)m", "g")
 const ANSI_COLOR_MAP: Record<string, string> = {
   "30": "text-text",

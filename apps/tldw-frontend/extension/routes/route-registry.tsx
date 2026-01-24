@@ -161,6 +161,17 @@ const OptionModerationPlayground = lazy(() => import("./option-moderation-playgr
 
 const ERROR_BOUNDARY_TEST_ENABLED = process.env.NODE_ENV !== "production"
 
+const errorBoundaryRoutes: RouteDefinition[] = ERROR_BOUNDARY_TEST_ENABLED
+  ? [
+      {
+        kind: "sidepanel",
+        path: "/error-boundary-test",
+        element: <SidepanelErrorBoundaryTest />,
+        targets: ALL_TARGETS
+      }
+    ]
+  : []
+
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/", element: <OptionIndex /> },
   {
@@ -559,16 +570,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     targets: ALL_TARGETS
   },
   { kind: "sidepanel", path: "/settings", element: <SidepanelSettings /> },
-  ...(ERROR_BOUNDARY_TEST_ENABLED
-    ? [
-        {
-          kind: "sidepanel",
-          path: "/error-boundary-test",
-          element: <SidepanelErrorBoundaryTest />,
-          targets: ALL_TARGETS
-        }
-      ]
-    : [])
+  ...errorBoundaryRoutes
 ]
 
 export const optionRoutes = ROUTE_DEFINITIONS.filter(

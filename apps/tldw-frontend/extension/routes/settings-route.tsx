@@ -22,9 +22,9 @@ export const createSettingsRoute = (
   exportName: string = "default"
 ) =>
   lazy(async () => {
-    const module = await loader()
+    const loadedModule = await loader()
     const Page =
-      exportName === "default" ? module.default : module[exportName]
+      exportName === "default" ? loadedModule.default : loadedModule[exportName]
 
     if (!Page) {
       throw new Error(`Settings route missing export: ${exportName}`)

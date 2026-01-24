@@ -59,6 +59,7 @@ export type WritingTemplatePayload = {
 }
 
 export type WritingThemePayload = {
+  class_name?: string
   className?: string
   css?: string
   order?: number

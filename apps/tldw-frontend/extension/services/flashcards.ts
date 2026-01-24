@@ -78,6 +78,7 @@ export type FlashcardUpdate = {
 export type FlashcardListResponse = {
   items: Flashcard[]
   count: number
+  total?: number | null
 }
 
 export type FlashcardReviewRequest = {

@@ -112,7 +112,7 @@ const formatArgsPreview = (toolName: string, argsStr: string): string => {
         return args.query || ""
       case "web_fetch":
         return args.url || ""
-      default:
+      default: {
         // Show first key-value for unknown tools
         const keys = Object.keys(args)
         if (keys.length > 0) {
@@ -122,6 +122,7 @@ const formatArgsPreview = (toolName: string, argsStr: string): string => {
           }
         }
         return ""
+      }
     }
   } catch {
     return ""

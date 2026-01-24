@@ -5,6 +5,8 @@ type MermaidProps = {
   className?: string
 }
 
+type MermaidTheme = "default" | "base" | "dark" | "forest" | "neutral" | "null"
+
 const hashCode = (input: string) => {
   let hash = 0
   for (let i = 0; i < input.length; i++) {
@@ -13,7 +15,7 @@ const hashCode = (input: string) => {
   return hash.toString(36)
 }
 
-const resolveMermaidTheme = () => {
+const resolveMermaidTheme = (): MermaidTheme => {
   try {
     if (typeof document !== "undefined") {
       const root = document.documentElement
@@ -36,7 +38,7 @@ const resolveMermaidTheme = () => {
 }
 
 const useMermaidTheme = () => {
-  const [theme, setTheme] = useState<string>(() => resolveMermaidTheme())
+  const [theme, setTheme] = useState<MermaidTheme>(() => resolveMermaidTheme())
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") {

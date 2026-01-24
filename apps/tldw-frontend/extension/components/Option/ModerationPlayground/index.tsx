@@ -819,7 +819,10 @@ export const ModerationPlayground: React.FC = () => {
                 <Button type="primary" onClick={handleSaveOverride} disabled={!activeUserId}>
                   Save override
                 </Button>
-                <Button danger onClick={handleDeleteOverride} disabled={!overrideLoaded}>
+                <Button
+                  danger
+                  onClick={() => void handleDeleteOverride()}
+                  disabled={!overrideLoaded}>
                   Delete override
                 </Button>
               </Space>

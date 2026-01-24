@@ -52,6 +52,7 @@ export type WritingThemeResponse = {
   id: number
   name: string
   class_name?: string | null
+  className?: string | null
   css?: string | null
   schema_version: number
   version_parent_id?: string | null

@@ -42,7 +42,7 @@ type Props = {
   onRegenerate: () => void
   onEditFormSubmit: (value: string, isSend: boolean) => void
   isProcessing: boolean
-  webSearch?: {}
+  webSearch?: boolean | Record<string, unknown>
   isSearchingInternet?: boolean
   sources?: any[]
   hideEditAndRegenerate?: boolean

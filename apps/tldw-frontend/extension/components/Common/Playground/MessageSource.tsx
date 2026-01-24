@@ -42,7 +42,9 @@ export const MessageSource: React.FC<Props> = ({
           target="_blank"
           rel="noopener noreferrer"
           onClick={() => {
-            onSourceNavigate && onSourceNavigate(source)
+            if (onSourceNavigate) {
+              onSourceNavigate(source)
+            }
           }}
           className="inline-flex items-center rounded-md border border-border bg-surface2 px-2 py-1 text-caption text-text opacity-80 transition-shadow duration-200 ease-in-out hover:bg-surface hover:opacity-100 hover:shadow-md">
           <span className="text-caption">{label}</span>
@@ -61,7 +63,9 @@ export const MessageSource: React.FC<Props> = ({
     <details className="w-full rounded-md border border-border bg-surface2 px-2 py-1">
       <summary
         onClick={() => {
-          onSourceClick && onSourceClick(source)
+          if (onSourceClick) {
+            onSourceClick(source)
+          }
         }}
         className="flex cursor-pointer items-center gap-2 text-caption text-text opacity-80 hover:opacity-100"
       >
@@ -90,7 +94,9 @@ export const MessageSource: React.FC<Props> = ({
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => {
-                  onSourceNavigate && onSourceNavigate(source)
+                  if (onSourceNavigate) {
+                    onSourceNavigate(source)
+                  }
                 }}
                 className="rounded-md border border-border bg-surface2 px-2 py-0.5 text-text-subtle hover:text-text"
               >

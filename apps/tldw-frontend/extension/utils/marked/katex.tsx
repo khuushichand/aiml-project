@@ -1,5 +1,19 @@
 import katex from "katex"
 
+type KatexStrictFunction = (
+  errorCode: string,
+  errorMessage: string,
+  token: string
+) => boolean
+
+type KatexTrustContext = {
+  command: string
+  url: string
+  protocol: string
+}
+
+type KatexTrustFunction = (context: KatexTrustContext) => boolean
+
 interface KatexOptions {
   displayMode?: boolean
   throwOnError?: boolean
@@ -9,8 +23,8 @@ interface KatexOptions {
   colorIsTextColor?: boolean
   maxSize?: number
   maxExpand?: number
-  strict?: boolean | string | Function
-  trust?: boolean | Function
+  strict?: boolean | string | KatexStrictFunction
+  trust?: boolean | KatexTrustFunction
   fleqn?: boolean
   leqno?: boolean
   output?: "html" | "mathml" | "htmlAndMathml"

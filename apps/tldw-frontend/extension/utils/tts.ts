@@ -45,6 +45,7 @@ export const parseTextIntoSentences = (text: string): string[] => {
 
     return sentences
         .map(sentence =>
+            // eslint-disable-next-line no-control-regex -- placeholders use null separators
             sentence.replace(/\u0000(\d+)\u0000/g, (_, idx) => codeBlocks[idx])
         )
         .map(sanitizeText)
@@ -64,6 +65,7 @@ export const parseTextIntoParagraphs = (text: string): string[] => {
     return processedText
         .split(/\n+/)
         .map(paragraph =>
+            // eslint-disable-next-line no-control-regex -- placeholders use null separators
             paragraph.replace(/\u0000(\d+)\u0000/g, (_, idx) => codeBlocks[idx])
         )
         .map(sanitizeText)

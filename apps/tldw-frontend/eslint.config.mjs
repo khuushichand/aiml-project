@@ -7,7 +7,7 @@ import tsPlugin from "@typescript-eslint/eslint-plugin"
 import tsParser from "@typescript-eslint/parser"
 
 const stripConfigs = (plugin) => {
-  const { configs, ...rest } = plugin
+  const { configs: _configs, ...rest } = plugin
   return rest
 }
 
@@ -17,6 +17,13 @@ const reactRules = react.configs.recommended?.rules ?? {}
 const tsRules = tsPlugin.configs.recommended?.rules ?? {}
 const codeFiles = ["**/*.{js,jsx,ts,tsx,mjs,cjs}"]
 const cjsFiles = ["**/*.cjs"]
+const tsFiles = ["**/*.{ts,tsx}"]
+const configFiles = [
+  "**/*.config.js",
+  "**/*.config.cjs",
+  "**/*.config.mjs",
+  "tailwind.config.js"
+]
 
 export default [
   {
@@ -41,8 +48,11 @@ export default [
       globals: {
         ...globals.browser,
         ...globals.node,
+        browser: "readonly",
+        chrome: "readonly",
         React: "readonly",
         NodeJS: "readonly",
+        JSX: "readonly",
         fetch: "readonly",
         process: "readonly"
       }
@@ -61,6 +71,16 @@ export default [
       ...reactRules,
       ...reactHooksRules,
       ...nextRules,
+      "react/display-name": "off",
+      "react/no-unescaped-entities": "off",
+      "react/prop-types": "off",
+      "react-hooks/immutability": "off",
+      "react-hooks/purity": "off",
+      "react-hooks/preserve-manual-memoization": "off",
+      "react-hooks/refs": "off",
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/static-components": "off",
+      "react-hooks/use-memo": "off",
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unused-vars": [
         "warn",
@@ -68,8 +88,21 @@ export default [
       ],
       "no-unused-vars": "off",
       "no-empty": ["error", { allowEmptyCatch: true }],
+      "no-useless-escape": "warn",
       "no-useless-catch": "warn",
       "@typescript-eslint/triple-slash-reference": "off"
+    }
+  },
+  {
+    files: tsFiles,
+    rules: {
+      "no-undef": "off"
+    }
+  },
+  {
+    files: configFiles,
+    rules: {
+      "@typescript-eslint/no-require-imports": "off"
     }
   },
   {

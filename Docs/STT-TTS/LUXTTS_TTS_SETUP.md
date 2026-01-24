@@ -72,6 +72,22 @@ Notes:
 - The `extra_params` defaults above match the LuxTTS repo defaults.
 - If `module_path` is different, point it at your LuxTTS checkout.
 
+### CPU-only baseline config
+
+Use this if you want a minimal CPU setup:
+
+```yaml
+providers:
+  lux_tts:
+    enabled: true
+    model: "YatharthS/LuxTTS"
+    module_path: "LuxTTS"
+    device: "cpu"
+    threads: 4
+    sample_rate: 48000
+    reference_sample_rate: 24000
+```
+
 ## 4) Make a request
 
 LuxTTS requires `voice_reference` (base64 audio). Example using `curl`:
@@ -150,6 +166,15 @@ JSON
 - **`model not cached`**: run the cache step or set a local `model` path.
 - **`voice_reference ... not valid`**: make sure it’s a real audio file and base64‑encoded.
 - **Performance**: set `device: cuda` for GPU, `device: cpu` for fallback.
+
+### Troubleshooting checklist
+
+- LuxTTS repo cloned and `module_path` points to it
+- `pip install -r LuxTTS/requirements.txt` ran in the same env as tldw_server
+- Model cached under `~/.cache/huggingface/hub` (or `HF_HOME`)
+- Reference audio is 3–10s, clean, and base64‑encoded
+- `providers.lux_tts.enabled=true` in `tts_providers_config.yaml`
+- Running on CPU? Expect slower generation; reduce `num_steps` if needed
 
 ## Optional: Integration smoke test
 

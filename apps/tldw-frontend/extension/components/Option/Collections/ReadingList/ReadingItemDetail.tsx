@@ -102,7 +102,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   const [activeTabKey, setActiveTabKey] = useState("content")
   const [progressPercent, setProgressPercent] = useState<number | null>(null)
   const lastEditedItemId = useRef<string | null>(null)
-  const contentRef = useRef<HTMLDivElement | null>(null)
+  const contentRef = useRef<HTMLElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const notesSaveTokenRef = useRef(0)
   const progressSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -540,6 +540,10 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     }
   }, [])
 
+  const setContentRef = useCallback((node: HTMLElement | null) => {
+    contentRef.current = node
+  }, [])
+
   const captureSelection = useCallback(() => {
     const container = contentRef.current
     if (!container) return
@@ -697,7 +701,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         <div className="prose prose-sm dark:prose-invert max-w-none">
           {currentItem?.clean_html ? (
             <div
-              ref={contentRef}
+              ref={setContentRef}
               onMouseUp={captureSelection}
               onKeyUp={captureSelection}
               onTouchEnd={captureSelection}
@@ -705,7 +709,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
             />
           ) : currentItem?.text ? (
             <pre
-              ref={contentRef}
+              ref={setContentRef}
               onMouseUp={captureSelection}
               onKeyUp={captureSelection}
               onTouchEnd={captureSelection}
